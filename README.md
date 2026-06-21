@@ -44,6 +44,10 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
   budget.
 - **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable, **resumable**, and
   **inspectable** after the fact (`goaly runs list` / `goaly runs show`).
+- **Per-run spend report:** every run ends with a token breakdown by layer — the **harness** vs. the
+  **LLM steps** (compiler / judge / approver) — and against any `--budget-tokens` cap. It's folded
+  from the run log, so `--resume` and `goaly runs show` rebuild the same numbers; missing token data
+  degrades to "unknown", never a crash. Optional USD cost via `--cost-table`; **tokens-only by default**.
 
 ## Install
 
@@ -108,6 +112,9 @@ goaly run --goal "..." --verify-cmd "npm test" --stream
 goaly run --goal "..." --verify-cmd "npm test" \
              --harness-timeout-ms 900000 --llm-timeout-ms 120000 --verify-timeout-ms 60000
 
+# Add an approximate USD cost to the end-of-run spend report (tokens-only without it):
+goaly run --goal "..." --verify-cmd "npm test" --cost-table ./prices.json
+
 # With a .goalyrc in the repo, the repeated wiring lives in the file — just pass the goal:
 goaly run --goal "make the parser handle empty input"
 
@@ -169,6 +176,40 @@ never enters the frozen contract):
 A verify command that exceeds its timeout is SIGKILL'd and reported as a **non-zero exit — i.e. a
 verifier FAIL, never a green** (fail-closed, invariant #4). Each value must be a positive integer
 number of milliseconds.
+
+### Per-run spend report
+
+Every run prints a **spend summary** and stores the data in the run log. Token usage is aggregated
+**at the Driver** (never the pure reducer) and broken down by layer — the **harness** vs. the **LLM
+steps** (compiler, the judge rung, the Gate-B approver) — plus consumption against any
+`--budget-tokens` cap. Because it's folded from the write-ahead event log, `--resume` and
+`goaly runs show <id>` reconstruct the identical report from the log alone. The `--budget-tokens`
+cap governs **total** spend (harness + LLM steps), not just the harness.
+
+```
+spend:
+  harness      482,113 tokens
+  compiler       3,901 tokens
+  verifier      11,204 tokens
+  approver       4,556 tokens
+  llm subtotal  19,661 tokens
+  total        501,774 tokens
+budget:      501,774 / 500,000 tokens (100%) — budget exceeded
+```
+
+**Fail-closed:** a harness or provider that doesn't surface usage degrades that layer to `unknown`
+(never a silent zero, never a crash). The default `claude` provider runs `--output-format json` so
+its usage is captured; `codex` / `droid` providers report usage too.
+
+**Cost is opt-in.** Pricing is volatile, so the log stays **tokens-only** and cost is a print-time
+overlay: pass `--cost-table <path>` to a JSON file mapping **model → USD per 1,000,000 tokens** (a
+`"default"` key prices any unlisted model). Each layer is priced by *its* resolved model; a layer
+whose model isn't priced is left out and the total is marked approximate.
+
+```jsonc
+// prices.json — USD per 1M tokens; "default" covers anything unlisted
+{ "claude-opus-4-8": 15, "claude-sonnet-4-6": 3, "default": 5 }
+```
 
 Goal, intent, and rubric each accept one source: inline (`--goal "…"`), a file (`--goal-file <path>`),
 or stdin (`--goal -`). Giving a field more than one source is a usage error.

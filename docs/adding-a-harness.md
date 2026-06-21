@@ -280,20 +280,27 @@ the LLM-judge rung, and the Gate-B approver — are a **separate** seam, `LlmPro
 
 ```ts
 // src/llm/provider.ts
+type LlmCompletion = { text: string; tokensUsed?: number };
 interface LlmProvider {
   readonly name: string;
-  complete(req: { system?: string; prompt: string; temperature?: number }): Promise<string>;
+  complete(req: { system?: string; prompt: string; temperature?: number }): Promise<LlmCompletion>;
 }
 ```
 
 It is deliberately **not** the same interface as `HarnessAdapter` (Interface Segregation): `run()`
 is session-threaded and **may edit the working tree**; `complete()` is a stateless, **read-only**
-`prompt → text`. A judge or approver that mutated the tree would corrupt the very diff it is judging.
-So wiring your tool here is opt-in — and you get to **reuse the `FieldExtractor` you already wrote**.
+`prompt → {text, tokensUsed?}`. A judge or approver that mutated the tree would corrupt the very diff
+it is judging. So wiring your tool here is opt-in — and you get to **reuse the `FieldExtractor` you
+already wrote**.
+
+`complete()` returns an `LlmCompletion`, not a bare string: `text` is the result, and the **optional
+`tokensUsed`** feeds the [per-run spend report](../README.md#per-run-spend-report). `AgentCliLlmProvider`
+fills it in from the same `usage` block your `FieldExtractor` already reads (`parsed.tokens`), so you
+get it for free; surfacing nothing is fine — a missing count degrades to "unknown", never a crash.
 
 `AgentCliLlmProvider` (`src/llm/agent-cli-provider.ts`) does the plumbing — build a read-only argv,
-exec, parse with your extractor via the same shared `parseAgentOutput`, return the text or fail
-closed. You supply three things:
+exec, parse with your extractor via the same shared `parseAgentOutput`, return `{text, tokensUsed?}`
+or fail closed. You supply three things:
 
 1. **A read-only invocation — mandatory.** Find the flag that forbids edits: codex uses
    `--sandbox read-only`; droid's `exec` is read-only *unless* you pass `--auto`, so we omit it.
@@ -341,9 +348,10 @@ you pass, or the cascade may hand a name from one tool's namespace to another (`
 <a-codex-model>`).
 
 **Test the provider** by injecting a fake `exec` into `AgentCliLlmProvider` (see
-`src/llm/agent-cli-provider.test.ts`): assert it returns your parsed text, that the argv carries
-your read-only flag (and `--model` when set), and that hostile/empty output **throws** (fail
-closed). Unit-test your `*CompletionArgs` builder directly (see `src/cli/compose.test.ts`).
+`src/llm/agent-cli-provider.test.ts`): assert it returns your parsed `text` (and `tokensUsed` when
+the `usage` block is present), that the argv carries your read-only flag (and `--model` when set),
+and that hostile/empty output **throws** (fail closed). Unit-test your `*CompletionArgs` builder
+directly (see `src/cli/compose.test.ts`).
 
 ## Test it (no real process)
 

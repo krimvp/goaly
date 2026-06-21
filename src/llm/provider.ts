@@ -10,25 +10,39 @@ export type LlmRequest = {
   temperature?: number;
 };
 
+/**
+ * One completion. `tokensUsed` is the total tokens the provider reports for this call; it is
+ * OPTIONAL because not every CLI surfaces usage, and a missing count must degrade to "unknown"
+ * in the per-run report rather than be mistaken for zero (the Driver meters these for issue #17).
+ */
+export type LlmCompletion = {
+  text: string;
+  tokensUsed?: number;
+};
+
 export interface LlmProvider {
   readonly name: string;
-  complete(req: LlmRequest): Promise<string>;
+  complete(req: LlmRequest): Promise<LlmCompletion>;
 }
 
-/** Scripted provider for tests. Cycles through canned responses; repeats the last one. */
+/**
+ * Scripted provider for tests. Cycles through canned responses; repeats the last one. A response
+ * may be a bare string (text only, tokens unknown) or a full {@link LlmCompletion} when a test
+ * wants to script token usage.
+ */
 export class FakeLlm implements LlmProvider {
   readonly name = 'fake-llm';
   #i = 0;
-  readonly #responses: string[];
+  readonly #responses: (string | LlmCompletion)[];
   readonly requests: LlmRequest[] = [];
-  constructor(responses: string[]) {
+  constructor(responses: (string | LlmCompletion)[]) {
     this.#responses = responses;
   }
-  async complete(req: LlmRequest): Promise<string> {
+  async complete(req: LlmRequest): Promise<LlmCompletion> {
     this.requests.push(req);
     const r = this.#responses[this.#i] ?? this.#responses[this.#responses.length - 1];
     this.#i += 1;
     if (r === undefined) throw new Error('FakeLlm has no responses scripted');
-    return r;
+    return typeof r === 'string' ? { text: r } : r;
   }
 }

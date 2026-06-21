@@ -9,6 +9,7 @@ import {
   type RunListItem,
   type RunSummary,
 } from '../runlog/inspect';
+import { formatUsage } from './usage-format';
 
 /**
  * Render the read-only `goaly runs` subcommands (issue #14). A pure presentation layer over the
@@ -106,6 +107,9 @@ export function renderRunDetail(d: RunDetail): string {
   lines.push(...renderContract(d.contract));
   lines.push(...renderGateA(d.gateA, d.compileFailures));
   lines.push(...renderIterations(d.iterationsDetail));
+  // The per-layer spend breakdown (issue #17), folded from the same log — tokens-only here, since
+  // cost pricing is a volatile print-time overlay applied only to a live run's `--cost-table`.
+  lines.push('', ...formatUsage(d.usage));
   return lines.join('\n');
 }
 

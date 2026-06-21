@@ -5,12 +5,18 @@ import type { ProcessResult } from '../util/spawn';
 const ok = (stdout: string): ProcessResult => ({ stdout, stderr: '', code: 0, timedOut: false });
 
 describe('buildLlmArgs', () => {
-  it('defaults to -p with no model', () => {
-    expect(buildLlmArgs(undefined, undefined)).toEqual(['-p']);
+  it('defaults to -p --output-format json with no model', () => {
+    expect(buildLlmArgs(undefined, undefined)).toEqual(['-p', '--output-format', 'json']);
   });
 
   it('appends --model to the default args when a model is set', () => {
-    expect(buildLlmArgs(undefined, 'opus')).toEqual(['-p', '--model', 'opus']);
+    expect(buildLlmArgs(undefined, 'opus')).toEqual([
+      '-p',
+      '--output-format',
+      'json',
+      '--model',
+      'opus',
+    ]);
   });
 
   it('returns caller-supplied args untouched, ignoring the model', () => {
@@ -19,7 +25,7 @@ describe('buildLlmArgs', () => {
 });
 
 describe('CliLlmProvider', () => {
-  it('combines system + prompt on stdin and returns trimmed stdout', async () => {
+  it('combines system + prompt on stdin and returns trimmed plain-text stdout', async () => {
     let captured = '';
     const llm = new CliLlmProvider({
       exec: async (input) => {
@@ -28,8 +34,17 @@ describe('CliLlmProvider', () => {
       },
     });
     const out = await llm.complete({ system: 'sys', prompt: 'p', temperature: 0 });
-    expect(out).toBe('answer');
+    expect(out.text).toBe('answer');
+    expect(out.tokensUsed).toBeUndefined();
     expect(captured).toBe('sys\n\np');
+  });
+
+  it('parses a --output-format json envelope for result text and token usage', async () => {
+    const json = JSON.stringify({ result: 'the answer', usage: { input_tokens: 7, output_tokens: 5 } });
+    const llm = new CliLlmProvider({ exec: async () => ok(json) });
+    const out = await llm.complete({ prompt: 'p' });
+    expect(out.text).toBe('the answer');
+    expect(out.tokensUsed).toBe(12);
   });
 
   it('sends just the prompt when there is no system message', async () => {

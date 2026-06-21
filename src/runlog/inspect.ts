@@ -3,12 +3,14 @@ import { join } from 'node:path';
 import type { CompiledContract } from '../domain/contract';
 import type { ContractHash, RunId } from '../domain/ids';
 import type { HarnessRunResult } from '../domain/events';
+import type { UsageReport } from '../domain/usage';
 import type { Verdict, ApprovalVerdict, GateDecision } from '../domain/verdict';
 import { iterationCount, type OrchestratorState } from '../orchestrator/state';
 import { errorMessage } from '../util/errors';
 import { FileRunLog } from './file-runlog';
 import type { RunLogHeader, RunLogEntry } from './runlog';
 import { replay } from './replay';
+import { summarizeUsage } from './usage';
 
 /**
  * READ-ONLY run-log inspection (issue #14). Everything here is a pure projection over the
@@ -62,6 +64,8 @@ export type RunDetail = {
   readonly endedAt: number | undefined;
   readonly iterations: number;
   readonly tokensSpent: number | undefined;
+  /** Per-layer token spend (harness vs. the LLM steps), folded from the event log (issue #17). */
+  readonly usage: UsageReport;
   /** The frozen success contract (its hash is `contract.contractHash`); null before compile. */
   readonly contract: CompiledContract | null;
   readonly contractHash: ContractHash | null;
@@ -113,6 +117,10 @@ export function runDetail(header: RunLogHeader, entries: readonly RunLogEntry[])
     endedAt: last?.ts,
     iterations: iterationCount(state),
     tokensSpent: lastTokensSpent(entries),
+    usage: summarizeUsage(
+      entries.map((e) => e.event),
+      header.config.budget,
+    ),
     contract,
     contractHash,
     compileFailures: collectCompileFailures(entries),

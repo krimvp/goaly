@@ -22,6 +22,7 @@ import { CodexAdapter } from '../harness/codex';
 import { DroidAdapter } from '../harness/droid';
 import { SystemClock } from '../driver/clock';
 import { SystemBudgetMeter } from '../driver/budget';
+import { LlmTokenMeter, meterLlm } from '../driver/llm-meter';
 import { buildLogger, type FileLogOptions } from '../log/build';
 import type { Logger, LogLevel } from '../log/logger';
 import type { LogFs } from '../log/sinks';
@@ -89,6 +90,10 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   const models = resolveModels(options.models ?? {});
   const provider = options.llmProvider ?? 'claude';
   const timeouts = options.timeouts ?? {};
+  // One meter for every LLM workflow step (compiler / judge / approver) so the Driver can aggregate
+  // their token spend per command (issue #17). Wrapping is transparent — the consumers still see a
+  // plain LlmProvider, and an injected test `llm` is metered just the same.
+  const llmMeter = new LlmTokenMeter();
   const clock = new SystemClock();
   const workspace = new GitWorkspace(options.workspaceRoot);
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
@@ -98,13 +103,17 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   // An injected `llm` (tests) overrides every step; otherwise build a provider per step so each can
   // carry its own resolved model, per-step timeout, AND its phase-tagged stream sink. All three are
   // wiring — none enters the frozen contract. The sink is injected at CONSTRUCTION so it never leaks
-  // through the Verifier/Approver seams (the `LlmProvider` stays an internal seam).
+  // through the Verifier/Approver seams (the `LlmProvider` stays an internal seam). Each provider is
+  // wrapped with the shared meter so its token spend is aggregated at the Driver (issue #17).
   const llmFor = (model: string | undefined, phase: StreamPhase): LlmProvider =>
-    options.llm ??
-    makeLlmProvider(provider, model, {
-      ...(timeouts.llmMs !== undefined ? { timeoutMs: timeouts.llmMs } : {}),
-      ...(streamSink !== undefined ? { onEvent: (event) => streamSink(phase, event) } : {}),
-    });
+    meterLlm(
+      options.llm ??
+        makeLlmProvider(provider, model, {
+          ...(timeouts.llmMs !== undefined ? { timeoutMs: timeouts.llmMs } : {}),
+          ...(streamSink !== undefined ? { onEvent: (event) => streamSink(phase, event) } : {}),
+        }),
+      llmMeter,
+    );
 
   return {
     compiler: new AgentCompiler({
@@ -120,6 +129,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     workspace,
     clock,
     budget: new SystemBudgetMeter(config.budget, clock),
+    llmMeter,
     runlog: new FileRunLog(path.join(stateDir, options.runId)),
     logger,
     ...(streamSink !== undefined ? { onStreamEvent: streamSink } : {}),

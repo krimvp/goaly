@@ -47,6 +47,8 @@ export type ParsedArgs = {
   stream: boolean;
   /** Per-step subprocess timeouts (pure wiring; each absent ⇒ that step keeps its default). */
   timeouts: StepTimeouts;
+  /** Optional `--cost-table` JSON path: prices the token report (USD per 1M tokens). Default off. */
+  costTablePath: string | undefined;
   /** Config files that supplied default flags, lowest-precedence first (pure wiring; for logging). */
   configSources: string[];
 };
@@ -60,7 +62,7 @@ Usage:
                [--harness claude-code|codex|droid] [--model <m>] [--llm-model <m>]
                [--llm-provider claude|codex|droid] [--harness-timeout-ms N]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
-               [--workspace <dir>] [--resume <runId>]
+               [--cost-table <path>] [--workspace <dir>] [--resume <runId>]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
                [--stream]
 
@@ -116,6 +118,14 @@ Config file (so the same wiring need not be repeated every run):
     { "harness": "codex", "autonomous": true, "max-iterations": 8, "verify-cmd": "npm test" }
   Precedence: CLI flag > --config file > .goalyrc > tool default. Per-invocation flags
   (--workspace, --resume, --config) are never read from a file.
+
+Per-run spend report (printed at the end of every run; stored in the run log):
+  Tokens are summarized by layer — harness vs. the LLM steps (compiler / judge / approver) —
+  and against any --budget-tokens cap. Missing token data degrades to "unknown", never a crash.
+  --cost-table <p>  optional JSON mapping model → USD per 1,000,000 tokens (a "default" key
+                    prices any unlisted model). Adds an approximate cost overlay; OFF by default
+                    (tokens-only), since prices go stale. Example cost-table.json:
+                      { "claude-sonnet-4-6": 3, "default": 5 }
 
 Diagnostics (leveled, structured logging — separate from the write-ahead run log):
   --log-level <l>   minimum level: debug | info | warn | error (default info). debug is the
@@ -253,6 +263,7 @@ export async function parseArgs(
     noLogFile: flags['no-log-file'] !== undefined,
     stream: flags['stream'] !== undefined,
     timeouts: parseTimeouts(flags),
+    costTablePath: str(flags, 'cost-table'),
     configSources,
   };
 }
@@ -387,6 +398,7 @@ function baseArgs(
     noLogFile: false,
     stream: false,
     timeouts: {},
+    costTablePath: undefined,
     configSources: [],
   };
 }

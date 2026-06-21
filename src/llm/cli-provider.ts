@@ -1,6 +1,6 @@
-import type { LlmProvider, LlmRequest } from './provider';
+import type { LlmCompletion, LlmProvider, LlmRequest } from './provider';
 import { runProcess, type ProcessResult } from '../util/spawn';
-import { parseAgentOutput, flatExtractor } from '../agent-cli/output';
+import { parseAgentOutput, flatExtractor, type AgentOutput } from '../agent-cli/output';
 import { StreamTap, type AgentEventSink } from '../agent-cli/stream';
 import { claudeStreamExtractor } from '../harness/claude-code';
 
@@ -12,10 +12,11 @@ type ExecFn = (
 
 /**
  * Build the argv for the default `claude` invocation. An explicit `args` array is the caller's full
- * contract — we never splice into it, so `model` is honored only for the default `-p` invocation
- * (append `--model <model>`). When `stream` is set (issue #23) the default invocation switches to
- * `--output-format stream-json --verbose` so per-turn JSONL can be tapped; the closing `result`
- * event still carries the SAME final text, so non-streaming callers are unaffected. Pure and
+ * contract — we never splice into it, so `model` is honored only for the default invocation. The
+ * default asks for a JSON envelope so token usage is available for the per-run spend report (issue
+ * #17): `--output-format json` normally, or `--output-format stream-json --verbose` when streaming
+ * (issue #23) so per-turn JSONL can be tapped. Either way the closing `result` carries the SAME
+ * final text — pulled back out by {@link parseAgentOutput} — so callers are unaffected. Pure and
  * exported so the argv shaping is directly unit-testable (the `exec` seam hides the argv).
  */
 export function buildLlmArgs(
@@ -26,9 +27,16 @@ export function buildLlmArgs(
   if (args !== undefined) return args;
   return [
     '-p',
-    ...(stream ? ['--output-format', 'stream-json', '--verbose'] : []),
+    ...(stream ? ['--output-format', 'stream-json', '--verbose'] : ['--output-format', 'json']),
     ...(model !== undefined ? ['--model', model] : []),
   ];
+}
+
+function toCompletion(parsed: AgentOutput): LlmCompletion {
+  return {
+    text: parsed.text,
+    ...(parsed.tokens !== undefined ? { tokensUsed: parsed.tokens } : {}),
+  };
 }
 
 /**
@@ -43,9 +51,9 @@ export function buildLlmArgs(
 export class CliLlmProvider implements LlmProvider {
   readonly name: string;
   readonly #exec: ExecFn;
-  /** Streaming sink (issue #23), wired at construction; absent → the lean plain-text path, unchanged. */
+  /** Streaming sink (issue #23), wired at construction; absent → the lean JSON path, unchanged. */
   readonly #onEvent: AgentEventSink | undefined;
-  /** True when streaming is active: the default `-p` invocation runs as `stream-json`. */
+  /** True when streaming is active: the default invocation runs as `stream-json`. */
   readonly #streaming: boolean;
 
   constructor(
@@ -58,8 +66,8 @@ export class CliLlmProvider implements LlmProvider {
       /**
        * Opt-in streaming sink. When set (and no explicit `args` override), the provider switches to
        * `--output-format stream-json` and parses the final text with the shared `flatExtractor` —
-       * identical to the plain `-p` text for non-streaming callers — while forwarding per-turn
-       * events. Wired at construction so the Verifier/Approver seams stay unchanged.
+       * identical to the JSON text for non-streaming callers — while forwarding per-turn events.
+       * Wired at construction so the Verifier/Approver seams stay unchanged.
        */
       onEvent?: AgentEventSink;
     } = {},
@@ -80,7 +88,7 @@ export class CliLlmProvider implements LlmProvider {
         }));
   }
 
-  async complete(req: LlmRequest): Promise<string> {
+  async complete(req: LlmRequest): Promise<LlmCompletion> {
     const prompt = req.system !== undefined ? `${req.system}\n\n${req.prompt}` : req.prompt;
     const tap =
       this.#streaming && this.#onEvent !== undefined
@@ -90,15 +98,17 @@ export class CliLlmProvider implements LlmProvider {
     tap?.end();
     if (r.timedOut) throw new Error('LLM CLI timed out');
     if (r.code !== 0) throw new Error(`LLM CLI exited ${r.code}: ${r.stderr.slice(0, 500)}`);
+    // The default invocation returns a JSON(L) envelope; recover the result text AND token usage
+    // (issue #17) with the shared flat extractor. Streaming requires parseable text (fail closed);
+    // a plain-text reply from caller-supplied args isn't JSON, so fall back to the raw stdout.
+    const parsed = parseAgentOutput(r.stdout, flatExtractor());
     if (this.#streaming) {
-      // stream-json stdout is JSONL; recover the final text from the closing `result` event via
-      // the shared flat extractor (same text the plain `-p` path would return). Fail closed.
-      const parsed = parseAgentOutput(r.stdout, flatExtractor());
       if (parsed === null || parsed.text.length === 0) {
         throw new Error('LLM CLI produced no parseable text');
       }
-      return parsed.text;
+      return toCompletion(parsed);
     }
-    return r.stdout.trim();
+    if (parsed !== null) return toCompletion(parsed);
+    return { text: r.stdout.trim() };
   }
 }
