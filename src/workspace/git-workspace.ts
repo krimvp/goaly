@@ -92,14 +92,31 @@ export class GitWorkspace implements Workspace {
 
     const env: NodeJS.ProcessEnv = { ...process.env, GIT_INDEX_FILE: tmpIndex };
     try {
-      // `add -A` respects .gitignore, so node_modules etc. are excluded; the pathspec
-      // additionally keeps the orchestrator's own state dir out of the hash.
-      const added = await this.#exec('git', ['-C', this.#root, 'add', '-A', ...this.#pathspec()], {
+      // `add -A` respects .gitignore, so node_modules etc. are excluded. We deliberately pass NO
+      // pathspec here: naming an excluded path that is ALSO gitignored (e.g. `.goaly` when the repo
+      // ignores `.goaly/`) makes `git add` emit "the following paths are ignored" and exit non-zero,
+      // which would spuriously throw and crash the loop. Instead we stage everything, then unstage
+      // the excludes below — which works whether or not they are gitignored.
+      const added = await this.#exec('git', ['-C', this.#root, 'add', '-A'], {
         cwd: this.#root,
         env,
       });
       if (added.code !== 0) {
         throw new Error(`git add -A failed (code ${added.code}): ${added.stderr.trim()}`);
+      }
+
+      // Keep the orchestrator's own state dir out of the hash, regardless of the repo's .gitignore.
+      // `--ignore-unmatch` makes this a no-op when an exclude is absent or already gitignored (so it
+      // never throws in the common case); `--cached -r` touches only the throwaway index.
+      if (this.#excludes.length > 0) {
+        const removed = await this.#exec(
+          'git',
+          ['-C', this.#root, 'rm', '--cached', '-r', '--quiet', '--ignore-unmatch', '--', ...this.#excludes],
+          { cwd: this.#root, env },
+        );
+        if (removed.code !== 0) {
+          throw new Error(`git rm --cached failed (code ${removed.code}): ${removed.stderr.trim()}`);
+        }
       }
 
       const tree = await this.#exec('git', ['-C', this.#root, 'write-tree'], {
