@@ -16,6 +16,12 @@ export type RunProcessOptions = {
   env?: NodeJS.ProcessEnv;
   /** Cap on captured stdout+stderr bytes before the process is killed (default 16 MB). */
   maxOutputBytes?: number;
+  /**
+   * Optional live stdout tap (issue #23): invoked with each raw stdout chunk as it arrives, in
+   * addition to the buffered capture returned at the end. Used to feed a streaming `StreamTap`.
+   * Guarded so a throwing tap never affects the subprocess result.
+   */
+  onStdout?: (chunk: string) => void;
 };
 
 const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -56,7 +62,16 @@ export function runProcess(
 
     child.stdout?.on('data', (d: Buffer) => {
       if (truncated) return;
-      stdout += d.toString();
+      const chunk = d.toString();
+      stdout += chunk;
+      if (options.onStdout !== undefined) {
+        // Live tap is diagnostics-only: never let it disturb capture or the subprocess.
+        try {
+          options.onStdout(chunk);
+        } catch {
+          /* ignore — a throwing stdout tap must not affect the run */
+        }
+      }
       if (overCap()) {
         truncated = true;
         child.kill('SIGKILL');

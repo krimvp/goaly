@@ -64,6 +64,7 @@ export async function main(argv: string[]): Promise<number> {
     timeouts: parsed.timeouts,
     ...(parsed.logFile !== undefined ? { logFile: parsed.logFile } : {}),
     ...(parsed.noLogFile ? { noLogFile: true } : {}),
+    ...(parsed.stream ? { stream: true } : {}),
   });
 
   // Human-facing startup banner, routed through the logger so it respects --log-level and lands

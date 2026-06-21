@@ -101,6 +101,9 @@ goaly run --goal "..." --generate --autonomous --harness codex \
 goaly run --goal "..." --verify-cmd "npm test" --log-level debug
 goaly run --goal "..." --verify-cmd "npm test" --log-file ./run.log   # or --no-log-file
 
+# Watch the agent's turns live — tool calls, messages, token counts — for the run AND the LLM steps:
+goaly run --goal "..." --verify-cmd "npm test" --stream
+
 # Cap how long each step may run (subprocess kill-timeouts, in ms):
 goaly run --goal "..." --verify-cmd "npm test" \
              --harness-timeout-ms 900000 --llm-timeout-ms 120000 --verify-timeout-ms 60000
@@ -205,6 +208,22 @@ step-by-step firehose, and prompts / harness output / diff / verifier detail sta
 console only. A logging failure never crashes a run (fail-closed). The pure reducer never logs
 (invariant #1).
 
+**Live streaming** (`--stream`) is opt-in observability for the "what is happening right now?" gap.
+A `harness.run()` call — **and** each LLM step (compile / judge / approve) — is otherwise a black
+box: goaly fires a prompt, waits minutes, then sees only the final buffered result. With `--stream`,
+the agent's **intermediate turns** — tool/command invocations and their output, assistant messages,
+reasoning, per-turn token usage — are rendered to **stderr** as they happen, each tagged by phase
+(`[agent]` / `[compile]` / `[judge]` / `[approve]`). Every tool maps its native stream onto one
+**canonical, tool-neutral event taxonomy** (`AgentStreamEvent`: `session` / `message` / `reasoning`
+/ `tool_use` / `tool_result` / `usage` / `done`), Zod-validated at the seam, so the live view is
+uniform across claude-code, codex, and droid (codex via its `--json` JSONL; claude-code and droid
+via `--output-format stream-json`). It's **independent of `--log-level`** (which separately routes
+the same events into the diagnostics file at `debug`), and embedders can subscribe programmatically
+via `composeDeps({ onStreamEvent })` / `DriverDeps.onStreamEvent`. It is **pure observability**: the
+stream never touches the frozen contract, the verifier ladder, or the two-key decision; events are
+**not** written to the run log (resume stays a fold over `OrchestratorEvent` only); and a streaming
+failure degrades to "no live output", never a changed outcome (fail-closed).
+
 ### Inspecting past runs
 
 The write-ahead run log is also queryable after the fact, with two **read-only** subcommands that
@@ -235,12 +254,16 @@ A new harness is **one file** implementing one method:
 ```ts
 interface HarnessAdapter {
   readonly name: string;
-  run(prompt: string, sessionId?: SessionId): Promise<HarnessRunResult>;
+  run(prompt: string, sessionId?: SessionId, onEvent?: AgentEventSink): Promise<HarnessRunResult>;
 }
 ```
 
 `diffHash` and verifier execution live in the shared `Workspace`, not the adapter — so stuck-detection
-and verification work on any harness for free.
+and verification work on any harness for free. The optional `onEvent` is the streaming tap (above):
+beyond the final **field mapping** (`FieldExtractor`), an adapter may supply a **stream mapping** (a
+`StreamEventExtractor`) that maps the tool's per-turn JSONL onto the canonical `AgentStreamEvent`
+taxonomy — both build on the same shared `agent-cli` parsing core. See
+[`docs/adding-a-harness.md`](docs/adding-a-harness.md) for both mappings.
 
 ## Develop
 

@@ -230,11 +230,17 @@ describe('parseArgs', () => {
   });
 
   describe('diagnostic logging flags', () => {
-    it('defaults to info level, no file override, file enabled', async () => {
+    it('defaults to info level, no file override, file enabled, streaming off', async () => {
       const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
       expect(a.logLevel).toBe('info');
       expect(a.logFile).toBeUndefined();
       expect(a.noLogFile).toBe(false);
+      expect(a.stream).toBe(false);
+    });
+
+    it('parses --stream as an opt-in boolean', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--stream']);
+      expect(a.stream).toBe(true);
     });
 
     it('parses --log-level, --log-file and --no-log-file', async () => {
