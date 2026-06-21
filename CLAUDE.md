@@ -13,6 +13,8 @@ Quick reference:
 - Adding a harness: read [`docs/adding-a-harness.md`](docs/adding-a-harness.md) and use the
   `investigate-harness` skill. A harness can optionally also back the LLM steps (read-only
   `LlmProvider` via `--llm-provider`).
+- Recording a terminal-demo GIF (e.g. to attach to a PR): use the `record-demo-gif` skill
+  (`.claude/skills/record-demo-gif/`); its `references/goaly-demo-recipe.md` has the loop-specific recipe.
 - Meaningful changes to the architecture, the public API, or functionality must update `README.md`
   **and** the landing page ([`docs/index.html`](docs/index.html)) in the same change — it's a
   definition-of-done check, not optional. **Also update

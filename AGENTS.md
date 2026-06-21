@@ -180,3 +180,10 @@ definition-of-done checklist. Two skills automate the workflow and enforce the r
 Conventional commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`). Keep diffs
 focused. A PR that touches the reducer must explain how purity and the two-key invariant are
 preserved.
+
+When a change alters user-facing CLI output or behavior, consider attaching a short terminal-demo
+GIF to the PR. The **`record-demo-gif`** skill (`.claude/skills/record-demo-gif/`) records one;
+`references/goaly-demo-recipe.md` has the loop-specific recipe (throwaway git sandbox, run from
+inside it, `--autonomous`, and decoding the run log to reveal the verifier ladder + Gate-B approver).
+GIFs are demo artifacts — host them (e.g. catbox) and embed the URL in the PR body; never commit the
+GIF/cast into the repo.

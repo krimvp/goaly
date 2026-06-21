@@ -34,4 +34,11 @@ Fixes #
      a seam, or a fail-closed/parse path: state how each affected invariant is preserved. Otherwise
      write "no invariant-bearing code touched". -->
 
+## Demo
+
+<!-- Optional. If this changes user-facing CLI output/behavior, a short terminal-demo GIF helps
+     reviewers. The `record-demo-gif` skill records one (see .claude/skills/record-demo-gif/ and its
+     goaly-demo-recipe.md). Host the GIF and embed it: ![demo](https://files.catbox.moe/...gif) —
+     don't commit the GIF into the repo. -->
+
 ## Notes for reviewers
