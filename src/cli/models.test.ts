@@ -1,0 +1,51 @@
+import { describe, it, expect } from 'vitest';
+import { ModelSelection, resolveModels } from './models';
+
+describe('resolveModels (cascade)', () => {
+  it('no flags → every seam at its tool default', () => {
+    expect(resolveModels(ModelSelection.parse({}))).toEqual({
+      harness: undefined, compiler: undefined, judge: undefined, approver: undefined,
+    });
+  });
+
+  it('--model cascades to the harness AND every LLM step', () => {
+    expect(resolveModels(ModelSelection.parse({ model: 'm' }))).toEqual({
+      harness: 'm', compiler: 'm', judge: 'm', approver: 'm',
+    });
+  });
+
+  it('--llm-model overrides all LLM steps but not the harness', () => {
+    expect(resolveModels(ModelSelection.parse({ model: 'm', llmModel: 'L' }))).toEqual({
+      harness: 'm', compiler: 'L', judge: 'L', approver: 'L',
+    });
+  });
+
+  it('a per-step flag overrides only that step; others fall back to --llm-model', () => {
+    expect(resolveModels(ModelSelection.parse({ model: 'm', llmModel: 'L', judgeModel: 'J' }))).toEqual({
+      harness: 'm', compiler: 'L', judge: 'J', approver: 'L',
+    });
+  });
+
+  it('a per-step flag with only --model set: others fall back to --model', () => {
+    expect(resolveModels(ModelSelection.parse({ model: 'm', approverModel: 'A' }))).toEqual({
+      harness: 'm', compiler: 'm', judge: 'm', approver: 'A',
+    });
+  });
+
+  it('per-step only (no --model/--llm-model) leaves the rest at tool default', () => {
+    expect(resolveModels(ModelSelection.parse({ judgeModel: 'J' }))).toEqual({
+      harness: undefined, compiler: undefined, judge: 'J', approver: undefined,
+    });
+  });
+});
+
+describe('ModelSelection validation (fail closed at the seam)', () => {
+  it('rejects an empty or whitespace-only value', () => {
+    expect(ModelSelection.safeParse({ model: '' }).success).toBe(false);
+    expect(ModelSelection.safeParse({ llmModel: '   ' }).success).toBe(false);
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(ModelSelection.parse({ model: '  opus  ' }).model).toBe('opus');
+  });
+});

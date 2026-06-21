@@ -2,6 +2,13 @@ import { spawn } from 'node:child_process';
 import { SessionId } from '../domain/ids';
 import { HarnessRunResult } from '../domain/events';
 import type { HarnessAdapter } from './adapter';
+import {
+  isRecord,
+  parseAgentOutput,
+  type AgentFields,
+  type AgentOutput,
+  type FieldExtractor,
+} from '../agent-cli/output';
 
 /**
  * Raw result of spawning the codex binary. `code` is the process exit code (null when the
@@ -27,17 +34,19 @@ const SESSION_FALLBACK = 'codex-unknown';
  * Assumed codex CLI contract (the EXACT flags may differ between codex versions — this is the
  * seam, not a hard dependency):
  *
- *   New conversation:  `codex exec <prompt> --json`
- *   Resume a thread:   `codex exec resume <sessionId> <prompt> --json`
+ *   New conversation:  `codex exec [--model <m>] <prompt> --json`
+ *   Resume a thread:   `codex exec resume <sessionId> [--model <m>] <prompt> --json`
  *
  * `--json` makes codex stream JSONL events on stdout, one JSON object per line. We parse those
- * lines tolerantly in `parseCodexOutput`.
+ * lines tolerantly via the shared core. The model flag (when set) precedes the prompt positional
+ * so the prompt is never mistaken for the model value.
  */
-function buildArgs(prompt: string, sessionId?: SessionId): string[] {
+function buildArgs(prompt: string, model: string | undefined, sessionId?: SessionId): string[] {
+  const modelArgs = model !== undefined ? ['--model', model] : [];
   if (sessionId !== undefined) {
-    return ['exec', 'resume', sessionId as unknown as string, prompt, '--json'];
+    return ['exec', 'resume', sessionId as unknown as string, ...modelArgs, prompt, '--json'];
   }
-  return ['exec', prompt, '--json'];
+  return ['exec', ...modelArgs, prompt, '--json'];
 }
 
 /** Default production exec: spawn the real `codex` binary and collect its output. */
@@ -80,16 +89,6 @@ function defaultExec(timeoutMs: number): ExecFn {
       });
     });
 }
-
-/** A single tolerantly-extracted carrier of useful fields from a JSONL event. */
-type ExtractedFields = {
-  text?: string;
-  sessionId?: string;
-  tokens?: number;
-};
-
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Pull a string from the first key present, tolerating nested message shapes. */
 function extractText(obj: Record<string, unknown>): string | undefined {
@@ -152,57 +151,29 @@ function extractTokens(obj: Record<string, unknown>): number | undefined {
   return undefined;
 }
 
-function extractFields(obj: Record<string, unknown>): ExtractedFields {
-  const out: ExtractedFields = {};
+/**
+ * Codex's field strategy: tolerant of nested message/content/delta shapes and codex's thread-id
+ * session keys. The shared envelope machinery (whole-object/JSONL, latch-first-session,
+ * keep-last-text) lives in {@link parseAgentOutput}.
+ */
+export const codexExtractor: FieldExtractor = (obj) => {
+  const fields: AgentFields = {};
   const text = extractText(obj);
-  if (text !== undefined) out.text = text;
+  if (text !== undefined) fields.text = text;
   const sid = extractSessionId(obj);
-  if (sid !== undefined) out.sessionId = sid;
+  if (sid !== undefined) fields.sessionId = sid;
   const tokens = extractTokens(obj);
-  if (tokens !== undefined) out.tokens = tokens;
-  return out;
-}
+  if (tokens !== undefined) fields.tokens = tokens;
+  return fields;
+};
 
 /**
  * Tolerantly walk codex `--json` JSONL stdout. Returns the final assistant/result text, plus a
- * session/thread id and token usage when any line carries them. Returns `null` when no line is
- * valid JSON or no usable text was found, so the adapter can map that to `crashed`. Never throws.
+ * session/thread id and token usage when present, or `null` when no line is valid JSON or no
+ * usable text was found. Never throws. A thin wrapper over the shared {@link parseAgentOutput}.
  */
-export function parseCodexOutput(
-  stdout: string,
-): { text: string; sessionId?: string; tokens?: number } | null {
-  const lines = stdout.split(/\r?\n/);
-  let sawValidJson = false;
-  let lastText: string | undefined;
-  let sessionId: string | undefined;
-  let tokens: number | undefined;
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (line.length === 0) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue; // tolerate non-JSON / partial lines
-    }
-    if (!isRecord(parsed)) continue;
-    sawValidJson = true;
-    const fields = extractFields(parsed);
-    if (fields.text !== undefined) lastText = fields.text;
-    // Session id: latch the FIRST seen (the thread id is established once at stream start).
-    if (fields.sessionId !== undefined && sessionId === undefined) sessionId = fields.sessionId;
-    // Tokens: keep the latest non-empty seen (usage accrues over the stream).
-    if (fields.tokens !== undefined) tokens = fields.tokens;
-  }
-
-  if (!sawValidJson) return null;
-  if (lastText === undefined) return null;
-
-  const result: { text: string; sessionId?: string; tokens?: number } = { text: lastText };
-  if (sessionId !== undefined) result.sessionId = sessionId;
-  if (tokens !== undefined) result.tokens = tokens;
-  return result;
+export function parseCodexOutput(stdout: string): AgentOutput | null {
+  return parseAgentOutput(stdout, codexExtractor);
 }
 
 /** Coerce an arbitrary candidate string into a valid SessionId, falling back when invalid. */
@@ -213,22 +184,24 @@ function toSessionId(candidate: string | undefined): SessionId {
 }
 
 /**
- * Codex headless adapter. Mirrors the Claude adapter exactly: never throws, classifies output
- * into `completed | crashed | truncated | timeout`, and always returns a Zod-parsed
- * HarnessRunResult. The subprocess is injectable so tests never spawn a real process.
+ * Codex headless adapter. Never throws, classifies output into
+ * `completed | crashed | truncated | timeout`, and always returns a Zod-parsed HarnessRunResult.
+ * The subprocess is injectable so tests never spawn a real process.
  */
 export class CodexAdapter implements HarnessAdapter {
   readonly name = 'codex';
   readonly #exec: ExecFn;
   readonly #timeoutMs: number;
+  readonly #model: string | undefined;
 
-  constructor(opts?: { exec?: ExecFn; timeoutMs?: number }) {
+  constructor(opts?: { exec?: ExecFn; timeoutMs?: number; model?: string }) {
     this.#timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#exec = opts?.exec ?? defaultExec(this.#timeoutMs);
+    this.#model = opts?.model;
   }
 
   async run(prompt: string, sessionId?: SessionId): Promise<HarnessRunResult> {
-    const args = buildArgs(prompt, sessionId);
+    const args = buildArgs(prompt, this.#model, sessionId);
 
     let result: ExecResult;
     try {

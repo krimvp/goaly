@@ -133,6 +133,24 @@ describe('DroidAdapter', () => {
     ]);
   });
 
+  it('threads --model among the leading flags, prompt last (fresh + resume)', async () => {
+    const capture = { args: [] as string[][], prompts: [] as string[] };
+    const adapter = new DroidAdapter({
+      model: 'm1',
+      exec: fakeExec({ stdout: droidRealSample, stderr: '', code: 0 }, capture),
+    });
+
+    await adapter.run('do it');
+    expect(capture.args[0]).toEqual([
+      'exec', '--output-format', 'json', '--auto', 'low', '--model', 'm1', 'do it',
+    ]);
+
+    await adapter.run('more', SessionId.parse('sess-prev'));
+    expect(capture.args[1]).toEqual([
+      'exec', '--output-format', 'json', '--auto', 'low', '--model', 'm1', '--session-id', 'sess-prev', 'more',
+    ]);
+  });
+
   it('returns crashed (but a valid RunResult) on a non-zero exit code', async () => {
     const adapter = new DroidAdapter({ exec: fakeExec({ stdout: '', stderr: 'boom: cli failed', code: 1 }) });
 

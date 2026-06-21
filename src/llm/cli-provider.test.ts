@@ -1,8 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { CliLlmProvider } from './cli-provider';
+import { CliLlmProvider, buildLlmArgs } from './cli-provider';
 import type { ProcessResult } from '../util/spawn';
 
 const ok = (stdout: string): ProcessResult => ({ stdout, stderr: '', code: 0, timedOut: false });
+
+describe('buildLlmArgs', () => {
+  it('defaults to -p with no model', () => {
+    expect(buildLlmArgs(undefined, undefined)).toEqual(['-p']);
+  });
+
+  it('appends --model to the default args when a model is set', () => {
+    expect(buildLlmArgs(undefined, 'opus')).toEqual(['-p', '--model', 'opus']);
+  });
+
+  it('returns caller-supplied args untouched, ignoring the model', () => {
+    expect(buildLlmArgs(['--print'], 'opus')).toEqual(['--print']);
+  });
+});
 
 describe('CliLlmProvider', () => {
   it('combines system + prompt on stdin and returns trimmed stdout', async () => {

@@ -104,29 +104,47 @@ leaves behind frozen interfaces. Prove policy with fakes before spawning a subpr
 
 ## Adding a new harness
 
-A new harness is **one file** implementing `HarnessAdapter.run()`. See
-[`docs/adding-a-harness.md`](docs/adding-a-harness.md) for the full guide, and use the
+A new harness is **one file** implementing `HarnessAdapter.run()`. It composes the shared
+agent-CLI output core (`src/agent-cli/output.ts`: `parseAgentOutput` + a per-tool `FieldExtractor`;
+`flatExtractor` covers a flat envelope) and, for the standard status policy, the shared
+`classifyHarnessRun` (`src/harness/classify.ts`) — don't re-implement tolerant JSON/JSONL parsing.
+See [`docs/adding-a-harness.md`](docs/adding-a-harness.md) for the full guide, and use the
 **`investigate-harness`** skill (`.claude/skills/investigate-harness/`) to probe an unfamiliar CLI
 and produce the field/flag/status mapping before you write the adapter.
 
+A harness CLI can **optionally** also back the LLM workflow steps (compiler / judge / approver) via
+the separate, **read-only** `LlmProvider` seam — wrap it with `AgentCliLlmProvider` reusing the same
+`FieldExtractor`, register an `LlmProviderChoice` + `makeLlmProvider()` case, and select it with
+`--llm-provider`. A judge/approver must never edit the tree, so this is read-only only. See the
+"Optional: also use the tool for the LLM steps" section of the harness guide.
+
 ## Keep the docs in sync (explicit check)
 
-The README and the landing page are part of the public contract, not optional decoration. **Any
-change that alters the architecture, the public/embeddable API (`src/index.ts` exports, the CLI
-flags/usage, the `HarnessAdapter`/seam interfaces), or user-facing functionality MUST update both
-of these in the same change:**
+The README and the docs are part of the public contract, not optional decoration. **Any change that
+alters the architecture, the public/embeddable API (`src/index.ts` exports, the CLI flags/usage, the
+`HarnessAdapter`/`LlmProvider`/seam interfaces), the harness-authoring pattern, or user-facing
+functionality MUST update the affected docs below in the same change:**
 
 - [`README.md`](README.md) — install, usage, flags, supported harnesses, the how-it-works summary.
 - [`docs/index.html`](docs/index.html) — the GitHub Pages landing page (the interactive overview):
   its pipeline / state-machine / DECIDE / verifier-ladder / seam diagrams, the support matrix, the
   "adding a harness" guide, and the harness-comparison tabs.
+- [`docs/adding-a-harness.md`](docs/adding-a-harness.md) — the harness-authoring guide. It contains
+  **real interface signatures, a copy-paste skeleton, and field/status-mapping recipes**, so it
+  rots silently when you change *how* a harness is written. Update it whenever you touch the
+  `HarnessAdapter` shape, the shared parsing core (`parseAgentOutput` / `FieldExtractor` /
+  `flatExtractor` / `classifyHarnessRun`), the adapter constructor options (e.g. `model`), the
+  `LlmProvider` seam or `AgentCliLlmProvider`, or the `args.ts`/`compose.ts` registration edits.
+  (Also re-check the `investigate-harness` skill if the discovery worksheet it emits no longer
+  matches the mapping the guide asks for.)
 
 Treat it as a definition-of-done gate. A change that adds or renames a harness, changes a CLI flag,
 alters the state machine / DECIDE table / verifier ladder / stuck detectors, moves or renames a
-seam, changes a default (e.g. judge quorum, confidence floor, `maxIterations`), or adds/removes an
-exported symbol is **not done** until `README.md` and `docs/index.html` reflect it. The landing page
-cites real states, commands, events, statuses, and defaults — if you change those in `src/`, change
-the page so it stays accurate. When in doubt whether a change is "meaningful", assume it is.
+seam, **changes how harness output is parsed or how an adapter is authored**, changes a default
+(e.g. judge quorum, confidence floor, `maxIterations`), or adds/removes an exported symbol is **not
+done** until every doc above that describes it reflects it. The docs cite real states, commands,
+events, statuses, signatures, and defaults — if you change those in `src/`, change the docs so they
+stay accurate. When in doubt whether a change is "meaningful", assume it is.
 
 ## Anti-patterns (rejected on sight)
 

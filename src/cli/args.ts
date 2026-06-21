@@ -1,12 +1,19 @@
+import { z } from 'zod';
 import { CliInput, cliInputToRunConfig, type RunConfig } from '../domain/config';
+import { ModelSelection, type ModelSelectionInput } from './models';
 import { resolveInputSources, defaultReaders, type InputReaders } from './input-sources';
 
 export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'fake';
+
+/** Which CLI runs the LLM workflow steps (judge / approver / compiler). */
+export type LlmProviderChoice = 'claude' | 'codex' | 'droid';
 
 export type ParsedArgs = {
   command: 'run' | 'help';
   config: RunConfig;
   harness: HarnessChoice;
+  models: ModelSelection;
+  llmProvider: LlmProviderChoice;
   workspace: string;
   resumeRunId: string | undefined;
 };
@@ -17,7 +24,8 @@ Usage:
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
                [--max-gate-a-revisions N] [--budget-tokens N] [--budget-wall-ms N]
-               [--harness claude-code|codex|droid] [--workspace <dir>] [--resume <runId>]
+               [--harness claude-code|codex|droid] [--model <m>] [--llm-model <m>]
+               [--llm-provider claude|codex|droid] [--workspace <dir>] [--resume <runId>]
 
   goaly help
 
@@ -31,6 +39,15 @@ Goal / intent / rubric input (choose ONE source per field):
 Verification:
   --verify-cmd   point at an existing command that must exit 0
   --generate     have the agent author the verification (optionally guided by --intent)
+
+Model selection (all optional; default = each tool's own default):
+  --model <m>           model for the harness AND the LLM steps (the global default)
+  --llm-model <m>       model for all LLM steps (judge / approver / compiler)
+  --judge-model <m>     model for the LLM-judge rung only
+  --approver-model <m>  model for the Gate-B approver only
+  --compiler-model <m>  model for the verification compiler only
+  --llm-provider <p>    which CLI runs the LLM steps: claude (default) | codex | droid
+  Precedence per LLM step: per-step flag → --llm-model → --model. The harness follows --model.
 
 Gate A (contract approval):
   default                     print the frozen contract and prompt for one of:
@@ -121,6 +138,8 @@ export async function parseArgs(
     command: 'run',
     config: cliInputToRunConfig(cliInput),
     harness,
+    models: parseModels(flags),
+    llmProvider: parseLlmProvider(str(flags, 'llm-provider')),
     workspace: str(flags, 'workspace') ?? process.cwd(),
     resumeRunId: str(flags, 'resume'),
   };
@@ -134,12 +153,44 @@ function parseHarness(value: string | undefined): HarnessChoice {
   throw new UsageError(`unknown harness: ${value} (expected claude-code | codex | droid | fake)`);
 }
 
+function parseLlmProvider(value: string | undefined): LlmProviderChoice {
+  if (value === undefined) return 'claude';
+  if (value === 'claude' || value === 'codex' || value === 'droid') return value;
+  throw new UsageError(`unknown llm provider: ${value} (expected claude | codex | droid)`);
+}
+
+/** Collect the model flags and validate them at the Zod seam (non-empty, fails closed). */
+function parseModels(flags: RawFlags): ModelSelection {
+  const raw: Partial<Record<keyof ModelSelectionInput, string>> = {};
+  const add = (key: keyof ModelSelectionInput, flag: string): void => {
+    const v = str(flags, flag);
+    if (v !== undefined) raw[key] = v;
+  };
+  add('model', 'model');
+  add('llmModel', 'llm-model');
+  add('judgeModel', 'judge-model');
+  add('approverModel', 'approver-model');
+  add('compilerModel', 'compiler-model');
+  try {
+    return ModelSelection.parse(raw);
+  } catch (e) {
+    if (e instanceof z.ZodError) {
+      const issue = e.issues[0];
+      const flag = issue?.path[0] !== undefined ? `--${String(issue.path[0])}` : 'a model flag';
+      throw new UsageError(`${flag}: ${issue?.message ?? 'must be a non-empty value'}`);
+    }
+    throw e;
+  }
+}
+
 function helpResult(): ParsedArgs {
   return {
     command: 'help',
     // a placeholder config; never used for the help command.
     config: cliInputToRunConfig(CliInput.parse({ goal: 'help', verifyCmd: 'true' })),
     harness: 'claude-code',
+    models: ModelSelection.parse({}),
+    llmProvider: 'claude',
     workspace: process.cwd(),
     resumeRunId: undefined,
   };
