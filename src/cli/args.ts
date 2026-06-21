@@ -10,6 +10,9 @@ export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'fake';
 /** Which CLI runs the LLM workflow steps (judge / approver / compiler). */
 export type LlmProviderChoice = 'claude' | 'codex' | 'droid';
 
+/** The read-only run-inspection subcommand (`goaly runs list` / `goaly runs show <id>`). */
+export type RunsCommand = { readonly kind: 'list' } | { readonly kind: 'show'; readonly runId: string };
+
 /**
  * Per-step subprocess kill-timeouts in milliseconds (pure wiring — never enters the contract).
  * Each is optional: when absent the step keeps its built-in default (harness/LLM = 10 min; the
@@ -25,7 +28,9 @@ export type StepTimeouts = {
 };
 
 export type ParsedArgs = {
-  command: 'run' | 'help';
+  command: 'run' | 'help' | 'runs';
+  /** The read-only inspection subcommand; present only when `command === 'runs'`. */
+  runs: RunsCommand | undefined;
   config: RunConfig;
   harness: HarnessChoice;
   models: ModelSelection;
@@ -55,6 +60,9 @@ Usage:
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
                [--workspace <dir>] [--resume <runId>]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
+
+  goaly runs list [--workspace <dir>]
+  goaly runs show <runId> [--workspace <dir>]
 
   goaly help
 
@@ -111,7 +119,15 @@ Diagnostics (leveled, structured logging — separate from the write-ahead run l
                     step-by-step firehose; prompts/output/diff stay at debug, never info.
   --log-file <p>    override the rotating diagnostics file (default
                     <workspace>/.goaly/<runId>/goaly.log; size-rotated, 5 MiB × 3 archives).
-  --no-log-file     console only — write no diagnostics file.`;
+  --no-log-file     console only — write no diagnostics file.
+
+Run history & inspection (read-only — pure replay of the write-ahead run log, no re-running):
+  goaly runs list           a table of past runs under <workspace>/.goaly: id, status, iterations,
+                            tokens, started/ended, goal. Corrupt logs are flagged, never dropped.
+  goaly runs show <runId>   the frozen contract (+ hash), Gate A outcome, the per-iteration
+                            verifier-ladder results and Gate B verdicts, the stuck/failure reason,
+                            and totals — reconstructed by the same replay-fold that --resume uses.
+  --workspace <dir>         where to look for the .goaly run-log directory (default: cwd).`;
 
 export type RawFlags = Record<string, string | boolean>;
 
@@ -159,6 +175,9 @@ export async function parseArgs(
 
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') {
     return helpResult();
+  }
+  if (command === 'runs') {
+    return runsResult(parseRunsCommand(rest));
   }
   if (command !== 'run') {
     throw new UsageError(`unknown command: ${command}`);
@@ -209,6 +228,7 @@ export async function parseArgs(
 
   return {
     command: 'run',
+    runs: undefined,
     config: cliInputToRunConfig(cliInput),
     harness,
     models: parseModels(flags),
@@ -296,15 +316,57 @@ function parseModels(flags: RawFlags): ModelSelection {
   }
 }
 
+/**
+ * Parse the read-only `runs` subcommand. `<runId>` is a positional (not a `--flag`); only
+ * `--workspace` is honoured (it locates the `.goaly` run-log directory). Fails closed on a
+ * missing/unknown subcommand or a missing run id.
+ */
+function parseRunsCommand(rest: string[]): { runs: RunsCommand; workspace: string } {
+  const [sub, ...subRest] = rest;
+  if (sub === 'list') {
+    return { runs: { kind: 'list' }, workspace: runsWorkspace(subRest) };
+  }
+  if (sub === 'show') {
+    const runId = subRest[0];
+    if (runId === undefined || runId.startsWith('--')) {
+      throw new UsageError('runs show requires a <runId> (e.g. goaly runs show run-1234)');
+    }
+    return { runs: { kind: 'show', runId }, workspace: runsWorkspace(subRest.slice(1)) };
+  }
+  throw new UsageError(`unknown runs subcommand: ${sub ?? '(none)'} (expected list | show)`);
+}
+
+function runsWorkspace(tokens: string[]): string {
+  return str(parseFlags(tokens), 'workspace') ?? process.cwd();
+}
+
 function helpResult(): ParsedArgs {
+  return baseArgs('help', undefined, process.cwd());
+}
+
+function runsResult(parsed: { runs: RunsCommand; workspace: string }): ParsedArgs {
+  return baseArgs('runs', parsed.runs, parsed.workspace);
+}
+
+/**
+ * The shared {@link ParsedArgs} scaffold for the non-`run` commands (help / runs). The run-specific
+ * fields are placeholders never read for those commands — only `command`, `runs` and `workspace`
+ * carry meaning.
+ */
+function baseArgs(
+  command: ParsedArgs['command'],
+  runs: RunsCommand | undefined,
+  workspace: string,
+): ParsedArgs {
   return {
-    command: 'help',
-    // a placeholder config; never used for the help command.
+    command,
+    runs,
+    // a placeholder config; never used for the help / runs commands.
     config: cliInputToRunConfig(CliInput.parse({ goal: 'help', verifyCmd: 'true' })),
     harness: 'claude-code',
     models: ModelSelection.parse({}),
     llmProvider: 'claude',
-    workspace: process.cwd(),
+    workspace,
     resumeRunId: undefined,
     logLevel: 'info',
     logFile: undefined,

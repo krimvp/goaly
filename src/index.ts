@@ -23,9 +23,11 @@ export {
   type ParsedArgs,
   type HarnessChoice,
   type LlmProviderChoice,
+  type RunsCommand,
   type StepTimeouts,
   type RawFlags,
 } from './cli/args';
+export { runRuns, renderRunsTable, renderRunDetail } from './cli/runs';
 export {
   ModelSelection,
   resolveModels,
@@ -57,6 +59,19 @@ export type { ContractGate } from './compile/gateA';
 export type { Workspace, CommandResult } from './workspace/workspace';
 export type { RunLog } from './runlog/runlog';
 export { RunLogHeader, RunLogEntry } from './runlog/runlog';
+export { replay, type ReplayResult } from './runlog/replay';
+export {
+  listRuns,
+  readRun,
+  runSummary,
+  runDetail,
+  type RunStatus,
+  type RunSummary,
+  type RunDetail,
+  type IterationDetail,
+  type RunListItem,
+  type RunReadResult,
+} from './runlog/inspect';
 export type { LlmProvider, LlmRequest } from './llm/provider';
 export { FakeLlm } from './llm/provider';
 

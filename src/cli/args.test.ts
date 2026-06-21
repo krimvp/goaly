@@ -78,6 +78,38 @@ describe('parseArgs', () => {
     await expect(parseArgs(['frobnicate'])).rejects.toThrow(UsageError);
   });
 
+  describe('runs subcommand (issue #14)', () => {
+    it('parses "runs list" with the default workspace (cwd)', async () => {
+      const a = await parseArgs(['runs', 'list']);
+      expect(a.command).toBe('runs');
+      expect(a.runs).toEqual({ kind: 'list' });
+      expect(a.workspace).toBe(process.cwd());
+    });
+
+    it('parses "runs list --workspace <dir>"', async () => {
+      const a = await parseArgs(['runs', 'list', '--workspace', '/tmp/ws']);
+      expect(a.runs).toEqual({ kind: 'list' });
+      expect(a.workspace).toBe('/tmp/ws');
+    });
+
+    it('parses "runs show <id>" with a positional run id', async () => {
+      const a = await parseArgs(['runs', 'show', 'run-1234', '--workspace', '/tmp/ws']);
+      expect(a.command).toBe('runs');
+      expect(a.runs).toEqual({ kind: 'show', runId: 'run-1234' });
+      expect(a.workspace).toBe('/tmp/ws');
+    });
+
+    it('throws UsageError when "runs show" is missing the run id', async () => {
+      await expect(parseArgs(['runs', 'show'])).rejects.toThrow(UsageError);
+      await expect(parseArgs(['runs', 'show', '--workspace', '/x'])).rejects.toThrow(UsageError);
+    });
+
+    it('throws UsageError on an unknown runs subcommand', async () => {
+      await expect(parseArgs(['runs', 'delete'])).rejects.toThrow(UsageError);
+      await expect(parseArgs(['runs'])).rejects.toThrow(UsageError);
+    });
+  });
+
   it('throws UsageError on an unknown harness', async () => {
     await expect(
       parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'bogus']),
