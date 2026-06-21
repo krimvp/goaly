@@ -108,7 +108,11 @@ call what counts as "no text"). `parseAgentOutput` returns `null` when nothing u
 ### 2. Status mapping — process outcome → `status`
 
 For the standard policy, call the shared `classifyHarnessRun({ parsed, code, stderr, timedOut,
-sessionId, unknownSession })` (from `src/harness/classify.ts`, used by claude-code **and** droid):
+sessionId, unknownSession, estimator? })` (from `src/harness/classify.ts`, used by claude-code **and**
+droid). The optional `estimator` (issue #24) is the `StreamTokenEstimator` returned by
+`streamingEstimator(onEvent)`: when the parsed envelope carries **no** `usage`, `classifyHarnessRun`
+falls back to its local estimate and stamps `tokenSource: 'estimated'` on the result (vs `'reported'`
+for a real count). Omit it and a quiet run simply reports unknown spend, exactly as before:
 
 | Condition | status |
 |---|---|
@@ -188,6 +192,7 @@ import { HarnessRunResult } from '../domain/events';
 import type { HarnessAdapter } from './adapter';
 import { parseAgentOutput, flatExtractor } from '../agent-cli/output';
 import { StreamTap, sdkStreamExtractor, type AgentEventSink } from '../agent-cli/stream';
+import { streamingEstimator } from '../agent-cli/estimate';
 import { classifyHarnessRun } from './classify';
 
 // Injectable subprocess seam so tests never spawn a real process. The optional `onStdout` (issue
@@ -216,7 +221,10 @@ export class MyAgentAdapter implements HarnessAdapter {
   }
   async run(prompt: string, sessionId?: SessionId, onEvent?: AgentEventSink): Promise<HarnessRunResult> {
     // Build the tap only when asked; pick the streaming output format when streaming (issue #23).
-    const tap = onEvent !== undefined ? new StreamTap(myStreamExtractor, onEvent) : undefined;
+    // `streamingEstimator` tees the stream into a local token estimator (issue #24) used as a
+    // fallback when the CLI reports no usage; pass it to `classifyHarnessRun` below.
+    const { sink, estimator } = streamingEstimator(onEvent);
+    const tap = sink !== undefined ? new StreamTap(myStreamExtractor, sink) : undefined;
     const args = ['exec', '--output-format', tap !== undefined ? 'stream-json' : 'json'];
     if (this.#model !== undefined) args.push('--model', this.#model); // model is wiring, not contract
     if (sessionId !== undefined) args.push('--session-id', sessionId); // flags first, prompt last
@@ -244,6 +252,7 @@ export class MyAgentAdapter implements HarnessAdapter {
       timedOut: r.timedOut,
       sessionId,
       unknownSession: UNKNOWN,
+      estimator, // issue #24: estimate spend from the streamed turns when the CLI reports no usage
     });
   }
 }
@@ -294,9 +303,12 @@ it is judging. So wiring your tool here is opt-in — and you get to **reuse the
 already wrote**.
 
 `complete()` returns an `LlmCompletion`, not a bare string: `text` is the result, and the **optional
-`tokensUsed`** feeds the [per-run spend report](../README.md#per-run-spend-report). `AgentCliLlmProvider`
-fills it in from the same `usage` block your `FieldExtractor` already reads (`parsed.tokens`), so you
-get it for free; surfacing nothing is fine — a missing count degrades to "unknown", never a crash.
+`tokensUsed`** (with a `tokenSource: 'reported' | 'estimated'` marker) feeds the
+[per-run spend report](../README.md#per-run-spend-report). `AgentCliLlmProvider` fills it in from the
+same `usage` block your `FieldExtractor` already reads (`parsed.tokens`), so you get it for free; and
+when you also wire a `streamExtractor` (below), it **estimates** the spend from the streamed turns
+whenever the CLI reports no usage (issue #24) — all internal, nothing for you to do. Surfacing nothing
+is still fine — a missing count degrades to "unknown", never a crash.
 
 `AgentCliLlmProvider` (`src/llm/agent-cli-provider.ts`) does the plumbing — build a read-only argv,
 exec, parse with your extractor via the same shared `parseAgentOutput`, return `{text, tokensUsed?}`
@@ -372,6 +384,6 @@ and a throwing sink that never changes the result) — see `src/harness/streamin
 - [ ] Added to `adapter.contract.test.ts`; `npm run typecheck` and `npm test` are green.
 - [ ] Registered in `args.ts` + `compose.ts` (`makeHarness(choice, model, timeoutMs?)`); documented the assumed CLI contract in a comment.
 - [ ] (optional) `--model` threaded into the argv via a `model?` constructor option; keep the `timeoutMs?` option so `--harness-timeout-ms` is honored.
-- [ ] (optional, streaming — issue #23) A `StreamEventExtractor` (the shared `sdkStreamExtractor` / `flatStreamExtractor`, or a custom one) mapping per-turn JSONL onto `AgentStreamEvent`; `run()` builds a `StreamTap` only when `onEvent` is set, feeds it via `onStdout`, `end()`s it, and selects the streaming output format; final result is identical with/without streaming; streaming test added.
+- [ ] (optional, streaming — issue #23) A `StreamEventExtractor` (the shared `sdkStreamExtractor` / `flatStreamExtractor`, or a custom one) mapping per-turn JSONL onto `AgentStreamEvent`; `run()` builds a `StreamTap` only when `onEvent` is set (via `streamingEstimator(onEvent)` so spend is estimated when the CLI reports no usage — issue #24, pass the `estimator` to `classifyHarnessRun`), feeds it via `onStdout`, `end()`s it, and selects the streaming output format; final result is identical with/without streaming; streaming test added.
 - [ ] (optional, only if read-only) Exported the `FieldExtractor` (and `StreamEventExtractor`); added a read-only `*CompletionArgs` builder + `makeLlmProvider()` case (pass `onEvent` + `streamExtractor`) + `LlmProviderChoice` literal; tested it returns parsed text, carries the read-only flag, and fails closed.
 ```

@@ -216,6 +216,9 @@ function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void
         status: event.run.status,
         changed: event.prevDiffHash !== event.diffHash,
         ...(event.budget.tokensSpent !== undefined ? { tokensSpent: event.budget.tokensSpent } : {}),
+        ...(event.budget.tokensEstimated !== undefined
+          ? { tokensEstimated: event.budget.tokensEstimated }
+          : {}),
         budgetExceeded: event.budget.exceeded,
       });
       if (command.tag === 'RUN_AGENT') {
@@ -254,7 +257,7 @@ async function perform(
   // just the harness. Returns the per-event usage to persist, or undefined when no LLM call ran.
   const meterStep = (): TokenUsage | undefined => {
     const usage = deltaToUsage(llmMeter.take());
-    if (usage !== undefined) deps.budget.record(usage.tokens);
+    if (usage !== undefined) deps.budget.record(usage.tokens, usage.estimatedTokens ?? 0);
     return usage;
   };
 
@@ -290,7 +293,11 @@ async function perform(
             ? (event: Parameters<PhasedStreamSink>[1]): void => deps.onStreamEvent?.('agent', event)
             : undefined;
         const run = await deps.harness.run(command.prompt, command.sessionId, onEvent);
-        deps.budget.record(run.tokensUsed);
+        // An estimated harness count (issue #24) still counts against the cap, marked so the
+        // snapshot/report can show it as approximate.
+        const estimated =
+          run.tokenSource === 'estimated' && run.tokensUsed !== undefined ? run.tokensUsed : 0;
+        deps.budget.record(run.tokensUsed, estimated);
         const diffHash = await deps.workspace.diffHash();
         const budget = deps.budget.snapshot();
         return { event: { tag: 'AGENT_RAN', run, prevDiffHash, diffHash, budget } };

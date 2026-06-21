@@ -59,6 +59,12 @@ describe('formatUsage', () => {
     expect(formatUsage(u).join('\n')).toContain('unknown (1 call(s) reported no usage)');
   });
 
+  it('marks the estimated portion of a layer (issue #24)', () => {
+    const u = usage({ harness: { tokens: 3_000, calls: 1, unknownCalls: 0, estimatedTokens: 3_000 } });
+    const text = formatUsage(u).join('\n');
+    expect(text).toContain('3,000 tokens (3,000 estimated)');
+  });
+
   it('overlays an approximate USD cost per layer when a cost view is given', () => {
     const cost: CostView = {
       harness: 0.12,

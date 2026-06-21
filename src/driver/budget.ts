@@ -8,13 +8,19 @@ import type { Clock } from './clock';
  * reducer only ever reads `snapshot.exceeded`.
  */
 export interface BudgetMeter {
-  record(tokensUsed: number | undefined): void;
+  /**
+   * Add one call's spend. `estimatedTokens` is the portion of `tokensUsed` that is a local estimate
+   * rather than a provider self-report (issue #24) — it still counts against the cap (an estimate is
+   * better than a silent zero), but is tracked so the snapshot can mark it approximate.
+   */
+  record(tokensUsed: number | undefined, estimatedTokens?: number): void;
   snapshot(): BudgetSnapshot;
 }
 
 /** Real meter: wall-clock from an injected Clock, tokens accumulated from run usage. */
 export class SystemBudgetMeter implements BudgetMeter {
   #tokens = 0;
+  #estimated = 0;
   readonly #budget: BudgetConfig;
   readonly #clock: Clock;
   readonly #startedAt: number;
@@ -25,8 +31,11 @@ export class SystemBudgetMeter implements BudgetMeter {
     this.#startedAt = clock.now();
   }
 
-  record(tokensUsed: number | undefined): void {
-    if (tokensUsed !== undefined && tokensUsed > 0) this.#tokens += tokensUsed;
+  record(tokensUsed: number | undefined, estimatedTokens = 0): void {
+    if (tokensUsed !== undefined && tokensUsed > 0) {
+      this.#tokens += tokensUsed;
+      this.#estimated += Math.min(Math.max(estimatedTokens, 0), tokensUsed);
+    }
   }
 
   snapshot(): BudgetSnapshot {
@@ -36,6 +45,7 @@ export class SystemBudgetMeter implements BudgetMeter {
       this.#budget.wallClockMs !== undefined && wallClockMs >= this.#budget.wallClockMs;
     return {
       tokensSpent: this.#tokens,
+      ...(this.#estimated > 0 ? { tokensEstimated: this.#estimated } : {}),
       wallClockMs,
       exceeded: tokenCapHit || timeCapHit,
     };

@@ -4,6 +4,7 @@ import { HarnessRunResult } from '../domain/events';
 import type { HarnessAdapter } from './adapter';
 import { parseAgentOutput, flatExtractor, type AgentOutput } from '../agent-cli/output';
 import { StreamTap, sdkStreamExtractor, type AgentEventSink } from '../agent-cli/stream';
+import { streamingEstimator } from '../agent-cli/estimate';
 import { classifyHarnessRun } from './classify';
 
 /**
@@ -134,7 +135,10 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     // (requires `--verbose`); the shared `flatExtractor` still recovers the SAME final `result`
     // text from the closing event, so a non-streaming caller is unaffected. Off → the lean
     // `--output-format json` envelope, exactly as before.
-    const tap = onEvent !== undefined ? new StreamTap(claudeStreamExtractor, onEvent) : undefined;
+    // When streaming, also accumulate a local token estimate (issue #24) from the same turns — used
+    // as a fallback if the closing `result` carries no `usage`.
+    const { sink, estimator } = streamingEstimator(onEvent);
+    const tap = sink !== undefined ? new StreamTap(claudeStreamExtractor, sink) : undefined;
     const args =
       tap !== undefined
         ? ['-p', prompt, '--output-format', 'stream-json', '--verbose']
@@ -163,6 +167,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       timedOut: result.timedOut,
       sessionId,
       unknownSession: UNKNOWN_SESSION,
+      estimator,
     });
   }
 }

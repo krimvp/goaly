@@ -11,13 +11,17 @@ const u = (tokens: number, calls = 1, unknownCalls = 0): TokenUsage => ({
   unknownCalls,
 });
 
-const agentRan = (tokensUsed?: number): OrchestratorEvent => ({
+const agentRan = (
+  tokensUsed?: number,
+  tokenSource?: 'reported' | 'estimated',
+): OrchestratorEvent => ({
   tag: 'AGENT_RAN',
   run: {
     output: 'ran',
     sessionId: SessionId.parse('s-1'),
     status: 'completed',
     ...(tokensUsed !== undefined ? { tokensUsed } : {}),
+    ...(tokenSource !== undefined ? { tokenSource } : {}),
   },
   prevDiffHash: DiffHash.parse('0000000'),
   diffHash: DiffHash.parse('0000001'),
@@ -119,5 +123,38 @@ describe('summarizeUsage', () => {
   it('returns an all-zero report for an empty log', () => {
     const report = summarizeUsage([], {});
     expect(report.total).toEqual({ tokens: 0, calls: 0, unknownCalls: 0 });
+  });
+
+  it('carries the estimated portion of harness + LLM spend through the report (issue #24)', () => {
+    const events = [
+      compiled(u(800)), // fully reported compiler
+      agentRan(3_000, 'estimated'), // an estimated harness run
+      verified({ tokens: 600, calls: 3, unknownCalls: 0, estimatedTokens: 600 }), // estimated judge
+      gateB(approve(), u(400)), // reported approver
+    ];
+
+    const report = summarizeUsage(events, {});
+
+    expect(report.harness).toEqual({ tokens: 3_000, calls: 1, unknownCalls: 0, estimatedTokens: 3_000 });
+    expect(report.verifier.estimatedTokens).toBe(600);
+    // compiler/approver were fully reported → no estimated key at all.
+    expect(report.compiler.estimatedTokens).toBeUndefined();
+    expect(report.approver.estimatedTokens).toBeUndefined();
+    // Rollups sum the estimated portions; reported spend is NOT counted as estimated.
+    expect(report.llm.estimatedTokens).toBe(600);
+    expect(report.total.tokens).toBe(4_800);
+    expect(report.total.estimatedTokens).toBe(3_600);
+  });
+
+  it('an estimated count still counts toward the budget cap (a fuller count trips it sooner)', () => {
+    // The harness self-reported nothing; the 9_000-token estimate plus 2_000 reported LLM tokens
+    // reach the 10_000 cap — without the estimate the harness would have read as 0 and never tripped.
+    const report = summarizeUsage(
+      [agentRan(9_000, 'estimated'), verified(u(2_000, 3))],
+      { tokens: 10_000 },
+    );
+    expect(report.budget.spent).toBe(11_000);
+    expect(report.budget.exceeded).toBe(true);
+    expect(report.total.estimatedTokens).toBe(9_000);
   });
 });

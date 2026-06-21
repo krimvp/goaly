@@ -7,12 +7,19 @@ import { z } from 'zod';
  * can degrade missing data to "unknown" instead of silently pretending it was zero (fail-closed).
  */
 export const TokenUsage = z.object({
-  /** Sum of the token counts that were actually reported. */
+  /** Sum of the token counts (reported AND estimated — see `estimatedTokens`). */
   tokens: z.number().int().nonnegative(),
   /** Number of token-spending calls this layer made. */
   calls: z.number().int().nonnegative(),
   /** Calls that completed without reporting any token usage (their tokens are unknown). */
   unknownCalls: z.number().int().nonnegative(),
+  /**
+   * The portion of `tokens` that came from a LOCAL ESTIMATE rather than a provider self-report
+   * (issue #24) — a quiet, streamed call counted from its turns instead of a missing `usage` block.
+   * Omitted when nothing was estimated, so a fully self-reported layer stays a plain `{tokens,
+   * calls, unknownCalls}`. Surfaced in the report so an approximate figure reads as approximate.
+   */
+  estimatedTokens: z.number().int().nonnegative().optional(),
 });
 export type TokenUsage = z.infer<typeof TokenUsage>;
 

@@ -38,6 +38,17 @@ describe('SystemBudgetMeter', () => {
     expect(meter.snapshot().exceeded).toBe(true);
   });
 
+  it('tracks the estimated portion of spend, clamped, and omits it when nothing was estimated', () => {
+    const meter = new SystemBudgetMeter({}, new ManualClock(0));
+    meter.record(100); // reported → estimates nothing
+    expect(meter.snapshot().tokensEstimated).toBeUndefined();
+    meter.record(60, 60); // a fully estimated call
+    meter.record(40, 999); // estimate clamped to the call's tokens
+    const snap = meter.snapshot();
+    expect(snap.tokensSpent).toBe(200);
+    expect(snap.tokensEstimated).toBe(100);
+  });
+
   it('with no caps configured, never exceeded regardless of spend or elapsed time', () => {
     const clock = new ManualClock(0);
     const meter = new SystemBudgetMeter({}, clock);

@@ -11,9 +11,15 @@ const usd = (n: number): string => `$${n.toFixed(2)}`;
 /** Human text for one layer's token spend, surfacing unknowns rather than implying a zero. */
 function tokensText(layer: TokenUsage): string {
   if (layer.calls === 0) return '0 tokens';
-  if (layer.unknownCalls === 0) return `${group(layer.tokens)} tokens`;
+  // Mark any portion that is a local estimate (issue #24) so an approximate figure reads approximate.
+  const estimated = layer.estimatedTokens ?? 0;
+  if (layer.unknownCalls === 0) {
+    const note = estimated > 0 ? ` (${group(estimated)} estimated)` : '';
+    return `${group(layer.tokens)} tokens${note}`;
+  }
   if (layer.tokens === 0) return `unknown (${layer.unknownCalls} call(s) reported no usage)`;
-  return `${group(layer.tokens)}+ tokens (${layer.unknownCalls} call(s) without usage)`;
+  const note = estimated > 0 ? `, ${group(estimated)} estimated` : '';
+  return `${group(layer.tokens)}+ tokens (${layer.unknownCalls} call(s) without usage${note})`;
 }
 
 /**

@@ -201,6 +201,19 @@ budget:      501,774 / 500,000 tokens (100%) — budget exceeded
 (never a silent zero, never a crash). The default `claude` provider runs `--output-format json` so
 its usage is captured; `codex` / `droid` providers report usage too.
 
+**Estimated when unreported.** When a run or LLM step is **streaming** its turns (`--stream`, debug
+logging, or an embedder subscription — see **Live streaming** below) but the CLI still reports **no**
+`usage`, goaly counts the spend **locally** from the streamed turns (assistant text, tool
+inputs/outputs) via a ~4-characters-per-token heuristic — a real number beats counting a quiet run
+as zero. Estimated tokens still count against the `--budget-tokens` cap (so a fuller count can trip
+it sooner) and are marked in the report so an approximate figure reads approximate:
+
+```
+spend:
+  harness      3,000 tokens (3,000 estimated)
+  ...
+```
+
 **Cost is opt-in.** Pricing is volatile, so the log stays **tokens-only** and cost is a print-time
 overlay: pass `--cost-table <path>` to a JSON file mapping **model → USD per 1,000,000 tokens** (a
 `"default"` key prices any unlisted model). Each layer is priced by *its* resolved model; a layer

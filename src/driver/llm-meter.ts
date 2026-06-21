@@ -10,6 +10,8 @@ export type LlmDelta = {
   tokens: number;
   calls: number;
   unknownCalls: number;
+  /** The portion of `tokens` that came from a local estimate rather than a self-report (issue #24). */
+  estimatedTokens: number;
 };
 
 /**
@@ -22,12 +24,19 @@ export class LlmTokenMeter {
   #tokens = 0;
   #calls = 0;
   #unknownCalls = 0;
+  #estimatedTokens = 0;
 
-  /** Record one completion's usage. An undefined count means the provider did not report tokens. */
-  record(tokensUsed: number | undefined): void {
+  /**
+   * Record one completion's usage. An undefined count means the provider did not report tokens.
+   * `estimatedTokens` is the portion of `tokensUsed` that is a local estimate (issue #24), so the
+   * report can mark it approximate; it is clamped into `[0, tokensUsed]`.
+   */
+  record(tokensUsed: number | undefined, estimatedTokens = 0): void {
     this.#calls += 1;
-    if (tokensUsed !== undefined && tokensUsed > 0) this.#tokens += tokensUsed;
-    else if (tokensUsed === undefined) this.#unknownCalls += 1;
+    if (tokensUsed !== undefined && tokensUsed > 0) {
+      this.#tokens += tokensUsed;
+      this.#estimatedTokens += Math.min(Math.max(estimatedTokens, 0), tokensUsed);
+    } else if (tokensUsed === undefined) this.#unknownCalls += 1;
   }
 
   /** Read and reset the accrued spend. */
@@ -36,10 +45,12 @@ export class LlmTokenMeter {
       tokens: this.#tokens,
       calls: this.#calls,
       unknownCalls: this.#unknownCalls,
+      estimatedTokens: this.#estimatedTokens,
     };
     this.#tokens = 0;
     this.#calls = 0;
     this.#unknownCalls = 0;
+    this.#estimatedTokens = 0;
     return delta;
   }
 }
@@ -53,7 +64,13 @@ export function meterLlm(inner: LlmProvider, meter: LlmTokenMeter): LlmProvider 
     name: inner.name,
     async complete(req: LlmRequest): Promise<LlmCompletion> {
       const completion = await inner.complete(req);
-      meter.record(completion.tokensUsed);
+      // A completion whose count is an estimate (issue #24) feeds the estimated portion through so
+      // the per-run report can mark it approximate; a reported/absent count estimates nothing.
+      const estimated =
+        completion.tokenSource === 'estimated' && completion.tokensUsed !== undefined
+          ? completion.tokensUsed
+          : 0;
+      meter.record(completion.tokensUsed, estimated);
       return completion;
     },
   };
@@ -66,5 +83,10 @@ export function meterLlm(inner: LlmProvider, meter: LlmTokenMeter): LlmProvider 
  */
 export function deltaToUsage(delta: LlmDelta): TokenUsage | undefined {
   if (delta.calls === 0) return undefined;
-  return { tokens: delta.tokens, calls: delta.calls, unknownCalls: delta.unknownCalls };
+  return {
+    tokens: delta.tokens,
+    calls: delta.calls,
+    unknownCalls: delta.unknownCalls,
+    ...(delta.estimatedTokens > 0 ? { estimatedTokens: delta.estimatedTokens } : {}),
+  };
 }

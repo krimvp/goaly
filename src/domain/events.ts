@@ -11,12 +11,20 @@ export const HarnessRunResult = z.object({
   sessionId: SessionId,
   status: z.enum(['completed', 'crashed', 'truncated', 'timeout']),
   tokensUsed: z.number().int().nonnegative().optional(),
+  /**
+   * Whether `tokensUsed` is the harness's own `reported` count or a local `estimated` fallback
+   * (issue #24), counted from the streamed turns when the CLI emits no `usage`. Absent when
+   * `tokensUsed` is absent (the spend is genuinely unknown — never a silent zero).
+   */
+  tokenSource: z.enum(['reported', 'estimated']).optional(),
 });
 export type HarnessRunResult = z.infer<typeof HarnessRunResult>;
 
 /** A budget reading stamped by the Driver after an iteration (the reducer reads `.exceeded`). */
 export const BudgetSnapshot = z.object({
   tokensSpent: z.number().int().nonnegative().optional(),
+  /** The portion of `tokensSpent` that is a local estimate (issue #24). Omitted when none was. */
+  tokensEstimated: z.number().int().nonnegative().optional(),
   wallClockMs: z.number().int().nonnegative().optional(),
   exceeded: z.boolean(),
 });

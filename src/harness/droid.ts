@@ -9,6 +9,7 @@ import {
   type AgentEventSink,
   type StreamEventExtractor,
 } from '../agent-cli/stream';
+import { streamingEstimator } from '../agent-cli/estimate';
 import { classifyHarnessRun } from './classify';
 
 /**
@@ -147,7 +148,10 @@ export class DroidAdapter implements HarnessAdapter {
     sessionId?: SessionId,
     onEvent?: AgentEventSink,
   ): Promise<HarnessRunResult> {
-    const tap = onEvent !== undefined ? new StreamTap(droidStreamExtractor, onEvent) : undefined;
+    // When streaming, accumulate a local token estimate (issue #24) from the same turns, used as a
+    // fallback if the closing `result` carries no `usage`.
+    const { sink, estimator } = streamingEstimator(onEvent);
+    const tap = sink !== undefined ? new StreamTap(droidStreamExtractor, sink) : undefined;
     // Streaming requested → ask droid for per-turn JSONL (`stream-json`); otherwise the lean final
     // envelope (`json`), unchanged. The final-result parse via `droidExtractor` handles both.
     const args = buildArgs(prompt, this.#auto, this.#model, sessionId, tap !== undefined);
@@ -173,6 +177,7 @@ export class DroidAdapter implements HarnessAdapter {
       timedOut: result.timedOut,
       sessionId,
       unknownSession: UNKNOWN_SESSION,
+      estimator,
     });
   }
 }

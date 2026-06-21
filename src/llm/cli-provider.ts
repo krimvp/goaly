@@ -2,6 +2,7 @@ import type { LlmCompletion, LlmProvider, LlmRequest } from './provider';
 import { runProcess, type ProcessResult } from '../util/spawn';
 import { parseAgentOutput, flatExtractor, type AgentOutput } from '../agent-cli/output';
 import { StreamTap, type AgentEventSink } from '../agent-cli/stream';
+import { accountTokens, streamingEstimator, type StreamTokenEstimator } from '../agent-cli/estimate';
 import { claudeStreamExtractor } from '../harness/claude-code';
 
 type ExecFn = (
@@ -32,11 +33,8 @@ export function buildLlmArgs(
   ];
 }
 
-function toCompletion(parsed: AgentOutput): LlmCompletion {
-  return {
-    text: parsed.text,
-    ...(parsed.tokens !== undefined ? { tokensUsed: parsed.tokens } : {}),
-  };
+function toCompletion(parsed: AgentOutput, estimator?: StreamTokenEstimator): LlmCompletion {
+  return { text: parsed.text, ...accountTokens(parsed.tokens, estimator) };
 }
 
 /**
@@ -90,10 +88,10 @@ export class CliLlmProvider implements LlmProvider {
 
   async complete(req: LlmRequest): Promise<LlmCompletion> {
     const prompt = req.system !== undefined ? `${req.system}\n\n${req.prompt}` : req.prompt;
-    const tap =
-      this.#streaming && this.#onEvent !== undefined
-        ? new StreamTap(claudeStreamExtractor, this.#onEvent)
-        : undefined;
+    // When streaming, accumulate a local token estimate (issue #24) from the turns, used as a
+    // fallback if the closing `result` carries no `usage`.
+    const { sink, estimator } = streamingEstimator(this.#streaming ? this.#onEvent : undefined);
+    const tap = sink !== undefined ? new StreamTap(claudeStreamExtractor, sink) : undefined;
     const r = await this.#exec(prompt, tap ? (chunk) => tap.push(chunk) : undefined);
     tap?.end();
     if (r.timedOut) throw new Error('LLM CLI timed out');
@@ -106,7 +104,7 @@ export class CliLlmProvider implements LlmProvider {
       if (parsed === null || parsed.text.length === 0) {
         throw new Error('LLM CLI produced no parseable text');
       }
-      return toCompletion(parsed);
+      return toCompletion(parsed, estimator);
     }
     if (parsed !== null) return toCompletion(parsed);
     return { text: r.stdout.trim() };

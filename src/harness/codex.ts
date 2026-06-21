@@ -16,6 +16,7 @@ import {
   type AgentStreamEvent,
   type StreamEventExtractor,
 } from '../agent-cli/stream';
+import { accountTokens, streamingEstimator } from '../agent-cli/estimate';
 
 /**
  * Raw result of spawning the codex binary. `code` is the process exit code (null when the
@@ -333,7 +334,10 @@ export class CodexAdapter implements HarnessAdapter {
     onEvent?: AgentEventSink,
   ): Promise<HarnessRunResult> {
     const args = buildArgs(prompt, this.#model, sessionId);
-    const tap = onEvent !== undefined ? new StreamTap(codexStreamExtractor, onEvent) : undefined;
+    // When streaming, accumulate a local token estimate (issue #24) from the same turns, used as a
+    // fallback if `turn.completed` carries no `usage`.
+    const { sink, estimator } = streamingEstimator(onEvent);
+    const tap = sink !== undefined ? new StreamTap(codexStreamExtractor, sink) : undefined;
 
     let result: ExecResult;
     try {
@@ -379,7 +383,7 @@ export class CodexAdapter implements HarnessAdapter {
       output: parsed.text,
       sessionId: sid,
       status,
-      ...(parsed.tokens !== undefined ? { tokensUsed: parsed.tokens } : {}),
+      ...accountTokens(parsed.tokens, estimator),
     });
   }
 }
