@@ -11,10 +11,15 @@ name: Publish to npm
 # You can also trigger it manually from the Actions tab (workflow_dispatch),
 # passing the version explicitly.
 #
+# After a successful publish, the `sync-version` job opens (and auto-merges) a
+# small PR that bumps package.json on main to the released version, so the
+# repo's version field stays in lockstep with npm.
+#
 # One-time setup (see .github/workflows/README.md):
-#   1. Create an npm "Automation" access token with publish rights.
-#   2. Add it to this repo as a secret named NPM_TOKEN
-#      (Settings -> Secrets and variables -> Actions -> New repository secret).
+#   1. NPM_TOKEN  — an npm "Automation" token with publish rights (for publish).
+#   2. RELEASE_TOKEN — a fine-grained PAT with contents + pull-requests write on
+#      this repo (so the sync PR triggers CI and can be merged). Optional: if it
+#      is absent, the release still publishes and the sync step is skipped.
 
 on:
   release:
@@ -29,13 +34,14 @@ concurrency:
   group: publish-${{ github.workflow }}
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  id-token: write # required for npm provenance
-
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm provenance
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -71,7 +77,7 @@ jobs:
         run: npm test
 
       # Stamp package.json with the release version (in the runner only — not
-      # committed back), so the published package matches the tag exactly.
+      # committed back here; the sync-version job updates main via a PR).
       - name: Set package version
         run: npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version --allow-same-version
 
@@ -82,3 +88,65 @@ jobs:
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Keep main's package.json in lockstep with the published version by opening a
+  # PR that bumps it. Uses RELEASE_TOKEN (a PAT) so the PR triggers CI — a PR
+  # opened by the default GITHUB_TOKEN would not, and would stick behind the
+  # required status checks.
+  sync-version:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check for RELEASE_TOKEN
+        id: gate
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::warning::RELEASE_TOKEN not set — skipping the package.json sync PR. See .github/workflows/README.md."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout main
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Set up Node
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Open package.json sync PR
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          CURRENT="$(node -p "require('./package.json').version")"
+          if [ "$CURRENT" = "$VERSION" ]; then
+            echo "package.json is already at $VERSION — nothing to sync."
+            exit 0
+          fi
+          BRANCH="chore/sync-version-$VERSION"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Branch $BRANCH already exists — assuming the sync PR is open."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          git commit -aqm "chore: sync package.json to $VERSION"
+          git push -u origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore: sync package.json to $VERSION" \
+            --body "Automated: bumps \`package.json\` to match the published \`v$VERSION\` release so the repo's version stays in lockstep with npm. Safe to merge once CI is green."
+          gh pr merge "$BRANCH" --auto --squash \
+            || echo "::notice::Could not enable auto-merge — merge the sync PR manually once CI passes."
