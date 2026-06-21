@@ -14,9 +14,11 @@ SOURCES := $(shell find src -name '*.ts' -not -name '*.test.ts' 2>/dev/null) \
            scripts/build.mjs tsconfig.json tsconfig.build.json package.json
 CLI     := dist/goaly.js
 ARGS    ?=
+# Version bump for `make release`: patch | minor | major (anything `npm version` accepts).
+BUMP    ?= patch
 
 .PHONY: help deps dev build run typecheck test test-watch coverage check \
-        install uninstall pack clean distclean
+        install uninstall pack release release-publish clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -61,6 +63,36 @@ uninstall: ## Remove the globally installed `goaly` binary
 
 pack: build ## Produce an installable tarball (npm pack)
 	npm pack
+
+# --- Release -----------------------------------------------------------------
+# Two-step flow that respects branch protection (main needs a PR) and tag
+# immutability (v* tags can't be moved/deleted): bump via PR, then release.
+
+release: check ## Open a version-bump PR (BUMP=patch|minor|major). Run on an up-to-date main.
+	@test -z "$$(git status --porcelain)" || { echo "release: working tree not clean — commit or stash first."; exit 1; }
+	@command -v gh >/dev/null 2>&1 || { echo "release: GitHub CLI (gh) is required."; exit 1; }
+	@git fetch --quiet origin main
+	@git merge-base --is-ancestor origin/main HEAD || { echo "release: your branch is behind origin/main — pull first."; exit 1; }
+	@NEW=$$(npm version "$(BUMP)" --no-git-tag-version) ; \
+	  echo "release: bumping to $$NEW" ; \
+	  git switch -c "release/$$NEW" ; \
+	  git commit -aqm "chore(release): $$NEW" ; \
+	  git push -q -u origin "release/$$NEW" ; \
+	  gh pr create --fill --title "chore(release): $$NEW" \
+	    --body "Version bump to $$NEW. Merge once CI is green, then run \`make release-publish\` on main." ; \
+	  echo "" ; \
+	  echo "release: next — merge the PR, then on main run: make release-publish"
+
+release-publish: ## After the bump PR merges: cut the GitHub Release for the current version (triggers npm publish).
+	@test -z "$$(git status --porcelain)" || { echo "release-publish: working tree not clean."; exit 1; }
+	@command -v gh >/dev/null 2>&1 || { echo "release-publish: GitHub CLI (gh) is required."; exit 1; }
+	@test "$$(git branch --show-current)" = "main" || { echo "release-publish: switch to main first (git switch main && git pull)."; exit 1; }
+	@git fetch --quiet origin main
+	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" || { echo "release-publish: local main differs from origin/main — pull first."; exit 1; }
+	@VER=v$$(node -p "require('./package.json').version") ; \
+	  echo "release-publish: creating release $$VER on main" ; \
+	  gh release create "$$VER" --target main --generate-notes --title "$$VER" ; \
+	  echo "release-publish: published $$VER — watch the 'Publish to npm' workflow in Actions."
 
 clean: ## Remove build output, coverage, and packed tarballs
 	rm -rf dist coverage *.tgz

@@ -24,15 +24,36 @@ Triggers when you **publish a GitHub Release**, or manually from the **Actions**
 
 ### Cutting a release
 
-1. Bump the version and commit it:
-   ```bash
-   npm version patch   # or minor / major — creates a vX.Y.Z commit + tag
-   git push --follow-tags
-   ```
-2. On GitHub, draft a **Release** for that `vX.Y.Z` tag and **Publish** it.
-3. The `Publish to npm` workflow runs and pushes the package to the registry.
+Because `main` requires a PR and `v*` tags are immutable, releasing is two steps —
+both wrapped as `make` targets:
+
+```bash
+make release BUMP=patch     # bump version on a release/* branch + open the PR (patch|minor|major)
+# ... review, let CI go green, merge the PR ...
+git switch main && git pull
+make release-publish         # create the GitHub Release for the merged version -> triggers publish
+```
+
+What the targets do:
+
+1. **`make release`** runs the gate (`typecheck` + tests), bumps `package.json` with
+   `npm version --no-git-tag-version`, and opens a `chore(release): vX.Y.Z` PR. No tag yet —
+   the tag is born on `main` so it can't point at a soon-to-be-squashed branch commit.
+2. After the PR merges, **`make release-publish`** (run on an up-to-date `main`) calls
+   `gh release create vX.Y.Z`, which publishes a GitHub Release and fires the workflow below.
+
+Prefer to do it by hand? The equivalent manual flow:
+
+```bash
+git switch -c release/vX.Y.Z
+npm version patch --no-git-tag-version
+git commit -am "chore(release): vX.Y.Z" && git push -u origin release/vX.Y.Z && gh pr create --fill
+# merge, then on main:
+gh release create vX.Y.Z --target main --generate-notes
+```
 
 > The tag (`v0.1.0`) must match `package.json` (`0.1.0`) or the publish job fails by design.
+> If a publish fails, roll **forward** to the next version — the tag ruleset blocks retagging.
 
 ### Provenance
 
