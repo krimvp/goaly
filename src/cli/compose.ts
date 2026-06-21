@@ -22,6 +22,9 @@ import { CodexAdapter } from '../harness/codex';
 import { DroidAdapter } from '../harness/droid';
 import { SystemClock } from '../driver/clock';
 import { SystemBudgetMeter } from '../driver/budget';
+import { buildLogger, type FileLogOptions } from '../log/build';
+import type { Logger, LogLevel } from '../log/logger';
+import type { LogFs } from '../log/sinks';
 import { CliLlmProvider } from '../llm/cli-provider';
 import { AgentCliLlmProvider } from '../llm/agent-cli-provider';
 import { codexExtractor } from '../harness/codex';
@@ -41,6 +44,20 @@ export type ComposeOptions = {
   models?: ModelSelection;
   /** Where run logs live. Default `<workspaceRoot>/.goaly` (excluded from diffHash). */
   stateDir?: string;
+  /** Minimum diagnostic log level. Default `info`. */
+  logLevel?: LogLevel;
+  /** Override the diagnostics file path. Default `<stateDir>/<runId>/goaly.log`. */
+  logFile?: string;
+  /** Disable the diagnostics file sink (console only). */
+  noLogFile?: boolean;
+  /** Disable the console sink (file only) — handy in tests to keep stderr quiet. */
+  noLogConsole?: boolean;
+  /** Inject a fully-built logger (tests); bypasses the level/file options above. */
+  logger?: Logger;
+  /** Inject the log filesystem (tests) so diagnostics never touch disk. */
+  logFs?: LogFs;
+  /** Inject the clock source for log timestamps (tests). */
+  now?: () => number;
 };
 
 /** The orchestrator's own state directory name, kept out of stuck-detection hashing. */
@@ -61,6 +78,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   const clock = new SystemClock();
   const workspace = new GitWorkspace(options.workspaceRoot);
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
+  const logger = options.logger ?? buildRunLogger(options, stateDir);
 
   return {
     compiler: new AgentCompiler({
@@ -77,7 +95,30 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     clock,
     budget: new SystemBudgetMeter(config.budget, clock),
     runlog: new FileRunLog(path.join(stateDir, options.runId)),
+    logger,
   };
+}
+
+/**
+ * Build the run's diagnostic logger: a console sink (stderr, human-formatted) plus, unless
+ * disabled, a size-rotated JSON file co-located with the run log at `<stateDir>/<runId>/goaly.log`.
+ * `runId` is bound onto every record. This is the only place real filesystem logging is wired.
+ */
+function buildRunLogger(options: ComposeOptions, stateDir: string): Logger {
+  const file: FileLogOptions | undefined =
+    options.noLogFile === true
+      ? undefined
+      : {
+          path: options.logFile ?? path.join(stateDir, options.runId, 'goaly.log'),
+          ...(options.logFs !== undefined ? { fs: options.logFs } : {}),
+        };
+  return buildLogger({
+    level: options.logLevel ?? 'info',
+    console: options.noLogConsole !== true,
+    ...(file !== undefined ? { file } : {}),
+    ...(options.now !== undefined ? { now: options.now } : {}),
+    fields: { runId: options.runId },
+  });
 }
 
 /**

@@ -353,6 +353,7 @@
           <tr><td class="feat">Stuck detection</td><td>no-diff · repeat-failure · oscillation · budget</td></tr>
           <tr><td class="feat">Budget</td><td><code>--budget-tokens</code> · <code>--budget-wall-ms</code>, independent of iteration count</td></tr>
           <tr><td class="feat">Resume</td><td><span class="yes">✓</span> <code>--resume run-&lt;id&gt;</code> — replay-fold from the write-ahead log</td></tr>
+          <tr><td class="feat">Diagnostics</td><td><code>--log-level</code> debug/info/warn/error · structured JSON file at <code>.goaly/&lt;runId&gt;/goaly.log</code> (size-rotated) · <code>--log-file</code> · <code>--no-log-file</code> — human-facing, separate from the write-ahead run log, content stays at <code>debug</code></td></tr>
         </tbody>
       </table>
     </div>
@@ -388,7 +389,10 @@ goaly run --goal <span class="str">"…"</span> --resume run-&lt;id&gt;
 
 <span class="cmt"># model for the harness + a different model (and CLI) for the LLM steps</span>
 goaly run --goal <span class="str">"…"</span> --model <span class="str">claude-opus-4-8</span> \
-  --llm-model <span class="str">claude-sonnet-4-6</span> --llm-provider claude</pre>
+  --llm-model <span class="str">claude-sonnet-4-6</span> --llm-provider claude
+
+<span class="cmt"># follow the loop step-by-step; structured rotated file at .goaly/&lt;runId&gt;/goaly.log</span>
+goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --log-level debug</pre>
       </div>
     </div>
     <p class="lede reveal" style="margin-top:0.9rem; font-size:0.82rem">Exit codes — <span class="pill pass">0 DONE</span> <span class="pill fail">1 FAILED / ABORTED</span> <span class="pill neutral">2 usage error</span></p>

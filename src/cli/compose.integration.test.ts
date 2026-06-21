@@ -39,6 +39,7 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
       harness: 'fake',
       workspaceRoot: dir,
       runId,
+      noLogConsole: true,
       llm: new FakeLlm(['{"veto": false}']),
     });
 
@@ -62,6 +63,7 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
       harness: 'fake',
       workspaceRoot: dir,
       runId,
+      noLogConsole: true,
       llm: new FakeLlm(['{"veto":true,"reason":"nope"}']),
     });
 

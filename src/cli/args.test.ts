@@ -182,4 +182,29 @@ describe('parseArgs', () => {
       }
     });
   });
+
+  describe('diagnostic logging flags', () => {
+    it('defaults to info level, no file override, file enabled', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.logLevel).toBe('info');
+      expect(a.logFile).toBeUndefined();
+      expect(a.noLogFile).toBe(false);
+    });
+
+    it('parses --log-level, --log-file and --no-log-file', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true',
+        '--log-level', 'debug', '--log-file', '/tmp/run.log', '--no-log-file',
+      ]);
+      expect(a.logLevel).toBe('debug');
+      expect(a.logFile).toBe('/tmp/run.log');
+      expect(a.noLogFile).toBe(true);
+    });
+
+    it('throws UsageError on an unknown --log-level', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--log-level', 'loud']),
+      ).rejects.toThrow(UsageError);
+    });
+  });
 });

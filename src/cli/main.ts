@@ -5,17 +5,17 @@ import { drive } from '../driver/driver';
 import { asRunId, type RunId } from '../domain/ids';
 import type { RunOutcome } from '../domain/events';
 
-/** Append the model/provider flags to the startup log, but only the ones the user actually set. */
-function formatModelNote(parsed: ParsedArgs): string {
+/** The model/provider flags the user actually set, as structured log fields (set ones only). */
+function startupFields(parsed: ParsedArgs): Record<string, string> {
   const m = parsed.models;
-  const parts: string[] = [];
-  if (m.model !== undefined) parts.push(`model=${m.model}`);
-  if (m.llmModel !== undefined) parts.push(`llm-model=${m.llmModel}`);
-  if (m.judgeModel !== undefined) parts.push(`judge-model=${m.judgeModel}`);
-  if (m.approverModel !== undefined) parts.push(`approver-model=${m.approverModel}`);
-  if (m.compilerModel !== undefined) parts.push(`compiler-model=${m.compilerModel}`);
-  if (parsed.llmProvider !== 'claude') parts.push(`llm-provider=${parsed.llmProvider}`);
-  return parts.length > 0 ? `, ${parts.join(', ')}` : '';
+  const fields: Record<string, string> = {};
+  if (m.model !== undefined) fields.model = m.model;
+  if (m.llmModel !== undefined) fields.llmModel = m.llmModel;
+  if (m.judgeModel !== undefined) fields.judgeModel = m.judgeModel;
+  if (m.approverModel !== undefined) fields.approverModel = m.approverModel;
+  if (m.compilerModel !== undefined) fields.compilerModel = m.compilerModel;
+  if (parsed.llmProvider !== 'claude') fields.llmProvider = parsed.llmProvider;
+  return fields;
 }
 
 /**
@@ -48,13 +48,18 @@ export async function main(argv: string[]): Promise<number> {
     llmProvider: parsed.llmProvider,
     workspaceRoot: parsed.workspace,
     runId,
+    logLevel: parsed.logLevel,
+    ...(parsed.logFile !== undefined ? { logFile: parsed.logFile } : {}),
+    ...(parsed.noLogFile ? { noLogFile: true } : {}),
   });
 
-  process.stderr.write(
-    `goaly: ${resuming ? 'resuming' : 'starting'} ${runId} ` +
-      `(harness=${parsed.harness}${formatModelNote(parsed)}, ` +
-      `autonomous=${parsed.config.autonomous})\n`,
-  );
+  // Human-facing startup banner, routed through the logger so it respects --log-level and lands
+  // in the diagnostics file too. The run outcome below stays on stdout (the machine-facing result).
+  deps.logger?.info('cli starting', {
+    harness: parsed.harness,
+    autonomous: parsed.config.autonomous,
+    ...startupFields(parsed),
+  });
 
   const outcome = await drive(deps, parsed.config, runId, { resume: resuming });
   process.stdout.write(`${formatOutcome(outcome)}\n`);

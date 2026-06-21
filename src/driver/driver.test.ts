@@ -20,8 +20,10 @@ import {
   failVerdict,
   veto,
   approve,
+  recordingLogger,
   type FakeRunScript,
 } from '../testing/fakes';
+import type { Logger, LogRecord } from '../log/logger';
 
 const runId = RunId.parse('run-1');
 const contract = makeFakeContract({ goal: 'make the thing work' });
@@ -35,6 +37,7 @@ type Wiring = {
   budget?: ManualBudgetMeter;
   workspace?: FakeWorkspace;
   runlog?: InMemoryRunLog;
+  logger?: Logger;
 };
 
 function wire(w: Wiring): {
@@ -58,6 +61,7 @@ function wire(w: Wiring): {
     clock: new ManualClock(),
     budget: w.budget ?? new ManualBudgetMeter(false),
     runlog,
+    ...(w.logger !== undefined ? { logger: w.logger } : {}),
   };
   return { deps, harness, runlog, approver };
 }
@@ -372,5 +376,79 @@ describe('drive() — resume', () => {
     const resumed = await drive(resumeDeps, makeConfig(), runId, { resume: true });
     expect(resumed.status).toBe('DONE');
     expect(resumed.iterations).toBe(first.iterations);
+  });
+});
+
+describe('drive() — diagnostic logging', () => {
+  const msgsAt = (records: LogRecord[], level: LogRecord['level']): string[] =>
+    records.filter((r) => r.level === level).map((r) => r.msg);
+
+  it('emits leveled records across the whole loop without affecting the outcome', async () => {
+    const { logger, records } = recordingLogger('debug');
+    const { deps } = wire({
+      scripts: [{ postHash: '0000001' }],
+      verdicts: [passVerdict()],
+      approvals: [approve()],
+      logger,
+    });
+
+    const outcome = await drive(deps, makeConfig({ goal: 'make the thing work' }), runId);
+    expect(outcome.status).toBe('DONE');
+
+    // info is content-free observability: every lifecycle beat is present.
+    expect(msgsAt(records, 'info')).toEqual([
+      'starting run',
+      'contract compiled',
+      'gate A decided',
+      'agent ran',
+      'verified',
+      'gate B decided',
+      'run finished',
+    ]);
+
+    const compiled = records.find((r) => r.msg === 'contract compiled');
+    expect(compiled?.fields).toMatchObject({ contractHash: contract.contractHash, rungs: 1 });
+    const finished = records.find((r) => r.msg === 'run finished');
+    expect(finished?.fields).toMatchObject({ status: 'DONE', iterations: 1 });
+
+    // debug carries the step-by-step detail (commands, transitions, prompt size).
+    const debug = msgsAt(records, 'debug');
+    expect(debug).toContain('perform command');
+    expect(debug).toContain('transition');
+    expect(debug).toContain('agent prompt');
+  });
+
+  it('keeps prompt/verifier CONTENT out of info records (secrets discipline)', async () => {
+    const { logger, records } = recordingLogger('debug');
+    const { deps } = wire({
+      scripts: [{ postHash: '0000001' }],
+      verdicts: [passVerdict('SECRET-VERDICT-DETAIL')],
+      approvals: [approve()],
+      logger,
+    });
+    await drive(deps, makeConfig({ goal: 'make the thing work' }), runId);
+
+    // The verdict detail only ever appears in a debug record, never at info.
+    const infoHasDetail = records
+      .filter((r) => r.level === 'info')
+      .some((r) => JSON.stringify(r.fields).includes('SECRET-VERDICT-DETAIL'));
+    expect(infoHasDetail).toBe(false);
+    const debugHasDetail = records.some(
+      (r) => r.level === 'debug' && r.msg === 'verdict detail',
+    );
+    expect(debugHasDetail).toBe(true);
+  });
+
+  it('logs a compile failure at error level', async () => {
+    const { logger, records } = recordingLogger('debug');
+    const { deps } = wire({ scripts: [], verdicts: [passVerdict()], logger });
+    deps.compiler = new FakeCompiler(new Error('cannot author a verifier'));
+
+    const outcome = await drive(deps, makeConfig(), runId);
+    expect(outcome.status).toBe('FAILED');
+
+    const err = records.find((r) => r.level === 'error');
+    expect(err?.msg).toBe('compile failed');
+    expect(err?.fields).toMatchObject({ reason: 'cannot author a verifier' });
   });
 });
