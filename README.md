@@ -156,6 +156,10 @@ installable `dist/` artifacts.
 The walking skeleton (domain → pure reducer → fakes → driver) is proven end-to-end with **zero IO**
 before any subprocess exists; real adapters/verifiers are leaves behind frozen interfaces.
 
+To record a terminal-demo GIF of a goaly run (e.g. to attach to a PR), use the **`record-demo-gif`**
+skill — see [`.claude/skills/record-demo-gif/`](.claude/skills/record-demo-gif/) and its
+`references/goaly-demo-recipe.md`.
+
 ## Embedding
 
 The library works headless; the CLI is a thin caller. Import from the package root:
