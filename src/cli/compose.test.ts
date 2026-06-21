@@ -60,6 +60,9 @@ describe('buildLadder — verify timeout threading', () => {
         calls.push(opts !== undefined ? { command, opts } : { command });
         return result;
       },
+      async fileHash() {
+        return null;
+      },
     };
     return { workspace, calls };
   }
@@ -92,6 +95,24 @@ describe('buildLadder — verify timeout threading', () => {
     await ladder.verify(workspace, 'g', 'r');
 
     expect(calls).toEqual([{ command: 'npm test' }]);
+  });
+
+  it('prepends a generated-files guard that fails closed before the command runs (C1)', async () => {
+    const contract = freezeContract({
+      goal: 'g',
+      rungs: [{ kind: 'deterministic', command: 'npm test' }],
+      rubric: 'r',
+      generatedFiles: [{ path: 'authored.test.ts', sha256: 'a'.repeat(64) }],
+    });
+    const ladder = buildLadder(contract, new FakeLlm([]));
+    const { workspace, calls } = spyWorkspace(); // fileHash() returns null → tampered/missing
+
+    const verdict = await ladder.verify(workspace, 'g', 'r');
+
+    // The guard short-circuits: a hard red, and the deterministic command never ran.
+    expect(verdict.pass).toBe(false);
+    expect(verdict.detail).toContain('authored.test.ts');
+    expect(calls).toEqual([]);
   });
 });
 

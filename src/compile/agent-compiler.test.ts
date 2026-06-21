@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { ContractHash } from '../domain/ids';
 import { FakeLlm } from '../llm/provider';
 import { makeConfig } from '../testing/fakes';
-import { AgentCompiler } from './agent-compiler';
+import { AgentCompiler, isVacuousCommand } from './agent-compiler';
 
 describe('AgentCompiler — existing verifier', () => {
   it('builds one deterministic rung equal to the ref and a valid contractHash', async () => {
@@ -71,7 +71,9 @@ describe('AgentCompiler — generate verifier', () => {
     expect(contract.rungs).toEqual([
       { kind: 'deterministic', command: 'vitest run parser.test.ts' },
     ]);
-    expect(contract.generatedFiles).toEqual(['parser.test.ts']);
+    expect(contract.generatedFiles).toHaveLength(1);
+    expect(contract.generatedFiles[0]?.path).toBe('parser.test.ts');
+    expect(contract.generatedFiles[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(writes).toEqual([
       { path: 'parser.test.ts', content: 'test("x", () => {})' },
     ]);
@@ -153,6 +155,40 @@ describe('AgentCompiler — generate verifier', () => {
     expect(llm.requests).toHaveLength(1);
     expect(llm.requests[0]?.prompt).toContain('Reviewer feedback');
     expect(llm.requests[0]?.prompt).toContain('be stricter about error handling');
+  });
+});
+
+describe('isVacuousCommand (C4)', () => {
+  it('flags trivially-passing no-ops', () => {
+    for (const cmd of ['true', ':', 'exit 0', 'exit', '  true  ', 'true; :', 'true && exit 0', '']) {
+      expect(isVacuousCommand(cmd)).toBe(true);
+    }
+  });
+
+  it('passes real test/check commands through', () => {
+    for (const cmd of ['npm test', 'vitest run', 'make check', 'true && npm test', './run.sh; exit 0']) {
+      expect(isVacuousCommand(cmd)).toBe(false);
+    }
+  });
+});
+
+describe('AgentCompiler — vacuous generated command (C4)', () => {
+  it('refuses to freeze a contract whose authored command trivially passes', async () => {
+    const llm = new FakeLlm([JSON.stringify({ command: 'true', rubric: '' })]);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({ verifier: { kind: 'generate' } });
+
+    await expect(compiler.compile(config)).rejects.toThrow(/vacuous/);
+  });
+
+  it('still accepts a user-supplied existing "true" command (informed choice)', async () => {
+    const llm = new FakeLlm([]);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({ verifier: { kind: 'existing', ref: 'true' } });
+
+    const contract = await compiler.compile(config);
+
+    expect(contract.rungs).toEqual([{ kind: 'deterministic', command: 'true' }]);
   });
 });
 

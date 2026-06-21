@@ -1,9 +1,11 @@
-import { rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { DiffHash } from '../domain/ids';
 import { errorMessage } from '../util/errors';
+import { sha256Hex } from '../util/hash';
 import { runProcess } from '../util/spawn';
+import { scrubEnv } from './scrub-env';
 import type { CommandResult, Workspace } from './workspace';
 
 /** The well-known git empty-tree object — a stable base for diffing a repo with no HEAD. */
@@ -63,16 +65,26 @@ export class GitWorkspace implements Workspace {
   readonly #root: string;
   readonly #exec: ExecFn;
   readonly #excludes: readonly string[];
+  readonly #scrubVerifyEnv: boolean;
 
   /**
    * @param excludes paths kept out of diffHash/diff so the orchestrator's own state dir
    *   (default `.goaly`) never pollutes stuck-detection, regardless of the repo's
    *   .gitignore.
+   * @param scrubVerifyEnv when true (default) the verify command (`run`) is spawned with a
+   *   credential-scrubbed environment (finding C5) so worker/model-authored verification code
+   *   cannot read the parent process's secrets. Git operations (diffHash/diff) keep the full env.
    */
-  constructor(root: string, exec: ExecFn = realExec, excludes: readonly string[] = ['.goaly']) {
+  constructor(
+    root: string,
+    exec: ExecFn = realExec,
+    excludes: readonly string[] = ['.goaly'],
+    scrubVerifyEnv = true,
+  ) {
     this.#root = root;
     this.#exec = exec;
     this.#excludes = excludes;
+    this.#scrubVerifyEnv = scrubVerifyEnv;
   }
 
   /** Git pathspec that scopes a command to everything except the excluded paths. */
@@ -168,12 +180,33 @@ export class GitWorkspace implements Workspace {
     return sections.join('');
   }
 
+  async fileHash(relPath: string): Promise<string | null> {
+    // Resolve under the root and refuse anything that escapes it — a pinned path is compiler-
+    // authored but we treat it as untrusted (a traversal becomes a fail-closed "missing" → FAIL).
+    const rootResolved = resolve(this.#root);
+    const resolved = resolve(rootResolved, relPath);
+    if (resolved !== rootResolved && !resolved.startsWith(rootResolved + sep)) {
+      return null;
+    }
+    try {
+      const content = await readFile(resolved, 'utf8');
+      return sha256Hex(content);
+    } catch {
+      // Missing/unreadable file is fail-closed: the guard reports it as a moved/deleted bar.
+      return null;
+    }
+  }
+
   async run(command: string, opts?: { timeoutMs?: number }): Promise<CommandResult> {
     // Honor the Workspace "never rejects" contract even if the injected exec throws.
     try {
+      // The verify command runs worker/model-authored code on the host: deny it the parent's
+      // ambient secrets (finding C5). Git operations above deliberately keep the full env.
+      const env = this.#scrubVerifyEnv ? scrubEnv(process.env) : undefined;
       const result = await this.#exec(command, [], {
         cwd: this.#root,
         shell: true,
+        ...(env !== undefined ? { env } : {}),
         ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       });
       return { exitCode: result.code, stdout: result.stdout, stderr: result.stderr };

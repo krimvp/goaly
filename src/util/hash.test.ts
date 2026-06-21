@@ -9,7 +9,10 @@ const base: UnhashedContract = {
     { kind: 'judge', rubric: 'is it clear?', quorum: 3, confidenceFloor: 0.66 },
   ],
   rubric: 'overall rubric',
-  generatedFiles: ['b.test.ts', 'a.test.ts'],
+  generatedFiles: [
+    { path: 'b.test.ts', sha256: 'b'.repeat(64) },
+    { path: 'a.test.ts', sha256: 'a'.repeat(64) },
+  ],
 };
 
 describe('contract hashing', () => {
@@ -18,8 +21,25 @@ describe('contract hashing', () => {
   });
 
   it('is stable regardless of generatedFiles ordering (canonicalized)', () => {
-    const reordered: UnhashedContract = { ...base, generatedFiles: ['a.test.ts', 'b.test.ts'] };
+    const reordered: UnhashedContract = {
+      ...base,
+      generatedFiles: [
+        { path: 'a.test.ts', sha256: 'a'.repeat(64) },
+        { path: 'b.test.ts', sha256: 'b'.repeat(64) },
+      ],
+    };
     expect(hashContract(reordered)).toBe(hashContract(base));
+  });
+
+  it('changes when a generated file content hash changes (the bar moved)', () => {
+    const tampered: UnhashedContract = {
+      ...base,
+      generatedFiles: [
+        { path: 'b.test.ts', sha256: 'c'.repeat(64) },
+        { path: 'a.test.ts', sha256: 'a'.repeat(64) },
+      ],
+    };
+    expect(hashContract(tampered)).not.toBe(hashContract(base));
   });
 
   it('changes when the bar changes (a rung command is weakened)', () => {

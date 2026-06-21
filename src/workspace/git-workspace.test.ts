@@ -128,6 +128,47 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(result.stdout).toContain('done');
   });
 
+  it('scrubs credential-looking env vars from the verify command (C5)', async () => {
+    process.env.GOALY_TEST_TOKEN = 'super-secret';
+    process.env.GOALY_TEST_PLAIN = 'visible';
+    try {
+      const ws = new GitWorkspace(root);
+      const secret = await ws.run('printf "%s" "${GOALY_TEST_TOKEN}"');
+      const plain = await ws.run('printf "%s" "${GOALY_TEST_PLAIN}"');
+      expect(secret.stdout).toBe('');
+      expect(plain.stdout).toBe('visible');
+    } finally {
+      delete process.env.GOALY_TEST_TOKEN;
+      delete process.env.GOALY_TEST_PLAIN;
+    }
+  });
+
+  it('passes the full env when scrubbing is disabled', async () => {
+    process.env.GOALY_TEST_TOKEN = 'super-secret';
+    try {
+      const ws = new GitWorkspace(root, undefined, ['.goaly'], false);
+      const secret = await ws.run('printf "%s" "${GOALY_TEST_TOKEN}"');
+      expect(secret.stdout).toBe('super-secret');
+    } finally {
+      delete process.env.GOALY_TEST_TOKEN;
+    }
+  });
+
+  it('fileHash hashes a real file, tracks edits, and returns null for missing/escaping paths (C1)', async () => {
+    const ws = new GitWorkspace(root);
+    await writeFile(join(root, 'gen.test.ts'), 'test("x", () => {})');
+    const h1 = await ws.fileHash('gen.test.ts');
+    expect(h1).toMatch(/^[0-9a-f]{64}$/);
+
+    // A content change yields a different hash (the guard's tamper signal).
+    await writeFile(join(root, 'gen.test.ts'), 'test("x", () => { expect(true).toBe(true) })');
+    const h2 = await ws.fileHash('gen.test.ts');
+    expect(h2).not.toBe(h1);
+
+    expect(await ws.fileHash('nope.test.ts')).toBeNull();
+    expect(await ws.fileHash('../escape.txt')).toBeNull();
+  });
+
   it('exec runner is injectable (no real process spawned)', async () => {
     const calls: string[][] = [];
     const ws = new GitWorkspace(root, async (cmd, args) => {

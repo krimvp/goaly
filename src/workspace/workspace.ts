@@ -23,4 +23,10 @@ export interface Workspace {
    * instead of stalling the loop forever.
    */
   run(command: string, opts?: { timeoutMs?: number }): Promise<CommandResult>;
+  /**
+   * sha256 (hex) of the content of a workspace file, or `null` when it is absent or escapes the
+   * workspace root. Used by the generated-files guard to detect tampering with the frozen, authored
+   * verification (finding C1). A `null` is treated fail-closed (a missing pinned file is a FAIL).
+   */
+  fileHash(relPath: string): Promise<string | null>;
 }

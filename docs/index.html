@@ -89,9 +89,10 @@
       autonomous loop degenerates into reward hacking. goaly's whole design exists to prevent that.</p>
 
     <div class="rows reveal">
-      <div class="row"><span class="rn">01</span><div class="rt"><b>Compile once, then freeze</b><p>The success contract — an ordered ladder of checks + a rubric — is authored once, hashed, and frozen. No transition rewrites it; the contractHash is logged every iteration to prove the bar never moved.</p></div></div>
-      <div class="row"><span class="rn">02</span><div class="rt"><b>Two independent keys</b><p>A run is DONE only when both keys turn: the frozen verifier passes and an independent approver doesn't veto. A worker can game one; getting both is much harder.</p></div></div>
+      <div class="row"><span class="rn">01</span><div class="rt"><b>Compile once, then freeze</b><p>The success contract — an ordered ladder of checks + a rubric — is authored once, hashed, and frozen. No transition rewrites it; the contractHash is logged every iteration to prove the bar never moved. Files goaly authors for <code>--generate</code> are pinned by content hash, and a guard rung fails closed if the worker rewrites the tests the frozen command runs.</p></div></div>
+      <div class="row"><span class="rn">02</span><div class="rt"><b>Two independent keys</b><p>A run is DONE only when both keys turn: the frozen verifier passes and an independent approver doesn't veto. A worker can game one; getting both is much harder. The worker's diff reaches both keys inside an untrusted, nonce-fenced envelope (prompt-injection defense), and goaly warns when the keys collapse onto one model.</p></div></div>
       <div class="row"><span class="rn">03</span><div class="rt"><b>Fail closed, always</b><p>Any verifier, grader, approver, or adapter that errors or returns garbage becomes a FAIL / VETO — never a false green, never an unhandled throw.</p></div></div>
+      <div class="row"><span class="rn">04</span><div class="rt"><b>Deny the bar a free lunch</b><p>Vacuously-passing authored commands (<code>true</code>, <code>:</code>, <code>exit 0</code>) are refused at compile, and the verify command runs with a credential-scrubbed environment so worker-authored checks can't exfiltrate host secrets.</p></div></div>
     </div>
   </div>
 </section>

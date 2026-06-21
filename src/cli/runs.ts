@@ -117,7 +117,7 @@ function renderContract(contract: CompiledContract | null): string[] {
   if (contract === null) return ['', 'contract:    (none — run failed before compile)'];
   const lines = ['', `contract:    ${contract.contractHash}`, `  rubric:    ${contract.rubric}`];
   if (contract.generatedFiles.length > 0) {
-    lines.push(`  generated: ${contract.generatedFiles.join(', ')}`);
+    lines.push(`  generated: ${contract.generatedFiles.map((f) => f.path).join(', ')}`);
   }
   lines.push('  rungs:');
   contract.rungs.forEach((rung, i) => lines.push(`    ${i + 1}. ${fmtRung(rung)}`));

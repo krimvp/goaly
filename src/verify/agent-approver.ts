@@ -3,6 +3,7 @@ import type { ApprovalInput } from '../domain/events';
 import type { Verdict } from '../domain/verdict';
 import type { Approver } from './approver';
 import type { LlmProvider } from '../llm/provider';
+import { UNTRUSTED_SYSTEM_CLAUSE, wrapUntrusted } from './prompt-safety';
 
 const SYSTEM_PROMPT = [
   'You are an INDEPENDENT skeptic acting as Gate B in an automated goal-orchestration loop.',
@@ -16,6 +17,7 @@ const SYSTEM_PROMPT = [
   'Respond with ONLY a single JSON object of the form {"veto": boolean, "reason"?: string}.',
   'A veto MUST include a non-empty reason explaining what is missing or suspect.',
   'Do not include any prose, markdown, or code fences — JSON only.',
+  UNTRUSTED_SYSTEM_CLAUSE,
 ].join(' ');
 
 function summarizeVerdicts(verdicts: Verdict[]): string {
@@ -33,7 +35,7 @@ function buildPrompt(input: ApprovalInput): string {
     `GOAL:\n${input.goal}`,
     `RUBRIC:\n${input.rubric}`,
     `VERIFIER VERDICTS:\n${summarizeVerdicts(input.verdicts)}`,
-    `DIFF:\n${input.diff}`,
+    `DIFF:\n${wrapUntrusted(input.diff, { label: 'DIFF' })}`,
     'Is this ACTUALLY done, or did the verifier get gamed/short-circuited?',
     'Reply with ONLY the JSON {"veto": boolean, "reason"?: string}.',
   ].join('\n\n');

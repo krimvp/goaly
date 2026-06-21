@@ -148,6 +148,7 @@ export class FakeWorkspace implements Workspace {
   #hash: string;
   #diffText: string;
   readonly #cmdResults: CommandResult[];
+  readonly #fileHashes: Map<string, string> = new Map();
   constructor(hash = '0000000', diffText = '', cmdResults: CommandResult[] = []) {
     this.#hash = hash;
     this.#diffText = diffText;
@@ -155,6 +156,11 @@ export class FakeWorkspace implements Workspace {
   }
   setHash(hash: string): void {
     this.#hash = hash;
+  }
+  /** Stub a file's content hash (the C1 guard reads this); `null` clears it (simulates deletion). */
+  setFileHash(relPath: string, sha256: string | null): void {
+    if (sha256 === null) this.#fileHashes.delete(relPath);
+    else this.#fileHashes.set(relPath, sha256);
   }
   async diffHash(): Promise<DiffHash> {
     return DiffHash.parse(this.#hash);
@@ -164,6 +170,9 @@ export class FakeWorkspace implements Workspace {
   }
   async run(_command: string): Promise<CommandResult> {
     return this.#cmdResults.shift() ?? { exitCode: 0, stdout: '', stderr: '' };
+  }
+  async fileHash(relPath: string): Promise<string | null> {
+    return this.#fileHashes.get(relPath) ?? null;
   }
 }
 

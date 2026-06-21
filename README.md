@@ -33,7 +33,10 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
   (running the agent, judging, approving) hides behind boolean/value interfaces at four real seams.
 - The **verifier ladder** runs cheapest-and-hardest-to-game first: deterministic checks (exit codes,
   tests) before any LLM judge, short-circuiting on the first deterministic fail. A rung that errors is
-  **fail-closed** — a malformed grader is never a green.
+  **fail-closed** — a malformed grader is never a green. When goaly **authored** the verification
+  (`--generate`), an integrity **guard rung runs first** and fails closed if any generated test file
+  was changed since the contract froze — the worker can't quietly rewrite the bar the frozen command
+  measures.
 - **Gate A is the human's say over the bar.** Before the loop you can approve the frozen contract,
   **reject** it (abort), or give **free-text feedback to revise** it — goaly re-authors the contract
   and re-presents it, bounded by `--max-gate-a-revisions` (default 10; `0` disables revision).
@@ -48,6 +51,31 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
   **LLM steps** (compiler / judge / approver) — and against any `--budget-tokens` cap. It's folded
   from the run log, so `--resume` and `goaly runs show` rebuild the same numbers; missing token data
   degrades to "unknown", never a crash. Optional USD cost via `--cost-table`; **tokens-only by default**.
+
+## Hardening against reward-hacking
+
+The point of goaly is correctness under adversarial self-interest, so the loop is hardened against
+the obvious ways a worker (or a gamed contract) could reach DONE without meeting the goal:
+
+- **The frozen bar can't be edited out from under the command.** Files goaly authors for `--generate`
+  are pinned by content hash inside the frozen contract; a guard rung re-checks them every iteration
+  and fails closed on any change or deletion (so `vitest run authored.test.ts` can't stay "frozen"
+  while `authored.test.ts` is rewritten to pass).
+- **The two keys ingest the diff as untrusted data.** The judge and the approver receive the
+  worker-controlled diff inside a clearly-delimited, nonce-fenced envelope, and are instructed to
+  never act on instructions, verdicts, or claims hidden inside it (prompt-injection defense).
+- **Vacuous authored bars are refused.** A `--generate` command that trivially passes without
+  measuring anything (`true`, `:`, `exit 0`, …) is rejected at compile (`COMPILE_FAILED`) rather than
+  frozen as a hollow contract.
+- **Independence is checked, not assumed.** goaly warns loudly when the "two independent keys" collapse
+  onto one model (e.g. a bare `--model X`, which would make the approver share the worker's/judge's
+  blind spots); pass `--approver-model` (or a different `--llm-provider`) to separate them.
+- **The verify command runs with a credential-scrubbed environment.** The verifier executes
+  worker/model-authored code on your host every iteration; goaly strips credential-looking variables
+  (`*_TOKEN`, `*_KEY`, `*SECRET*`, `AWS_*`, `GITHUB_*`, …) from its environment so they can't be
+  exfiltrated through a check. PATH/HOME and the rest of the toolchain environment are kept, so
+  ordinary test commands are unaffected. (This narrows, but does not eliminate, the host trust
+  boundary — only run `--autonomous` against repositories you trust.)
 
 ## Install
 

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { RunConfig } from '../domain/config';
-import type { CompiledContract, Rung, UnhashedContract } from '../domain/contract';
-import { freezeContract } from '../util/hash';
+import type { CompiledContract, GeneratedFile, Rung, UnhashedContract } from '../domain/contract';
+import { freezeContract, sha256Hex } from '../util/hash';
 import type { LlmProvider } from '../llm/provider';
 import type { VerifierCompiler } from './compiler';
 
@@ -62,6 +62,25 @@ function extractBalancedJson(text: string): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Reject a verification command that trivially exits 0 without measuring anything (finding C4).
+ * An autonomously-authored bar like `true`, `:`, or `exit 0` would pass both keys vacuously, so a
+ * generated command made only of no-op segments is refused at compile (→ COMPILE_FAILED) rather
+ * than frozen as a hollow contract. Conservative on purpose: it only flags commands whose EVERY
+ * segment is a recognised no-op, so any real test/check command passes through untouched. This is
+ * applied to the LLM-authored `--generate` command only; a user's explicit `--verify-cmd "true"`
+ * is their own informed choice and is left alone.
+ */
+export function isVacuousCommand(command: string): boolean {
+  const segments = command
+    .split(/[\n;]|&&|\|\||\|/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (segments.length === 0) return true;
+  const NOOP = /^(true|:|exit(\s+0)?)$/;
+  return segments.every((s) => NOOP.test(s));
 }
 
 function parseGenerated(raw: string): GeneratedVerification {
@@ -165,11 +184,21 @@ export class AgentCompiler implements VerifierCompiler {
 
     const generated = parseGenerated(raw);
 
-    const generatedFiles: string[] = [];
+    if (isVacuousCommand(generated.command)) {
+      throw new Error(
+        `AgentCompiler: refusing to freeze a vacuous verification command ('${generated.command}') ` +
+          'that passes without measuring the goal — author a command that fails until the goal is met',
+      );
+    }
+
+    // Pin each authored file by the hash of the exact content we write, so the C1 guard can detect
+    // any later tampering with the bar. Content hashing matches GitWorkspace.fileHash (sha256 of the
+    // utf8 content).
+    const generatedFiles: GeneratedFile[] = [];
     if (generated.files !== undefined && this.#writeFile !== undefined) {
       for (const file of generated.files) {
         await this.#writeFile(file.path, file.content);
-        generatedFiles.push(file.path);
+        generatedFiles.push({ path: file.path, sha256: sha256Hex(file.content) });
       }
     }
 

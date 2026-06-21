@@ -11,6 +11,7 @@ import type { Verifier } from '../verify/verifier';
 import type { LlmProvider } from '../llm/provider';
 import { Ladder } from '../verify/ladder';
 import { DeterministicVerifier } from '../verify/deterministic';
+import { GeneratedFilesGuard } from '../verify/generated-guard';
 import { JudgeVerifier } from '../verify/judge';
 import { AgentApprover } from '../verify/agent-approver';
 import { AgentCompiler } from '../compile/agent-compiler';
@@ -33,6 +34,7 @@ import { droidCodec } from '../agent-cli/droid-codec';
 import type { AgentEventSink, PhasedStreamSink, StreamPhase } from '../agent-cli/stream';
 import { makeStreamRenderer, streamLogFields } from './stream-render';
 import { resolveModels, type ModelSelection } from './models';
+import { independenceWarnings } from './independence';
 import type { HarnessChoice, LlmProviderChoice, StepTimeouts } from './args';
 
 export type ComposeOptions = {
@@ -99,6 +101,15 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
   const logger = options.logger ?? buildRunLogger(options, stateDir);
   const streamSink = buildStreamSink(options, logger);
+
+  // Warn loudly when the "two independent keys" collapse onto one model (finding C3). Skipped when
+  // the caller injects its own `llm` — then the resolved per-seam models are not what runs, so the
+  // wiring warning would be misleading (and noisy in tests/embedders).
+  if (options.llm === undefined) {
+    for (const warning of independenceWarnings(models, options.harness, provider)) {
+      logger.warn('model independence', { detail: warning });
+    }
+  }
 
   // An injected `llm` (tests) overrides every step; otherwise build a provider per step so each can
   // carry its own resolved model, per-step timeout, AND its phase-tagged stream sink. All three are
@@ -259,6 +270,12 @@ export function buildLadder(
           llm,
         }),
   );
+  // Pin compiler-authored verification files (finding C1): a guard runs FIRST and fails closed if
+  // any frozen generated file was modified/removed, so the worker can't rewrite the bar the frozen
+  // command measures. No generated files ⇒ no guard (the common --verify-cmd path is unchanged).
+  if (contract.generatedFiles.length > 0) {
+    rungs.unshift(new GeneratedFilesGuard(contract.generatedFiles));
+  }
   return new Ladder(rungs);
 }
 
