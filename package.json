@@ -8,14 +8,30 @@
     "node": ">=20"
   },
   "bin": {
-    "goalorch": "./bin/goalorch.mjs"
+    "goalorch": "./dist/goalorch.js"
   },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "dev": "tsx bin/goalorch.mjs",
+    "dev": "tsx src/cli/bin.ts",
+    "build": "node scripts/build.mjs && tsc -p tsconfig.build.json",
+    "start": "node dist/goalorch.js",
+    "clean": "rm -rf dist coverage *.tgz",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "prepare": "npm run build"
   },
   "dependencies": {
     "zod": "^3.24.1"
@@ -23,6 +39,7 @@
   "devDependencies": {
     "@types/node": "^22.10.5",
     "@vitest/coverage-v8": "^2.1.8",
+    "esbuild": "^0.24.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"

@@ -34,12 +34,24 @@ COMPILE_VERIFIER → [Gate A: contract approval] → loop {
 
 ## Install
 
+Install it as a standalone CLI (builds `dist/`, then puts `goalorch` on your PATH):
+
 ```bash
-npm install
+make install        # == npm install -g .  (the `prepare` hook bundles dist/ first)
+goalorch help
 ```
 
-Requires Node ≥ 20 and `git`. The default adapters shell out to `claude` / `codex` CLIs; the LLM
-judge/approver use a CLI-backed provider by default.
+Or build a redistributable tarball, or install from source by hand:
+
+```bash
+npm install         # install deps (also bundles dist/ via the `prepare` hook)
+npm run build       # bundle the standalone CLI + type declarations into dist/
+npm install -g .    # put `goalorch` on your PATH
+make pack           # -> goalorch-<version>.tgz, installable with `npm i -g ./goalorch-*.tgz`
+```
+
+Requires Node ≥ 20 and `git`. The default adapters shell out to the `claude` / `codex` / `droid`
+CLIs; the LLM judge/approver use a CLI-backed provider by default.
 
 > Add `.goalorch/` to your target repo's `.gitignore`. (goalorch also excludes it from its own
 > tree-hash, so its run logs never pollute stuck-detection regardless.)
@@ -77,12 +89,19 @@ and verification work on any harness for free.
 
 ## Develop
 
+`make help` lists every task. The common ones:
+
 ```bash
-npm run typecheck   # tsc --noEmit (strict)
-npm test            # vitest run
-npm run coverage    # vitest run --coverage (80% thresholds)
-npm run dev -- run --goal "..." --verify-cmd "true" --harness fake --autonomous
+make dev ARGS='run --goal "..." --verify-cmd "true" --harness fake --autonomous'  # run from SOURCE (tsx) — no build
+make build          # bundle the standalone CLI + type declarations into dist/
+make check          # typecheck + tests (the definition-of-done gate)
+make coverage       # vitest run --coverage (80% thresholds)
 ```
+
+Each maps to an npm script (`npm run dev -- …`, `npm run build`, `npm run typecheck`, `npm test`,
+`npm run coverage`). `make dev` / `npm run dev` execute the TypeScript entry directly with `tsx`, so
+there is **no build step** for the dev loop; `npm run build` (esbuild) is only needed to produce the
+installable `dist/` artifacts.
 
 The walking skeleton (domain → pure reducer → fakes → driver) is proven end-to-end with **zero IO**
 before any subprocess exists; real adapters/verifiers are leaves behind frozen interfaces.
