@@ -52,12 +52,19 @@ Every serious harness exposes these; find each for your target:
 
 | Capability | Claude Code | Codex | What you need |
 |---|---|---|---|
-| Headless / print invocation | `claude -p "<prompt>"` | `codex exec "<prompt>"` | how to run one non-interactive turn |
+| Headless / print invocation | `claude -p "<prompt>"` | `codex exec --full-auto "<prompt>"` | how to run one non-interactive turn |
 | Structured output | `--output-format json` | `--json` (JSONL stream) | a machine-readable result |
 | Session resume | `--resume <id>` | `codex exec resume <id>` | continue the same conversation |
 
 If a harness lacks structured output, parse its text output tolerantly and synthesize a session id.
 If it lacks resume, return a stable session id and accept that each turn is cold (note it).
+
+**The harness role must be able to edit the tree.** A harness *drives* the agent, so its invocation
+must run in a writable mode — the opposite of the read-only `LlmProvider` role below. Some CLIs are
+read-only by default and need an explicit write flag: `codex exec` runs in a read-only sandbox unless
+you pass `--full-auto` (its alias for a workspace-write sandbox), so the codex *harness* passes it
+while the codex *provider* deliberately passes `--sandbox read-only`. If you forget it, the agent can
+diagnose but never apply a fix and every iteration no-diffs.
 
 ## The two mappings you must define
 

@@ -34,9 +34,14 @@ const SESSION_FALLBACK = 'codex-unknown';
  * Assumed codex CLI contract (the EXACT flags may differ between codex versions — this is the
  * seam, not a hard dependency):
  *
- *   New conversation:  `codex exec [--model <m>] <prompt> --json`
- *   Resume a thread:   `codex exec resume <sessionId> [--model <m>] <prompt> --json`
+ *   New conversation:  `codex exec --full-auto [--model <m>] <prompt> --json`
+ *   Resume a thread:   `codex exec resume <sessionId> --full-auto [--model <m>] <prompt> --json`
  *
+ * `--full-auto` is mandatory for the HARNESS role: `codex exec` defaults to a read-only sandbox,
+ * so without it codex can diagnose a fix but never apply one — every iteration would no-diff and
+ * the run would abort. `--full-auto` is codex's alias for a workspace-write sandbox with automatic
+ * execution. (The separate, read-only `LlmProvider` role must NOT get it — it uses
+ * `--sandbox read-only`; see `codexCompletionArgs` in `compose.ts`.)
  * `--json` makes codex stream JSONL events on stdout, one JSON object per line. We parse those
  * lines tolerantly via the shared core. The model flag (when set) precedes the prompt positional
  * so the prompt is never mistaken for the model value.
@@ -44,9 +49,17 @@ const SESSION_FALLBACK = 'codex-unknown';
 function buildArgs(prompt: string, model: string | undefined, sessionId?: SessionId): string[] {
   const modelArgs = model !== undefined ? ['--model', model] : [];
   if (sessionId !== undefined) {
-    return ['exec', 'resume', sessionId as unknown as string, ...modelArgs, prompt, '--json'];
+    return [
+      'exec',
+      'resume',
+      sessionId as unknown as string,
+      '--full-auto',
+      ...modelArgs,
+      prompt,
+      '--json',
+    ];
   }
-  return ['exec', ...modelArgs, prompt, '--json'];
+  return ['exec', '--full-auto', ...modelArgs, prompt, '--json'];
 }
 
 /** Default production exec: spawn the real `codex` binary and collect its output. */
@@ -117,6 +130,14 @@ function extractText(obj: Record<string, unknown>): string | undefined {
   const delta = obj['delta'];
   if (isRecord(delta)) {
     const inner = extractText(delta);
+    if (inner !== undefined) return inner;
+  }
+  // Current codex (>=0.x) streams its result nested: a top-level event
+  // `{ type: 'item.completed', item: { type: 'agent_message', text } }`. Recurse into `item` so
+  // the final assistant message is found (command_execution items carry no text and are skipped).
+  const item = obj['item'];
+  if (isRecord(item)) {
+    const inner = extractText(item);
     if (inner !== undefined) return inner;
   }
   return undefined;
