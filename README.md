@@ -1,5 +1,8 @@
 # goaly
 
+[![CI](https://github.com/krimvp/goaly/actions/workflows/ci.yml/badge.svg)](https://github.com/krimvp/goaly/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/goaly.svg)](https://www.npmjs.com/package/goaly)
+
 **🌐 [Interactive overview &amp; architecture →](https://krimvp.github.io/goaly/)** — the landing
 page (`docs/`) explains what this is, how the loop works, the internal architecture, and how to add
 a harness, with interactive diagrams.
