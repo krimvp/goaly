@@ -19,8 +19,11 @@ export type ExecResult = { stdout: string; stderr: string; code: number };
 export type ExecFn = (
   cmd: string,
   args: string[],
-  opts: { cwd: string; env?: NodeJS.ProcessEnv; shell?: boolean },
+  opts: { cwd: string; env?: NodeJS.ProcessEnv; shell?: boolean; timeoutMs?: number },
 ) => Promise<ExecResult>;
+
+/** Conventional `timeout(1)` exit code; surfaced when we kill a command for exceeding `timeoutMs`. */
+const TIMEOUT_EXIT_CODE = 124;
 
 /** Counter to keep temporary index file names unique within a process. */
 let tmpIndexCounter = 0;
@@ -28,14 +31,41 @@ let tmpIndexCounter = 0;
 /** Real spawn-based runner. Never rejects on a non-zero exit — resolves the code. */
 const realExec: ExecFn = (cmd, args, opts) =>
   new Promise<ExecResult>((resolve) => {
+    // When a timeout is requested we run in a NEW process group (`detached`) so the kill can target
+    // the whole group. A verify command is a shell string, so SIGKILL'ing just the `sh` wrapper
+    // would orphan its children and (because they inherit the stdio pipes) leave `close` pending
+    // forever. Killing the group (`-pid`) reaps the wrapper AND its descendants.
+    const detached = opts.timeoutMs !== undefined;
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
       ...(opts.env !== undefined ? { env: opts.env } : {}),
       ...(opts.shell !== undefined ? { shell: opts.shell } : {}),
+      ...(detached ? { detached: true } : {}),
     });
 
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+
+    /** Kill the whole process group when detached; fall back to the lone child otherwise. */
+    const killTree = (): void => {
+      try {
+        if (detached && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch {
+        // Process (group) already gone — nothing to kill.
+      }
+    };
+
+    // Optional wall-clock cap: SIGKILL the command and report a fail-closed non-zero exit. This is
+    // how a hung verify command becomes a verifier FAIL instead of stalling the loop forever.
+    const timer =
+      opts.timeoutMs !== undefined
+        ? setTimeout(() => {
+            timedOut = true;
+            killTree();
+          }, opts.timeoutMs)
+        : null;
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -47,10 +77,20 @@ const realExec: ExecFn = (cmd, args, opts) =>
     // A spawn-level failure (e.g. git missing from PATH) must NOT reject — resolve with the
     // POSIX "command not found" code so callers fail closed instead of crashing the loop.
     child.on('error', (err) => {
+      if (timer !== null) clearTimeout(timer);
       resolve({ stdout, stderr: `${stderr}${String(err)}`, code: 127 });
     });
 
     child.on('close', (code, signal) => {
+      if (timer !== null) clearTimeout(timer);
+      if (timedOut) {
+        resolve({
+          stdout,
+          stderr: `${stderr}\n[goaly] command timed out after ${opts.timeoutMs}ms`,
+          code: TIMEOUT_EXIT_CODE,
+        });
+        return;
+      }
       // Signal-killed or unknown exit → treat as a failure exit code of 1.
       const exitCode = code === null ? (signal !== null ? 1 : 1) : code;
       resolve({ stdout, stderr, code: exitCode });
@@ -172,10 +212,14 @@ export class GitWorkspace implements Workspace {
     return sections.join('');
   }
 
-  async run(command: string): Promise<CommandResult> {
+  async run(command: string, opts?: { timeoutMs?: number }): Promise<CommandResult> {
     // Honor the Workspace "never rejects" contract even if the injected exec throws.
     try {
-      const result = await this.#exec(command, [], { cwd: this.#root, shell: true });
+      const result = await this.#exec(command, [], {
+        cwd: this.#root,
+        shell: true,
+        ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      });
       return { exitCode: result.code, stdout: result.stdout, stderr: result.stderr };
     } catch (e) {
       return { exitCode: 127, stdout: '', stderr: errorMessage(e) };

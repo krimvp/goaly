@@ -1,8 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { composeDeps, makeLlmProvider, codexCompletionArgs, droidCompletionArgs } from './compose';
+import {
+  composeDeps,
+  makeLlmProvider,
+  buildLadder,
+  codexCompletionArgs,
+  droidCompletionArgs,
+} from './compose';
 import { makeConfig, InMemoryLogFs } from '../testing/fakes';
-import { asRunId } from '../domain/ids';
+import { asRunId, DiffHash } from '../domain/ids';
+import { freezeContract } from '../util/hash';
+import { FakeLlm } from '../llm/provider';
+import type { Workspace, CommandResult } from '../workspace/workspace';
 
 describe('LLM provider completion argv (read-only)', () => {
   it('codex runs --sandbox read-only with the model before the prompt positional', () => {
@@ -29,6 +38,60 @@ describe('makeLlmProvider', () => {
     expect(makeLlmProvider('claude', undefined).name).toBe('cli:claude');
     expect(makeLlmProvider('codex', undefined).name).toBe('codex');
     expect(makeLlmProvider('droid', undefined).name).toBe('droid');
+  });
+});
+
+describe('buildLadder — verify timeout threading', () => {
+  /** A workspace that records the opts passed to `run`. */
+  function spyWorkspace(): {
+    workspace: Workspace;
+    calls: Array<{ command: string; opts?: { timeoutMs?: number } }>;
+  } {
+    const calls: Array<{ command: string; opts?: { timeoutMs?: number } }> = [];
+    const result: CommandResult = { exitCode: 0, stdout: '', stderr: '' };
+    const workspace: Workspace = {
+      async diffHash() {
+        return DiffHash.parse('0'.repeat(40));
+      },
+      async diff() {
+        return '';
+      },
+      async run(command, opts) {
+        calls.push(opts !== undefined ? { command, opts } : { command });
+        return result;
+      },
+    };
+    return { workspace, calls };
+  }
+
+  it('passes verifyTimeoutMs down into each deterministic rung', async () => {
+    const contract = freezeContract({
+      goal: 'g',
+      rungs: [{ kind: 'deterministic', command: 'npm test' }],
+      rubric: 'r',
+      generatedFiles: [],
+    });
+    const ladder = buildLadder(contract, new FakeLlm([]), 45000);
+    const { workspace, calls } = spyWorkspace();
+
+    await ladder.verify(workspace, 'g', 'r');
+
+    expect(calls).toEqual([{ command: 'npm test', opts: { timeoutMs: 45000 } }]);
+  });
+
+  it('omits the timeout when none is configured', async () => {
+    const contract = freezeContract({
+      goal: 'g',
+      rungs: [{ kind: 'deterministic', command: 'npm test' }],
+      rubric: 'r',
+      generatedFiles: [],
+    });
+    const ladder = buildLadder(contract, new FakeLlm([]));
+    const { workspace, calls } = spyWorkspace();
+
+    await ladder.verify(workspace, 'g', 'r');
+
+    expect(calls).toEqual([{ command: 'npm test' }]);
   });
 });
 

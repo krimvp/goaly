@@ -49,6 +49,7 @@ export async function main(argv: string[]): Promise<number> {
     workspaceRoot: parsed.workspace,
     runId,
     logLevel: parsed.logLevel,
+    timeouts: parsed.timeouts,
     ...(parsed.logFile !== undefined ? { logFile: parsed.logFile } : {}),
     ...(parsed.noLogFile ? { noLogFile: true } : {}),
   });
@@ -58,6 +59,7 @@ export async function main(argv: string[]): Promise<number> {
   deps.logger?.info('cli starting', {
     harness: parsed.harness,
     autonomous: parsed.config.autonomous,
+    ...(parsed.configSources.length > 0 ? { configFile: parsed.configSources.join(', ') } : {}),
     ...startupFields(parsed),
   });
 

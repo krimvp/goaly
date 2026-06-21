@@ -12,14 +12,19 @@ const DETAIL_OUTPUT_LIMIT = 2000;
 export class DeterministicVerifier implements Verifier {
   readonly #command: string;
   readonly #label: string | undefined;
+  readonly #timeoutMs: number | undefined;
 
-  constructor(command: string, label?: string) {
+  constructor(command: string, label?: string, timeoutMs?: number) {
     this.#command = command;
     this.#label = label;
+    this.#timeoutMs = timeoutMs;
   }
 
   async verify(workspace: Workspace, _goal: string, _rubric: string): Promise<Verdict> {
-    const r = await workspace.run(this.#command);
+    const r =
+      this.#timeoutMs !== undefined
+        ? await workspace.run(this.#command, { timeoutMs: this.#timeoutMs })
+        : await workspace.run(this.#command);
     const name = this.#label ?? this.#command;
     const pass = r.exitCode === 0;
     if (pass) {

@@ -30,7 +30,7 @@ import { AgentCliLlmProvider } from '../llm/agent-cli-provider';
 import { codexExtractor } from '../harness/codex';
 import { droidExtractor } from '../harness/droid';
 import { resolveModels, type ModelSelection } from './models';
-import type { HarnessChoice, LlmProviderChoice } from './args';
+import type { HarnessChoice, LlmProviderChoice, StepTimeouts } from './args';
 
 export type ComposeOptions = {
   harness: HarnessChoice;
@@ -42,6 +42,8 @@ export type ComposeOptions = {
   llmProvider?: LlmProviderChoice;
   /** Raw model-selection flags; resolved into per-seam models via the cascade. */
   models?: ModelSelection;
+  /** Per-step subprocess timeouts (harness / LLM steps / verify command). Each absent ⇒ default. */
+  timeouts?: StepTimeouts;
   /** Where run logs live. Default `<workspaceRoot>/.goaly` (excluded from diffHash). */
   stateDir?: string;
   /** Minimum diagnostic log level. Default `info`. */
@@ -71,10 +73,11 @@ export const STATE_DIR = '.goaly';
 export function composeDeps(config: RunConfig, options: ComposeOptions): DriverDeps {
   const models = resolveModels(options.models ?? {});
   const provider = options.llmProvider ?? 'claude';
+  const timeouts = options.timeouts ?? {};
   // An injected `llm` (tests) overrides every step; otherwise build a provider per step so each
-  // can carry its own resolved model. The model is wiring — it never enters the frozen contract.
+  // can carry its own resolved model. Model + timeout are wiring — they never enter the contract.
   const llmFor = (model: string | undefined): LlmProvider =>
-    options.llm ?? makeLlmProvider(provider, model);
+    options.llm ?? makeLlmProvider(provider, model, timeouts.llmMs);
   const clock = new SystemClock();
   const workspace = new GitWorkspace(options.workspaceRoot);
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
@@ -88,8 +91,8 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     gateA: config.autonomous
       ? new AutoContractGate()
       : new HumanContractGate({ allowRevise: config.maxGateARevisions > 0 }),
-    harness: makeHarness(options.harness, models.harness),
-    makeLadder: (contract) => buildLadder(contract, llmFor(models.judge)),
+    harness: makeHarness(options.harness, models.harness, timeouts.harnessMs),
+    makeLadder: (contract) => buildLadder(contract, llmFor(models.judge), timeouts.verifyMs),
     approver: new AgentApprover({ llm: llmFor(models.approver) }),
     workspace,
     clock,
@@ -127,16 +130,22 @@ function buildRunLogger(options: ComposeOptions, stateDir: string): Logger {
  * droid's default no-`--auto` exec) so a judge / approver / compiler can use that tool's model
  * without ever mutating the working tree it is judging. The resolved per-step model is threaded in.
  */
-export function makeLlmProvider(choice: LlmProviderChoice, model: string | undefined): LlmProvider {
+export function makeLlmProvider(
+  choice: LlmProviderChoice,
+  model: string | undefined,
+  timeoutMs?: number,
+): LlmProvider {
+  const timeout = timeoutMs !== undefined ? { timeoutMs } : {};
   switch (choice) {
     case 'claude':
-      return new CliLlmProvider(model !== undefined ? { model } : {});
+      return new CliLlmProvider({ ...(model !== undefined ? { model } : {}), ...timeout });
     case 'codex':
       return new AgentCliLlmProvider({
         name: 'codex',
         command: 'codex',
         extractor: codexExtractor,
         buildArgs: (prompt) => codexCompletionArgs(prompt, model),
+        ...timeout,
       });
     case 'droid':
       return new AgentCliLlmProvider({
@@ -144,6 +153,7 @@ export function makeLlmProvider(choice: LlmProviderChoice, model: string | undef
         command: 'droid',
         extractor: droidExtractor,
         buildArgs: (prompt) => droidCompletionArgs(prompt, model),
+        ...timeout,
       });
   }
 }
@@ -171,11 +181,19 @@ export function droidCompletionArgs(prompt: string, model: string | undefined): 
   ];
 }
 
-/** Turn the frozen contract's ordered rungs into a Ladder of concrete verifiers. */
-export function buildLadder(contract: CompiledContract, llm: LlmProvider): Verifier {
+/**
+ * Turn the frozen contract's ordered rungs into a Ladder of concrete verifiers. An optional
+ * `verifyTimeoutMs` caps each deterministic command (a timeout is a fail-closed FAIL); the model
+ * and timeout are wiring and never alter the frozen rungs themselves.
+ */
+export function buildLadder(
+  contract: CompiledContract,
+  llm: LlmProvider,
+  verifyTimeoutMs?: number,
+): Verifier {
   const rungs: Verifier[] = contract.rungs.map((rung) =>
     rung.kind === 'deterministic'
-      ? new DeterministicVerifier(rung.command, rung.label)
+      ? new DeterministicVerifier(rung.command, rung.label, verifyTimeoutMs)
       : new JudgeVerifier({
           rubric: rung.rubric,
           quorum: rung.quorum,
@@ -186,8 +204,15 @@ export function buildLadder(contract: CompiledContract, llm: LlmProvider): Verif
   return new Ladder(rungs);
 }
 
-function makeHarness(choice: HarnessChoice, model: string | undefined): HarnessAdapter {
-  const opts = model !== undefined ? { model } : {};
+function makeHarness(
+  choice: HarnessChoice,
+  model: string | undefined,
+  timeoutMs?: number,
+): HarnessAdapter {
+  const opts = {
+    ...(model !== undefined ? { model } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  };
   switch (choice) {
     case 'claude-code':
       return new ClaudeCodeAdapter(opts);

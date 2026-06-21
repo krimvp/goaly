@@ -23,6 +23,7 @@ export {
   type ParsedArgs,
   type HarnessChoice,
   type LlmProviderChoice,
+  type StepTimeouts,
   type RawFlags,
 } from './cli/args';
 export {
@@ -37,6 +38,14 @@ export {
   type InputReaders,
   type ResolvedInputs,
 } from './cli/input-sources';
+export {
+  loadConfig,
+  overlayFromConfig,
+  defaultConfigFileReader,
+  IMPLICIT_CONFIG_FILENAME,
+  type ConfigFileReader,
+  type LoadedConfig,
+} from './cli/config-file';
 export { main, formatOutcome } from './cli/main';
 
 // Seam interfaces.

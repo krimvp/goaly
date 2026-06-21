@@ -99,7 +99,68 @@ goaly run --goal "..." --generate --autonomous --harness codex \
 # Follow the loop step-by-step, and keep a structured diagnostics file (rotated):
 goaly run --goal "..." --verify-cmd "npm test" --log-level debug
 goaly run --goal "..." --verify-cmd "npm test" --log-file ./run.log   # or --no-log-file
+
+# Cap how long each step may run (subprocess kill-timeouts, in ms):
+goaly run --goal "..." --verify-cmd "npm test" \
+             --harness-timeout-ms 900000 --llm-timeout-ms 120000 --verify-timeout-ms 60000
+
+# With a .goalyrc in the repo, the repeated wiring lives in the file — just pass the goal:
+goaly run --goal "make the parser handle empty input"
 ```
+
+### Config file
+
+So you don't repeat the same wiring on every invocation, `goaly run` reads **default flags from a
+JSON config file** in two layers (later overrides earlier):
+
+1. an **implicit `.goalyrc`** discovered in `--workspace` (or the current directory) — optional,
+2. an **explicit `--config <path>`** JSON file — when given it **must exist** (fails closed).
+
+Keys mirror the CLI flag names in **kebab-case** (`verify-cmd`, `max-iterations`,
+`harness-timeout-ms`). **Any flag passed on the command line overrides the file**, so the full
+precedence is: **CLI flag > `--config` file > `.goalyrc` > tool default**.
+
+```jsonc
+// .goalyrc — committed once, applies to every `goaly run` in this repo
+{
+  "harness": "codex",
+  "verify-cmd": "npm test",
+  "autonomous": true,
+  "max-iterations": 8,
+  "budget-tokens": 500000,
+  "model": "claude-opus-4-8",
+  "verify-timeout-ms": 60000
+}
+```
+
+```bash
+# now the same run is just:
+goaly run --goal "add a /health endpoint returning 200"
+# …a one-off override still wins over the file:
+goaly run --goal "..." --max-iterations 3
+# …and a named profile can be pointed at explicitly (overrides .goalyrc on conflicts):
+goaly run --goal "..." --config ./ci/goaly.ci.json
+```
+
+Booleans (`autonomous`, `generate`, `no-log-file`) take `true`/`false`, where `false` means "not
+set" (the flag's absence is its default). Per-invocation flags — `--workspace`, `--resume`, and
+`--config` itself — are intentionally not read from a file. An unknown key, a non-primitive value,
+or invalid JSON is a usage error (the config seam parses with Zod and fails closed).
+
+### Per-step timeouts
+
+Each subprocess goaly spawns has a wall-clock kill-timeout, configurable as **pure wiring** (it
+never enters the frozen contract):
+
+| Flag / config key | Step | Default |
+| --- | --- | --- |
+| `--harness-timeout-ms` | the harness (coding-agent) subprocess | `600000` (10 min) |
+| `--llm-timeout-ms` | each LLM step — judge / approver / compiler | `600000` (10 min) |
+| `--verify-timeout-ms` | the verify command | unbounded |
+
+A verify command that exceeds its timeout is SIGKILL'd and reported as a **non-zero exit — i.e. a
+verifier FAIL, never a green** (fail-closed, invariant #4). Each value must be a positive integer
+number of milliseconds.
 
 Goal, intent, and rubric each accept one source: inline (`--goal "…"`), a file (`--goal-file <path>`),
 or stdin (`--goal -`). Giving a field more than one source is a usage error.

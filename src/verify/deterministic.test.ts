@@ -1,6 +1,29 @@
 import { describe, it, expect } from 'vitest';
 import { DeterministicVerifier } from './deterministic';
 import { FakeWorkspace } from '../testing/fakes';
+import type { Workspace, CommandResult } from '../workspace/workspace';
+import { DiffHash } from '../domain/ids';
+
+/** A workspace that records every `run` call (command + opts) so we can assert what was forwarded. */
+function spyWorkspace(result: CommandResult): {
+  workspace: Workspace;
+  calls: Array<{ command: string; opts?: { timeoutMs?: number } }>;
+} {
+  const calls: Array<{ command: string; opts?: { timeoutMs?: number } }> = [];
+  const workspace: Workspace = {
+    async diffHash() {
+      return DiffHash.parse('0'.repeat(40));
+    },
+    async diff() {
+      return '';
+    },
+    async run(command, opts) {
+      calls.push(opts !== undefined ? { command, opts } : { command });
+      return result;
+    },
+  };
+  return { workspace, calls };
+}
 
 describe('DeterministicVerifier', () => {
   it('passes with confidence 1 when the command exits 0', async () => {
@@ -64,6 +87,24 @@ describe('DeterministicVerifier', () => {
     expect(verdict.pass).toBe(false);
     expect(verdict.detail).toContain('exit 2');
     expect(verdict.detail).toContain('failure on stdout');
+  });
+
+  it('forwards an explicit timeout to workspace.run', async () => {
+    const { workspace, calls } = spyWorkspace({ exitCode: 0, stdout: '', stderr: '' });
+    const verifier = new DeterministicVerifier('npm test', undefined, 30000);
+
+    await verifier.verify(workspace, 'goal', 'rubric');
+
+    expect(calls).toEqual([{ command: 'npm test', opts: { timeoutMs: 30000 } }]);
+  });
+
+  it('passes no opts when no timeout is configured', async () => {
+    const { workspace, calls } = spyWorkspace({ exitCode: 0, stdout: '', stderr: '' });
+    const verifier = new DeterministicVerifier('npm test');
+
+    await verifier.verify(workspace, 'goal', 'rubric');
+
+    expect(calls).toEqual([{ command: 'npm test' }]);
   });
 
   it('truncates long failure output to 2000 chars', async () => {
