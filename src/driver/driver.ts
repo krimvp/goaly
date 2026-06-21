@@ -17,6 +17,7 @@ import type { Clock } from './clock';
 import type { BudgetMeter } from './budget';
 import type { RunLog } from '../runlog/runlog';
 import { noopLogger, type Logger } from '../log/logger';
+import type { PhasedStreamSink } from '../agent-cli/stream';
 import { errorMessage } from '../util/errors';
 
 /** Distinct sentinel tree hashes used when the workspace cannot be hashed (kept != each other
@@ -46,6 +47,14 @@ export type DriverDeps = {
    * the run log, or replay.
    */
   logger?: Logger;
+  /**
+   * Optional streaming sink (issue #23): receives the agent run's intermediate turns as
+   * phase-tagged {@link PhasedStreamSink} events (phase `agent`). The composition root fans this
+   * out to the `--stream` live view, the debug logger, and any embedder subscription, and wires
+   * the same sink into the LLM-step providers. Pure observability — events are NEVER written to
+   * the replay log, so resume stays a fold over `OrchestratorEvent` only.
+   */
+  onStreamEvent?: PhasedStreamSink;
 };
 
 export type DriveOptions = {
@@ -231,7 +240,13 @@ async function perform(
     case 'RUN_AGENT': {
       try {
         const prevDiffHash = await deps.workspace.diffHash();
-        const run = await deps.harness.run(command.prompt, command.sessionId);
+        // Tap the agent run's turns (phase `agent`) when a stream sink is wired. The StreamTap
+        // inside the adapter guards the sink, so a throwing consumer never affects the run.
+        const onEvent =
+          deps.onStreamEvent !== undefined
+            ? (event: Parameters<PhasedStreamSink>[1]): void => deps.onStreamEvent?.('agent', event)
+            : undefined;
+        const run = await deps.harness.run(command.prompt, command.sessionId, onEvent);
         deps.budget.record(run.tokensUsed);
         const diffHash = await deps.workspace.diffHash();
         const budget = deps.budget.snapshot();

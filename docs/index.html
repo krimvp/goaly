@@ -354,6 +354,7 @@
           <tr><td class="feat">Budget</td><td><code>--budget-tokens</code> · <code>--budget-wall-ms</code>, independent of iteration count</td></tr>
           <tr><td class="feat">Resume</td><td><span class="yes">✓</span> <code>--resume run-&lt;id&gt;</code> — replay-fold from the write-ahead log</td></tr>
           <tr><td class="feat">Diagnostics</td><td><code>--log-level</code> debug/info/warn/error · structured JSON file at <code>.goaly/&lt;runId&gt;/goaly.log</code> (size-rotated) · <code>--log-file</code> · <code>--no-log-file</code> — human-facing, separate from the write-ahead run log, content stays at <code>debug</code></td></tr>
+          <tr><td class="feat">Live streaming</td><td><code>--stream</code> — the agent run <b>and</b> the LLM steps' intermediate turns (tool uses, messages, token counts) to stderr as they happen, phase-tagged · one canonical tool-neutral <code>AgentStreamEvent</code> taxonomy · embedder hook (<code>onStreamEvent</code>) · pure observability, never in the run log</td></tr>
         </tbody>
       </table>
     </div>
@@ -392,7 +393,10 @@ goaly run --goal <span class="str">"…"</span> --model <span class="str">claude
   --llm-model <span class="str">claude-sonnet-4-6</span> --llm-provider claude
 
 <span class="cmt"># follow the loop step-by-step; structured rotated file at .goaly/&lt;runId&gt;/goaly.log</span>
-goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --log-level debug</pre>
+goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --log-level debug
+
+<span class="cmt"># watch the agent's turns live — run AND LLM steps — tool calls, messages, tokens</span>
+goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --stream</pre>
       </div>
     </div>
     <p class="lede reveal" style="margin-top:0.9rem; font-size:0.82rem">Exit codes — <span class="pill pass">0 DONE</span> <span class="pill fail">1 FAILED / ABORTED</span> <span class="pill neutral">2 usage error</span></p>
@@ -413,8 +417,8 @@ goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"
       <button class="copy-btn">copy</button>
 <pre><span class="kw">interface</span> <span class="fn">HarnessAdapter</span> {
   <span class="kw">readonly</span> name: <span class="tok">string</span>;
-  <span class="fn">run</span>(prompt: <span class="tok">string</span>, sessionId?: SessionId): <span class="tok">Promise</span>&lt;HarnessRunResult&gt;;
-}
+  <span class="fn">run</span>(prompt: <span class="tok">string</span>, sessionId?: SessionId, onEvent?: AgentEventSink): <span class="tok">Promise</span>&lt;HarnessRunResult&gt;;
+}  <span class="cmt">// onEvent: optional, opt-in streaming tap (issue #23)</span>
 
 <span class="kw">type</span> <span class="fn">HarnessRunResult</span> = {
   output: <span class="tok">string</span>;
@@ -430,6 +434,7 @@ goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"
       <div class="row"><span class="rn">01</span><div class="rt"><b>Headless / print invocation</b><p>How do you run one non-interactive turn? Look for a print/exec/headless flag (<code>-p</code>, <code>exec</code>, <code>--print</code>). The prompt is usually an argv value or read from stdin.</p></div></div>
       <div class="row"><span class="rn">02</span><div class="rt"><b>Structured output</b><p>Find a machine-readable result (<code>--output-format json</code>, <code>--json</code>). Note the shape — a whole-stdout JSON object, a JSONL stream, or text-only — and capture a real sample.</p></div></div>
       <div class="row"><span class="rn">03</span><div class="rt"><b>Session resume</b><p>Where does the session id appear in a fresh run's output, and which flag replays it next turn (<code>--resume</code>, <code>--session-id</code>, <code>exec resume &lt;id&gt;</code>)? No resume → return a stable id and accept cold turns.</p></div></div>
+      <div class="row"><span class="rn">04</span><div class="rt"><b>Per-turn streaming <span style="opacity:0.6">(optional — issue #23)</span></b><p>Is there a streaming output mode (<code>--output-format stream-json</code>, an always-JSONL <code>--json</code>)? If so, note which line carries each turn — message, tool call + result, usage — and map them onto the canonical <code>AgentStreamEvent</code> taxonomy. No streaming mode → skip it; the run is unaffected.</p></div></div>
     </div>
 
     <!-- comparison tabs -->
@@ -449,6 +454,7 @@ goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"
           <dt>result ←</dt><dd><code>.result</code> ?? <code>.text</code> ?? <code>.response</code></dd>
           <dt>session ←</dt><dd><code>.session_id</code> — latch the first seen across the stream</dd>
           <dt>tokens ←</dt><dd><code>.usage.total_tokens</code>, else <code>input + output</code></dd>
+          <dt>stream →</dt><dd><code>--output-format stream-json --verbose</code> → <code>sdkStreamExtractor</code> (Anthropic SDK envelope)</dd>
         </dl>
       </div>
       <div class="tabpane" id="tab-cx">
@@ -461,6 +467,7 @@ goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"
           <dt>result ←</dt><dd>last <code>agent_message</code>'s <code>item.text</code> (or a flat <code>result</code>/<code>message</code>)</dd>
           <dt>session ←</dt><dd><code>thread_id</code> — latch the first established at stream start</dd>
           <dt>tokens ←</dt><dd><code>turn.completed.usage</code> (input+output) if present (optional)</dd>
+          <dt>stream →</dt><dd><code>--json</code> is already a stream → custom <code>codexStreamExtractor</code> (thread.started · agent_message · command_execution · turn.completed)</dd>
         </dl>
       </div>
       <div class="tabpane" id="tab-dr">
@@ -471,6 +478,7 @@ goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"
           <dt>output</dt><dd>json-object (agent-SDK result envelope), tolerant to JSONL</dd>
           <dt>result ←</dt><dd><code>.result</code> (with aliases)</dd>
           <dt>session ←</dt><dd><code>.session_id</code> — latch the first</dd>
+          <dt>stream →</dt><dd><code>--output-format stream-json</code> → shared <code>sdkStreamExtractor</code> (same Anthropic-SDK envelope as claude-code)</dd>
           <dt>caveat</dt><dd>defaults to <code>--auto low</code> (edit files only) so <code>git diff HEAD</code> stays honest; never <code>--skip-permissions-unsafe</code></dd>
         </dl>
       </div>
@@ -504,7 +512,7 @@ goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"
     </details>
 
     <details class="disc reveal">
-      <summary>The two mappings: stdout → fields, and outcome → status<span class="s-sub">field + status</span></summary>
+      <summary>The mappings: stdout → fields, outcome → status, turns → events<span class="s-sub">field · status · stream</span></summary>
       <div class="disc-body">
         <div class="grid grid-2" style="align-items:start; margin-top:0.9rem">
           <div>
@@ -523,6 +531,10 @@ goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"
               </tbody>
             </table>
           </div>
+        </div>
+        <div style="margin-top:1.1rem">
+          <p style="font-family:var(--mono); font-size:0.85rem; color:var(--fg)">3 · Stream mapping <span style="opacity:0.6">(optional — issue #23)</span></p>
+          <p>The streaming sibling of the field mapping. A <code>StreamEventExtractor</code> — <code>(obj) =&gt; AgentStreamEvent[]</code> — maps one JSONL line of your CLI's per-turn output onto the <b>canonical, tool-neutral</b> <code>AgentStreamEvent</code> taxonomy (<code>session · message · reasoning · tool_use · tool_result · usage · done</code>). The shared <code>StreamTap</code> buffers partial lines across chunks, Zod-validates every event at the seam, and forwards survivors to the live view / logger / embedder — fail-closed, so a throwing sink never touches the run. Emit the Anthropic agent-SDK envelope (claude-code, droid)? Reuse <code>sdkStreamExtractor</code>. Final-envelope only? <code>flatStreamExtractor</code>. The same mapping serves the read-only LLM steps too — write it once, both seams stream.</p>
         </div>
       </div>
     </details>
@@ -546,6 +558,7 @@ goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"
       <summary>Optional: also run the LLM steps on it<span class="s-sub">read-only provider</span></summary>
       <div class="disc-body">
         <p style="margin-top:0.9rem">A harness <i>drives</i> the agent. The compiler / judge / approver are a <b>separate, read-only</b> seam — <code>LlmProvider.complete(prompt) → text</code>. Different interface on purpose: a judge must never edit the tree it's judging (Interface Segregation). But it <b>reuses the <code>FieldExtractor</code> you already wrote</b>. Give it a read-only invocation (codex <code>--sandbox read-only</code>; droid omits <code>--auto</code>), then add a <code>makeLlmProvider()</code> case + an <code>LlmProviderChoice</code> literal — the model cascade (<code>--llm-model</code>, per-step flags) is threaded in for you. No read-only mode on your CLI → don't wire it as a provider.</p>
+        <p style="margin-top:0.7rem"><b>The LLM steps stream too</b> (issue #23): under <code>--stream</code> the compile / judge / approve turns surface in the live view just like the agent run, phase-tagged. They <b>reuse the same <code>StreamEventExtractor</code></b> — the sink is wired into the provider at construction (so the Verifier / Approver seams stay clean), and the same canonical events flow out. One stream mapping, both seams.</p>
       </div>
     </details>
   </div>
@@ -584,6 +597,9 @@ Field mapping:
   result text   &lt;-  .result            # or: last line's .text
   session id    &lt;-  .session_id        # latch the FIRST seen in a stream
   token usage   &lt;-  .usage.total_tokens  | (none)
+Streaming mode:         none | stream-json | always-jsonl | other
+Stream mapping:         reuse sdkStreamExtractor | flatStreamExtractor | custom
+  per line type -&gt; session | message | tool_use/result | usage | done
 Status mapping:
   timeout    &lt;= wall-clock kill
   crashed    &lt;= exit != 0 | unparseable | exec throws

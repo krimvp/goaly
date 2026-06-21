@@ -3,6 +3,7 @@ import { SessionId, coerceSessionId } from '../domain/ids';
 import { HarnessRunResult } from '../domain/events';
 import type { HarnessAdapter } from './adapter';
 import { parseAgentOutput, flatExtractor, type AgentOutput } from '../agent-cli/output';
+import { StreamTap, sdkStreamExtractor, type AgentEventSink } from '../agent-cli/stream';
 import { classifyHarnessRun } from './classify';
 
 /**
@@ -12,6 +13,8 @@ import { classifyHarnessRun } from './classify';
 export type ExecFn = (
   args: string[],
   input: { prompt: string },
+  /** Optional live stdout tap (issue #23): called with each raw stdout chunk as it arrives. */
+  onStdout?: (chunk: string) => void,
 ) => Promise<{ stdout: string; stderr: string; code: number; timedOut?: boolean }>;
 
 /** Sentinel session id used whenever we have no usable session from the CLI or the caller. */
@@ -33,6 +36,14 @@ export function parseClaudeOutput(stdout: string): AgentOutput | null {
 }
 
 /**
+ * Claude Code's STREAM mapping for `--output-format stream-json` events. Claude Code IS the
+ * reference Anthropic agent-SDK envelope, so it simply IS the shared {@link sdkStreamExtractor}
+ * (system → session, assistant blocks → message / reasoning / tool_use, user → tool_result,
+ * result → usage + done). Never throws (the {@link StreamTap} guards it regardless).
+ */
+export const claudeStreamExtractor = sdkStreamExtractor();
+
+/**
  * Real subprocess implementation. Assumed CLI contract:
  *   claude -p "<prompt>" --output-format json [--model <model>] [--resume <sessionId>]
  * stdout is JSON (object or stream-json lines); a non-zero exit code means failure; the prompt is
@@ -40,7 +51,7 @@ export function parseClaudeOutput(stdout: string): AgentOutput | null {
  * read the prompt from stdin. Never rejects: maps spawn errors to a non-zero code instead.
  */
 function defaultExec(timeoutMs: number): ExecFn {
-  return (args, input) =>
+  return (args, input, onStdout) =>
     new Promise((resolve) => {
       let settled = false;
       const finish = (r: { stdout: string; stderr: string; code: number; timedOut?: boolean }) => {
@@ -67,7 +78,15 @@ function defaultExec(timeoutMs: number): ExecFn {
       }, timeoutMs);
 
       child.stdout?.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString('utf8');
+        const text = chunk.toString('utf8');
+        stdout += text;
+        if (onStdout !== undefined) {
+          try {
+            onStdout(text);
+          } catch {
+            /* live tap is diagnostics-only — never disturb capture */
+          }
+        }
       });
       child.stderr?.on('data', (chunk: Buffer) => {
         stderr += chunk.toString('utf8');
@@ -106,22 +125,36 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     this.#model = opts.model;
   }
 
-  async run(prompt: string, sessionId?: SessionId): Promise<HarnessRunResult> {
-    const args = ['-p', prompt, '--output-format', 'json'];
+  async run(
+    prompt: string,
+    sessionId?: SessionId,
+    onEvent?: AgentEventSink,
+  ): Promise<HarnessRunResult> {
+    // Stream the turns when asked (issue #23): `--output-format stream-json` emits per-turn JSONL
+    // (requires `--verbose`); the shared `flatExtractor` still recovers the SAME final `result`
+    // text from the closing event, so a non-streaming caller is unaffected. Off → the lean
+    // `--output-format json` envelope, exactly as before.
+    const tap = onEvent !== undefined ? new StreamTap(claudeStreamExtractor, onEvent) : undefined;
+    const args =
+      tap !== undefined
+        ? ['-p', prompt, '--output-format', 'stream-json', '--verbose']
+        : ['-p', prompt, '--output-format', 'json'];
     if (this.#model !== undefined) args.push('--model', this.#model);
     if (sessionId !== undefined) args.push('--resume', sessionId);
 
     let result: { stdout: string; stderr: string; code: number; timedOut?: boolean };
     try {
-      result = await this.#exec(args, { prompt });
+      result = await this.#exec(args, { prompt }, tap ? (chunk) => tap.push(chunk) : undefined);
     } catch (err) {
       // The exec seam should never reject, but fail-closed if it does.
+      tap?.end();
       return HarnessRunResult.parse({
         output: err instanceof Error ? err.message : String(err),
         sessionId: coerceSessionId(sessionId, UNKNOWN_SESSION),
         status: 'crashed',
       });
     }
+    tap?.end(); // flush a final unterminated JSONL line before classification
 
     return classifyHarnessRun({
       parsed: parseClaudeOutput(result.stdout),

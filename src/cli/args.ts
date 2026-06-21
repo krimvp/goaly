@@ -23,6 +23,8 @@ export type ParsedArgs = {
   logFile: string | undefined;
   /** Disable the diagnostics file sink (console only). */
   noLogFile: boolean;
+  /** Stream the agent run AND the LLM steps' intermediate turns live to stderr (opt-in). */
+  stream: boolean;
 };
 
 export const USAGE = `goaly — run a coding agent until a frozen success contract is met.
@@ -34,6 +36,7 @@ Usage:
                [--harness claude-code|codex|droid] [--model <m>] [--llm-model <m>]
                [--llm-provider claude|codex|droid] [--workspace <dir>] [--resume <runId>]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
+               [--stream]
 
   goaly help
 
@@ -73,7 +76,17 @@ Diagnostics (leveled, structured logging — separate from the write-ahead run l
                     step-by-step firehose; prompts/output/diff stay at debug, never info.
   --log-file <p>    override the rotating diagnostics file (default
                     <workspace>/.goaly/<runId>/goaly.log; size-rotated, 5 MiB × 3 archives).
-  --no-log-file     console only — write no diagnostics file.`;
+  --no-log-file     console only — write no diagnostics file.
+
+Live streaming (opt-in observability — issue #23):
+  --stream          render the agent run AND the LLM steps' intermediate turns (tool uses,
+                    assistant messages, token counts) to stderr as they happen, each tagged by
+                    phase ([agent] / [compile] / [judge] / [approve]). Independent of --log-level
+                    (which routes the same events into the diagnostics file at debug). Pure
+                    observability: it never touches the frozen contract, the verifier, or the run
+                    log. All bundled harnesses stream (claude-code & droid via stream-json, codex
+                    via its --json JSONL); a tool that only emits a final envelope degrades to a
+                    closing summary.`;
 
 export type RawFlags = Record<string, string | boolean>;
 
@@ -160,6 +173,7 @@ export async function parseArgs(
     logLevel: parseLogLevel(str(flags, 'log-level')),
     logFile: str(flags, 'log-file'),
     noLogFile: flags['no-log-file'] !== undefined,
+    stream: flags['stream'] !== undefined,
   };
 }
 
@@ -224,5 +238,6 @@ function helpResult(): ParsedArgs {
     logLevel: 'info',
     logFile: undefined,
     noLogFile: false,
+    stream: false,
   };
 }

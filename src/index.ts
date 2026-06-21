@@ -62,9 +62,15 @@ export { JudgeVerifier } from './verify/judge';
 export { AgentApprover } from './verify/agent-approver';
 export { AgentCompiler } from './compile/agent-compiler';
 export { AutoContractGate, HumanContractGate } from './compile/gates';
-export { ClaudeCodeAdapter, parseClaudeOutput } from './harness/claude-code';
-export { CodexAdapter, parseCodexOutput, codexExtractor } from './harness/codex';
-export { DroidAdapter, parseDroidOutput, droidExtractor, type AutonomyLevel } from './harness/droid';
+export { ClaudeCodeAdapter, parseClaudeOutput, claudeStreamExtractor } from './harness/claude-code';
+export { CodexAdapter, parseCodexOutput, codexExtractor, codexStreamExtractor } from './harness/codex';
+export {
+  DroidAdapter,
+  parseDroidOutput,
+  droidExtractor,
+  droidStreamExtractor,
+  type AutonomyLevel,
+} from './harness/droid';
 export { CliLlmProvider, buildLlmArgs } from './llm/cli-provider';
 export { AgentCliLlmProvider } from './llm/agent-cli-provider';
 
@@ -77,6 +83,26 @@ export {
   type FieldExtractor,
 } from './agent-cli/output';
 export { classifyHarnessRun } from './harness/classify';
+
+// Streaming tap (issue #23): the canonical intermediate-turn taxonomy + the shared StreamTap,
+// reused by harness adapters AND the read-only LLM providers, plus the driver-side renderers.
+export {
+  AgentStreamEvent,
+  StreamTap,
+  flatStreamExtractor,
+  sdkStreamExtractor,
+  usageEventFromBlock,
+  type StreamEventExtractor,
+  type AgentEventSink,
+  type StreamPhase,
+  type PhasedStreamSink,
+} from './agent-cli/stream';
+export {
+  renderStreamLine,
+  streamLogFields,
+  makeStreamRenderer,
+  type StreamRendererOptions,
+} from './cli/stream-render';
 
 // Diagnostic logging seam (human-facing observability; NOT the durable run log).
 export {

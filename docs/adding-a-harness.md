@@ -12,7 +12,7 @@ flag/field/status mapping this guide asks for.
 // src/harness/adapter.ts
 interface HarnessAdapter {
   readonly name: string;
-  run(prompt: string, sessionId?: SessionId): Promise<HarnessRunResult>;
+  run(prompt: string, sessionId?: SessionId, onEvent?: AgentEventSink): Promise<HarnessRunResult>;
 }
 
 // src/domain/events.ts
@@ -25,7 +25,10 @@ type HarnessRunResult = {
 ```
 
 That's the whole seam. The orchestrator can't tell which harness it called, so nothing else in
-the system changes when you add one.
+the system changes when you add one. The optional `onEvent` (an `AgentEventSink`) is the **streaming
+tap** — opt-in, observability-only, ignored entirely if you don't implement it; it's covered in
+[The stream mapping](#3-stream-mapping--a-streameventextractor-optional-issue-23) below. Existing
+callers and adapters that omit it keep compiling unchanged.
 
 ### What `run()` MUST do
 
@@ -55,9 +58,12 @@ Every serious harness exposes these; find each for your target:
 | Headless / print invocation | `claude -p "<prompt>"` | `codex exec --full-auto "<prompt>"` | how to run one non-interactive turn |
 | Structured output | `--output-format json` | `--json` (JSONL stream) | a machine-readable result |
 | Session resume | `--resume <id>` | `codex exec resume <id>` | continue the same conversation |
+| Streaming turns *(optional)* | `--output-format stream-json --verbose` | `--json` (already a JSONL stream) | per-turn events for live observability (issue #23) |
 
 If a harness lacks structured output, parse its text output tolerantly and synthesize a session id.
-If it lacks resume, return a stable session id and accept that each turn is cold (note it).
+If it lacks resume, return a stable session id and accept that each turn is cold (note it). If it has
+no per-turn streaming mode, **skip the stream mapping** — `onEvent` stays unimplemented and the run
+is unaffected (a tool that only emits a final envelope can still degrade to a couple of events).
 
 **The harness role must be able to edit the tree.** A harness *drives* the agent, so its invocation
 must run in a writable mode — the opposite of the read-only `LlmProvider` role below. Some CLIs are
@@ -66,12 +72,14 @@ you pass `--full-auto` (its alias for a workspace-write sandbox), so the codex *
 while the codex *provider* deliberately passes `--sandbox read-only`. If you forget it, the agent can
 diagnose but never apply a fix and every iteration no-diffs.
 
-## The two mappings you must define
+## The mappings you must define
 
-The shared core (`src/agent-cli/output.ts`) already owns the **envelope machinery** — the
-whole-object / amid-noise / JSONL walk, latching the **first** session id seen, keeping the **last**
-text-bearing line, accruing token counts, and never throwing. You supply two small, tool-specific
-pieces.
+The shared core (`src/agent-cli/`) already owns the **envelope machinery** — for the FINAL result
+(`output.ts`: the whole-object / amid-noise / JSONL walk, latching the **first** session id seen,
+keeping the **last** text-bearing line, accruing token counts) and, for the live STREAM
+(`stream.ts`: a `StreamTap` that buffers partial lines across stdout chunks, parses each completed
+JSONL line, Zod-validates events at the seam, and forwards them to a sink) — and **never throws**.
+You supply two small, tool-specific mappings (the third, streaming, is optional).
 
 ### 1. Field mapping — a `FieldExtractor`
 
@@ -116,6 +124,62 @@ construct the result through `HarnessRunResult.parse(...)` so a bad mapping is c
 boundary, and resolve the session with `coerceSessionId(candidate, '<name>-unknown')` (from
 `src/domain/ids.ts`) so an absent/hostile id falls back safely instead of throwing.
 
+### 3. Stream mapping — a `StreamEventExtractor` *(optional, issue #23)*
+
+The **streaming sibling of the field mapping**. Where the `FieldExtractor` converges your tool's
+*final* output into one `AgentFields` abstraction, a `StreamEventExtractor` converges your tool's
+*intermediate turns* into one **canonical, tool-neutral event taxonomy** — the same abstraction-first
+discipline, so no tool-specific event shapes ever leak past the parser and every harness converges to
+the same events. Implement it only if your CLI has a per-turn streaming mode; skip it otherwise (the
+`onEvent` arg simply stays unused and the run is unaffected).
+
+The target is `AgentStreamEvent` (`src/agent-cli/stream.ts`) — a Zod-validated discriminated union,
+a **superset** you map INTO (omit the variants your tool can't produce):
+
+```ts
+type AgentStreamEvent =
+  | { kind: 'session';     sessionId: string }
+  | { kind: 'message';     text: string; delta?: boolean }               // assistant text (full or incremental)
+  | { kind: 'reasoning';   text: string }                                // thinking, where exposed
+  | { kind: 'tool_use';    id?: string; name: string; input?: unknown }  // tool / command invocation
+  | { kind: 'tool_result'; id?: string; output: string; exitCode?: number; isError?: boolean }
+  | { kind: 'usage';       inputTokens?: number; outputTokens?: number; cachedTokens?: number; totalTokens?: number }
+  | { kind: 'done';        status: string };                             // turn / run complete
+```
+
+A `StreamEventExtractor` is `(obj) => AgentStreamEvent[]`: map **one** parsed JSONL line to zero or
+more canonical events. Return `[]` for lines you don't recognize. It need not be defensive — the
+`StreamTap` Zod-validates every event you return and drops any that don't fit, and guards the call so
+a throw degrades to "no events for this line" (fail-closed; observability never crashes a run).
+
+```ts
+import { sdkStreamExtractor, flatStreamExtractor, type StreamEventExtractor } from '../agent-cli/stream';
+
+// If your tool emits the ANTHROPIC AGENT-SDK stream-json envelope (system/assistant/user/result
+// events) you don't write one at all — reuse the shared factory (claude-code & droid use exactly this):
+export const myStreamExtractor = sdkStreamExtractor();                  // droid adds { errorKey: 'is_error' }
+
+// If your tool only emits a single FINAL result object, degrade with the flat factory
+// (session → message → usage → done):
+export const myStreamExtractor = flatStreamExtractor({ errorKey: 'is_error' });
+
+// Write a CUSTOM extractor only for a bespoke JSONL shape (see `codexStreamExtractor` in codex.ts,
+// which maps thread.started → session, item.completed agent_message → message, command_execution →
+// tool_use + tool_result, turn.completed → usage + done):
+export const myStreamExtractor: StreamEventExtractor = (obj) => { /* ...map one line... */ return []; };
+```
+
+Then, in `run()`, build a `StreamTap(myStreamExtractor, onEvent)` only when `onEvent` is provided,
+feed it each stdout chunk via the exec's optional `onStdout` callback, and `end()` it once the
+process closes (flushes a final unterminated line). If your stream mode is a *different* flag from
+your normal structured output (claude-code & droid switch `--output-format json` → `stream-json`
+when streaming; codex's `--json` is already a stream), select it based on whether `onEvent` is set.
+The **final-result parse is unchanged** — the `FieldExtractor` still recovers the same `output` from
+the stream's closing line, so a non-streaming caller sees byte-identical behavior. See the skeleton
+below and `src/harness/streaming.test.ts` for the test pattern (a fake exec replays canned JSONL
+through `onStdout`; assert the ordered events, that the final result is identical with/without
+streaming, and that a throwing sink never changes the result).
+
 ## Skeleton (copy `src/harness/claude-code.ts` and adapt)
 
 ```ts
@@ -123,19 +187,23 @@ import { coerceSessionId, type SessionId } from '../domain/ids';
 import { HarnessRunResult } from '../domain/events';
 import type { HarnessAdapter } from './adapter';
 import { parseAgentOutput, flatExtractor } from '../agent-cli/output';
+import { StreamTap, sdkStreamExtractor, type AgentEventSink } from '../agent-cli/stream';
 import { classifyHarnessRun } from './classify';
 
-// Injectable subprocess seam so tests never spawn a real process.
+// Injectable subprocess seam so tests never spawn a real process. The optional `onStdout` (issue
+// #23) is the live tap: the default exec forwards each raw stdout chunk to it as it arrives.
 export type ExecFn = (
   args: string[],
   input: { prompt: string },
+  onStdout?: (chunk: string) => void,
 ) => Promise<{ stdout: string; stderr: string; code: number; timedOut?: boolean }>;
 
 const UNKNOWN = 'myagent-unknown';
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
-// Reuse the shared factory for a flat envelope, or write a custom FieldExtractor (see above).
+// Reuse the shared factories for the field + stream mappings, or write custom ones (see above).
 export const myExtractor = flatExtractor();
+export const myStreamExtractor = sdkStreamExtractor();
 export const parseMyAgentOutput = (stdout: string) => parseAgentOutput(stdout, myExtractor);
 
 export class MyAgentAdapter implements HarnessAdapter {
@@ -146,24 +214,29 @@ export class MyAgentAdapter implements HarnessAdapter {
     this.#exec = opts.exec ?? defaultExec(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     this.#model = opts.model;
   }
-  async run(prompt: string, sessionId?: SessionId): Promise<HarnessRunResult> {
-    const args = ['exec', '--output-format', 'json'];
+  async run(prompt: string, sessionId?: SessionId, onEvent?: AgentEventSink): Promise<HarnessRunResult> {
+    // Build the tap only when asked; pick the streaming output format when streaming (issue #23).
+    const tap = onEvent !== undefined ? new StreamTap(myStreamExtractor, onEvent) : undefined;
+    const args = ['exec', '--output-format', tap !== undefined ? 'stream-json' : 'json'];
     if (this.#model !== undefined) args.push('--model', this.#model); // model is wiring, not contract
     if (sessionId !== undefined) args.push('--session-id', sessionId); // flags first, prompt last
     args.push(prompt);
 
     let r: Awaited<ReturnType<ExecFn>>;
     try {
-      r = await this.#exec(args, { prompt });
+      r = await this.#exec(args, { prompt }, tap ? (chunk) => tap.push(chunk) : undefined);
     } catch (err) {
+      tap?.end();
       return HarnessRunResult.parse({
         output: err instanceof Error ? err.message : String(err),
         sessionId: coerceSessionId(sessionId, UNKNOWN),
         status: 'crashed',
       });
     }
+    tap?.end(); // flush a final unterminated JSONL line before the result is assembled
 
     // Standard policy. If your CLI needs codex's inverted mapping, write a bespoke tail instead.
+    // The final parse uses `myExtractor` over the SAME stdout, streaming or not — identical result.
     return classifyHarnessRun({
       parsed: parseMyAgentOutput(r.stdout),
       code: r.code,
@@ -195,7 +268,7 @@ export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'fake' | 'myagen
 case 'myagent': return new MyAgentAdapter(model !== undefined ? { model } : {});
 ```
 
-Optionally export it (and your `myExtractor`) from `src/index.ts` for embedders.
+Optionally export it (and your `myExtractor` / `myStreamExtractor`) from `src/index.ts` for embedders.
 
 ## Optional: also use the tool for the LLM steps (compiler / judge / approver)
 
@@ -239,10 +312,20 @@ case 'myagent':
   return new AgentCliLlmProvider({
     name: 'myagent',
     command: 'myagent',
-    extractor: myExtractor,                       // the SAME extractor your adapter uses
+    extractor: myExtractor,                       // the SAME field extractor your adapter uses
     buildArgs: (prompt) => myagentCompletionArgs(prompt, model),
+    // Streaming (issue #23) — the LLM steps stream too, reusing your stream mapping. The sink is
+    // wired here at CONSTRUCTION (not via complete()) so the Verifier/Approver seams stay clean;
+    // makeLlmProvider() receives the phase-bound sink and forwards it as `onEvent`:
+    ...(onEvent !== undefined ? { onEvent, streamExtractor: myStreamExtractor } : {}),
   });
 ```
+
+The **stream mapping applies to the read-only `LlmProvider` too** — `AgentCliLlmProvider` reuses the
+same `StreamTap`, so the compile / judge / approve turns surface in the live view exactly like the
+agent run, just phase-tagged differently. You write the `StreamEventExtractor` once and both seams
+use it. (The composition root passes `onEvent` into `makeLlmProvider()` for you; a custom provider
+class wiring its own CLI would accept `onEvent` + `streamExtractor` in its constructor the same way.)
 
 That's it. The resolved per-step model is threaded in for you, and the cascade
 (`--judge-model`/`--approver-model`/`--compiler-model` → `--llm-model` → `--model` → tool default)
@@ -265,7 +348,10 @@ Inject a fake `exec` and assert the seam invariants. The shared contract test in
 `src/harness/adapter.contract.test.ts` runs every adapter through the same matrix — add yours to
 its `adapters` array so it's proven to **never throw**, always return a valid `HarnessRunResult`,
 and map each scenario (success / non-zero / garbage / timeout / exec-throws) to a sane status. Then
-add adapter-specific tests for your `parse<Name>Output` (real-output samples → fields).
+add adapter-specific tests for your `parse<Name>Output` (real-output samples → fields). If you
+implemented the stream mapping, also add a streaming test (fake exec replays canned JSONL through
+`onStdout` → assert ordered `AgentStreamEvent`s, an identical final result with/without streaming,
+and a throwing sink that never changes the result) — see `src/harness/streaming.test.ts`.
 
 ## Checklist
 
@@ -275,5 +361,6 @@ add adapter-specific tests for your `parse<Name>Output` (real-output samples →
 - [ ] Added to `adapter.contract.test.ts`; `npm run typecheck` and `npm test` are green.
 - [ ] Registered in `args.ts` + `compose.ts` (`makeHarness(choice, model)`); documented the assumed CLI contract in a comment.
 - [ ] (optional) `--model` threaded into the argv via a `model?` constructor option.
-- [ ] (optional, only if read-only) Exported the `FieldExtractor`; added a read-only `*CompletionArgs` builder + `makeLlmProvider()` case + `LlmProviderChoice` literal; tested it returns parsed text, carries the read-only flag, and fails closed.
+- [ ] (optional, streaming — issue #23) A `StreamEventExtractor` (the shared `sdkStreamExtractor` / `flatStreamExtractor`, or a custom one) mapping per-turn JSONL onto `AgentStreamEvent`; `run()` builds a `StreamTap` only when `onEvent` is set, feeds it via `onStdout`, `end()`s it, and selects the streaming output format; final result is identical with/without streaming; streaming test added.
+- [ ] (optional, only if read-only) Exported the `FieldExtractor` (and `StreamEventExtractor`); added a read-only `*CompletionArgs` builder + `makeLlmProvider()` case (pass `onEvent` + `streamExtractor`) + `LlmProviderChoice` literal; tested it returns parsed text, carries the read-only flag, and fails closed.
 ```

@@ -9,6 +9,13 @@ import {
   type AgentOutput,
   type FieldExtractor,
 } from '../agent-cli/output';
+import {
+  StreamTap,
+  usageEventFromBlock,
+  type AgentEventSink,
+  type AgentStreamEvent,
+  type StreamEventExtractor,
+} from '../agent-cli/stream';
 
 /**
  * Raw result of spawning the codex binary. `code` is the process exit code (null when the
@@ -22,7 +29,12 @@ export type ExecResult = {
   timedOut?: boolean;
 };
 
-export type ExecFn = (args: string[], input: { prompt: string }) => Promise<ExecResult>;
+export type ExecFn = (
+  args: string[],
+  input: { prompt: string },
+  /** Optional live stdout tap (issue #23): called with each raw stdout chunk as it arrives. */
+  onStdout?: (chunk: string) => void,
+) => Promise<ExecResult>;
 
 /** Wall-clock cap before we kill the codex subprocess and report `timeout`. */
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -64,7 +76,7 @@ function buildArgs(prompt: string, model: string | undefined, sessionId?: Sessio
 
 /** Default production exec: spawn the real `codex` binary and collect its output. */
 function defaultExec(timeoutMs: number): ExecFn {
-  return (args, _input) =>
+  return (args, _input, onStdout) =>
     new Promise<ExecResult>((resolve) => {
       let settled = false;
       const finish = (r: ExecResult): void => {
@@ -85,7 +97,15 @@ function defaultExec(timeoutMs: number): ExecFn {
       }, timeoutMs);
 
       child.stdout?.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString('utf8');
+        const text = chunk.toString('utf8');
+        stdout += text;
+        if (onStdout !== undefined) {
+          try {
+            onStdout(text);
+          } catch {
+            /* live tap is diagnostics-only — never disturb capture */
+          }
+        }
       });
       child.stderr?.on('data', (chunk: Buffer) => {
         stderr += chunk.toString('utf8');
@@ -197,6 +217,92 @@ export function parseCodexOutput(stdout: string): AgentOutput | null {
   return parseAgentOutput(stdout, codexExtractor);
 }
 
+/** Pull incremental delta text from an `assistant.delta`-style line, tolerating nested shapes. */
+function codexDeltaText(obj: Record<string, unknown>): string | undefined {
+  const delta = obj['delta'];
+  if (typeof delta === 'string' && delta.length > 0) return delta;
+  if (isRecord(delta) && typeof delta['text'] === 'string' && delta['text'].length > 0) {
+    return delta['text'];
+  }
+  const text = obj['text'];
+  return typeof text === 'string' && text.length > 0 ? text : undefined;
+}
+
+/** Map one codex `item.*` event (an agent message, a command execution, or reasoning) to events. */
+function codexItemEvents(eventType: string, item: Record<string, unknown>): AgentStreamEvent[] {
+  const itemType = typeof item['type'] === 'string' ? item['type'] : '';
+  const id = typeof item['id'] === 'string' ? item['id'] : undefined;
+  const idPart = id !== undefined ? { id } : {};
+
+  if (itemType === 'agent_message') {
+    const text = typeof item['text'] === 'string' ? item['text'] : undefined;
+    // Emit the full message once, on completion — the streamed deltas already carried the partials.
+    return text !== undefined && eventType === 'item.completed' ? [{ kind: 'message', text }] : [];
+  }
+  if (itemType === 'reasoning') {
+    const text = typeof item['text'] === 'string' ? item['text'] : undefined;
+    return text !== undefined && eventType === 'item.completed' ? [{ kind: 'reasoning', text }] : [];
+  }
+  if (itemType === 'command_execution') {
+    const command = typeof item['command'] === 'string' ? item['command'] : undefined;
+    if (eventType === 'item.started') {
+      return [{ kind: 'tool_use', ...idPart, name: 'command', ...(command !== undefined ? { input: command } : {}) }];
+    }
+    if (eventType === 'item.completed') {
+      const output = typeof item['aggregated_output'] === 'string' ? item['aggregated_output'] : '';
+      const exitCode = typeof item['exit_code'] === 'number' ? item['exit_code'] : undefined;
+      return [
+        {
+          kind: 'tool_result',
+          ...idPart,
+          output,
+          ...(exitCode !== undefined ? { exitCode, isError: exitCode !== 0 } : {}),
+        },
+      ];
+    }
+  }
+  return [];
+}
+
+/**
+ * Codex's STREAM mapping — the streaming sibling of {@link codexExtractor}. Maps codex `--json`
+ * JSONL events onto the canonical {@link AgentStreamEvent} taxonomy: `thread.started` → session;
+ * `assistant.delta` → message delta; `item.completed` agent messages → message; `command_execution`
+ * items → tool_use (started) + tool_result (completed, with exit code); reasoning items → reasoning;
+ * `turn.completed` → usage + done. Unknown lines map to `[]`. Never throws (the {@link StreamTap}
+ * guards it regardless).
+ */
+export const codexStreamExtractor: StreamEventExtractor = (obj) => {
+  const type = typeof obj['type'] === 'string' ? obj['type'] : '';
+
+  if (type === 'thread.started' || type === 'session.created' || type === 'session.configured') {
+    const sid = extractSessionId(obj);
+    return sid !== undefined ? [{ kind: 'session', sessionId: sid }] : [];
+  }
+  if (type === 'assistant.delta' || type === 'response.output_text.delta') {
+    const text = codexDeltaText(obj);
+    return text !== undefined ? [{ kind: 'message', text, delta: true }] : [];
+  }
+  if (type === 'item.started' || type === 'item.completed' || type === 'item.updated') {
+    const item = obj['item'];
+    return isRecord(item) ? codexItemEvents(type, item) : [];
+  }
+  if (type === 'turn.completed') {
+    const usage = obj['usage'];
+    const events: AgentStreamEvent[] = [];
+    if (isRecord(usage)) {
+      const u = usageEventFromBlock(usage);
+      if (u !== null) events.push(u);
+    }
+    events.push({ kind: 'done', status: 'turn.completed' });
+    return events;
+  }
+  if (type === 'turn.failed' || type === 'error') {
+    return [{ kind: 'done', status: type }];
+  }
+  return [];
+};
+
 /** Coerce an arbitrary candidate string into a valid SessionId, falling back when invalid. */
 function toSessionId(candidate: string | undefined): SessionId {
   const value = candidate !== undefined && candidate.length > 0 ? candidate : SESSION_FALLBACK;
@@ -221,20 +327,27 @@ export class CodexAdapter implements HarnessAdapter {
     this.#model = opts?.model;
   }
 
-  async run(prompt: string, sessionId?: SessionId): Promise<HarnessRunResult> {
+  async run(
+    prompt: string,
+    sessionId?: SessionId,
+    onEvent?: AgentEventSink,
+  ): Promise<HarnessRunResult> {
     const args = buildArgs(prompt, this.#model, sessionId);
+    const tap = onEvent !== undefined ? new StreamTap(codexStreamExtractor, onEvent) : undefined;
 
     let result: ExecResult;
     try {
-      result = await this.#exec(args, { prompt });
+      result = await this.#exec(args, { prompt }, tap ? (chunk) => tap.push(chunk) : undefined);
     } catch {
       // The exec seam itself failed (spawn error surfaced as a throw): treat as crash.
+      tap?.end();
       return HarnessRunResult.parse({
         output: '',
         sessionId: toSessionId(sessionId as unknown as string | undefined),
         status: 'crashed',
       });
     }
+    tap?.end(); // flush a final unterminated JSONL line before the result is assembled
 
     if (result.timedOut === true) {
       const parsed = parseCodexOutput(result.stdout);

@@ -27,8 +27,10 @@ import type { Logger, LogLevel } from '../log/logger';
 import type { LogFs } from '../log/sinks';
 import { CliLlmProvider } from '../llm/cli-provider';
 import { AgentCliLlmProvider } from '../llm/agent-cli-provider';
-import { codexExtractor } from '../harness/codex';
-import { droidExtractor } from '../harness/droid';
+import { codexExtractor, codexStreamExtractor } from '../harness/codex';
+import { droidExtractor, droidStreamExtractor } from '../harness/droid';
+import type { AgentEventSink, PhasedStreamSink, StreamPhase } from '../agent-cli/stream';
+import { makeStreamRenderer, streamLogFields } from './stream-render';
 import { resolveModels, type ModelSelection } from './models';
 import type { HarnessChoice, LlmProviderChoice } from './args';
 
@@ -58,6 +60,19 @@ export type ComposeOptions = {
   logFs?: LogFs;
   /** Inject the clock source for log timestamps (tests). */
   now?: () => number;
+  /**
+   * Enable the `--stream` live view (issue #23): render the harness run AND the LLM steps'
+   * intermediate turns to stderr, phase-tagged. Opt-in; off by default.
+   */
+  stream?: boolean;
+  /** Override where the `--stream` renderer writes (tests capture it; default `process.stderr`). */
+  streamWrite?: (line: string) => void;
+  /**
+   * Embedder hook (issue #23): subscribe to every phase-tagged stream event (the agent run and the
+   * compile / judge / approve steps). Composed alongside the live view and the debug logger, then
+   * threaded into the harness (via `DriverDeps.onStreamEvent`) and the LLM-step providers.
+   */
+  onStreamEvent?: PhasedStreamSink;
 };
 
 /** The orchestrator's own state directory name, kept out of stuck-detection hashing. */
@@ -71,32 +86,72 @@ export const STATE_DIR = '.goaly';
 export function composeDeps(config: RunConfig, options: ComposeOptions): DriverDeps {
   const models = resolveModels(options.models ?? {});
   const provider = options.llmProvider ?? 'claude';
-  // An injected `llm` (tests) overrides every step; otherwise build a provider per step so each
-  // can carry its own resolved model. The model is wiring — it never enters the frozen contract.
-  const llmFor = (model: string | undefined): LlmProvider =>
-    options.llm ?? makeLlmProvider(provider, model);
   const clock = new SystemClock();
   const workspace = new GitWorkspace(options.workspaceRoot);
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
   const logger = options.logger ?? buildRunLogger(options, stateDir);
+  const streamSink = buildStreamSink(options, logger);
+
+  // An injected `llm` (tests) overrides every step; otherwise build a provider per step so each can
+  // carry its own resolved model AND its phase-tagged stream sink. The model and the sink are both
+  // wiring — neither enters the frozen contract. The sink is injected at CONSTRUCTION so it never
+  // leaks through the Verifier/Approver seams (the `LlmProvider` stays an internal seam).
+  const llmFor = (model: string | undefined, phase: StreamPhase): LlmProvider =>
+    options.llm ??
+    makeLlmProvider(
+      provider,
+      model,
+      streamSink !== undefined ? (event) => streamSink(phase, event) : undefined,
+    );
 
   return {
     compiler: new AgentCompiler({
-      llm: llmFor(models.compiler),
+      llm: llmFor(models.compiler, 'compile'),
       writeFile: (rel, content) => writeWorkspaceFile(options.workspaceRoot, rel, content),
     }),
     gateA: config.autonomous
       ? new AutoContractGate()
       : new HumanContractGate({ allowRevise: config.maxGateARevisions > 0 }),
     harness: makeHarness(options.harness, models.harness),
-    makeLadder: (contract) => buildLadder(contract, llmFor(models.judge)),
-    approver: new AgentApprover({ llm: llmFor(models.approver) }),
+    makeLadder: (contract) => buildLadder(contract, llmFor(models.judge, 'judge')),
+    approver: new AgentApprover({ llm: llmFor(models.approver, 'approve') }),
     workspace,
     clock,
     budget: new SystemBudgetMeter(config.budget, clock),
     runlog: new FileRunLog(path.join(stateDir, options.runId)),
     logger,
+    ...(streamSink !== undefined ? { onStreamEvent: streamSink } : {}),
   };
+}
+
+/**
+ * Assemble the one phase-tagged stream sink (issue #23) that fans every event out to the three
+ * driver-side consumer surfaces — the `--stream` live stderr view, the diagnostics logger (at
+ * `debug`, respecting `--log-level`), and any embedder subscription. Returns `undefined` when no
+ * consumer is active so a default run builds NO taps and pays zero streaming overhead. Each branch
+ * is guarded: a throwing consumer can never crash a run or starve the others (fail-closed).
+ */
+function buildStreamSink(options: ComposeOptions, logger: Logger): PhasedStreamSink | undefined {
+  const renderer = options.stream === true ? makeStreamRenderer(streamRendererOpts(options)) : undefined;
+  const routeToLog = (options.logLevel ?? 'info') === 'debug';
+  const embedder = options.onStreamEvent;
+  if (renderer === undefined && !routeToLog && embedder === undefined) return undefined;
+
+  return (phase, event) => {
+    if (renderer !== undefined) renderer(phase, event);
+    if (routeToLog) logger.debug('stream', streamLogFields(phase, event));
+    if (embedder !== undefined) {
+      try {
+        embedder(phase, event);
+      } catch {
+        /* an embedder subscription must never crash the run */
+      }
+    }
+  };
+}
+
+function streamRendererOpts(options: ComposeOptions): { write?: (line: string) => void } {
+  return options.streamWrite !== undefined ? { write: options.streamWrite } : {};
 }
 
 /**
@@ -127,16 +182,22 @@ function buildRunLogger(options: ComposeOptions, stateDir: string): Logger {
  * droid's default no-`--auto` exec) so a judge / approver / compiler can use that tool's model
  * without ever mutating the working tree it is judging. The resolved per-step model is threaded in.
  */
-export function makeLlmProvider(choice: LlmProviderChoice, model: string | undefined): LlmProvider {
+export function makeLlmProvider(
+  choice: LlmProviderChoice,
+  model: string | undefined,
+  onEvent?: AgentEventSink,
+): LlmProvider {
+  const stream = onEvent !== undefined ? { onEvent } : {};
   switch (choice) {
     case 'claude':
-      return new CliLlmProvider(model !== undefined ? { model } : {});
+      return new CliLlmProvider({ ...(model !== undefined ? { model } : {}), ...stream });
     case 'codex':
       return new AgentCliLlmProvider({
         name: 'codex',
         command: 'codex',
         extractor: codexExtractor,
         buildArgs: (prompt) => codexCompletionArgs(prompt, model),
+        ...(onEvent !== undefined ? { onEvent, streamExtractor: codexStreamExtractor } : {}),
       });
     case 'droid':
       return new AgentCliLlmProvider({
@@ -144,6 +205,7 @@ export function makeLlmProvider(choice: LlmProviderChoice, model: string | undef
         command: 'droid',
         extractor: droidExtractor,
         buildArgs: (prompt) => droidCompletionArgs(prompt, model),
+        ...(onEvent !== undefined ? { onEvent, streamExtractor: droidStreamExtractor } : {}),
       });
   }
 }

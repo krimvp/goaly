@@ -3,6 +3,12 @@ import { HarnessRunResult } from '../domain/events';
 import { runProcess } from '../util/spawn';
 import type { HarnessAdapter } from './adapter';
 import { parseAgentOutput, flatExtractor, type AgentOutput } from '../agent-cli/output';
+import {
+  StreamTap,
+  sdkStreamExtractor,
+  type AgentEventSink,
+  type StreamEventExtractor,
+} from '../agent-cli/stream';
 import { classifyHarnessRun } from './classify';
 
 /**
@@ -16,6 +22,12 @@ import { classifyHarnessRun } from './classify';
  *
  * Output shape (the Anthropic agent-SDK envelope) is parsed tolerantly by the shared
  * {@link parseAgentOutput} core via {@link droidExtractor}.
+ *
+ * Streaming (issue #23): when a `run()` caller passes an `onEvent` sink, the output format switches
+ * to `--output-format stream-json`, which emits the SAME agent-SDK envelope as a per-turn JSONL
+ * stream. Those turns map onto the canonical taxonomy through the shared {@link sdkStreamExtractor}
+ * (so droid and claude-code share one stream mapping). The final-result parse is unchanged — the
+ * flat {@link droidExtractor} recovers the closing `result` text from either format.
  *
  * Autonomy: `droid exec` defaults to READ-ONLY, where the agent cannot modify files — useless for
  * a goaly loop. So we always pass `--auto`. The default is `low` (file create/modify only, no
@@ -37,6 +49,8 @@ import { classifyHarnessRun } from './classify';
 export type ExecFn = (
   args: string[],
   input: { prompt: string },
+  /** Optional live stdout tap (issue #23): called with each raw stdout chunk as it arrives. */
+  onStdout?: (chunk: string) => void,
 ) => Promise<{ stdout: string; stderr: string; code: number; timedOut?: boolean }>;
 
 /** Autonomy tiers `droid exec` accepts via `--auto`. */
@@ -53,6 +67,15 @@ const DEFAULT_AUTONOMY: AutonomyLevel = 'low';
 
 /** Field strategy for droid's flat result envelope (result/session_id/usage/is_error). */
 export const droidExtractor = flatExtractor({ errorKey: 'is_error' });
+
+/**
+ * droid's STREAM mapping. droid emits the Anthropic agent-SDK envelope, so under
+ * `--output-format stream-json` its per-turn events share Claude Code's shape — it reuses the same
+ * shared {@link sdkStreamExtractor} (with droid's `is_error` soft-error key). A droid build whose
+ * `stream-json` only emits a final result envelope degrades to `usage` + `done` for the live view;
+ * the final text is still recovered by {@link droidExtractor}, so the run is unaffected.
+ */
+export const droidStreamExtractor: StreamEventExtractor = sdkStreamExtractor({ errorKey: 'is_error' });
 
 /**
  * Tolerantly parse droid headless stdout (whole-object, object-amid-noise, or a JSONL stream).
@@ -73,8 +96,10 @@ function buildArgs(
   auto: AutonomyLevel,
   model: string | undefined,
   sessionId?: SessionId,
+  /** When true (issue #23, streaming requested) ask droid for per-turn JSONL via `stream-json`. */
+  stream = false,
 ): string[] {
-  const args = ['exec', '--output-format', 'json', '--auto', auto];
+  const args = ['exec', '--output-format', stream ? 'stream-json' : 'json', '--auto', auto];
   if (model !== undefined) args.push('--model', model);
   if (sessionId !== undefined) args.push('--session-id', sessionId);
   args.push(prompt);
@@ -88,8 +113,11 @@ function buildArgs(
  * so we do not write it to stdin.
  */
 function defaultExec(timeoutMs: number): ExecFn {
-  return async (args, _input) => {
-    const r = await runProcess('droid', args, { timeoutMs });
+  return async (args, _input, onStdout) => {
+    const r = await runProcess('droid', args, {
+      timeoutMs,
+      ...(onStdout !== undefined ? { onStdout } : {}),
+    });
     return { stdout: r.stdout, stderr: r.stderr, code: r.code, timedOut: r.timedOut };
   };
 }
@@ -114,20 +142,29 @@ export class DroidAdapter implements HarnessAdapter {
     this.#model = opts.model;
   }
 
-  async run(prompt: string, sessionId?: SessionId): Promise<HarnessRunResult> {
-    const args = buildArgs(prompt, this.#auto, this.#model, sessionId);
+  async run(
+    prompt: string,
+    sessionId?: SessionId,
+    onEvent?: AgentEventSink,
+  ): Promise<HarnessRunResult> {
+    const tap = onEvent !== undefined ? new StreamTap(droidStreamExtractor, onEvent) : undefined;
+    // Streaming requested → ask droid for per-turn JSONL (`stream-json`); otherwise the lean final
+    // envelope (`json`), unchanged. The final-result parse via `droidExtractor` handles both.
+    const args = buildArgs(prompt, this.#auto, this.#model, sessionId, tap !== undefined);
 
     let result: { stdout: string; stderr: string; code: number; timedOut?: boolean };
     try {
-      result = await this.#exec(args, { prompt });
+      result = await this.#exec(args, { prompt }, tap ? (chunk) => tap.push(chunk) : undefined);
     } catch (err) {
       // The exec seam should never reject, but fail-closed if it does.
+      tap?.end();
       return HarnessRunResult.parse({
         output: err instanceof Error ? err.message : String(err),
         sessionId: coerceSessionId(sessionId, UNKNOWN_SESSION),
         status: 'crashed',
       });
     }
+    tap?.end(); // flush the final envelope before classification
 
     return classifyHarnessRun({
       parsed: parseDroidOutput(result.stdout),
