@@ -4,6 +4,7 @@
   "description": "Harness-agnostic goal-orchestration layer: run a coding agent until a frozen success criterion is verifiably met.",
   "type": "module",
   "license": "MIT",
+  "author": "krimvp",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/krimvp/goaly.git"
@@ -16,7 +17,7 @@
     "node": ">=20"
   },
   "bin": {
-    "goaly": "./dist/goaly.js"
+    "goaly": "dist/goaly.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
