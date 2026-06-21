@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { AgentCliLlmProvider } from './agent-cli-provider';
-import { codexExtractor } from '../harness/codex';
-import { droidExtractor } from '../harness/droid';
+import { codexCodec } from '../agent-cli/codex-codec';
+import { droidCodec } from '../agent-cli/droid-codec';
+
+const codexExtractor = codexCodec.fieldExtractor;
+const droidExtractor = droidCodec.fieldExtractor;
 
 type ExecResult = { stdout: string; stderr: string; code: number; timedOut?: boolean };
 

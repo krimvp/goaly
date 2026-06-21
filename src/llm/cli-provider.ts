@@ -3,7 +3,7 @@ import { runProcess, type ProcessResult } from '../util/spawn';
 import { parseAgentOutput, flatExtractor, type AgentOutput } from '../agent-cli/output';
 import { StreamTap, type AgentEventSink } from '../agent-cli/stream';
 import { accountTokens, streamingEstimator, type StreamTokenEstimator } from '../agent-cli/estimate';
-import { claudeStreamExtractor } from '../harness/claude-code';
+import { claudeCodec } from '../agent-cli/claude-codec';
 
 type ExecFn = (
   input: string,
@@ -26,11 +26,8 @@ export function buildLlmArgs(
   stream = false,
 ): string[] {
   if (args !== undefined) return args;
-  return [
-    '-p',
-    ...(stream ? ['--output-format', 'stream-json', '--verbose'] : ['--output-format', 'json']),
-    ...(model !== undefined ? ['--model', model] : []),
-  ];
+  // The claude read-only argv lives in the codec (the prompt is delivered on stdin, not argv).
+  return claudeCodec.readonlyArgs({ prompt: '', model, stream });
 }
 
 function toCompletion(parsed: AgentOutput, estimator?: StreamTokenEstimator): LlmCompletion {
@@ -91,7 +88,7 @@ export class CliLlmProvider implements LlmProvider {
     // When streaming, accumulate a local token estimate (issue #24) from the turns, used as a
     // fallback if the closing `result` carries no `usage`.
     const { sink, estimator } = streamingEstimator(this.#streaming ? this.#onEvent : undefined);
-    const tap = sink !== undefined ? new StreamTap(claudeStreamExtractor, sink) : undefined;
+    const tap = sink !== undefined ? new StreamTap(claudeCodec.streamExtractor, sink) : undefined;
     const r = await this.#exec(prompt, tap ? (chunk) => tap.push(chunk) : undefined);
     tap?.end();
     if (r.timedOut) throw new Error('LLM CLI timed out');

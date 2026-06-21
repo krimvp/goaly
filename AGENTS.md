@@ -88,7 +88,8 @@ src/
   driver/      driver, clock, budget                    — effects + seam #4
   verify/      verifier, ladder, deterministic, judge, approver, agent-approver   — seam #2/#3
   compile/     compiler, agent-compiler, gateA, gates   — Phase 1 + freeze + Gate A
-  harness/     adapter, claude-code, codex              — seam #1
+  agent-cli/   codec, <tool>-codec, output, stream, estimate — one deep codec per CLI (seam-shared)
+  harness/     adapter, agent-cli-harness, claude-code, codex, droid — seam #1
   workspace/   workspace, git-workspace                 — harness-independent diff/run
   runlog/      runlog, file-runlog                      — write-ahead persistence + replay
   llm/         provider, cli-provider                   — INTERNAL seam (judge/approver/compiler)
@@ -104,19 +105,23 @@ leaves behind frozen interfaces. Prove policy with fakes before spawning a subpr
 
 ## Adding a new harness
 
-A new harness is **one file** implementing `HarnessAdapter.run()`. It composes the shared
-agent-CLI output core (`src/agent-cli/output.ts`: `parseAgentOutput` + a per-tool `FieldExtractor`;
-`flatExtractor` covers a flat envelope) and, for the standard status policy, the shared
-`classifyHarnessRun` (`src/harness/classify.ts`) — don't re-implement tolerant JSON/JSONL parsing.
+A new harness is **one module** — an `AgentCliCodec` (`src/agent-cli/codec.ts`) holding all of one
+CLI's quirks in one place: its two argv dialects (`harnessArgs` write-mode + `readonlyArgs`
+read-only), its `fieldExtractor`/`streamExtractor`, and its `classify` status policy. It composes the
+shared agent-CLI core (`output.ts`: `parseAgentOutput` + a per-tool `FieldExtractor`; `flatExtractor`
+covers a flat envelope) and, for the standard status policy, the shared `classifyFlatRun`
+(`src/agent-cli/codec.ts`) — don't re-implement tolerant JSON/JSONL parsing or the subprocess dance
+(`runProcess` owns it). Register the codec by wiring the generic `AgentCliHarness` into `makeHarness`.
 See [`docs/adding-a-harness.md`](docs/adding-a-harness.md) for the full guide, and use the
 **`investigate-harness`** skill (`.claude/skills/investigate-harness/`) to probe an unfamiliar CLI
-and produce the field/flag/status mapping before you write the adapter.
+and produce the field/flag/status mapping before you write the codec.
 
 A harness CLI can **optionally** also back the LLM workflow steps (compiler / judge / approver) via
-the separate, **read-only** `LlmProvider` seam — wrap it with `AgentCliLlmProvider` reusing the same
-`FieldExtractor`, register an `LlmProviderChoice` + `makeLlmProvider()` case, and select it with
-`--llm-provider`. A judge/approver must never edit the tree, so this is read-only only. See the
-"Optional: also use the tool for the LLM steps" section of the harness guide.
+the separate, **read-only** `LlmProvider` seam — `AgentCliLlmProvider` consumes the **same codec**
+(its `readonlyArgs` + `fieldExtractor`/`streamExtractor`); register an `LlmProviderChoice` +
+`makeLlmProvider()` case, and select it with `--llm-provider`. A judge/approver must never edit the
+tree, so this is read-only only. See the "Optional: also use the tool for the LLM steps" section of
+the harness guide.
 
 ## Keep the docs in sync (explicit check)
 

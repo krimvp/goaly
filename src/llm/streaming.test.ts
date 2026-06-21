@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { AgentCliLlmProvider } from './agent-cli-provider';
 import { CliLlmProvider, buildLlmArgs } from './cli-provider';
-import { codexExtractor, codexStreamExtractor } from '../harness/codex';
+import { codexCodec } from '../agent-cli/codex-codec';
+
+const codexExtractor = codexCodec.fieldExtractor;
+const codexStreamExtractor = codexCodec.streamExtractor;
 import type { ProcessResult } from '../util/spawn';
 import type { AgentStreamEvent } from '../agent-cli/stream';
 
