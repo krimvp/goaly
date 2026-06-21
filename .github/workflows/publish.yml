@@ -1,0 +1,67 @@
+name: Publish to npm
+
+# Publishes the package to the npm registry when you cut a GitHub Release.
+# You can also run it manually from the Actions tab (workflow_dispatch).
+#
+# One-time setup (see .github/workflows/README.md):
+#   1. Create an npm "Automation" access token with publish rights.
+#   2. Add it to this repo as a secret named NPM_TOKEN
+#      (Settings -> Secrets and variables -> Actions -> New repository secret).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # required for npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # Guard: when triggered by a Release, the tag (e.g. v0.1.0) must match
+      # the version in package.json (0.1.0). Stops a mistagged release from
+      # publishing the wrong version.
+      - name: Verify release tag matches package.json version
+        if: github.event_name == 'release'
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "package.json version: $PKG_VERSION"
+          echo "release tag:          $TAG"
+          if [ "$PKG_VERSION" != "$TAG" ]; then
+            echo "::error::Tag '$GITHUB_REF_NAME' does not match package.json version '$PKG_VERSION'."
+            exit 1
+          fi
+
+      - name: Publish
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
