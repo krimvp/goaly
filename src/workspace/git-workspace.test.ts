@@ -111,6 +111,23 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(result.stderr).toContain('oops');
   });
 
+  it('run kills a command that exceeds timeoutMs and fails closed (non-zero exit)', async () => {
+    const ws = new GitWorkspace(root);
+    const start = Date.now();
+    const result = await ws.run('sleep 10', { timeoutMs: 100 });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('timed out');
+    // It must return promptly (well under the 10s sleep), proving the SIGKILL fired.
+    expect(Date.now() - start).toBeLessThan(5000);
+  });
+
+  it('run without a timeout still completes normally', async () => {
+    const ws = new GitWorkspace(root);
+    const result = await ws.run('printf done');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('done');
+  });
+
   it('exec runner is injectable (no real process spawned)', async () => {
     const calls: string[][] = [];
     const ws = new GitWorkspace(root, async (cmd, args) => {

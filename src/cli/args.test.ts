@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseArgs, UsageError } from './args';
 import type { InputReaders } from './input-sources';
+import { loadConfig, type ConfigFileReader, type LoadedConfig } from './config-file';
 
 /** Fake readers so tests never touch the filesystem or the real stdin stream. */
 function fakeReaders(opts: { files?: Record<string, string>; stdin?: string }): InputReaders {
@@ -15,6 +16,19 @@ function fakeReaders(opts: { files?: Record<string, string>; stdin?: string }): 
     },
     readStdin: async () => opts.stdin ?? '',
   };
+}
+
+/**
+ * A `load` (parseArgs' 3rd arg) backed by an in-memory map of file path → JSON body, routed
+ * through the REAL loader so the .goalyrc/--config layering + overlay logic is exercised
+ * end-to-end. The implicit `.goalyrc` lives under the workspace dir; an explicit `--config <path>`
+ * is looked up by its exact path.
+ */
+function fakeConfig(
+  files: Record<string, string>,
+): (dir: string, explicit: string | undefined) => Promise<LoadedConfig> {
+  const reader: ConfigFileReader = async (p) => files[p];
+  return (dir, explicit) => loadConfig(dir, explicit, reader);
 }
 
 describe('parseArgs', () => {
@@ -204,6 +218,140 @@ describe('parseArgs', () => {
     it('throws UsageError on an unknown --log-level', async () => {
       await expect(
         parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--log-level', 'loud']),
+      ).rejects.toThrow(UsageError);
+    });
+  });
+
+  describe('config file (issue #15)', () => {
+    const rc = path.join('/ws', '.goalyrc');
+
+    it('fills harness/autonomous/max-iterations/verify-cmd from .goalyrc when only --goal is given', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws'],
+        fakeReaders({}),
+        fakeConfig({
+          [rc]: '{ "harness": "fake", "autonomous": true, "max-iterations": 1, "verify-cmd": "touch m; exit 7" }',
+        }),
+      );
+      expect(a.harness).toBe('fake');
+      expect(a.config.autonomous).toBe(true);
+      expect(a.config.maxIterations).toBe(1);
+      expect(a.config.verifier).toEqual({ kind: 'existing', ref: 'touch m; exit 7' });
+      expect(a.configSources).toEqual(['.goalyrc']);
+    });
+
+    it('reads defaults from an explicit --config <path> file', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--config', '/ci/goaly.json'],
+        fakeReaders({}),
+        fakeConfig({ '/ci/goaly.json': '{ "harness": "fake", "autonomous": true, "verify-cmd": "true" }' }),
+      );
+      expect(a.harness).toBe('fake');
+      expect(a.config.verifier).toEqual({ kind: 'existing', ref: 'true' });
+      expect(a.configSources).toEqual(['/ci/goaly.json']);
+    });
+
+    it('layers --config over .goalyrc (explicit wins on conflicts)', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--config', '/cfg.json'],
+        fakeReaders({}),
+        fakeConfig({
+          [rc]: '{ "harness": "fake", "max-iterations": 1, "verify-cmd": "true" }',
+          '/cfg.json': '{ "harness": "codex" }',
+        }),
+      );
+      expect(a.harness).toBe('codex'); // from --config
+      expect(a.config.maxIterations).toBe(1); // from .goalyrc
+      expect(a.configSources).toEqual(['.goalyrc', '/cfg.json']);
+    });
+
+    it('lets an explicit CLI flag override the config value', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--harness', 'codex', '--max-iterations', '5'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "harness": "fake", "max-iterations": 1, "verify-cmd": "true" }' }),
+      );
+      expect(a.harness).toBe('codex');
+      expect(a.config.maxIterations).toBe(5);
+      expect(a.config.verifier).toEqual({ kind: 'existing', ref: 'true' });
+    });
+
+    it('reads per-step timeouts from the config file', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({
+          [rc]: '{ "harness-timeout-ms": 120000, "llm-timeout-ms": 90000, "verify-timeout-ms": 30000 }',
+        }),
+      );
+      expect(a.timeouts).toEqual({ harnessMs: 120000, llmMs: 90000, verifyMs: 30000 });
+    });
+
+    it('drops a config goal when the CLI supplies one from a file (no false double-source)', async () => {
+      const a = await parseArgs(
+        ['run', '--goal-file', 'goal.md', '--verify-cmd', 'true', '--workspace', '/ws'],
+        fakeReaders({ files: { 'goal.md': 'cli goal\n' } }),
+        fakeConfig({ [rc]: '{ "goal": "config goal", "harness": "fake" }' }),
+      );
+      expect(a.config.goal).toBe('cli goal');
+      expect(a.harness).toBe('fake');
+    });
+
+    it('surfaces an unknown config key as a usage error', async () => {
+      await expect(
+        parseArgs(
+          ['run', '--goal', 'g', '--workspace', '/ws'],
+          fakeReaders({}),
+          fakeConfig({ [rc]: '{ "bogus": 1 }' }),
+        ),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('fails closed when an explicit --config path does not exist', async () => {
+      await expect(
+        parseArgs(
+          ['run', '--goal', 'g', '--workspace', '/ws', '--config', '/nope.json'],
+          fakeReaders({}),
+          fakeConfig({}),
+        ),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('reports no config file when none is present', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.configSources).toEqual([]);
+    });
+  });
+
+  describe('per-step timeouts (issue #15)', () => {
+    it('parses the three timeout flags into milliseconds', async () => {
+      const a = await parseArgs([
+        'run',
+        '--goal',
+        'g',
+        '--verify-cmd',
+        'true',
+        '--harness-timeout-ms',
+        '600000',
+        '--llm-timeout-ms',
+        '120000',
+        '--verify-timeout-ms',
+        '45000',
+      ]);
+      expect(a.timeouts).toEqual({ harnessMs: 600000, llmMs: 120000, verifyMs: 45000 });
+    });
+
+    it('defaults to no explicit timeouts (each step keeps its own default)', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.timeouts).toEqual({});
+    });
+
+    it('rejects a non-positive / non-integer timeout (fails closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--verify-timeout-ms', '0']),
+      ).rejects.toThrow(UsageError);
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--harness-timeout-ms', 'soon']),
       ).rejects.toThrow(UsageError);
     });
   });

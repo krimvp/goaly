@@ -17,6 +17,10 @@ export interface Workspace {
   diffHash(): Promise<DiffHash>;
   /** The working-tree diff as text, for the approver's Gate B input. */
   diff(): Promise<string>;
-  /** Run a shell command in the workspace root. */
-  run(command: string): Promise<CommandResult>;
+  /**
+   * Run a shell command in the workspace root. An optional `timeoutMs` kills the command (SIGKILL)
+   * after that many ms and reports it as a non-zero exit, so a hung verify command fails closed
+   * instead of stalling the loop forever.
+   */
+  run(command: string, opts?: { timeoutMs?: number }): Promise<CommandResult>;
 }
