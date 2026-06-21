@@ -42,7 +42,8 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
   doesn't veto.
 - **Stuck detection** bails before `maxIterations` with a reason: no-diff, repeat-failure, oscillation,
   budget.
-- **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable and **resumable**.
+- **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable, **resumable**, and
+  **inspectable** after the fact (`goaly runs list` / `goaly runs show`).
 
 ## Install
 
@@ -102,7 +103,72 @@ goaly run --goal "..." --verify-cmd "npm test" --log-file ./run.log   # or --no-
 
 # Watch the agent's turns live — tool calls, messages, token counts — for the run AND the LLM steps:
 goaly run --goal "..." --verify-cmd "npm test" --stream
+
+# Cap how long each step may run (subprocess kill-timeouts, in ms):
+goaly run --goal "..." --verify-cmd "npm test" \
+             --harness-timeout-ms 900000 --llm-timeout-ms 120000 --verify-timeout-ms 60000
+
+# With a .goalyrc in the repo, the repeated wiring lives in the file — just pass the goal:
+goaly run --goal "make the parser handle empty input"
+
+# Inspect past runs (read-only — replays the run log, re-runs nothing):
+goaly runs list
+goaly runs show run-<id>
 ```
+
+### Config file
+
+So you don't repeat the same wiring on every invocation, `goaly run` reads **default flags from a
+JSON config file** in two layers (later overrides earlier):
+
+1. an **implicit `.goalyrc`** discovered in `--workspace` (or the current directory) — optional,
+2. an **explicit `--config <path>`** JSON file — when given it **must exist** (fails closed).
+
+Keys mirror the CLI flag names in **kebab-case** (`verify-cmd`, `max-iterations`,
+`harness-timeout-ms`). **Any flag passed on the command line overrides the file**, so the full
+precedence is: **CLI flag > `--config` file > `.goalyrc` > tool default**.
+
+```jsonc
+// .goalyrc — committed once, applies to every `goaly run` in this repo
+{
+  "harness": "codex",
+  "verify-cmd": "npm test",
+  "autonomous": true,
+  "max-iterations": 8,
+  "budget-tokens": 500000,
+  "model": "claude-opus-4-8",
+  "verify-timeout-ms": 60000
+}
+```
+
+```bash
+# now the same run is just:
+goaly run --goal "add a /health endpoint returning 200"
+# …a one-off override still wins over the file:
+goaly run --goal "..." --max-iterations 3
+# …and a named profile can be pointed at explicitly (overrides .goalyrc on conflicts):
+goaly run --goal "..." --config ./ci/goaly.ci.json
+```
+
+Booleans (`autonomous`, `generate`, `no-log-file`) take `true`/`false`, where `false` means "not
+set" (the flag's absence is its default). Per-invocation flags — `--workspace`, `--resume`, and
+`--config` itself — are intentionally not read from a file. An unknown key, a non-primitive value,
+or invalid JSON is a usage error (the config seam parses with Zod and fails closed).
+
+### Per-step timeouts
+
+Each subprocess goaly spawns has a wall-clock kill-timeout, configurable as **pure wiring** (it
+never enters the frozen contract):
+
+| Flag / config key | Step | Default |
+| --- | --- | --- |
+| `--harness-timeout-ms` | the harness (coding-agent) subprocess | `600000` (10 min) |
+| `--llm-timeout-ms` | each LLM step — judge / approver / compiler | `600000` (10 min) |
+| `--verify-timeout-ms` | the verify command | unbounded |
+
+A verify command that exceeds its timeout is SIGKILL'd and reported as a **non-zero exit — i.e. a
+verifier FAIL, never a green** (fail-closed, invariant #4). Each value must be a positive integer
+number of milliseconds.
 
 Goal, intent, and rubric each accept one source: inline (`--goal "…"`), a file (`--goal-file <path>`),
 or stdin (`--goal -`). Giving a field more than one source is a usage error.
@@ -157,6 +223,29 @@ via `composeDeps({ onStreamEvent })` / `DriverDeps.onStreamEvent`. It is **pure 
 stream never touches the frozen contract, the verifier ladder, or the two-key decision; events are
 **not** written to the run log (resume stays a fold over `OrchestratorEvent` only); and a streaming
 failure degrades to "no live output", never a changed outcome (fail-closed).
+
+### Inspecting past runs
+
+The write-ahead run log is also queryable after the fact, with two **read-only** subcommands that
+**re-run nothing** — they replay the persisted event stream with the *same* fold `--resume` uses, so
+what they render is exactly the state the Driver computed:
+
+```bash
+goaly runs list                  # a table of past runs under ./.goaly
+goaly runs show run-<id>         # full detail for one run
+goaly runs list --workspace ./myrepo   # look elsewhere for the .goaly directory
+```
+
+- **`goaly runs list`** — one row per run: id, status (`DONE` / `FAILED` / `ABORTED`, or
+  `INCOMPLETE` for a run that never finished), iterations, tokens, started/ended, and the goal.
+  Most-recent first.
+- **`goaly runs show <runId>`** — the **frozen contract** (and its hash), the **Gate A** outcome,
+  every iteration's **verifier-ladder verdict** and **Gate B** approver decision, the
+  stuck/failure **reason**, and the totals.
+
+Both parse the log with **Zod on read** and **fail closed**: a corrupt run is *flagged* (`CORRUPT`
+in the table; a non-zero exit for `show`), never silently treated as green or dropped (invariants
+#6/#7). `runs show` exits `1` for an unknown or corrupt run, `0` otherwise.
 
 ### Adding a harness
 

@@ -5,8 +5,9 @@ import type { CompiledContract } from '../domain/contract';
 import type { ContractHash, RunId } from '../domain/ids';
 import { DiffHash, coerceSessionId } from '../domain/ids';
 import type { Verdict } from '../domain/verdict';
-import { isTerminal, type OrchestratorState } from '../orchestrator/state';
+import { isTerminal, iterationCount, type OrchestratorState } from '../orchestrator/state';
 import { initial, step } from '../orchestrator/step';
+import { replay } from '../runlog/replay';
 import type { VerifierCompiler } from '../compile/compiler';
 import type { ContractGate } from '../compile/gateA';
 import type { HarnessAdapter } from '../harness/adapter';
@@ -144,7 +145,7 @@ export async function drive(
     return {
       status: 'ABORTED',
       reason: `driver error: ${errorMessage(e)}`,
-      iterations: iterationsOf(state),
+      iterations: iterationCount(state),
       contractHash: contractHash ?? null,
       runId,
     };
@@ -196,22 +197,6 @@ function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void
         ...(event.approval.reason !== undefined ? { reason: event.approval.reason } : {}),
       });
       return;
-  }
-}
-
-/** Best-effort iteration count from any state, for outcomes built outside the reducer. */
-function iterationsOf(state: OrchestratorState): number {
-  switch (state.tag) {
-    case 'RUNNING_AGENT':
-    case 'VERIFYING':
-    case 'AWAIT_GATE_B':
-      return state.ctx.iteration;
-    case 'DONE':
-    case 'FAILED':
-    case 'ABORTED':
-      return state.iterations;
-    default:
-      return 0;
   }
 }
 
@@ -340,18 +325,9 @@ async function resume(deps: DriverDeps, config: RunConfig): Promise<Resumed> {
     return { state, commands, seq: 0, contractHash: null, contract: null };
   }
 
-  let [state, commands] = initial(stored.header.config);
-  let contract: CompiledContract | null = null;
-  let contractHash: ContractHash | null = null;
-
-  for (const entry of stored.entries) {
-    if (entry.event.tag === 'CONTRACT_COMPILED') {
-      contract = entry.event.contract;
-      contractHash = entry.event.contract.contractHash;
-    }
-    [state, commands] = step(state, entry.event);
-  }
-
+  // Same replay-fold the read-only `runs` inspection uses — a single source of truth so an
+  // inspected run's state matches exactly what resume reconstructs here.
+  const { state, commands, contract, contractHash } = replay(stored.header.config, stored.entries);
   return { state, commands, seq: stored.entries.length, contractHash, contract };
 }
 

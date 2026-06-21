@@ -255,7 +255,9 @@ export class MyAgentAdapter implements HarnessAdapter {
 
 Supporting `--model` is optional but cheap: take a `model?` constructor option and push `--model
 <model>` into the argv (before the prompt positional). The composition root passes the resolved
-harness model in for you — see "Register it" below.
+harness model in for you — see "Register it" below. The same goes for the wall-clock cap: keep the
+`timeoutMs?` constructor option (it already exists in the skeleton) and `makeHarness` threads the
+user's `--harness-timeout-ms` into it — you don't write any flag parsing for it.
 
 ## Register it (two tiny edits)
 
@@ -264,8 +266,9 @@ harness model in for you — see "Register it" below.
 export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'fake' | 'myagent';
 // ...allow it in parseHarness(...)
 
-// src/cli/compose.ts — wire it in makeHarness(choice, model)
-case 'myagent': return new MyAgentAdapter(model !== undefined ? { model } : {});
+// src/cli/compose.ts — wire it in makeHarness(choice, model, timeoutMs?)
+// `opts` already carries { model?, timeoutMs? }, so just pass it through:
+case 'myagent': return new MyAgentAdapter(opts);
 ```
 
 Optionally export it (and your `myExtractor` / `myStreamExtractor`) from `src/index.ts` for embedders.
@@ -359,8 +362,8 @@ and a throwing sink that never changes the result) — see `src/harness/streamin
 - [ ] `run()` never throws; uses `classifyHarnessRun` (or a documented bespoke tail) and returns a `HarnessRunResult.parse(...)`d value; session id uses `coerceSessionId(..., '<name>-unknown')`.
 - [ ] Subprocess is injectable; tests pass with a fake exec and don't spawn anything.
 - [ ] Added to `adapter.contract.test.ts`; `npm run typecheck` and `npm test` are green.
-- [ ] Registered in `args.ts` + `compose.ts` (`makeHarness(choice, model)`); documented the assumed CLI contract in a comment.
-- [ ] (optional) `--model` threaded into the argv via a `model?` constructor option.
+- [ ] Registered in `args.ts` + `compose.ts` (`makeHarness(choice, model, timeoutMs?)`); documented the assumed CLI contract in a comment.
+- [ ] (optional) `--model` threaded into the argv via a `model?` constructor option; keep the `timeoutMs?` option so `--harness-timeout-ms` is honored.
 - [ ] (optional, streaming — issue #23) A `StreamEventExtractor` (the shared `sdkStreamExtractor` / `flatStreamExtractor`, or a custom one) mapping per-turn JSONL onto `AgentStreamEvent`; `run()` builds a `StreamTap` only when `onEvent` is set, feeds it via `onStdout`, `end()`s it, and selects the streaming output format; final result is identical with/without streaming; streaming test added.
 - [ ] (optional, only if read-only) Exported the `FieldExtractor` (and `StreamEventExtractor`); added a read-only `*CompletionArgs` builder + `makeLlmProvider()` case (pass `onEvent` + `streamExtractor`) + `LlmProviderChoice` literal; tested it returns parsed text, carries the read-only flag, and fails closed.
 ```

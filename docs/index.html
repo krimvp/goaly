@@ -310,6 +310,7 @@
         <ul>
           <li><b>replay</b> = fold the reducer over the event stream</li>
           <li><b>resume</b> = parse header + entries, replay-fold to reconstruct state (session id, iteration, stuck histories), then continue</li>
+          <li><b>inspect</b> = <code>goaly runs list</code> / <code>runs show &lt;id&gt;</code> reuse the <em>same</em> replay-fold (read-only, re-runs nothing) so the rendered status/iterations match exactly what the Driver computed</li>
           <li>no completed iteration is repeated; durability is at-least-once by design</li>
           <li>logs live under <code>.goaly/&lt;runId&gt;/</code>, excluded from the tree hash</li>
         </ul>
@@ -353,8 +354,11 @@
           <tr><td class="feat">Stuck detection</td><td>no-diff · repeat-failure · oscillation · budget</td></tr>
           <tr><td class="feat">Budget</td><td><code>--budget-tokens</code> · <code>--budget-wall-ms</code>, independent of iteration count</td></tr>
           <tr><td class="feat">Resume</td><td><span class="yes">✓</span> <code>--resume run-&lt;id&gt;</code> — replay-fold from the write-ahead log</td></tr>
+          <tr><td class="feat">Run history</td><td><span class="yes">✓</span> <code>goaly runs list</code> · <code>goaly runs show run-&lt;id&gt;</code> — read-only inspection of past runs (frozen contract + hash, Gate A, per-iteration ladder + Gate B, stuck reason, totals) via the <em>same</em> replay-fold as <code>--resume</code>; parses with Zod, flags corrupt logs (fail-closed)</td></tr>
           <tr><td class="feat">Diagnostics</td><td><code>--log-level</code> debug/info/warn/error · structured JSON file at <code>.goaly/&lt;runId&gt;/goaly.log</code> (size-rotated) · <code>--log-file</code> · <code>--no-log-file</code> — human-facing, separate from the write-ahead run log, content stays at <code>debug</code></td></tr>
           <tr><td class="feat">Live streaming</td><td><code>--stream</code> — the agent run <b>and</b> the LLM steps' intermediate turns (tool uses, messages, token counts) to stderr as they happen, phase-tagged · one canonical tool-neutral <code>AgentStreamEvent</code> taxonomy · embedder hook (<code>onStreamEvent</code>) · pure observability, never in the run log</td></tr>
+          <tr><td class="feat">Per-step timeouts</td><td><code>--harness-timeout-ms</code> · <code>--llm-timeout-ms</code> (judge/approver/compiler) · <code>--verify-timeout-ms</code> — subprocess kill-timeouts; a verify timeout is a fail-closed FAIL, never a green</td></tr>
+          <tr><td class="feat">Config file</td><td>repeated wiring as defaults in an implicit <code>.goalyrc</code> (workspace/cwd) plus an explicit <code>--config &lt;path&gt;</code> · keys mirror the flags in kebab-case · precedence <code>CLI &gt; --config &gt; .goalyrc &gt; default</code> · parsed with Zod, fails closed</td></tr>
         </tbody>
       </table>
     </div>
@@ -396,7 +400,21 @@ goaly run --goal <span class="str">"…"</span> --model <span class="str">claude
 goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --log-level debug
 
 <span class="cmt"># watch the agent's turns live — run AND LLM steps — tool calls, messages, tokens</span>
-goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --stream</pre>
+goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --stream
+
+<span class="cmt"># cap each step's subprocess (ms); a verify timeout fails closed (FAIL, never green)</span>
+goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> \
+  --harness-timeout-ms 900000 --verify-timeout-ms 60000
+
+<span class="cmt"># put repeated wiring in .goalyrc once, then just pass the goal</span>
+<span class="cmt"># { "harness": "codex", "verify-cmd": "npm test", "autonomous": true, "max-iterations": 8 }</span>
+goaly run --goal <span class="str">"add a /health endpoint"</span>
+<span class="cmt"># …or point at an explicit profile that overrides .goalyrc</span>
+goaly run --goal <span class="str">"…"</span> --config ./ci/goaly.ci.json
+
+<span class="cmt"># inspect past runs (read-only — replays the run log, re-runs nothing)</span>
+goaly runs list
+goaly runs show run-&lt;id&gt;</pre>
       </div>
     </div>
     <p class="lede reveal" style="margin-top:0.9rem; font-size:0.82rem">Exit codes — <span class="pill pass">0 DONE</span> <span class="pill fail">1 FAILED / ABORTED</span> <span class="pill neutral">2 usage error</span></p>

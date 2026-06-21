@@ -32,7 +32,7 @@ import { droidExtractor, droidStreamExtractor } from '../harness/droid';
 import type { AgentEventSink, PhasedStreamSink, StreamPhase } from '../agent-cli/stream';
 import { makeStreamRenderer, streamLogFields } from './stream-render';
 import { resolveModels, type ModelSelection } from './models';
-import type { HarnessChoice, LlmProviderChoice } from './args';
+import type { HarnessChoice, LlmProviderChoice, StepTimeouts } from './args';
 
 export type ComposeOptions = {
   harness: HarnessChoice;
@@ -44,6 +44,8 @@ export type ComposeOptions = {
   llmProvider?: LlmProviderChoice;
   /** Raw model-selection flags; resolved into per-seam models via the cascade. */
   models?: ModelSelection;
+  /** Per-step subprocess timeouts (harness / LLM steps / verify command). Each absent ⇒ default. */
+  timeouts?: StepTimeouts;
   /** Where run logs live. Default `<workspaceRoot>/.goaly` (excluded from diffHash). */
   stateDir?: string;
   /** Minimum diagnostic log level. Default `info`. */
@@ -86,6 +88,7 @@ export const STATE_DIR = '.goaly';
 export function composeDeps(config: RunConfig, options: ComposeOptions): DriverDeps {
   const models = resolveModels(options.models ?? {});
   const provider = options.llmProvider ?? 'claude';
+  const timeouts = options.timeouts ?? {};
   const clock = new SystemClock();
   const workspace = new GitWorkspace(options.workspaceRoot);
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
@@ -93,16 +96,15 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   const streamSink = buildStreamSink(options, logger);
 
   // An injected `llm` (tests) overrides every step; otherwise build a provider per step so each can
-  // carry its own resolved model AND its phase-tagged stream sink. The model and the sink are both
-  // wiring — neither enters the frozen contract. The sink is injected at CONSTRUCTION so it never
-  // leaks through the Verifier/Approver seams (the `LlmProvider` stays an internal seam).
+  // carry its own resolved model, per-step timeout, AND its phase-tagged stream sink. All three are
+  // wiring — none enters the frozen contract. The sink is injected at CONSTRUCTION so it never leaks
+  // through the Verifier/Approver seams (the `LlmProvider` stays an internal seam).
   const llmFor = (model: string | undefined, phase: StreamPhase): LlmProvider =>
     options.llm ??
-    makeLlmProvider(
-      provider,
-      model,
-      streamSink !== undefined ? (event) => streamSink(phase, event) : undefined,
-    );
+    makeLlmProvider(provider, model, {
+      ...(timeouts.llmMs !== undefined ? { timeoutMs: timeouts.llmMs } : {}),
+      ...(streamSink !== undefined ? { onEvent: (event) => streamSink(phase, event) } : {}),
+    });
 
   return {
     compiler: new AgentCompiler({
@@ -112,8 +114,8 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     gateA: config.autonomous
       ? new AutoContractGate()
       : new HumanContractGate({ allowRevise: config.maxGateARevisions > 0 }),
-    harness: makeHarness(options.harness, models.harness),
-    makeLadder: (contract) => buildLadder(contract, llmFor(models.judge, 'judge')),
+    harness: makeHarness(options.harness, models.harness, timeouts.harnessMs),
+    makeLadder: (contract) => buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs),
     approver: new AgentApprover({ llm: llmFor(models.approver, 'approve') }),
     workspace,
     clock,
@@ -185,19 +187,23 @@ function buildRunLogger(options: ComposeOptions, stateDir: string): Logger {
 export function makeLlmProvider(
   choice: LlmProviderChoice,
   model: string | undefined,
-  onEvent?: AgentEventSink,
+  opts: { onEvent?: AgentEventSink; timeoutMs?: number } = {},
 ): LlmProvider {
-  const stream = onEvent !== undefined ? { onEvent } : {};
+  const timeout = opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {};
+  const stream = opts.onEvent !== undefined ? { onEvent: opts.onEvent } : {};
   switch (choice) {
     case 'claude':
-      return new CliLlmProvider({ ...(model !== undefined ? { model } : {}), ...stream });
+      return new CliLlmProvider({ ...(model !== undefined ? { model } : {}), ...timeout, ...stream });
     case 'codex':
       return new AgentCliLlmProvider({
         name: 'codex',
         command: 'codex',
         extractor: codexExtractor,
         buildArgs: (prompt) => codexCompletionArgs(prompt, model),
-        ...(onEvent !== undefined ? { onEvent, streamExtractor: codexStreamExtractor } : {}),
+        ...timeout,
+        ...(opts.onEvent !== undefined
+          ? { onEvent: opts.onEvent, streamExtractor: codexStreamExtractor }
+          : {}),
       });
     case 'droid':
       return new AgentCliLlmProvider({
@@ -205,7 +211,10 @@ export function makeLlmProvider(
         command: 'droid',
         extractor: droidExtractor,
         buildArgs: (prompt) => droidCompletionArgs(prompt, model),
-        ...(onEvent !== undefined ? { onEvent, streamExtractor: droidStreamExtractor } : {}),
+        ...timeout,
+        ...(opts.onEvent !== undefined
+          ? { onEvent: opts.onEvent, streamExtractor: droidStreamExtractor }
+          : {}),
       });
   }
 }
@@ -233,11 +242,19 @@ export function droidCompletionArgs(prompt: string, model: string | undefined): 
   ];
 }
 
-/** Turn the frozen contract's ordered rungs into a Ladder of concrete verifiers. */
-export function buildLadder(contract: CompiledContract, llm: LlmProvider): Verifier {
+/**
+ * Turn the frozen contract's ordered rungs into a Ladder of concrete verifiers. An optional
+ * `verifyTimeoutMs` caps each deterministic command (a timeout is a fail-closed FAIL); the model
+ * and timeout are wiring and never alter the frozen rungs themselves.
+ */
+export function buildLadder(
+  contract: CompiledContract,
+  llm: LlmProvider,
+  verifyTimeoutMs?: number,
+): Verifier {
   const rungs: Verifier[] = contract.rungs.map((rung) =>
     rung.kind === 'deterministic'
-      ? new DeterministicVerifier(rung.command, rung.label)
+      ? new DeterministicVerifier(rung.command, rung.label, verifyTimeoutMs)
       : new JudgeVerifier({
           rubric: rung.rubric,
           quorum: rung.quorum,
@@ -248,8 +265,15 @@ export function buildLadder(contract: CompiledContract, llm: LlmProvider): Verif
   return new Ladder(rungs);
 }
 
-function makeHarness(choice: HarnessChoice, model: string | undefined): HarnessAdapter {
-  const opts = model !== undefined ? { model } : {};
+function makeHarness(
+  choice: HarnessChoice,
+  model: string | undefined,
+  timeoutMs?: number,
+): HarnessAdapter {
+  const opts = {
+    ...(model !== undefined ? { model } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  };
   switch (choice) {
     case 'claude-code':
       return new ClaudeCodeAdapter(opts);
