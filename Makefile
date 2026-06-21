@@ -14,9 +14,12 @@ SOURCES := $(shell find src -name '*.ts' -not -name '*.test.ts' 2>/dev/null) \
            scripts/build.mjs tsconfig.json tsconfig.build.json package.json
 CLI     := dist/goaly.js
 ARGS    ?=
+# `make release` knobs: bump the patch/minor/major segment, or pin VERSION=X.Y.Z.
+BUMP    ?= patch
+VERSION ?=
 
 .PHONY: help deps dev build run typecheck test test-watch coverage check \
-        install uninstall pack clean distclean
+        install uninstall pack release clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -61,6 +64,41 @@ uninstall: ## Remove the globally installed `goaly` binary
 
 pack: build ## Produce an installable tarball (npm pack)
 	npm pack
+
+# --- Release -----------------------------------------------------------------
+# Releases are tag-driven: creating a GitHub Release (vX.Y.Z) triggers the
+# "Publish to npm" workflow, which derives the version from the tag, builds, and
+# publishes to npm. GitHub Actions does the build/version/publish — not you.
+# This target is just a CLI shortcut for "Draft a new release" in the GitHub UI.
+
+release: ## Cut a GitHub Release -> Actions publishes to npm. BUMP=patch|minor|major or VERSION=X.Y.Z
+	@command -v gh >/dev/null 2>&1 || { echo "release: GitHub CLI (gh) is required."; exit 1; }
+	@test -z "$$(git status --porcelain)" || { echo "release: working tree not clean."; exit 1; }
+	@test "$$(git branch --show-current)" = "main" || { echo "release: switch to main first (git switch main && git pull)."; exit 1; }
+	@git fetch --quiet --tags origin main
+	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" || { echo "release: local main differs from origin/main — pull first."; exit 1; }
+	@set -e ; \
+	  if [ -n "$(VERSION)" ]; then \
+	    V="$(VERSION)" ; V="$${V#v}" ; \
+	  else \
+	    LATEST=$$(git tag -l 'v*' --sort=-v:refname | head -n1) ; \
+	    BASE="$${LATEST#v}" ; [ -n "$$BASE" ] || BASE="0.0.0" ; \
+	    IFS=. read -r MA MI PA <<< "$$BASE" ; \
+	    case "$(BUMP)" in \
+	      major) MA=$$((MA + 1)); MI=0; PA=0 ;; \
+	      minor) MI=$$((MI + 1)); PA=0 ;; \
+	      patch) PA=$$((PA + 1)) ;; \
+	      *) echo "release: BUMP must be patch|minor|major (got '$(BUMP)')"; exit 1 ;; \
+	    esac ; \
+	    V="$$MA.$$MI.$$PA" ; \
+	  fi ; \
+	  TAG="v$$V" ; \
+	  if git rev-parse "$$TAG" >/dev/null 2>&1; then \
+	    echo "release: tag $$TAG already exists — versions are immutable, pick another." ; exit 1 ; \
+	  fi ; \
+	  echo "release: creating GitHub Release $$TAG (Actions will build, version & publish)" ; \
+	  gh release create "$$TAG" --target main --generate-notes --title "$$TAG" ; \
+	  echo "release: $$TAG created — watch the 'Publish to npm' workflow in the Actions tab."
 
 clean: ## Remove build output, coverage, and packed tarballs
 	rm -rf dist coverage *.tgz

@@ -1,7 +1,15 @@
 name: Publish to npm
 
-# Publishes the package to the npm registry when you cut a GitHub Release.
-# You can also run it manually from the Actions tab (workflow_dispatch).
+# Publishes the package to the npm registry. This is fully GitHub-driven: you
+# create a Release in GitHub and this workflow does the rest — derive the
+# version from the release tag, build, and publish. You never run npm version
+# or npm publish locally.
+#
+#   GitHub UI: Releases -> "Draft a new release" -> set tag vX.Y.Z -> Publish.
+#   (or `gh release create vX.Y.Z --generate-notes`, or `make release`.)
+#
+# You can also trigger it manually from the Actions tab (workflow_dispatch),
+# passing the version explicitly.
 #
 # One-time setup (see .github/workflows/README.md):
 #   1. Create an npm "Automation" access token with publish rights.
@@ -12,6 +20,10 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, e.g. 1.2.3 (no leading "v").
+        required: true
 
 concurrency:
   group: publish-${{ github.workflow }}
@@ -34,6 +46,21 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
 
+      # The release tag (e.g. v1.2.3) is the source of truth for the version.
+      # For manual runs, take it from the workflow_dispatch input instead.
+      - name: Resolve version from release tag
+        id: ver
+        run: |
+          RAW="${{ github.event.release.tag_name }}"
+          [ -n "$RAW" ] || RAW="${{ github.event.inputs.version }}"
+          VERSION="${RAW#v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+].+)?$'; then
+            echo "::error::Could not resolve a valid semver version (got '$RAW')."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing version $VERSION"
+
       - name: Install dependencies
         run: npm ci
 
@@ -43,23 +70,13 @@ jobs:
       - name: Test
         run: npm test
 
+      # Stamp package.json with the release version (in the runner only — not
+      # committed back), so the published package matches the tag exactly.
+      - name: Set package version
+        run: npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version --allow-same-version
+
       - name: Build
         run: npm run build
-
-      # Guard: when triggered by a Release, the tag (e.g. v0.1.0) must match
-      # the version in package.json (0.1.0). Stops a mistagged release from
-      # publishing the wrong version.
-      - name: Verify release tag matches package.json version
-        if: github.event_name == 'release'
-        run: |
-          PKG_VERSION="$(node -p "require('./package.json').version")"
-          TAG="${GITHUB_REF_NAME#v}"
-          echo "package.json version: $PKG_VERSION"
-          echo "release tag:          $TAG"
-          if [ "$PKG_VERSION" != "$TAG" ]; then
-            echo "::error::Tag '$GITHUB_REF_NAME' does not match package.json version '$PKG_VERSION'."
-            exit 1
-          fi
 
       - name: Publish
         run: npm publish --provenance --access public

@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/krimvp/goaly/actions/workflows/ci.yml/badge.svg)](https://github.com/krimvp/goaly/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/goaly.svg)](https://www.npmjs.com/package/goaly)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **🌐 [Interactive overview &amp; architecture →](https://krimvp.github.io/goaly/)** — the landing
 page (`docs/`) explains what this is, how the loop works, the internal architecture, and how to add
@@ -146,3 +147,7 @@ The library works headless; the CLI is a thin caller. Import from the package ro
 ```ts
 import { drive, composeDeps, freezeContract, type DriverDeps } from 'goaly';
 ```
+
+## License
+
+[MIT](LICENSE) © krimvp

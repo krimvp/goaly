@@ -10,8 +10,10 @@ This is the gate that keeps `main` green; nothing publishes from here.
 ## `publish.yml` — publishes to npm
 
 Triggers when you **publish a GitHub Release**, or manually from the **Actions** tab
-(`Run workflow`). It re-runs typecheck/test/build, checks that the release tag matches
-`package.json`, and runs `npm publish --provenance --access public`.
+(`Run workflow`). It is fully GitHub-driven: the release **tag is the version**. The workflow
+derives the version from the tag, re-runs typecheck/test, stamps `package.json` with that version
+(in the runner only — not committed back), builds, and runs `npm publish --provenance --access
+public`. You never run `npm version` or `npm publish` locally.
 
 ### One-time setup
 
@@ -24,15 +26,24 @@ Triggers when you **publish a GitHub Release**, or manually from the **Actions**
 
 ### Cutting a release
 
-1. Bump the version and commit it:
-   ```bash
-   npm version patch   # or minor / major — creates a vX.Y.Z commit + tag
-   git push --follow-tags
-   ```
-2. On GitHub, draft a **Release** for that `vX.Y.Z` tag and **Publish** it.
-3. The `Publish to npm` workflow runs and pushes the package to the registry.
+Releasing is a single action — create a GitHub Release. GitHub Actions does the build, version,
+and publish. Pick whichever entry point you like:
 
-> The tag (`v0.1.0`) must match `package.json` (`0.1.0`) or the publish job fails by design.
+- **GitHub UI:** *Releases* → *Draft a new release* → *Choose a tag* → type a new `vX.Y.Z` →
+  *Publish release*.
+- **CLI:** `gh release create vX.Y.Z --generate-notes` (or `make release BUMP=patch` /
+  `make release VERSION=X.Y.Z`, which computes the next tag and creates the release for you).
+- **Actions tab:** *Publish to npm* → *Run workflow*, passing the version explicitly.
+
+Publishing the release fires the `Publish to npm` workflow, which derives the version from the tag,
+builds, and publishes to the registry.
+
+> The release tag is the source of truth for the published version — the workflow stamps
+> `package.json` to match at publish time, so no pre-release version bump is needed. The repo's
+> `package.json` `version` is just a development baseline and may lag the latest published version.
+>
+> If a publish fails, fix forward and release the **next** version — the tag ruleset makes `v*`
+> tags immutable, so they can't be moved or reused.
 
 ### Provenance
 
