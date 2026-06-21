@@ -18,6 +18,13 @@ export type LlmRequest = {
 export type LlmCompletion = {
   text: string;
   tokensUsed?: number;
+  /**
+   * Whether `tokensUsed` is the provider's own `reported` count or a local `estimated` fallback
+   * (issue #24), counted from the streamed turns when the CLI emits no usage. Absent when
+   * `tokensUsed` is absent. A bare-string scripted {@link FakeLlm} response leaves it unset
+   * (treated as reported/unknown), so existing token-metering behavior is unchanged.
+   */
+  tokenSource?: 'reported' | 'estimated';
 };
 
 export interface LlmProvider {

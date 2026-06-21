@@ -121,6 +121,65 @@ describe('ClaudeCodeAdapter streaming', () => {
   });
 });
 
+describe('token estimation fallback (issue #24)', () => {
+  // A claude stream-json run whose closing `result` carries NO `usage` block.
+  const claudeStreamNoUsage = [
+    JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-1' }),
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Working on it now.' }] }, // 18 chars
+    }),
+    JSON.stringify({ type: 'result', subtype: 'success', result: 'done' }),
+  ].join('\n');
+
+  it('claude: estimates from streamed turns when the run self-reports no usage', async () => {
+    const result = await new ClaudeCodeAdapter({ exec: streamingExec(claudeStreamNoUsage) }).run(
+      'go',
+      undefined,
+      () => {},
+    );
+    expect(result.status).toBe('completed');
+    expect(result.tokenSource).toBe('estimated');
+    // 18 chars of assistant text → ceil(18 / 4) = 5.
+    expect(result.tokensUsed).toBe(5);
+  });
+
+  it('claude: marks a self-reported count as reported, never estimated', async () => {
+    const result = await new ClaudeCodeAdapter({ exec: streamingExec(claudeStreamJson) }).run(
+      'go',
+      undefined,
+      () => {},
+    );
+    expect(result.tokenSource).toBe('reported');
+    expect(result.tokensUsed).toBe(7); // 3 + 4 from the reported usage block
+  });
+
+  it('codex: estimates from streamed turns when turn.completed carries no usage (no delta double-count)', async () => {
+    const noUsage = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'th-1' }),
+      // Incremental deltas for the same turn — must NOT be counted on top of the full message.
+      JSON.stringify({ type: 'assistant.delta', delta: 'All set ' }),
+      JSON.stringify({ type: 'assistant.delta', delta: 'here.' }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: 'All set here.' }, // 13 chars — the only counted text
+      }),
+      JSON.stringify({ type: 'turn.completed' }), // no usage block
+    ].join('\n');
+    const result = await new CodexAdapter({ exec: streamingExec(noUsage) }).run('go', undefined, () => {});
+    expect(result.status).toBe('completed');
+    expect(result.tokenSource).toBe('estimated');
+    // 13 chars → ceil(13 / 4) = 4, NOT inflated by the streamed deltas.
+    expect(result.tokensUsed).toBe(Math.ceil('All set here.'.length / 4));
+  });
+
+  it('does NOT estimate when not streaming (the lean envelope still reports usage)', async () => {
+    const result = await new ClaudeCodeAdapter({ exec: streamingExec(claudeJson) }).run('go');
+    expect(result.tokenSource).toBe('reported');
+    expect(result.tokensUsed).toBe(7);
+  });
+});
+
 describe('DroidAdapter streaming', () => {
   it('requests stream-json and forwards the SDK turns when an onEvent sink is supplied', async () => {
     const seenArgs: string[][] = [];

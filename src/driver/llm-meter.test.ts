@@ -7,16 +7,24 @@ describe('LlmTokenMeter', () => {
     const meter = new LlmTokenMeter();
     meter.record(100);
     meter.record(50);
-    expect(meter.take()).toEqual({ tokens: 150, calls: 2, unknownCalls: 0 });
+    expect(meter.take()).toEqual({ tokens: 150, calls: 2, unknownCalls: 0, estimatedTokens: 0 });
     // take() resets, so the next read starts fresh.
-    expect(meter.take()).toEqual({ tokens: 0, calls: 0, unknownCalls: 0 });
+    expect(meter.take()).toEqual({ tokens: 0, calls: 0, unknownCalls: 0, estimatedTokens: 0 });
   });
 
   it('counts a call with no reported tokens as unknown, not zero', () => {
     const meter = new LlmTokenMeter();
     meter.record(undefined);
     meter.record(40);
-    expect(meter.take()).toEqual({ tokens: 40, calls: 2, unknownCalls: 1 });
+    expect(meter.take()).toEqual({ tokens: 40, calls: 2, unknownCalls: 1, estimatedTokens: 0 });
+  });
+
+  it('tracks the estimated portion of a call separately (issue #24), clamped to the count', () => {
+    const meter = new LlmTokenMeter();
+    meter.record(100); // a reported call estimates nothing
+    meter.record(60, 60); // a fully estimated call
+    meter.record(40, 999); // estimate clamped to the call's tokens
+    expect(meter.take()).toEqual({ tokens: 200, calls: 3, unknownCalls: 0, estimatedTokens: 100 });
   });
 });
 
@@ -29,7 +37,7 @@ describe('meterLlm', () => {
     expect(metered.name).toBe(fake.name);
     expect(await metered.complete({ prompt: 'x' })).toEqual({ text: 'a', tokensUsed: 7 });
     expect(await metered.complete({ prompt: 'y' })).toEqual({ text: 'b', tokensUsed: 3 });
-    expect(meter.take()).toEqual({ tokens: 10, calls: 2, unknownCalls: 0 });
+    expect(meter.take()).toEqual({ tokens: 10, calls: 2, unknownCalls: 0, estimatedTokens: 0 });
     // The inner provider still received both requests.
     expect(fake.requests).toHaveLength(2);
   });
@@ -37,14 +45,23 @@ describe('meterLlm', () => {
 
 describe('deltaToUsage', () => {
   it('returns undefined when no call was made (distinguishing "no call" from "zero tokens")', () => {
-    expect(deltaToUsage({ tokens: 0, calls: 0, unknownCalls: 0 })).toBeUndefined();
+    expect(deltaToUsage({ tokens: 0, calls: 0, unknownCalls: 0, estimatedTokens: 0 })).toBeUndefined();
   });
 
   it('returns the usage when at least one call was made', () => {
-    expect(deltaToUsage({ tokens: 12, calls: 1, unknownCalls: 0 })).toEqual({
+    expect(deltaToUsage({ tokens: 12, calls: 1, unknownCalls: 0, estimatedTokens: 0 })).toEqual({
       tokens: 12,
       calls: 1,
       unknownCalls: 0,
+    });
+  });
+
+  it('carries the estimated portion through when present (issue #24)', () => {
+    expect(deltaToUsage({ tokens: 12, calls: 1, unknownCalls: 0, estimatedTokens: 12 })).toEqual({
+      tokens: 12,
+      calls: 1,
+      unknownCalls: 0,
+      estimatedTokens: 12,
     });
   });
 });

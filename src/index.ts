@@ -118,6 +118,16 @@ export {
 } from './agent-cli/output';
 export { classifyHarnessRun } from './harness/classify';
 
+// Local token ESTIMATION (issue #24): the fallback when a streamed run/step self-reports no usage.
+export {
+  estimateTokens,
+  accountTokens,
+  streamingEstimator,
+  StreamTokenEstimator,
+  CHARS_PER_TOKEN,
+  type TokenAccounting,
+} from './agent-cli/estimate';
+
 // Streaming tap (issue #23): the canonical intermediate-turn taxonomy + the shared StreamTap,
 // reused by harness adapters AND the read-only LLM providers, plus the driver-side renderers.
 export {

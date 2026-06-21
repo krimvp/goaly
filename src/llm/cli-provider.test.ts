@@ -45,6 +45,30 @@ describe('CliLlmProvider', () => {
     const out = await llm.complete({ prompt: 'p' });
     expect(out.text).toBe('the answer');
     expect(out.tokensUsed).toBe(12);
+    expect(out.tokenSource).toBe('reported');
+  });
+
+  it('estimates token usage from the streamed turns when the step self-reports none (issue #24)', async () => {
+    // A claude stream-json reply whose closing `result` carries NO usage block.
+    const streamJson = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: 's-1' }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Reasoning through it.' }] }, // 21 chars
+      }),
+      JSON.stringify({ type: 'result', subtype: 'success', result: 'verdict' }),
+    ].join('\n');
+    const llm = new CliLlmProvider({
+      onEvent: () => {}, // streaming on → stream-json path
+      exec: async (_input, onStdout) => {
+        onStdout?.(streamJson);
+        return ok(streamJson);
+      },
+    });
+    const out = await llm.complete({ prompt: 'p' });
+    expect(out.text).toBe('verdict');
+    expect(out.tokenSource).toBe('estimated');
+    expect(out.tokensUsed).toBe(Math.ceil('Reasoning through it.'.length / 4));
   });
 
   it('sends just the prompt when there is no system message', async () => {

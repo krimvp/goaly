@@ -2,6 +2,7 @@ import type { LlmCompletion, LlmProvider, LlmRequest } from './provider';
 import { runProcess } from '../util/spawn';
 import { parseAgentOutput, type FieldExtractor } from '../agent-cli/output';
 import { StreamTap, type AgentEventSink, type StreamEventExtractor } from '../agent-cli/stream';
+import { accountTokens, streamingEstimator } from '../agent-cli/estimate';
 
 /** Injectable subprocess seam: takes the full argv, returns raw output. Tests pass a fake. */
 type ExecFn = (
@@ -58,9 +59,13 @@ export class AgentCliLlmProvider implements LlmProvider {
 
   async complete(req: LlmRequest): Promise<LlmCompletion> {
     const prompt = req.system !== undefined ? `${req.system}\n\n${req.prompt}` : req.prompt;
+    // When streaming, accumulate a local token estimate (issue #24) from the turns, used as a
+    // fallback when the agent CLI reports no usage. Estimation needs a stream extractor to map turns.
+    const streaming = this.#streamExtractor !== undefined ? this.#onEvent : undefined;
+    const { sink, estimator } = streamingEstimator(streaming);
     const tap =
-      this.#onEvent !== undefined && this.#streamExtractor !== undefined
-        ? new StreamTap(this.#streamExtractor, this.#onEvent)
+      sink !== undefined && this.#streamExtractor !== undefined
+        ? new StreamTap(this.#streamExtractor, sink)
         : undefined;
     const r = await this.#exec(this.#buildArgs(prompt), tap ? (chunk) => tap.push(chunk) : undefined);
     tap?.end();
@@ -72,9 +77,6 @@ export class AgentCliLlmProvider implements LlmProvider {
     if (parsed === null || parsed.text.length === 0) {
       throw new Error(`LLM CLI ${this.name} produced no parseable text`);
     }
-    return {
-      text: parsed.text,
-      ...(parsed.tokens !== undefined ? { tokensUsed: parsed.tokens } : {}),
-    };
+    return { text: parsed.text, ...accountTokens(parsed.tokens, estimator) };
   }
 }

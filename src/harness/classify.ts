@@ -1,6 +1,7 @@
 import { coerceSessionId } from '../domain/ids';
 import { HarnessRunResult } from '../domain/events';
 import type { AgentOutput } from '../agent-cli/output';
+import { accountTokens, type StreamTokenEstimator } from '../agent-cli/estimate';
 
 /**
  * Shared run-status classifier for the FLAT adapters (claude-code, droid), whose `run()` tails are
@@ -17,8 +18,14 @@ export function classifyHarnessRun(opts: {
   timedOut?: boolean | undefined;
   sessionId?: string | undefined;
   unknownSession: string;
+  /**
+   * Streaming token estimator (issue #24): when the parsed envelope carries no `usage`, fall back to
+   * a local estimate of the agent's spend accumulated from its streamed turns. Present only when the
+   * adapter streamed (`onEvent` supplied); a self-reported count always takes precedence.
+   */
+  estimator?: StreamTokenEstimator | undefined;
 }): HarnessRunResult {
-  const { parsed, code, stderr, timedOut, sessionId, unknownSession } = opts;
+  const { parsed, code, stderr, timedOut, sessionId, unknownSession, estimator } = opts;
   const session = coerceSessionId(parsed?.sessionId ?? sessionId, unknownSession);
 
   if (timedOut === true) {
@@ -47,6 +54,6 @@ export function classifyHarnessRun(opts: {
     output: parsed.text,
     sessionId: session,
     status,
-    ...(parsed.tokens !== undefined ? { tokensUsed: parsed.tokens } : {}),
+    ...accountTokens(parsed.tokens, estimator),
   });
 }
