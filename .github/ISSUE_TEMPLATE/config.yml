@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Docs, architecture & how-it-works
+    url: https://krimvp.github.io/goaly/
+    about: Read the overview and architecture first — it may already answer your question.
+  - name: 🧭 Contributor guide (AGENTS.md)
+    url: https://github.com/krimvp/goaly/blob/main/AGENTS.md
+    about: Conventions, the eight invariants, and the definition of done for any change.

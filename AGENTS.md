@@ -157,6 +157,24 @@ stay accurate. When in doubt whether a change is "meaningful", assume it is.
 - Shipping an architecture / public-API / functionality change without updating `README.md` and the
   landing page (`docs/index.html`) in the same change.
 
+## Reporting & working on issues
+
+Issue templates live in [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE) — one per type: **bug**,
+**feature** (new capability), **enhancement** (improve existing), **harness adapter**, and
+**discussion/decision**. A [PR template](.github/PULL_REQUEST_TEMPLATE.md) carries the
+definition-of-done checklist. Two skills automate the workflow and enforce the rules below:
+
+- **`log-issue`** — file a high-quality, *verified* issue. Bugs follow **reported → replicated →
+  logged**: a bug is reproduced (prefer the `fake` harness + `--verify-cmd` for orchestration bugs,
+  zero network) *before* it's filed, and the report carries verified reproduction steps plus a
+  preliminary cause; if it can't be reproduced it isn't filed as a bug. Features/enhancements use the
+  comprehensive, invariant-aware templates.
+- **`work-on-issue`** — pick up an issue. **Verify the claim first**: replicate the bug, or confirm a
+  feature/enhancement is actually wanted *and pointed in the intended direction* — a valid outcome is
+  "not planned"/discarded, so we don't build for the sake of building. Then implement **test-first**:
+  a bug fix ships with a regression test that reproduces it; a feature/enhancement ships with tests
+  that pin the new behavior so it can't silently regress. The definition of done above still applies.
+
 ## Commits / PRs
 
 Conventional commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`). Keep diffs
