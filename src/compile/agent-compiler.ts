@@ -157,7 +157,7 @@ export class AgentCompiler implements VerifierCompiler {
     }
     guidanceParts.push('Author verification as JSON only.');
 
-    const raw = await this.#llm.complete({
+    const { text: raw } = await this.#llm.complete({
       system: SYSTEM_PROMPT,
       prompt: guidanceParts.join('\n'),
       temperature: 0,

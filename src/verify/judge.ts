@@ -92,7 +92,7 @@ export class JudgeVerifier implements Verifier {
 
     const samples: JudgeOutput[] = [];
     for (let i = 0; i < this.#quorum; i += 1) {
-      const raw = await this.#llm.complete({
+      const { text: raw } = await this.#llm.complete({
         system: SYSTEM_PROMPT,
         prompt,
         temperature: 0,

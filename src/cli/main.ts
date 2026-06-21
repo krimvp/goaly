@@ -1,11 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { parseArgs, USAGE, UsageError, type ParsedArgs } from './args';
 import { composeDeps, STATE_DIR } from './compose';
 import { runRuns } from './runs';
 import { drive } from '../driver/driver';
 import { asRunId, type RunId } from '../domain/ids';
 import type { RunOutcome } from '../domain/events';
+import { resolveModels } from './models';
+import { parsePriceTable, computeCost, type CostView, type PriceTable } from './cost';
+import { formatUsage } from './usage-format';
 
 /** The model/provider flags the user actually set, as structured log fields (set ones only). */
 function startupFields(parsed: ParsedArgs): Record<string, string> {
@@ -51,6 +55,19 @@ export async function main(argv: string[]): Promise<number> {
     );
   }
 
+  // Load the optional cost table BEFORE the run so a malformed table fails fast (never mid-run).
+  let priceTable: PriceTable | undefined;
+  if (parsed.costTablePath !== undefined) {
+    try {
+      priceTable = parsePriceTable(await readFile(parsed.costTablePath, 'utf8'));
+    } catch (e) {
+      process.stderr.write(
+        `--cost-table ${parsed.costTablePath}: ${e instanceof Error ? e.message : String(e)}\n`,
+      );
+      return 2;
+    }
+  }
+
   const resuming = parsed.resumeRunId !== undefined;
   const runId: RunId =
     parsed.resumeRunId !== undefined ? asRunId(parsed.resumeRunId) : asRunId(`run-${randomUUID()}`);
@@ -77,11 +94,15 @@ export async function main(argv: string[]): Promise<number> {
   });
 
   const outcome = await drive(deps, parsed.config, runId, { resume: resuming });
-  process.stdout.write(`${formatOutcome(outcome)}\n`);
+  const cost =
+    priceTable !== undefined && outcome.usage !== undefined
+      ? computeCost(outcome.usage, resolveModels(parsed.models), priceTable)
+      : undefined;
+  process.stdout.write(`${formatOutcome(outcome, cost)}\n`);
   return outcome.status === 'DONE' ? 0 : 1;
 }
 
-export function formatOutcome(o: RunOutcome): string {
+export function formatOutcome(o: RunOutcome, cost?: CostView): string {
   const lines = [
     '',
     `── goaly run ${o.runId} ──`,
@@ -90,5 +111,6 @@ export function formatOutcome(o: RunOutcome): string {
     `contract:    ${o.contractHash ?? '(none — failed before compile)'}`,
   ];
   if (o.reason !== undefined) lines.push(`reason:      ${o.reason}`);
+  if (o.usage !== undefined) lines.push(...formatUsage(o.usage, cost));
   return lines.join('\n');
 }

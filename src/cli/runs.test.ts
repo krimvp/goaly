@@ -83,6 +83,15 @@ describe('renderRunDetail', () => {
       endedAt: 1_700_000_050_000,
       iterations: 2,
       tokensSpent: 1234,
+      usage: {
+        harness: { tokens: 1000, calls: 2, unknownCalls: 0 },
+        compiler: { tokens: 100, calls: 1, unknownCalls: 0 },
+        verifier: { tokens: 100, calls: 2, unknownCalls: 0 },
+        approver: { tokens: 34, calls: 2, unknownCalls: 0 },
+        llm: { tokens: 234, calls: 5, unknownCalls: 0 },
+        total: { tokens: 1234, calls: 7, unknownCalls: 0 },
+        budget: { spent: 1234, exceeded: false },
+      },
       contract,
       contractHash: contract.contractHash,
       compileFailures: [],
@@ -106,6 +115,16 @@ describe('renderRunDetail', () => {
     expect(text).toContain('#2');
     expect(text).toContain('PASS');
     expect(text).toContain('gate B=approved');
+  });
+
+  it('renders the per-layer spend breakdown (harness vs the LLM steps)', () => {
+    const text = renderRunDetail(detail());
+    expect(text).toContain('spend:');
+    expect(text).toContain('harness');
+    expect(text).toContain('1,000 tokens');
+    expect(text).toContain('llm subtotal');
+    expect(text).toContain('234 tokens');
+    expect(text).toContain('1,234 tokens');
   });
 
   it('annotates an INCOMPLETE run with its raw state tag and shows a failure reason', () => {

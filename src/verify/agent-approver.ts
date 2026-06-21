@@ -97,11 +97,13 @@ export class AgentApprover implements Approver {
   async review(input: ApprovalInput): Promise<ApprovalVerdict> {
     let raw: string;
     try {
-      raw = await this.#llm.complete({
-        system: SYSTEM_PROMPT,
-        prompt: buildPrompt(input),
-        temperature: 0,
-      });
+      raw = (
+        await this.#llm.complete({
+          system: SYSTEM_PROMPT,
+          prompt: buildPrompt(input),
+          temperature: 0,
+        })
+      ).text;
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'unknown error';
       return failClosed(`llm call failed: ${message}`);

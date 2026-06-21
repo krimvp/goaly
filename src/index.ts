@@ -49,6 +49,14 @@ export {
   type LoadedConfig,
 } from './cli/config-file';
 export { main, formatOutcome } from './cli/main';
+export { formatUsage } from './cli/usage-format';
+export {
+  parsePriceTable,
+  computeCost,
+  PriceTable,
+  DEFAULT_PRICE_KEY,
+  type CostView,
+} from './cli/cost';
 
 // Seam interfaces.
 export type { HarnessAdapter } from './harness/adapter';
@@ -72,12 +80,14 @@ export {
   type RunListItem,
   type RunReadResult,
 } from './runlog/inspect';
-export type { LlmProvider, LlmRequest } from './llm/provider';
+export type { LlmProvider, LlmRequest, LlmCompletion } from './llm/provider';
 export { FakeLlm } from './llm/provider';
 
 // Seam #4 (real implementations) + concrete adapters/verifiers.
 export { SystemClock, type Clock } from './driver/clock';
 export { SystemBudgetMeter, type BudgetMeter } from './driver/budget';
+export { LlmTokenMeter, meterLlm, deltaToUsage, type LlmDelta } from './driver/llm-meter';
+export { summarizeUsage } from './runlog/usage';
 export { GitWorkspace } from './workspace/git-workspace';
 export { FileRunLog } from './runlog/file-runlog';
 export { DeterministicVerifier } from './verify/deterministic';

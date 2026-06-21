@@ -1,4 +1,4 @@
-import type { LlmProvider, LlmRequest } from './provider';
+import type { LlmCompletion, LlmProvider, LlmRequest } from './provider';
 import { runProcess } from '../util/spawn';
 import { parseAgentOutput, type FieldExtractor } from '../agent-cli/output';
 import { StreamTap, type AgentEventSink, type StreamEventExtractor } from '../agent-cli/stream';
@@ -56,7 +56,7 @@ export class AgentCliLlmProvider implements LlmProvider {
     this.#streamExtractor = opts.streamExtractor;
   }
 
-  async complete(req: LlmRequest): Promise<string> {
+  async complete(req: LlmRequest): Promise<LlmCompletion> {
     const prompt = req.system !== undefined ? `${req.system}\n\n${req.prompt}` : req.prompt;
     const tap =
       this.#onEvent !== undefined && this.#streamExtractor !== undefined
@@ -72,6 +72,9 @@ export class AgentCliLlmProvider implements LlmProvider {
     if (parsed === null || parsed.text.length === 0) {
       throw new Error(`LLM CLI ${this.name} produced no parseable text`);
     }
-    return parsed.text;
+    return {
+      text: parsed.text,
+      ...(parsed.tokens !== undefined ? { tokensUsed: parsed.tokens } : {}),
+    };
   }
 }

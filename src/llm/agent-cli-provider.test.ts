@@ -27,7 +27,8 @@ describe('AgentCliLlmProvider', () => {
 
     const out = await llm.complete({ system: 'sys', prompt: 'judge this' });
 
-    expect(out).toBe('the verdict');
+    expect(out.text).toBe('the verdict');
+    expect(out.tokensUsed).toBe(3);
     expect(sink[0]).toEqual([
       'exec', '--sandbox', 'read-only', '--model', 'gpt-x', 'sys\n\njudge this', '--json',
     ]);
@@ -44,7 +45,7 @@ describe('AgentCliLlmProvider', () => {
       exec: fakeExec({ stdout: droidJson, stderr: '', code: 0 }, sink),
     });
 
-    expect(await llm.complete({ prompt: 'p' })).toBe('looks good');
+    expect((await llm.complete({ prompt: 'p' })).text).toBe('looks good');
     expect(sink[0]).not.toContain('--auto');
   });
 

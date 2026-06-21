@@ -3,6 +3,7 @@ import { DiffHash, SessionId, ContractHash, RunId } from './ids';
 import { CompiledContract } from './contract';
 import { Verdict, ApprovalVerdict, GateDecision } from './verdict';
 import { RunConfig } from './config';
+import { TokenUsage, UsageReport } from './usage';
 
 /** What a harness adapter returns. `diffHash` is computed by the Workspace, not here. */
 export const HarnessRunResult = z.object({
@@ -28,8 +29,18 @@ export type BudgetSnapshot = z.infer<typeof BudgetSnapshot>;
  * a Zod schema.
  */
 export const OrchestratorEvent = z.discriminatedUnion('tag', [
-  z.object({ tag: z.literal('CONTRACT_COMPILED'), contract: CompiledContract }),
-  z.object({ tag: z.literal('COMPILE_FAILED'), reason: z.string() }),
+  z.object({
+    tag: z.literal('CONTRACT_COMPILED'),
+    contract: CompiledContract,
+    /** LLM spend authoring this contract (absent for an existing-command contract — no LLM call). */
+    llm: TokenUsage.optional(),
+  }),
+  z.object({
+    tag: z.literal('COMPILE_FAILED'),
+    reason: z.string(),
+    /** LLM spend before the compile failed (tokens can be spent on a draft that then fails to parse). */
+    llm: TokenUsage.optional(),
+  }),
   z.object({ tag: z.literal('GATE_A_DECIDED'), decision: GateDecision }),
   z.object({
     tag: z.literal('AGENT_RAN'),
@@ -40,8 +51,18 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     diffHash: DiffHash,
     budget: BudgetSnapshot,
   }),
-  z.object({ tag: z.literal('VERIFIED'), verdict: Verdict }),
-  z.object({ tag: z.literal('GATE_B_DECIDED'), approval: ApprovalVerdict }),
+  z.object({
+    tag: z.literal('VERIFIED'),
+    verdict: Verdict,
+    /** LLM spend by the judge rung (absent when the ladder had no LLM rung). */
+    llm: TokenUsage.optional(),
+  }),
+  z.object({
+    tag: z.literal('GATE_B_DECIDED'),
+    approval: ApprovalVerdict,
+    /** LLM spend by the approver (absent only if the call never reached the model). */
+    llm: TokenUsage.optional(),
+  }),
 ]);
 export type OrchestratorEvent = z.infer<typeof OrchestratorEvent>;
 
@@ -74,5 +95,7 @@ export const RunOutcome = z.object({
   /** Null only when the run failed during compile, before any contract was frozen. */
   contractHash: ContractHash.nullable(),
   runId: RunId,
+  /** Per-run token spend, folded from the event log. Absent only if the log could not be read. */
+  usage: UsageReport.optional(),
 });
 export type RunOutcome = z.infer<typeof RunOutcome>;

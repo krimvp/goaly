@@ -35,7 +35,7 @@ describe('AgentCliLlmProvider streaming', () => {
 
     const text = await provider.complete({ prompt: 'judge this' });
 
-    expect(text).toBe('verdict: PASS');
+    expect(text.text).toBe('verdict: PASS');
     expect(events.map((e) => e.kind)).toEqual(['session', 'message', 'usage', 'done']);
   });
 
@@ -58,7 +58,7 @@ describe('AgentCliLlmProvider streaming', () => {
     const streamed = await make(() => {
       throw new Error('sink exploded');
     }).complete({ prompt: 'x' });
-    expect(streamed).toBe(baseline);
+    expect(streamed).toEqual(baseline);
   });
 });
 
@@ -70,7 +70,7 @@ describe('CliLlmProvider (claude) streaming', () => {
       'stream-json',
       '--verbose',
     ]);
-    expect(buildLlmArgs(undefined, undefined, false)).toEqual(['-p']);
+    expect(buildLlmArgs(undefined, undefined, false)).toEqual(['-p', '--output-format', 'json']);
   });
 
   it('switches to stream-json parsing + emits events when a sink is wired', async () => {
@@ -83,7 +83,7 @@ describe('CliLlmProvider (claude) streaming', () => {
 
     const text = await provider.complete({ prompt: 'judge this' });
 
-    expect(text).toBe('verdict: PASS'); // recovered from the closing `result` event via flatExtractor
+    expect(text.text).toBe('verdict: PASS'); // recovered from the closing `result` event via flatExtractor
     expect(events.map((e) => e.kind)).toEqual(['session', 'message', 'usage', 'done']);
   });
 
@@ -95,6 +95,6 @@ describe('CliLlmProvider (claude) streaming', () => {
       timedOut: false,
     });
     const provider = new CliLlmProvider({ exec });
-    expect(await provider.complete({ prompt: 'x' })).toBe('verdict: PASS');
+    expect((await provider.complete({ prompt: 'x' })).text).toBe('verdict: PASS');
   });
 });

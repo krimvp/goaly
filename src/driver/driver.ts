@@ -5,6 +5,7 @@ import type { CompiledContract } from '../domain/contract';
 import type { ContractHash, RunId } from '../domain/ids';
 import { DiffHash, coerceSessionId } from '../domain/ids';
 import type { Verdict } from '../domain/verdict';
+import type { TokenUsage, UsageReport } from '../domain/usage';
 import { isTerminal, iterationCount, type OrchestratorState } from '../orchestrator/state';
 import { initial, step } from '../orchestrator/step';
 import { replay } from '../runlog/replay';
@@ -16,6 +17,8 @@ import type { Approver } from '../verify/approver';
 import type { Workspace } from '../workspace/workspace';
 import type { Clock } from './clock';
 import type { BudgetMeter } from './budget';
+import { LlmTokenMeter, deltaToUsage } from './llm-meter';
+import { summarizeUsage } from '../runlog/usage';
 import type { RunLog } from '../runlog/runlog';
 import { noopLogger, type Logger } from '../log/logger';
 import type { PhasedStreamSink } from '../agent-cli/stream';
@@ -40,6 +43,12 @@ export type DriverDeps = {
   workspace: Workspace;
   clock: Clock;
   budget: BudgetMeter;
+  /**
+   * Meters LLM-step token spend (compiler / judge / approver). The composition root wraps each
+   * workflow-step provider with `meterLlm` feeding this one meter; the Driver reads it per command
+   * to attribute spend. Optional: when absent, LLM spend is simply reported as "unknown".
+   */
+  llmMeter?: LlmTokenMeter;
   runlog: RunLog;
   /**
    * Diagnostic logger (the Driver is the orchestration choke-point: it sees every Command, Event,
@@ -80,6 +89,7 @@ export async function drive(
   let ladder: Verifier | null = null;
   let contractHash: ContractHash | null = null;
   const log = deps.logger ?? noopLogger;
+  const llmMeter = deps.llmMeter ?? new LlmTokenMeter();
 
   log.info(options.resume === true ? 'resuming run' : 'starting run', {
     runId,
@@ -111,7 +121,7 @@ export async function drive(
 
       // Perform the effect (the only place anything stochastic/IO happens), then build the
       // Event. `ladder` is created at COMPILE and reused for every RUN_VERIFIER.
-      const performed = await perform(command, deps, ladder);
+      const performed = await perform(command, deps, ladder, llmMeter);
       const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge
       if (performed.ladder !== undefined) ladder = performed.ladder;
       if (event.tag === 'CONTRACT_COMPILED') contractHash = event.contract.contractHash;
@@ -142,18 +152,43 @@ export async function drive(
     // throw (corrupt log on append, invalid transition) must still resolve to a terminal outcome
     // rather than reject — so the caller always gets a RunOutcome.
     log.error('driver error (fail-closed → ABORTED)', { reason: errorMessage(e) });
+    const usage = await buildUsageReport(deps);
     return {
       status: 'ABORTED',
       reason: `driver error: ${errorMessage(e)}`,
       iterations: iterationCount(state),
       contractHash: contractHash ?? null,
       runId,
+      ...(usage !== undefined ? { usage } : {}),
     };
   }
 
   const outcome = buildOutcome(state, runId);
-  log.info('run finished', { status: outcome.status, iterations: outcome.iterations });
-  return outcome;
+  const usage = await buildUsageReport(deps);
+  log.info('run finished', {
+    status: outcome.status,
+    iterations: outcome.iterations,
+    ...(usage !== undefined ? { tokensTotal: usage.total.tokens } : {}),
+  });
+  return { ...outcome, ...(usage !== undefined ? { usage } : {}) };
+}
+
+/**
+ * Fold the persisted event log into the per-run spend report (issue #17). Best-effort and
+ * fail-closed: a log that cannot be read degrades the report to absent — it NEVER breaks the
+ * outcome. Reading the log (the source of truth) means the report is identical fresh or resumed.
+ */
+async function buildUsageReport(deps: DriverDeps): Promise<UsageReport | undefined> {
+  try {
+    const stored = await deps.runlog.read();
+    if (stored === null) return undefined;
+    return summarizeUsage(
+      stored.entries.map((entry) => entry.event),
+      stored.header.config.budget,
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -167,6 +202,7 @@ function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void
       log.info('contract compiled', {
         contractHash: event.contract.contractHash,
         rungs: event.contract.rungs.length,
+        ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
       });
       return;
     case 'COMPILE_FAILED':
@@ -188,12 +224,17 @@ function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void
       }
       return;
     case 'VERIFIED':
-      log.info('verified', { pass: event.verdict.pass, confidence: event.verdict.confidence });
+      log.info('verified', {
+        pass: event.verdict.pass,
+        confidence: event.verdict.confidence,
+        ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
+      });
       log.debug('verdict detail', { detail: event.verdict.detail });
       return;
     case 'GATE_B_DECIDED':
       log.info('gate B decided', {
         veto: event.approval.veto,
+        ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
         ...(event.approval.reason !== undefined ? { reason: event.approval.reason } : {}),
       });
       return;
@@ -206,14 +247,31 @@ async function perform(
   command: Command,
   deps: DriverDeps,
   ladder: Verifier | null,
+  llmMeter: LlmTokenMeter,
 ): Promise<Performed> {
+  // Read the LLM spend accrued by THIS command (the loop is sequential, so the meter holds only the
+  // call(s) just made) and count it against the token budget so the cap governs total spend, not
+  // just the harness. Returns the per-event usage to persist, or undefined when no LLM call ran.
+  const meterStep = (): TokenUsage | undefined => {
+    const usage = deltaToUsage(llmMeter.take());
+    if (usage !== undefined) deps.budget.record(usage.tokens);
+    return usage;
+  };
+
   switch (command.tag) {
     case 'COMPILE_VERIFIER': {
       try {
         const contract = await deps.compiler.compile(command.config, command.feedback);
-        return { event: { tag: 'CONTRACT_COMPILED', contract }, ladder: deps.makeLadder(contract) };
+        const llm = meterStep();
+        return {
+          event: { tag: 'CONTRACT_COMPILED', contract, ...(llm !== undefined ? { llm } : {}) },
+          ladder: deps.makeLadder(contract),
+        };
       } catch (e) {
-        return { event: { tag: 'COMPILE_FAILED', reason: errorMessage(e) } };
+        const llm = meterStep();
+        return {
+          event: { tag: 'COMPILE_FAILED', reason: errorMessage(e), ...(llm !== undefined ? { llm } : {}) },
+        };
       }
     }
 
@@ -266,7 +324,8 @@ async function perform(
         command.contract.goal,
         command.contract.rubric,
       );
-      return { event: { tag: 'VERIFIED', verdict } };
+      const llm = meterStep();
+      return { event: { tag: 'VERIFIED', verdict, ...(llm !== undefined ? { llm } : {}) } };
     }
 
     case 'REQUEST_GATE_B': {
@@ -279,11 +338,17 @@ async function perform(
           diff,
           verdicts: command.verdicts,
         });
-        return { event: { tag: 'GATE_B_DECIDED', approval } };
+        const llm = meterStep();
+        return { event: { tag: 'GATE_B_DECIDED', approval, ...(llm !== undefined ? { llm } : {}) } };
       } catch (e) {
         // Fail-closed: an approver that errors is treated as a veto, never a green.
+        const llm = meterStep();
         return {
-          event: { tag: 'GATE_B_DECIDED', approval: { veto: true, reason: `approver error: ${errorMessage(e)}` } },
+          event: {
+            tag: 'GATE_B_DECIDED',
+            approval: { veto: true, reason: `approver error: ${errorMessage(e)}` },
+            ...(llm !== undefined ? { llm } : {}),
+          },
         };
       }
     }
