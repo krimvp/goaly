@@ -28,8 +28,8 @@ import type { Logger, LogLevel } from '../log/logger';
 import type { LogFs } from '../log/sinks';
 import { CliLlmProvider } from '../llm/cli-provider';
 import { AgentCliLlmProvider } from '../llm/agent-cli-provider';
-import { codexExtractor, codexStreamExtractor } from '../harness/codex';
-import { droidExtractor, droidStreamExtractor } from '../harness/droid';
+import { codexCodec } from '../agent-cli/codex-codec';
+import { droidCodec } from '../agent-cli/droid-codec';
 import type { AgentEventSink, PhasedStreamSink, StreamPhase } from '../agent-cli/stream';
 import { makeStreamRenderer, streamLogFields } from './stream-render';
 import { resolveModels, type ModelSelection } from './models';
@@ -206,24 +206,24 @@ export function makeLlmProvider(
       return new CliLlmProvider({ ...(model !== undefined ? { model } : {}), ...timeout, ...stream });
     case 'codex':
       return new AgentCliLlmProvider({
-        name: 'codex',
-        command: 'codex',
-        extractor: codexExtractor,
+        name: codexCodec.name,
+        command: codexCodec.command,
+        extractor: codexCodec.fieldExtractor,
         buildArgs: (prompt) => codexCompletionArgs(prompt, model),
         ...timeout,
         ...(opts.onEvent !== undefined
-          ? { onEvent: opts.onEvent, streamExtractor: codexStreamExtractor }
+          ? { onEvent: opts.onEvent, streamExtractor: codexCodec.streamExtractor }
           : {}),
       });
     case 'droid':
       return new AgentCliLlmProvider({
-        name: 'droid',
-        command: 'droid',
-        extractor: droidExtractor,
+        name: droidCodec.name,
+        command: droidCodec.command,
+        extractor: droidCodec.fieldExtractor,
         buildArgs: (prompt) => droidCompletionArgs(prompt, model),
         ...timeout,
         ...(opts.onEvent !== undefined
-          ? { onEvent: opts.onEvent, streamExtractor: droidStreamExtractor }
+          ? { onEvent: opts.onEvent, streamExtractor: droidCodec.streamExtractor }
           : {}),
       });
   }
@@ -231,25 +231,12 @@ export function makeLlmProvider(
 
 /** codex one-shot completion argv — READ-ONLY (`--sandbox read-only`), model before the prompt. */
 export function codexCompletionArgs(prompt: string, model: string | undefined): string[] {
-  return [
-    'exec',
-    '--sandbox',
-    'read-only',
-    ...(model !== undefined ? ['--model', model] : []),
-    prompt,
-    '--json',
-  ];
+  return codexCodec.readonlyArgs({ prompt, model, stream: false });
 }
 
 /** droid one-shot completion argv — READ-ONLY (no `--auto`, droid's `exec` default cannot edit). */
 export function droidCompletionArgs(prompt: string, model: string | undefined): string[] {
-  return [
-    'exec',
-    '--output-format',
-    'json',
-    ...(model !== undefined ? ['--model', model] : []),
-    prompt,
-  ];
+  return droidCodec.readonlyArgs({ prompt, model, stream: false });
 }
 
 /**

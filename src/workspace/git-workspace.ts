@@ -1,9 +1,9 @@
-import { spawn } from 'node:child_process';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DiffHash } from '../domain/ids';
 import { errorMessage } from '../util/errors';
+import { runProcess } from '../util/spawn';
 import type { CommandResult, Workspace } from './workspace';
 
 /** The well-known git empty-tree object — a stable base for diffing a repo with no HEAD. */
@@ -28,74 +28,30 @@ const TIMEOUT_EXIT_CODE = 124;
 /** Counter to keep temporary index file names unique within a process. */
 let tmpIndexCounter = 0;
 
-/** Real spawn-based runner. Never rejects on a non-zero exit — resolves the code. */
-const realExec: ExecFn = (cmd, args, opts) =>
-  new Promise<ExecResult>((resolve) => {
-    // When a timeout is requested we run in a NEW process group (`detached`) so the kill can target
-    // the whole group. A verify command is a shell string, so SIGKILL'ing just the `sh` wrapper
-    // would orphan its children and (because they inherit the stdio pipes) leave `close` pending
-    // forever. Killing the group (`-pid`) reaps the wrapper AND its descendants.
-    const detached = opts.timeoutMs !== undefined;
-    const child = spawn(cmd, args, {
-      cwd: opts.cwd,
-      ...(opts.env !== undefined ? { env: opts.env } : {}),
-      ...(opts.shell !== undefined ? { shell: opts.shell } : {}),
-      ...(detached ? { detached: true } : {}),
-    });
-
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
-
-    /** Kill the whole process group when detached; fall back to the lone child otherwise. */
-    const killTree = (): void => {
-      try {
-        if (detached && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
-        else child.kill('SIGKILL');
-      } catch {
-        // Process (group) already gone — nothing to kill.
-      }
-    };
-
-    // Optional wall-clock cap: SIGKILL the command and report a fail-closed non-zero exit. This is
-    // how a hung verify command becomes a verifier FAIL instead of stalling the loop forever.
-    const timer =
-      opts.timeoutMs !== undefined
-        ? setTimeout(() => {
-            timedOut = true;
-            killTree();
-          }, opts.timeoutMs)
-        : null;
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    // A spawn-level failure (e.g. git missing from PATH) must NOT reject — resolve with the
-    // POSIX "command not found" code so callers fail closed instead of crashing the loop.
-    child.on('error', (err) => {
-      if (timer !== null) clearTimeout(timer);
-      resolve({ stdout, stderr: `${stderr}${String(err)}`, code: 127 });
-    });
-
-    child.on('close', (code, signal) => {
-      if (timer !== null) clearTimeout(timer);
-      if (timedOut) {
-        resolve({
-          stdout,
-          stderr: `${stderr}\n[goaly] command timed out after ${opts.timeoutMs}ms`,
-          code: TIMEOUT_EXIT_CODE,
-        });
-        return;
-      }
-      // Signal-killed or unknown exit → treat as a failure exit code of 1.
-      const exitCode = code === null ? (signal !== null ? 1 : 1) : code;
-      resolve({ stdout, stderr, code: exitCode });
-    });
+/**
+ * Real runner — a thin shim over the shared {@link runProcess} (one tested subprocess dance for the
+ * whole codebase). A verify command spawns a `sh` wrapper with children, so when a timeout is set we
+ * ask `runProcess` to kill the whole process group (`killGroup`) — otherwise SIGKILL'ing just the
+ * wrapper would orphan its children and (because they inherit the stdio pipes) leave the run hanging
+ * forever. A timeout is surfaced as the conventional `timeout(1)` exit code with a loud marker, so a
+ * hung verify command becomes a fail-closed verifier FAIL. Never rejects.
+ */
+const realExec: ExecFn = async (cmd, args, opts) => {
+  const r = await runProcess(cmd, args, {
+    cwd: opts.cwd,
+    ...(opts.env !== undefined ? { env: opts.env } : {}),
+    ...(opts.shell !== undefined ? { shell: opts.shell } : {}),
+    ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs, killGroup: true } : {}),
   });
+  if (r.timedOut) {
+    return {
+      stdout: r.stdout,
+      stderr: `${r.stderr}\n[goaly] command timed out after ${opts.timeoutMs}ms`,
+      code: TIMEOUT_EXIT_CODE,
+    };
+  }
+  return { stdout: r.stdout, stderr: r.stderr, code: r.code };
+};
 
 /**
  * Git-backed {@link Workspace}. Computes a NON-MUTATING content hash of the full working

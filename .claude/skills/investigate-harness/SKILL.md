@@ -98,30 +98,33 @@ Notes / caveats:           <e.g. no resume support -> cold each turn; flags diff
 Produce, in order:
 
 1. **The filled worksheet** above (session ids redacted).
-2. **`parse<Name>Output(stdout)`** — a pure, tolerant function returning
-   `{ text; sessionId?; tokens? } | null`, latching the **first** session id across a stream and
-   returning `null` when no usable text is found. Base it on `parseClaudeOutput` /
-   `parseCodexOutput`.
-3. **`<name>StreamExtractor` (optional, only if the tool streams)** — a `StreamEventExtractor`
+2. **A `fieldExtractor` + `parse`** — a tolerant field mapping returning
+   `{ text; sessionId?; tokens? } | null` via `parseAgentOutput`, latching the **first** session id
+   across a stream and returning `null` when no usable text is found. Reuse `flatExtractor()` for a
+   flat envelope; base a custom one on `codexExtractor`.
+3. **`streamExtractor` (optional, only if the tool streams)** — a `StreamEventExtractor`
    (`(obj) => AgentStreamEvent[]`) mapping one JSONL line onto the canonical taxonomy. Prefer reusing
    `sdkStreamExtractor()` (Anthropic SDK envelope) or `flatStreamExtractor()` (final-only); write a
    custom one only for a bespoke shape (base it on `codexStreamExtractor`). Record "(none)" if the
    tool has no streaming mode.
-4. **The adapter class** `src/harness/<name>.ts` implementing `HarnessAdapter`, following the
-   skeleton in `docs/adding-a-harness.md`: injectable `exec` (with the optional `onStdout` tap),
-   never throws, every path returns `HarnessRunResult.parse(...)`, session id via
-   `coerceSessionId(candidate, '<name>-unknown')`. If it streams, build a `StreamTap` only when
-   `onEvent` is set, feed it via `onStdout`, `end()` it, and select the streaming output format.
+4. **The codec** `src/agent-cli/<name>-codec.ts` — an `AgentCliCodec` (the deep, one-place module),
+   following the skeleton in `docs/adding-a-harness.md`: the two argv dialects (`harnessArgs`
+   write-mode + `readonlyArgs` read-only), the `fieldExtractor`/`streamExtractor` above, `parse`, and
+   `classify` (reuse `classifyFlatRun`, or a bespoke policy à la codex). `classify` never throws,
+   every path returns `HarnessRunResult.parse(...)`, session id via
+   `coerceSessionId(candidate, '<name>-unknown')`. The subprocess + `StreamTap` wiring is handled by
+   the generic `AgentCliHarness`/`runCodecHarness` — you don't write it.
 5. **Registration edits**: add the literal to `HarnessChoice` + `parseHarness` in `src/cli/args.ts`
-   and a `case` in `makeHarness` in `src/cli/compose.ts`.
-6. **Tests**: add the adapter to the `adapters` array in `src/harness/adapter.contract.test.ts`, and
-   write `src/harness/<name>.test.ts` with the captured real-output sample(s) -> expected fields and
-   the status-mapping cases (success / non-zero / garbage / timeout / exec-throws), using an
-   injected fake `exec`. If it streams, add a streaming test (canned JSONL via `onStdout` → ordered
-   `AgentStreamEvent`s; identical final result with/without streaming; a throwing sink that never
-   changes the result) — see `src/harness/streaming.test.ts`.
+   and a `case '<name>': return new AgentCliHarness(<name>Codec, opts)` in `makeHarness` in
+   `src/cli/compose.ts`.
+6. **Tests**: add the codec (via `AgentCliHarness`) to the `adapters` array in
+   `src/harness/adapter.contract.test.ts`, and write `src/agent-cli/<name>-codec.test.ts` with the
+   captured real-output sample(s) -> expected fields, the argv dialects, and the status-mapping cases
+   (success / non-zero / garbage / timeout / exec-throws), using an injected fake `exec`. If it
+   streams, add a streaming test (canned JSONL via `onStdout` → ordered `AgentStreamEvent`s; identical
+   final result with/without streaming) — see `src/llm/streaming.test.ts`.
 
-Finish by running `npm run typecheck` and `npx vitest run src/harness/<name>.test.ts
+Finish by running `npm run typecheck` and `npx vitest run src/agent-cli/<name>-codec.test.ts
 src/harness/adapter.contract.test.ts` and reporting green. Do **not** weaken any invariant in
-[`AGENTS.md`](../../../AGENTS.md) — especially: the adapter must never throw, and it must not compute
+[`AGENTS.md`](../../../AGENTS.md) — especially: the codec must never throw, and it must not compute
 `diffHash` or run the verifier (those live in the shared `Workspace`).

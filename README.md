@@ -303,21 +303,34 @@ in the table; a non-zero exit for `show`), never silently treated as green or dr
 
 ### Adding a harness
 
-A new harness is **one file** implementing one method:
+A new harness is **one module** — an `AgentCliCodec` that holds everything goaly needs to know to
+speak to one coding-agent CLI in one place:
 
 ```ts
-interface HarnessAdapter {
+interface AgentCliCodec {
   readonly name: string;
-  run(prompt: string, sessionId?: SessionId, onEvent?: AgentEventSink): Promise<HarnessRunResult>;
+  readonly command: string;                                       // the binary to spawn
+  readonly unknownSession: string;                                // safe sentinel session id
+  readonly promptOnStdin: boolean;                                // prompt on stdin vs argv-only
+  readonly fieldExtractor: FieldExtractor;                        // final-result field mapping
+  readonly streamExtractor: StreamEventExtractor;                 // per-turn → AgentStreamEvent
+  harnessArgs(opts): string[];                                    // write-mode argv (drives edits)
+  readonlyArgs(opts): string[];                                   // read-only argv (judge/approver)
+  parse(stdout): AgentOutput | null;                              // tolerant, never throws
+  classify(input): HarnessRunResult;                              // process outcome → status
 }
 ```
 
-`diffHash` and verifier execution live in the shared `Workspace`, not the adapter — so stuck-detection
-and verification work on any harness for free. The optional `onEvent` is the streaming tap (above):
-beyond the final **field mapping** (`FieldExtractor`), an adapter may supply a **stream mapping** (a
-`StreamEventExtractor`) that maps the tool's per-turn JSONL onto the canonical `AgentStreamEvent`
-taxonomy — both build on the same shared `agent-cli` parsing core. See
-[`docs/adding-a-harness.md`](docs/adding-a-harness.md) for both mappings.
+The codec is consumed by **both** roles a CLI can play, from one source of truth: the write-role
+`HarnessAdapter` (seam #1) drives the agent, and the read-only `AgentCliLlmProvider` (the
+judge/approver/compiler LLM role) reuses the same extractors and the `readonlyArgs` dialect — so
+there is no `llm → harness` coupling. The generic `AgentCliHarness` is all the seam-#1 wiring a codec
+needs; registering a harness is one codec module + one line in `makeHarness`. `diffHash` and verifier
+execution live in the shared `Workspace`, not the codec — so stuck-detection and verification work on
+any harness for free. The shared `agent-cli` core owns the tolerant final-result parse, the streaming
+`StreamTap`, and the flat status policy (`classifyFlatRun`), and the shared `runProcess` owns the one
+tested subprocess dance (output cap, timeout, process-group kill, never-reject). See
+[`docs/adding-a-harness.md`](docs/adding-a-harness.md) for the full guide.
 
 ## Develop
 

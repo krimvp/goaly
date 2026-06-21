@@ -96,6 +96,7 @@ export { JudgeVerifier } from './verify/judge';
 export { AgentApprover } from './verify/agent-approver';
 export { AgentCompiler } from './compile/agent-compiler';
 export { AutoContractGate, HumanContractGate } from './compile/gates';
+export { AgentCliHarness } from './harness/agent-cli-harness';
 export { ClaudeCodeAdapter, parseClaudeOutput, claudeStreamExtractor } from './harness/claude-code';
 export { CodexAdapter, parseCodexOutput, codexExtractor, codexStreamExtractor } from './harness/codex';
 export {
@@ -117,6 +118,22 @@ export {
   type FieldExtractor,
 } from './agent-cli/output';
 export { classifyHarnessRun } from './harness/classify';
+
+// One deep codec per CLI: the per-tool argv dialects + field/stream extractors + status mapping,
+// consumed by BOTH the write-role HarnessAdapter and the read-only AgentCliLlmProvider.
+export {
+  classifyFlatRun,
+  runCodecHarness,
+  defaultAgentExec,
+  DEFAULT_AGENT_TIMEOUT_MS,
+  type AgentCliCodec,
+  type AgentExecFn,
+  type AgentExecResult,
+  type CodecClassifyInput,
+} from './agent-cli/codec';
+export { claudeCodec } from './agent-cli/claude-codec';
+export { codexCodec } from './agent-cli/codex-codec';
+export { droidCodec, makeDroidCodec, DEFAULT_AUTONOMY } from './agent-cli/droid-codec';
 
 // Local token ESTIMATION (issue #24): the fallback when a streamed run/step self-reports no usage.
 export {

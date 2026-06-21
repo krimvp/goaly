@@ -328,7 +328,8 @@
   <span class="d">driver/</span>       driver, clock, budget                         <span class="cmt"># effects + seam #4</span>
   <span class="d">verify/</span>       verifier, ladder, deterministic, judge, …     <span class="cmt"># seam #2 / #3</span>
   <span class="d">compile/</span>      compiler, agent-compiler, gateA, gates        <span class="cmt"># Phase 1 + freeze + Gate A</span>
-  <span class="d">harness/</span>      adapter, claude-code, codex, droid            <span class="cmt"># seam #1</span>
+  <span class="d">agent-cli/</span>     codec, &lt;tool&gt;-codec, output, stream, estimate <span class="cmt"># one deep codec per CLI</span>
+  <span class="d">harness/</span>      adapter, agent-cli-harness, claude-code, …    <span class="cmt"># seam #1</span>
   <span class="d">workspace/</span>    workspace, git-workspace                      <span class="cmt"># harness-independent diff/run</span>
   <span class="d">runlog/</span>       runlog, file-runlog                           <span class="cmt"># write-ahead persistence + replay</span>
   <span class="d">llm/</span>          provider, cli-provider                        <span class="cmt"># INTERNAL seam</span>
@@ -428,9 +429,10 @@ goaly runs show run-&lt;id&gt;</pre>
 <section id="harnesses">
   <div class="wrap">
     <div class="eyebrow reveal">Extending it</div>
-    <h2 class="reveal">Adding a harness is one file, one method.</h2>
+    <h2 class="reveal">Adding a harness is one deep codec.</h2>
     <p class="lede reveal">A “harness” is any coding agent you can drive headlessly. The orchestrator
-      can't tell which one it called — so wrapping a new one changes nothing else in the system.</p>
+      can't tell which one it called — so wrapping a new one changes nothing else in the system. The
+      seam stays this one method; the per-CLI substance is a single <code>AgentCliCodec</code>.</p>
 
     <div class="code reveal" style="margin-top:1.4rem">
       <button class="copy-btn">copy</button>
@@ -446,6 +448,15 @@ goaly runs show run-&lt;id&gt;</pre>
   tokensUsed?: <span class="tok">number</span>;
 };  <span class="cmt">// diffHash is computed by the shared Workspace — NOT the adapter</span></pre>
     </div>
+
+    <p class="reveal" style="margin-top:1.2rem">Behind that one method sits the real unit of work — an
+      <code>AgentCliCodec</code> that holds <b>all</b> of one CLI's quirks in one place: its two argv
+      dialects (<code>harnessArgs</code> for the write-mode agent, <code>readonlyArgs</code> for the
+      judge/approver), its <code>fieldExtractor</code> + <code>streamExtractor</code>, and its
+      <code>classify</code> status mapping. The generic <code>AgentCliHarness</code> consumes it for
+      seam #1, and the read-only <code>AgentCliLlmProvider</code> consumes the <i>same</i> codec for
+      the LLM steps — so there's no <code>llm → harness</code> coupling and a CLI's knowledge never
+      scatters. Registering one is a codec module + one line in <code>makeHarness</code>.</p>
 
     <!-- three things to discover -->
     <h3 class="reveal" style="margin-top:2.4rem">The three things to figure out</h3>
@@ -566,17 +577,17 @@ goaly runs show run-&lt;id&gt;</pre>
 <pre><span class="cmt">// src/cli/args.ts — add the literal to the choice union + parser</span>
 <span class="kw">export type</span> HarnessChoice = <span class="str">'claude-code'</span> | <span class="str">'codex'</span> | <span class="str">'droid'</span> | <span class="str">'fake'</span> | <span class="str">'myagent'</span>;
 
-<span class="cmt">// src/cli/compose.ts — wire it in makeHarness()</span>
-<span class="kw">case</span> <span class="str">'myagent'</span>: <span class="kw">return</span> <span class="kw">new</span> <span class="fn">MyAgentAdapter</span>();</pre>
+<span class="cmt">// src/cli/compose.ts — wire your codec into makeHarness() via the generic adapter</span>
+<span class="kw">case</span> <span class="str">'myagent'</span>: <span class="kw">return</span> <span class="kw">new</span> <span class="fn">AgentCliHarness</span>(myagentCodec, opts);</pre>
         </div>
-        <p style="margin-top:0.9rem">Then add your adapter to the shared <code>adapter.contract.test.ts</code> matrix — it runs every adapter through the same scenarios (success / non-zero / garbage / timeout / exec-throws) to prove it never throws and always returns a valid <code>HarnessRunResult</code>.</p>
+        <p style="margin-top:0.9rem">Then add your codec to the shared <code>adapter.contract.test.ts</code> matrix — it runs every adapter through the same scenarios (success / non-zero / garbage / timeout / exec-throws) to prove it never throws and always returns a valid <code>HarnessRunResult</code>.</p>
       </div>
     </details>
 
     <details class="disc reveal">
       <summary>Optional: also run the LLM steps on it<span class="s-sub">read-only provider</span></summary>
       <div class="disc-body">
-        <p style="margin-top:0.9rem">A harness <i>drives</i> the agent. The compiler / judge / approver are a <b>separate, read-only</b> seam — <code>LlmProvider.complete(prompt) → {text, tokensUsed?}</code> (the optional token count feeds the per-run spend report). Different interface on purpose: a judge must never edit the tree it's judging (Interface Segregation). But it <b>reuses the <code>FieldExtractor</code> you already wrote</b>. Give it a read-only invocation (codex <code>--sandbox read-only</code>; droid omits <code>--auto</code>), then add a <code>makeLlmProvider()</code> case + an <code>LlmProviderChoice</code> literal — the model cascade (<code>--llm-model</code>, per-step flags) is threaded in for you. No read-only mode on your CLI → don't wire it as a provider.</p>
+        <p style="margin-top:0.9rem">A harness <i>drives</i> the agent. The compiler / judge / approver are a <b>separate, read-only</b> seam — <code>LlmProvider.complete(prompt) → {text, tokensUsed?}</code> (the optional token count feeds the per-run spend report). Different interface on purpose: a judge must never edit the tree it's judging (Interface Segregation). But it <b>reuses the codec you already wrote</b> — its <code>fieldExtractor</code> and its <code>readonlyArgs</code> dialect (codex <code>--sandbox read-only</code>; droid omits <code>--auto</code>) — so wiring it is a <code>makeLlmProvider()</code> case + an <code>LlmProviderChoice</code> literal, the model cascade (<code>--llm-model</code>, per-step flags) threaded in for you. No read-only mode on your CLI → don't wire it as a provider.</p>
         <p style="margin-top:0.7rem"><b>The LLM steps stream too</b> (issue #23): under <code>--stream</code> the compile / judge / approve turns surface in the live view just like the agent run, phase-tagged. They <b>reuse the same <code>StreamEventExtractor</code></b> — the sink is wired into the provider at construction (so the Verifier / Approver seams stay clean), and the same canonical events flow out. One stream mapping, both seams.</p>
       </div>
     </details>
