@@ -78,5 +78,27 @@ export {
 } from './agent-cli/output';
 export { classifyHarnessRun } from './harness/classify';
 
+// Diagnostic logging seam (human-facing observability; NOT the durable run log).
+export {
+  StructuredLogger,
+  noopLogger,
+  LogLevel,
+  LOG_LEVELS,
+  LEVEL_SEVERITY,
+  type Logger,
+  type LogSink,
+  type LogRecord,
+  type LogFields,
+} from './log/logger';
+export {
+  ConsoleSink,
+  RotatingFileSink,
+  nodeLogFs,
+  jsonLine,
+  prettyLine,
+  type LogFs,
+} from './log/sinks';
+export { buildLogger, type BuildLoggerOptions, type FileLogOptions } from './log/build';
+
 // Utilities.
 export { freezeContract, hashContract, sha256Hex } from './util/hash';

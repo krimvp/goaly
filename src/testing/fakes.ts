@@ -13,6 +13,8 @@ import type { Workspace, CommandResult } from '../workspace/workspace';
 import type { Clock } from '../driver/clock';
 import type { BudgetMeter } from '../driver/budget';
 import type { RunLog, RunLogHeader, RunLogEntry } from '../runlog/runlog';
+import { StructuredLogger, type Logger, type LogLevel, type LogRecord } from '../log/logger';
+import type { LogFs } from '../log/sinks';
 import { freezeContract } from '../util/hash';
 
 /** Build a frozen contract for tests (defaults to a single deterministic rung). */
@@ -210,6 +212,49 @@ export class InMemoryRunLog implements RunLog {
   async read(): Promise<{ header: RunLogHeader; entries: RunLogEntry[] } | null> {
     if (this.header === null) return null;
     return { header: this.header, entries: [...this.entries] };
+  }
+}
+
+/** A logger backed by a captured-records sink, with a deterministic counter clock. */
+export function recordingLogger(level: LogLevel = 'debug'): {
+  logger: Logger;
+  records: LogRecord[];
+} {
+  const records: LogRecord[] = [];
+  let t = 0;
+  const logger = new StructuredLogger({
+    level,
+    sinks: [{ write: (r) => records.push(r) }],
+    now: () => (t += 1),
+  });
+  return { logger, records };
+}
+
+/** In-memory {@link LogFs} for rotating-sink tests — never touches disk. */
+export class InMemoryLogFs implements LogFs {
+  readonly files = new Map<string, string>();
+  readonly dirs = new Set<string>();
+  size(path: string): number | null {
+    const f = this.files.get(path);
+    return f === undefined ? null : Buffer.byteLength(f, 'utf8');
+  }
+  append(path: string, data: string): void {
+    this.files.set(path, (this.files.get(path) ?? '') + data);
+  }
+  exists(path: string): boolean {
+    return this.files.has(path);
+  }
+  rename(from: string, to: string): void {
+    const f = this.files.get(from);
+    if (f === undefined) return;
+    this.files.set(to, f);
+    this.files.delete(from);
+  }
+  remove(path: string): void {
+    this.files.delete(path);
+  }
+  ensureDir(dir: string): void {
+    this.dirs.add(dir);
   }
 }
 

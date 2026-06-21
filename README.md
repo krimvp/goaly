@@ -95,6 +95,10 @@ goaly run --goal "..." --verify-cmd "npm test" --harness claude-code \
 # Run the LLM steps on a different CLI entirely (kept read-only so they never touch the tree):
 goaly run --goal "..." --generate --autonomous --harness codex \
              --model gpt-5-codex --llm-provider codex --judge-model o3
+
+# Follow the loop step-by-step, and keep a structured diagnostics file (rotated):
+goaly run --goal "..." --verify-cmd "npm test" --log-level debug
+goaly run --goal "..." --verify-cmd "npm test" --log-file ./run.log   # or --no-log-file
 ```
 
 Goal, intent, and rubric each accept one source: inline (`--goal "…"`), a file (`--goal-file <path>`),
@@ -122,6 +126,18 @@ Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject:
 > prompt — use `--autonomous` or `--goal-file` in that case.
 
 `goaly help` lists every flag. Exit codes: `0` DONE, `1` FAILED/ABORTED, `2` usage error.
+
+**Diagnostics / logging** is leveled, structured observability for the Driver and the seams — and,
+like model selection, it's pure wiring that never enters the frozen contract. It is **separate from
+the write-ahead run log** (`.goaly/<runId>/` event stream), which stays the single source of truth
+for replay/resume; this logger is human-facing diagnostics, not durability. A human-readable line
+goes to **stderr** (so stdout stays clean for the outcome) and a structured **JSON-lines file** is
+written to `.goaly/<runId>/goaly.log`, **size-rotated** (5 MiB × 3 archives) so it can't grow
+unbounded. `--log-level debug|info|warn|error` (default `info`) sets verbosity — `debug` is the
+step-by-step firehose, and prompts / harness output / diff / verifier detail stay at `debug`, never
+`info` (secrets discipline). `--log-file <path>` overrides the file location; `--no-log-file` writes
+console only. A logging failure never crashes a run (fail-closed). The pure reducer never logs
+(invariant #1).
 
 ### Adding a harness
 

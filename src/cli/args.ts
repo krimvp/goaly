@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CliInput, cliInputToRunConfig, type RunConfig } from '../domain/config';
+import { LogLevel } from '../log/logger';
 import { ModelSelection, type ModelSelectionInput } from './models';
 import { resolveInputSources, defaultReaders, type InputReaders } from './input-sources';
 
@@ -16,6 +17,12 @@ export type ParsedArgs = {
   llmProvider: LlmProviderChoice;
   workspace: string;
   resumeRunId: string | undefined;
+  /** Minimum diagnostic log level (default `info`). Pure wiring — never enters the contract. */
+  logLevel: LogLevel;
+  /** Override the diagnostics file path (default `<workspace>/.goaly/<runId>/goaly.log`). */
+  logFile: string | undefined;
+  /** Disable the diagnostics file sink (console only). */
+  noLogFile: boolean;
 };
 
 export const USAGE = `goaly — run a coding agent until a frozen success contract is met.
@@ -26,6 +33,7 @@ Usage:
                [--max-gate-a-revisions N] [--budget-tokens N] [--budget-wall-ms N]
                [--harness claude-code|codex|droid] [--model <m>] [--llm-model <m>]
                [--llm-provider claude|codex|droid] [--workspace <dir>] [--resume <runId>]
+               [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
 
   goaly help
 
@@ -58,7 +66,14 @@ Gate A (contract approval):
   --autonomous                skip the prompt: auto-accept (still frozen; logged loudly)
 
   Note: piping the goal via stdin (--goal -) leaves no stdin for the interactive prompt;
-  pair it with --autonomous, or read the goal from a file (--goal-file) instead.`;
+  pair it with --autonomous, or read the goal from a file (--goal-file) instead.
+
+Diagnostics (leveled, structured logging — separate from the write-ahead run log):
+  --log-level <l>   minimum level: debug | info | warn | error (default info). debug is the
+                    step-by-step firehose; prompts/output/diff stay at debug, never info.
+  --log-file <p>    override the rotating diagnostics file (default
+                    <workspace>/.goaly/<runId>/goaly.log; size-rotated, 5 MiB × 3 archives).
+  --no-log-file     console only — write no diagnostics file.`;
 
 export type RawFlags = Record<string, string | boolean>;
 
@@ -142,7 +157,20 @@ export async function parseArgs(
     llmProvider: parseLlmProvider(str(flags, 'llm-provider')),
     workspace: str(flags, 'workspace') ?? process.cwd(),
     resumeRunId: str(flags, 'resume'),
+    logLevel: parseLogLevel(str(flags, 'log-level')),
+    logFile: str(flags, 'log-file'),
+    noLogFile: flags['no-log-file'] !== undefined,
   };
+}
+
+/** Validate --log-level at the seam (fails closed on an unknown level). Default `info`. */
+function parseLogLevel(value: string | undefined): LogLevel {
+  if (value === undefined) return 'info';
+  const parsed = LogLevel.safeParse(value);
+  if (!parsed.success) {
+    throw new UsageError(`unknown log level: ${value} (expected debug | info | warn | error)`);
+  }
+  return parsed.data;
 }
 
 function parseHarness(value: string | undefined): HarnessChoice {
@@ -193,5 +221,8 @@ function helpResult(): ParsedArgs {
     llmProvider: 'claude',
     workspace: process.cwd(),
     resumeRunId: undefined,
+    logLevel: 'info',
+    logFile: undefined,
+    noLogFile: false,
   };
 }

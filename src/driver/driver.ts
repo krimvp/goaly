@@ -16,6 +16,7 @@ import type { Workspace } from '../workspace/workspace';
 import type { Clock } from './clock';
 import type { BudgetMeter } from './budget';
 import type { RunLog } from '../runlog/runlog';
+import { noopLogger, type Logger } from '../log/logger';
 import { errorMessage } from '../util/errors';
 
 /** Distinct sentinel tree hashes used when the workspace cannot be hashed (kept != each other
@@ -38,6 +39,13 @@ export type DriverDeps = {
   clock: Clock;
   budget: BudgetMeter;
   runlog: RunLog;
+  /**
+   * Diagnostic logger (the Driver is the orchestration choke-point: it sees every Command, Event,
+   * verdict and decision). Optional and defaults to a no-op so logging never affects control flow,
+   * never touches the filesystem in tests, and is pure wiring — it has no bearing on the contract,
+   * the run log, or replay.
+   */
+  logger?: Logger;
 };
 
 export type DriveOptions = {
@@ -61,6 +69,12 @@ export async function drive(
   let seq: number;
   let ladder: Verifier | null = null;
   let contractHash: ContractHash | null = null;
+  const log = deps.logger ?? noopLogger;
+
+  log.info(options.resume === true ? 'resuming run' : 'starting run', {
+    runId,
+    resume: options.resume === true,
+  });
 
   if (options.resume === true) {
     const resumed = await resume(deps, config);
@@ -83,6 +97,7 @@ export async function drive(
         );
       }
       const command = commands[0]!;
+      log.debug('perform command', { command: command.tag, state: state.tag });
 
       // Perform the effect (the only place anything stochastic/IO happens), then build the
       // Event. `ladder` is created at COMPILE and reused for every RUN_VERIFIER.
@@ -90,6 +105,7 @@ export async function drive(
       const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge
       if (performed.ladder !== undefined) ladder = performed.ladder;
       if (event.tag === 'CONTRACT_COMPILED') contractHash = event.contract.contractHash;
+      logEvent(log, command, event);
 
       // step() is pure — computing it before persisting is side-effect-free and lets us log the
       // resulting state tag in the same write-ahead entry. Durability is AT-LEAST-ONCE: a crash
@@ -107,6 +123,7 @@ export async function drive(
         stateTagAfter: next.tag,
       });
 
+      log.debug('transition', { from: state.tag, to: next.tag, seq });
       state = next;
       commands = nextCommands;
     }
@@ -114,6 +131,7 @@ export async function drive(
     // Last-resort safety net: every effectful seam is individually fail-closed, but an unexpected
     // throw (corrupt log on append, invalid transition) must still resolve to a terminal outcome
     // rather than reject — so the caller always gets a RunOutcome.
+    log.error('driver error (fail-closed → ABORTED)', { reason: errorMessage(e) });
     return {
       status: 'ABORTED',
       reason: `driver error: ${errorMessage(e)}`,
@@ -123,7 +141,53 @@ export async function drive(
     };
   }
 
-  return buildOutcome(state, runId);
+  const outcome = buildOutcome(state, runId);
+  log.info('run finished', { status: outcome.status, iterations: outcome.iterations });
+  return outcome;
+}
+
+/**
+ * Translate a performed Event into leveled diagnostics. Content that may carry repo text or
+ * secrets (prompts, harness output, verifier detail, the diff) is kept at `debug` only — `info`
+ * stays content-free (statuses, counts, hashes, decisions).
+ */
+function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void {
+  switch (event.tag) {
+    case 'CONTRACT_COMPILED':
+      log.info('contract compiled', {
+        contractHash: event.contract.contractHash,
+        rungs: event.contract.rungs.length,
+      });
+      return;
+    case 'COMPILE_FAILED':
+      log.error('compile failed', { reason: event.reason });
+      return;
+    case 'GATE_A_DECIDED':
+      log.info('gate A decided', { decision: event.decision.kind });
+      return;
+    case 'AGENT_RAN':
+      log.info('agent ran', {
+        status: event.run.status,
+        changed: event.prevDiffHash !== event.diffHash,
+        ...(event.budget.tokensSpent !== undefined ? { tokensSpent: event.budget.tokensSpent } : {}),
+        budgetExceeded: event.budget.exceeded,
+      });
+      if (command.tag === 'RUN_AGENT') {
+        // Prompt CONTENT stays out of logs; its size is a safe diagnostic signal.
+        log.debug('agent prompt', { promptChars: command.prompt.length });
+      }
+      return;
+    case 'VERIFIED':
+      log.info('verified', { pass: event.verdict.pass, confidence: event.verdict.confidence });
+      log.debug('verdict detail', { detail: event.verdict.detail });
+      return;
+    case 'GATE_B_DECIDED':
+      log.info('gate B decided', {
+        veto: event.approval.veto,
+        ...(event.approval.reason !== undefined ? { reason: event.approval.reason } : {}),
+      });
+      return;
+  }
 }
 
 /** Best-effort iteration count from any state, for outcomes built outside the reducer. */
