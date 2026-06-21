@@ -43,6 +43,7 @@ export { AgentCompiler } from './compile/agent-compiler';
 export { AutoContractGate, HumanContractGate } from './compile/gates';
 export { ClaudeCodeAdapter } from './harness/claude-code';
 export { CodexAdapter } from './harness/codex';
+export { DroidAdapter, type AutonomyLevel } from './harness/droid';
 export { CliLlmProvider } from './llm/cli-provider';
 
 // Utilities.

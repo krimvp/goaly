@@ -28,6 +28,11 @@ describe('parseArgs', () => {
     expect(a.workspace).toBe('/tmp/x');
   });
 
+  it('accepts the droid harness', () => {
+    const a = parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'droid']);
+    expect(a.harness).toBe('droid');
+  });
+
   it('returns help for no args and for the help command', () => {
     expect(parseArgs([]).command).toBe('help');
     expect(parseArgs(['help']).command).toBe('help');

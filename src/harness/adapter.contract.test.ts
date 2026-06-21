@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ClaudeCodeAdapter } from './claude-code';
 import { CodexAdapter } from './codex';
+import { DroidAdapter } from './droid';
 import type { HarnessAdapter } from './adapter';
 import { HarnessRunResult } from '../domain/events';
 import { SessionId } from '../domain/ids';
@@ -24,12 +25,18 @@ const codexOk = JSON.stringify({
   session_id: 'sess-codex-1',
   usage: { total_tokens: 5 },
 });
+const droidOk = JSON.stringify({
+  type: 'result',
+  result: 'done',
+  session_id: 'sess-droid-1',
+  usage: { input_tokens: 2, output_tokens: 3 },
+});
 
 function execFor(
-  kind: 'claude' | 'codex',
+  kind: 'claude' | 'codex' | 'droid',
   scenario: string,
 ): (args: string[], input: { prompt: string }) => Promise<CommonExecResult> {
-  const ok = kind === 'claude' ? claudeOk : codexOk;
+  const ok = kind === 'claude' ? claudeOk : kind === 'codex' ? codexOk : droidOk;
   return async () => {
     switch (scenario) {
       case 'success':
@@ -51,6 +58,7 @@ function execFor(
 const adapters: Array<{ name: string; make: (scenario: string) => HarnessAdapter }> = [
   { name: 'claude-code', make: (s) => new ClaudeCodeAdapter({ exec: execFor('claude', s) }) },
   { name: 'codex', make: (s) => new CodexAdapter({ exec: execFor('codex', s) }) },
+  { name: 'droid', make: (s) => new DroidAdapter({ exec: execFor('droid', s) }) },
 ];
 
 const scenarios = ['success', 'nonzero', 'garbage', 'timeout', 'throw'];

@@ -19,6 +19,7 @@ import { GitWorkspace } from '../workspace/git-workspace';
 import { FileRunLog } from '../runlog/file-runlog';
 import { ClaudeCodeAdapter } from '../harness/claude-code';
 import { CodexAdapter } from '../harness/codex';
+import { DroidAdapter } from '../harness/droid';
 import { SystemClock } from '../driver/clock';
 import { SystemBudgetMeter } from '../driver/budget';
 import { CliLlmProvider } from '../llm/cli-provider';
@@ -85,6 +86,8 @@ function makeHarness(choice: HarnessChoice): HarnessAdapter {
       return new ClaudeCodeAdapter();
     case 'codex':
       return new CodexAdapter();
+    case 'droid':
+      return new DroidAdapter();
     case 'fake':
       return new NoopHarness();
   }

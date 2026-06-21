@@ -1,6 +1,6 @@
 import { CliInput, cliInputToRunConfig, type RunConfig } from '../domain/config';
 
-export type HarnessChoice = 'claude-code' | 'codex' | 'fake';
+export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'fake';
 
 export type ParsedArgs = {
   command: 'run' | 'help';
@@ -16,7 +16,7 @@ Usage:
   goalorch run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
                [--budget-tokens N] [--budget-wall-ms N]
-               [--harness claude-code|codex] [--workspace <dir>] [--resume <runId>]
+               [--harness claude-code|codex|droid] [--workspace <dir>] [--resume <runId>]
 
   goalorch help
 
@@ -104,8 +104,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
 function parseHarness(value: string | undefined): HarnessChoice {
   if (value === undefined) return 'claude-code';
-  if (value === 'claude-code' || value === 'codex' || value === 'fake') return value;
-  throw new UsageError(`unknown harness: ${value} (expected claude-code | codex | fake)`);
+  if (value === 'claude-code' || value === 'codex' || value === 'droid' || value === 'fake') {
+    return value;
+  }
+  throw new UsageError(`unknown harness: ${value} (expected claude-code | codex | droid | fake)`);
 }
 
 function helpResult(): ParsedArgs {
