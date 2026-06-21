@@ -17,7 +17,7 @@ This plan turns the spec into a **deep-module architecture** (Matt Pocock's
 `codebase-design` vocabulary: Module / Interface / Implementation / Seam / Adapter /
 Depth) with **runtime validation at every seam** (Zod), so that:
 
-- the tool is **easy to use** — a `goalorch` CLI over a clean embeddable core;
+- the tool is **easy to use** — a `goaly` CLI over a clean embeddable core;
 - **adding a new harness is trivial** — implement one method (`run()`) and register the
   adapter; nothing else changes;
 - the control flow is **pure, replayable, and table-testable** — no LLM call can sneak
@@ -210,7 +210,7 @@ all-tests-first):**
 8. JudgeVerifier + AgentApprover (quorum, temp 0, Zod-parsed output).
 9. VerifierCompiler + Gate A (authoring + freeze + loud logging).
 10. **CodexAdapter** — proves the seam is real, flushes out any leaked Claude-isms.
-11. `goalorch` CLI — thin caller; the library already works headless.
+11. `goaly` CLI — thin caller; the library already works headless.
 
 Building the fake-driven loop (steps 1–4) before any real adapter means the entire control
 policy is proven correct before a single subprocess is spawned — the deterministic core
@@ -244,6 +244,6 @@ Record these ADRs (each hard-to-reverse, surprising, a real trade-off):
 - **Adapter contract tests**: run the *same* scenario suite against ClaudeCode, Codex, and
   Fake adapters — identical orchestrator behaviour proves the seam is genuinely
   harness-agnostic.
-- **Real smoke run**: `goalorch run --goal "..." --autonomous --max-iterations 5` against a
+- **Real smoke run**: `goaly run --goal "..." --autonomous --max-iterations 5` against a
   tiny real repo with a trivial deterministic verifier (e.g. `npm test`), confirming a real
   Claude Code session compiles a contract, loops, and exits DONE with a complete run log.

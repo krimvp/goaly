@@ -12,3 +12,6 @@ Quick reference:
 - Every external seam parses with Zod and fails closed.
 - Adding a harness: read [`docs/adding-a-harness.md`](docs/adding-a-harness.md) and use the
   `investigate-harness` skill.
+- Meaningful changes to the architecture, the public API, or functionality must update `README.md`
+  **and** the landing page ([`docs/index.html`](docs/index.html)) in the same change — it's a
+  definition-of-done check, not optional. See `AGENTS.md` → "Keep the docs in sync".

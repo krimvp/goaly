@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>goaly — run a coding agent until the goal is verifiably met</title>
+  <meta name="description" content="goaly is a harness-agnostic goal-orchestration layer: it runs a coding agent in a loop until a goal is verifiably achieved, against a frozen success contract the agent can't weaken. Zero-LLM control flow, two keys for DONE, replayable & resumable." />
+  <meta name="color-scheme" content="dark" />
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="goaly — verifiable goal orchestration for coding agents" />
+  <meta property="og:description" content="Run a coding agent until the goal is verifiably met — against a frozen contract it can't weaken. Harness-agnostic, zero-LLM control flow, two keys for DONE." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+
+<!-- ============================== NAV ============================== -->
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top"><img src="assets/favicon.svg" alt="" />goaly</a>
+    <nav class="nav-links" id="navLinks">
+      <a href="#what">What</a>
+      <a href="#how">How</a>
+      <a href="#internals">Internals</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#harnesses">Add a harness</a>
+      <a href="#agentic">Agentic</a>
+    </nav>
+    <a class="nav-cta" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">GitHub ↗</a>
+    <button class="nav-toggle" aria-label="Toggle navigation">☰</button>
+  </div>
+</header>
+
+<!-- ============================== HERO ============================== -->
+<a id="top"></a>
+<section class="hero" id="what">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <div class="eyebrow">Goal orchestration</div>
+      <h1>Loop a coding agent until the goal is verifiably met.</h1>
+      <p class="hero-lede">
+        goaly runs any coding agent — Claude Code, Codex, Droid, your own — until a goal is actually
+        done, against a <em>frozen</em> success contract it can't weaken mid-loop.
+      </p>
+
+      <div class="spec-strip">
+        <span><b>harness-agnostic</b></span><span class="sep">/</span>
+        <span><b>zero-LLM</b> control flow</span><span class="sep">/</span>
+        <span><b>two keys</b> for DONE</span><span class="sep">/</span>
+        <span>replayable &amp; <b>resumable</b></span>
+      </div>
+
+      <div class="btn-row">
+        <a class="btn btn-primary" href="#how">How it works</a>
+        <a class="btn btn-ghost" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">Read the code ↗</a>
+      </div>
+    </div>
+
+    <div class="hero-art reveal">
+      <div class="code" aria-hidden="true">
+        <button class="copy-btn" data-clip='goaly run --goal "add /health endpoint" --generate --autonomous'>copy</button>
+<pre><span class="cmt">$</span> <span class="fn">goaly</span> run --goal <span class="str">"add /health endpoint"</span> --generate --autonomous
+
+<span class="tok">✔ COMPILE_VERIFIER</span>  contract frozen   <span class="cmt">┌ sha 9f3c…a2</span>
+<span class="str">● Gate A</span>           auto-accepted     <span class="cmt">(logged loudly)</span>
+<span class="cmt">↻ iter 1</span>  RUN_AGENT → ladder <span style="color:var(--red)">✗</span>  <span class="cmt">npm test: 2 failing</span>   continue
+<span class="cmt">↻ iter 2</span>  RUN_AGENT → ladder <span class="tok">✓</span>  Gate B <span style="color:var(--red)">✗</span> veto: returns 500
+<span class="cmt">↻ iter 3</span>  RUN_AGENT → ladder <span class="tok">✓</span>  Gate B <span class="tok">✓</span> no veto
+<span class="tok">✔ DONE</span>   two keys turned · 3 iterations · contract unchanged
+<span class="cmt"># exit 0</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="section-line" />
+
+<!-- ============================== THE PROBLEM ============================== -->
+<section id="problem">
+  <div class="wrap">
+    <div class="eyebrow reveal">The core problem</div>
+    <h2 class="reveal">“Until the goal is achieved” must not collapse into<br />“until the agent weakens its own test.”</h2>
+    <p class="lede reveal">If an agent can regenerate its own success criterion each iteration, an
+      autonomous loop degenerates into reward hacking. goaly's whole design exists to prevent that.</p>
+
+    <div class="rows reveal">
+      <div class="row"><span class="rn">01</span><div class="rt"><b>Compile once, then freeze</b><p>The success contract — an ordered ladder of checks + a rubric — is authored once, hashed, and frozen. No transition rewrites it; the contractHash is logged every iteration to prove the bar never moved.</p></div></div>
+      <div class="row"><span class="rn">02</span><div class="rt"><b>Two independent keys</b><p>A run is DONE only when both keys turn: the frozen verifier passes and an independent approver doesn't veto. A worker can game one; getting both is much harder.</p></div></div>
+      <div class="row"><span class="rn">03</span><div class="rt"><b>Fail closed, always</b><p>Any verifier, grader, approver, or adapter that errors or returns garbage becomes a FAIL / VETO — never a false green, never an unhandled throw.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<hr class="section-line" />
+
+<!-- ============================== HOW IT WORKS ============================== -->
+<section id="how">
+  <div class="wrap">
+    <div class="eyebrow reveal">How it works</div>
+    <h2 class="reveal">One compile, then a verified loop.</h2>
+    <p class="lede reveal">A single pure reducer owns all policy; a thin driver performs the effects it
+      requests. Click any stage to inspect it.</p>
+
+    <div class="pipeline-wrap reveal">
+      <div class="pipeline">
+        <div class="stage" data-stage="compile"><span class="st-k">COMPILE_VERIFIER</span><span class="st-s">author + freeze</span></div>
+        <span class="arrow">→</span>
+        <div class="stage gate" data-stage="gatea"><span class="st-k">Gate A</span><span class="st-s">contract approval</span></div>
+        <span class="arrow">→</span>
+        <div class="loop-band">
+          <span class="loop-tag">loop ↻ until DONE / FAILED / ABORTED</span>
+          <div class="stage" data-stage="run"><span class="st-k">RUN_AGENT</span><span class="st-s">one headless turn</span></div>
+          <span class="arrow">→</span>
+          <div class="stage" data-stage="ladder"><span class="st-k">verifier ladder</span><span class="st-s">det → judge</span></div>
+          <span class="arrow">→</span>
+          <div class="stage gate" data-stage="gateb"><span class="st-k">Gate B</span><span class="st-s">veto-only</span></div>
+          <span class="arrow">→</span>
+          <div class="stage" data-stage="decide"><span class="st-k">DECIDE</span><span class="st-s">pure truth table</span></div>
+        </div>
+        <div class="term-row">
+          <div class="term done">DONE ✔</div>
+          <div class="term failed">FAILED</div>
+          <div class="term aborted">ABORTED</div>
+        </div>
+      </div>
+      <div class="detail" id="pipeline-detail"></div>
+    </div>
+  </div>
+</section>
+
+<hr class="section-line" />
+
+<!-- ============================== INTERNALS ============================== -->
+<section id="internals">
+  <div class="wrap">
+    <div class="eyebrow reveal">Internal functionality</div>
+    <h2 class="reveal">Deterministic stages, decision points, budgets.</h2>
+    <p class="lede reveal">Everything stochastic — running the agent, judging, approving — already
+      happened before the control flow sees it. What's left is a pure, replayable state machine.</p>
+
+    <!-- State machine -->
+    <h3 class="reveal" style="margin-top:2.6rem">The state machine</h3>
+    <p class="lede reveal" style="margin-bottom:1.2rem">Pure, synchronous, zero-LLM. Click a state to see the command it emits and the event that advances it.</p>
+    <div class="fsm-layout reveal">
+      <div class="fsm-svg-wrap">
+        <svg class="fsm-svg" viewBox="0 0 580 392" role="img" aria-label="goaly state machine">
+          <defs>
+            <marker id="arrowhead" markerWidth="9" markerHeight="9" refX="6.2" refY="3" orient="auto">
+              <path d="M0,0 L6.4,3 L0,6 Z" fill="rgba(255,255,255,0.3)" />
+            </marker>
+          </defs>
+          <path class="fsm-edge" d="M145,58 L145,89" />
+          <path class="fsm-edge" d="M145,132 L145,173" />
+          <text class="fsm-elabel" x="151" y="156">approved</text>
+          <path class="fsm-edge" d="M220,108 C 300,108 300,38 382,38" />
+          <text class="fsm-elabel" x="262" y="66">reject → ABORTED</text>
+          <path class="fsm-edge" d="M145,216 L145,247" />
+          <path class="fsm-edge" d="M145,290 L145,321" />
+          <text class="fsm-elabel" x="151" y="312">ladder pass</text>
+          <path class="fsm-edge dim" d="M220,262 C 305,262 305,196 382,196" />
+          <text class="fsm-elabel" x="246" y="224">max iters → FAILED</text>
+          <path class="fsm-edge" d="M220,344 L382,344" />
+          <text class="fsm-elabel" x="250" y="337">two keys</text>
+          <path class="fsm-edge" d="M70,336 C 24,308 24,216 70,192" />
+          <text class="fsm-elabel" x="2" y="270" transform="rotate(-90 14,270)">continue (fail / veto)</text>
+          <text class="fsm-elabel" x="402" y="74">↑ or a stuck detector</text>
+
+          <g class="fsm-node" data-state="COMPILING"><rect x="70" y="18" width="150" height="40" rx="9" /><text x="145" y="43" text-anchor="middle">COMPILING</text></g>
+          <g class="fsm-node" data-state="AWAIT_GATE_A"><rect x="70" y="92" width="150" height="40" rx="9" /><text x="145" y="117" text-anchor="middle">AWAIT_GATE_A</text></g>
+          <g class="fsm-node" data-state="RUNNING_AGENT"><rect x="70" y="176" width="150" height="40" rx="9" /><text x="145" y="201" text-anchor="middle">RUNNING_AGENT</text></g>
+          <g class="fsm-node" data-state="VERIFYING"><rect x="70" y="250" width="150" height="40" rx="9" /><text x="145" y="275" text-anchor="middle">VERIFYING</text></g>
+          <g class="fsm-node" data-state="AWAIT_GATE_B"><rect x="70" y="324" width="150" height="40" rx="9" /><text x="145" y="349" text-anchor="middle">AWAIT_GATE_B</text></g>
+          <g class="fsm-node term-aborted" data-state="ABORTED"><rect x="385" y="18" width="150" height="40" rx="9" /><text x="460" y="43" text-anchor="middle">ABORTED</text></g>
+          <g class="fsm-node term-failed" data-state="FAILED"><rect x="385" y="176" width="150" height="40" rx="9" /><text x="460" y="201" text-anchor="middle">FAILED</text></g>
+          <g class="fsm-node term-done" data-state="DONE"><rect x="385" y="324" width="150" height="40" rx="9" /><text x="460" y="349" text-anchor="middle">DONE</text></g>
+        </svg>
+      </div>
+      <div class="detail" id="fsm-detail" style="min-height:156px"></div>
+    </div>
+
+    <!-- DECIDE -->
+    <h3 class="reveal" style="margin-top:3rem">DECIDE — the truth table, made interactive</h3>
+    <p class="lede reveal" style="margin-bottom:1.2rem">Flip the inputs. The outcome follows the exact precedence of <code>decide.ts</code> — success is checked first, so a goal met on the last allowed iteration is DONE, never FAILED.</p>
+    <div class="decide-layout reveal">
+      <div class="toggles">
+        <label class="toggle"><span class="lab"><code>ladder.pass</code><small>frozen verifier passed</small></span><span class="switch"><input type="checkbox" id="tg-pass" checked /><span class="slider"></span></span></label>
+        <label class="toggle"><span class="lab"><code>approver.veto</code><small>Gate B runs only on a passing ladder</small></span><span class="switch"><input type="checkbox" id="tg-veto" /><span class="slider"></span></span></label>
+        <label class="toggle"><span class="lab"><code>stuck</code><small>no-diff · repeat-failure · oscillation · budget</small></span><span class="switch"><input type="checkbox" id="tg-stuck" /><span class="slider"></span></span></label>
+        <label class="toggle"><span class="lab"><code>iteration ≥ maxIterations</code><small>the blunt backstop</small></span><span class="switch"><input type="checkbox" id="tg-cap" /><span class="slider"></span></span></label>
+      </div>
+      <div class="decide-out">
+        <div class="decide-screen">
+          <div class="outcome" id="decide-outcome"><div class="big">DONE</div><div class="why"></div></div>
+          <ol class="precedence">
+            <li><code>ladder.pass &amp;&amp; !veto</code> → DONE</li>
+            <li><code>stuck</code> → ABORTED</li>
+            <li><code>iteration ≥ max</code> → FAILED</li>
+            <li><code>!ladder.pass</code> → CONTINUE</li>
+            <li><code>ladder.pass &amp;&amp; veto</code> → CONTINUE</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <!-- Verifier ladder -->
+    <h3 class="reveal" style="margin-top:3rem">The verifier ladder</h3>
+    <p class="lede reveal" style="margin-bottom:1.2rem">Cheapest &amp; hardest-to-game first. Rungs run top → bottom and short-circuit on the first deterministic fail, so a red exit code never wastes an LLM judge call. Try failing a rung:</p>
+    <div class="reveal">
+      <div class="ladder-ctrl">
+        <button class="mini-btn on" data-fail="-1">All pass</button>
+        <button class="mini-btn" data-fail="0">Deterministic fails</button>
+        <button class="mini-btn" data-fail="2">Judge fails</button>
+      </div>
+      <div class="ladder" id="ladder">
+        <div class="rung det"><span class="rk">det · 1</span><span class="rbody"><b><code>npm test</code> exits 0</b><p>tests / exit codes — ungameable, confidence = 1</p></span><span class="rstat"></span></div>
+        <div class="rung det"><span class="rk">det · 2</span><span class="rbody"><b><code>npm run lint</code> exits 0</b><p>static checks before any model is consulted</p></span><span class="rstat"></span></div>
+        <div class="rung judge"><span class="rk">judge · 3</span><span class="rbody"><b>LLM quorum vs. the frozen rubric</b><p>only the fuzzy residual — temp 0, best-of-N, confidence floor</p></span><span class="rstat"></span></div>
+      </div>
+      <p class="ladder-note" id="ladder-note"></p>
+
+      <details class="disc">
+        <summary>How the LLM judge is made “deterministic enough”<span class="s-sub">4 techniques</span></summary>
+        <div class="disc-body">
+          <ul>
+            <li><b>Frozen rubric</b> — criteria authored once; the bar can't drift to meet the work.</li>
+            <li><b>Temperature 0 + structured output</b> — a Zod schema <code>{pass, confidence, failing_criteria[]}</code>, no free-form “looks good”.</li>
+            <li><b>Quorum, not one call</b> — best-of-N majority (default 3) + a confidence floor (default 0.66).</li>
+            <li><b>Independent grader</b> — fed goal + rubric + diff + verdicts, not the worker's self-justification.</li>
+          </ul>
+        </div>
+      </details>
+    </div>
+
+    <!-- Gates -->
+    <h3 class="reveal" style="margin-top:3rem">Two gates, and one flag that moves only one</h3>
+    <div class="grid grid-3 reveal">
+      <div class="card"><h3><span class="pill gate">Gate A</span> Contract</h3><p>Approves the frozen contract once, before the loop. Default: a human confirms what “done” means. <code>--autonomous</code>: auto-accepted, but still frozen and logged loudly.</p></div>
+      <div class="card"><h3><span class="pill fail">Gate B</span> Result</h3><p>Every iteration, but only when the ladder passes. The independent approver is veto-only — it can stop a green from becoming DONE, never promote a red. Defaults to reject on uncertainty.</p></div>
+      <div class="card"><h3><code>--autonomous</code></h3><p>Moves Gate A only. It skips the human pause, never the freeze and never verification. The two-key contract is identical in both modes.</p></div>
+    </div>
+
+    <!-- Stuck + budget -->
+    <h3 class="reveal" style="margin-top:3rem">Stuck detection &amp; budget</h3>
+    <p class="lede reveal">Bail <em>before</em> the iteration cap with an actionable reason. Pure over the histories stored in loop state.</p>
+    <div class="rows reveal">
+      <div class="row"><span class="rn">01</span><div class="rt"><b>No-diff</b><p>The working tree is unchanged after a whole iteration → the agent is spinning.</p></div></div>
+      <div class="row"><span class="rn">02</span><div class="rt"><b>Repeat-failure</b><p>The same normalized verifier failure N times in a row (default 3) → same wall.</p></div></div>
+      <div class="row"><span class="rn">03</span><div class="rt"><b>Oscillation</b><p>The diff hash flip-flops A,B,A,B between two states → flip-flopping.</p></div></div>
+      <div class="row"><span class="rn">04</span><div class="rt"><b>Budget</b><p>Token / wall-clock caps, metered by the driver — independent of iteration count.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<hr class="section-line" />
+
+<!-- ============================== ARCHITECTURE ============================== -->
+<section id="architecture">
+  <div class="wrap">
+    <div class="eyebrow reveal">Internal software architecture</div>
+    <h2 class="reveal">One deep module. Four real seams.</h2>
+    <p class="lede reveal">The orchestrator (a pure reducer) owns all policy. A thin driver performs
+      effects. Everything stochastic hides behind a value interface at four seams — each with a real
+      and a fake implementation, so the orchestrator can't tell which it called.</p>
+
+    <div class="arch-stack reveal" style="margin-top:1.6rem">
+      <div class="arch-layer arch-driver">
+        <span class="alabel">imperative · the only thing that touches the world</span>
+        <h3>Driver</h3>
+        <p>Performs commands, feeds events back, persists write-ahead. Clock, budget, processes, disk — all live here.</p>
+      </div>
+      <div class="arch-conn"></div>
+      <div class="arch-layer arch-orch">
+        <span class="alabel">pure · synchronous · zero-LLM by construction</span>
+        <h3>Orchestrator — <code>step(state, event) → [state, Command[]]</code></h3>
+        <p>The whole COMPILE → Gate A → loop → DECIDE graph, iteration count, stuck bookkeeping. Returns no Promise, holds no adapters: it cannot perform an effect. That is what makes the run replayable from the log.</p>
+      </div>
+      <div class="arch-conn"></div>
+      <div class="seams">
+        <div class="seam"><span class="sn">seam #1</span><h4>Harness Adapter</h4><p>run(prompt, sessionId?) → result. Spawn headless, parse, thread the session.</p><div class="impls"><span class="real">claude-code</span><span class="real">codex</span><span class="real">droid</span><span class="fake">fake</span></div></div>
+        <div class="seam"><span class="sn">seam #2</span><h4>Verifier / Ladder</h4><p>verify(ws, goal, rubric) → Verdict. Exit codes, tests, LLM quorum.</p><div class="impls"><span class="real">deterministic</span><span class="real">judge</span><span class="fake">fake</span></div></div>
+        <div class="seam"><span class="sn">seam #3</span><h4>Approver (Gate B)</h4><p>review(input) → veto? Independent, veto-only, reject-on-uncertainty.</p><div class="impls"><span class="real">agent</span><span class="fake">fake</span></div></div>
+        <div class="seam"><span class="sn">seam #4</span><h4>Clock + Budget</h4><p>now(), spent()/remaining(). Time &amp; token metering, injected into the driver.</p><div class="impls"><span class="real">system</span><span class="fake">manual</span></div></div>
+      </div>
+    </div>
+
+    <details class="disc reveal" style="margin-top:1.6rem">
+      <summary>Parse at every seam (Zod, parse-don't-validate)<span class="s-sub">validation</span></summary>
+      <div class="disc-body">
+        <p>No path from the outside world into the reducer skips a <code>parse</code>. Branded ids are nominal (<code>SessionId</code>, <code>DiffHash</code>, <code>RunId</code>, <code>ContractHash</code>).</p>
+        <ul>
+          <li>CLI args &amp; run config → reject with a usage error</li>
+          <li>Harness stdout (hostile/partial) → never throw; map to <code>truncated</code>/<code>crashed</code></li>
+          <li>Judge / approver output → drop unparseable (judge) / fail-closed (approver)</li>
+          <li>Run log on resume → reject a corrupt entry</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="disc reveal">
+      <summary>Write-ahead log → replay &amp; resume<span class="s-sub">durability</span></summary>
+      <div class="disc-body">
+        <p>Each event is persisted before the state advances. Because the reducer is pure:</p>
+        <ul>
+          <li><b>replay</b> = fold the reducer over the event stream</li>
+          <li><b>resume</b> = parse header + entries, replay-fold to reconstruct state (session id, iteration, stuck histories), then continue</li>
+          <li>no completed iteration is repeated; durability is at-least-once by design</li>
+          <li>logs live under <code>.goaly/&lt;runId&gt;/</code>, excluded from the tree hash</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="disc reveal">
+      <summary>The source map<span class="s-sub">src/</span></summary>
+      <div class="disc-body">
+        <div class="code" style="margin-top:0.9rem">
+          <button class="copy-btn">copy</button>
+<pre class="tree"><span class="d">src/</span>
+  <span class="d">domain/</span>       ids, config, contract, verdict, events        <span class="cmt"># types + Zod schemas</span>
+  <span class="pure">orchestrator/</span> state, step, decide, stuck                    <span class="cmt"># PURE reducer (the spine)</span>
+  <span class="d">driver/</span>       driver, clock, budget                         <span class="cmt"># effects + seam #4</span>
+  <span class="d">verify/</span>       verifier, ladder, deterministic, judge, …     <span class="cmt"># seam #2 / #3</span>
+  <span class="d">compile/</span>      compiler, agent-compiler, gateA, gates        <span class="cmt"># Phase 1 + freeze + Gate A</span>
+  <span class="d">harness/</span>      adapter, claude-code, codex, droid            <span class="cmt"># seam #1</span>
+  <span class="d">workspace/</span>    workspace, git-workspace                      <span class="cmt"># harness-independent diff/run</span>
+  <span class="d">runlog/</span>       runlog, file-runlog                           <span class="cmt"># write-ahead persistence + replay</span>
+  <span class="d">llm/</span>          provider, cli-provider                        <span class="cmt"># INTERNAL seam</span>
+  <span class="d">cli/</span>          args, compose, main                           <span class="cmt"># composition root + CLI</span>
+  <span class="d">testing/</span>      fakes                                         <span class="cmt"># fakes for every seam</span></pre>
+        </div>
+      </div>
+    </details>
+
+    <!-- support matrix -->
+    <h3 class="reveal" style="margin-top:3rem">What's supported</h3>
+    <div class="panel reveal" style="padding:0.3rem 1rem; overflow:auto">
+      <table class="matrix">
+        <thead><tr><th>Capability</th><th>What you get</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Harnesses</td><td><span class="pill pass">claude-code</span> <span class="pill pass">codex</span> <span class="pill pass">droid</span> <span class="pill neutral">fake</span> — adding one is a single file</td></tr>
+          <tr><td class="feat">Verification</td><td><code>--verify-cmd</code> (existing command) · <code>--generate</code> (the agent authors it)</td></tr>
+          <tr><td class="feat">Deterministic rungs</td><td><span class="yes">✓</span> exit-code / test commands, confidence = 1, ungameable</td></tr>
+          <tr><td class="feat">LLM-judge rungs</td><td><span class="yes">✓</span> temperature 0, quorum (default 3), confidence floor (default 0.66)</td></tr>
+          <tr><td class="feat">Gate A</td><td>human approval · <code>--autonomous</code> auto-accept (still frozen + logged)</td></tr>
+          <tr><td class="feat">Gate B</td><td><span class="yes">✓</span> independent approver, veto-only, every iteration</td></tr>
+          <tr><td class="feat">Stuck detection</td><td>no-diff · repeat-failure · oscillation · budget</td></tr>
+          <tr><td class="feat">Budget</td><td><code>--budget-tokens</code> · <code>--budget-wall-ms</code>, independent of iteration count</td></tr>
+          <tr><td class="feat">Resume</td><td><span class="yes">✓</span> <code>--resume run-&lt;id&gt;</code> — replay-fold from the write-ahead log</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- quickstart -->
+    <h3 class="reveal" style="margin-top:3rem">Quickstart</h3>
+    <div class="grid grid-2 reveal" style="align-items:start">
+      <div class="code">
+        <button class="copy-btn">copy</button>
+<pre><span class="cmt"># install (puts goaly on your PATH)</span>
+make install
+goaly help
+
+<span class="cmt"># point at an existing test; approve the contract once</span>
+goaly run --goal <span class="str">"handle empty input"</span> \
+  --verify-cmd <span class="str">"npm test"</span></pre>
+      </div>
+      <div class="code">
+        <button class="copy-btn">copy</button>
+<pre><span class="cmt"># let the agent author verification, run unattended</span>
+goaly run --goal <span class="str">"add a /health endpoint"</span> \
+  --generate --autonomous
+
+<span class="cmt"># choose a harness, cap iters, set a budget, resume</span>
+goaly run --goal <span class="str">"…"</span> --harness codex \
+  --max-iterations 8 --budget-tokens 500000
+goaly run --goal <span class="str">"…"</span> --resume run-&lt;id&gt;</pre>
+      </div>
+    </div>
+    <p class="lede reveal" style="margin-top:0.9rem; font-size:0.82rem">Exit codes — <span class="pill pass">0 DONE</span> <span class="pill fail">1 FAILED / ABORTED</span> <span class="pill neutral">2 usage error</span></p>
+  </div>
+</section>
+
+<hr class="section-line" />
+
+<!-- ============================== ADDING A HARNESS ============================== -->
+<section id="harnesses">
+  <div class="wrap">
+    <div class="eyebrow reveal">Extending it</div>
+    <h2 class="reveal">Adding a harness is one file, one method.</h2>
+    <p class="lede reveal">A “harness” is any coding agent you can drive headlessly. The orchestrator
+      can't tell which one it called — so wrapping a new one changes nothing else in the system.</p>
+
+    <div class="code reveal" style="margin-top:1.4rem">
+      <button class="copy-btn">copy</button>
+<pre><span class="kw">interface</span> <span class="fn">HarnessAdapter</span> {
+  <span class="kw">readonly</span> name: <span class="tok">string</span>;
+  <span class="fn">run</span>(prompt: <span class="tok">string</span>, sessionId?: SessionId): <span class="tok">Promise</span>&lt;HarnessRunResult&gt;;
+}
+
+<span class="kw">type</span> <span class="fn">HarnessRunResult</span> = {
+  output: <span class="tok">string</span>;
+  sessionId: SessionId;
+  status: <span class="str">'completed'</span> | <span class="str">'crashed'</span> | <span class="str">'truncated'</span> | <span class="str">'timeout'</span>;
+  tokensUsed?: <span class="tok">number</span>;
+};  <span class="cmt">// diffHash is computed by the shared Workspace — NOT the adapter</span></pre>
+    </div>
+
+    <!-- three things to discover -->
+    <h3 class="reveal" style="margin-top:2.4rem">The three things to figure out</h3>
+    <div class="rows reveal">
+      <div class="row"><span class="rn">01</span><div class="rt"><b>Headless / print invocation</b><p>How do you run one non-interactive turn? Look for a print/exec/headless flag (<code>-p</code>, <code>exec</code>, <code>--print</code>). The prompt is usually an argv value or read from stdin.</p></div></div>
+      <div class="row"><span class="rn">02</span><div class="rt"><b>Structured output</b><p>Find a machine-readable result (<code>--output-format json</code>, <code>--json</code>). Note the shape — a whole-stdout JSON object, a JSONL stream, or text-only — and capture a real sample.</p></div></div>
+      <div class="row"><span class="rn">03</span><div class="rt"><b>Session resume</b><p>Where does the session id appear in a fresh run's output, and which flag replays it next turn (<code>--resume</code>, <code>--session-id</code>, <code>exec resume &lt;id&gt;</code>)? No resume → return a stable id and accept cold turns.</p></div></div>
+    </div>
+
+    <!-- comparison tabs -->
+    <h3 class="reveal" style="margin-top:2.4rem">…solved for the three bundled adapters</h3>
+    <div class="reveal">
+      <div class="tabs">
+        <button class="tab active" data-tab="cc">claude-code</button>
+        <button class="tab" data-tab="cx">codex</button>
+        <button class="tab" data-tab="dr">droid</button>
+      </div>
+      <div class="tabpane active" id="tab-cc">
+        <dl class="kv">
+          <dt>fresh</dt><dd><code>claude -p "&lt;prompt&gt;" --output-format json</code></dd>
+          <dt>resume</dt><dd><code>claude -p "&lt;prompt&gt;" --output-format json --resume &lt;id&gt;</code></dd>
+          <dt>prompt</dt><dd>argv (with a stdin fallback)</dd>
+          <dt>output</dt><dd>json-object, or stream-json (one JSON object per line)</dd>
+          <dt>result ←</dt><dd><code>.result</code> ?? <code>.text</code> ?? <code>.response</code></dd>
+          <dt>session ←</dt><dd><code>.session_id</code> — latch the first seen across the stream</dd>
+          <dt>tokens ←</dt><dd><code>.usage.total_tokens</code>, else <code>input + output</code></dd>
+        </dl>
+      </div>
+      <div class="tabpane" id="tab-cx">
+        <dl class="kv">
+          <dt>fresh</dt><dd><code>codex exec "&lt;prompt&gt;" --json</code></dd>
+          <dt>resume</dt><dd><code>codex exec resume &lt;id&gt; "&lt;prompt&gt;" --json</code></dd>
+          <dt>prompt</dt><dd>argv</dd>
+          <dt>output</dt><dd>jsonl-stream — the last result-bearing line carries the answer</dd>
+          <dt>result ←</dt><dd>last line's result / message field</dd>
+          <dt>session ←</dt><dd>thread id — latch the first established at stream start</dd>
+          <dt>tokens ←</dt><dd>usage block if present (optional)</dd>
+        </dl>
+      </div>
+      <div class="tabpane" id="tab-dr">
+        <dl class="kv">
+          <dt>fresh</dt><dd><code>droid exec --output-format json --auto &lt;level&gt; "&lt;prompt&gt;"</code></dd>
+          <dt>resume</dt><dd><code>droid exec … --session-id &lt;id&gt; "&lt;prompt&gt;"</code></dd>
+          <dt>prompt</dt><dd>argv</dd>
+          <dt>output</dt><dd>json-object (agent-SDK result envelope), tolerant to JSONL</dd>
+          <dt>result ←</dt><dd><code>.result</code> (with aliases)</dd>
+          <dt>session ←</dt><dd><code>.session_id</code> — latch the first</dd>
+          <dt>caveat</dt><dd>defaults to <code>--auto low</code> (edit files only) so <code>git diff HEAD</code> stays honest; never <code>--skip-permissions-unsafe</code></dd>
+        </dl>
+      </div>
+    </div>
+
+    <!-- progressive disclosure: rules, mappings, registration -->
+    <details class="disc reveal" style="margin-top:2rem">
+      <summary>What <code>run()</code> must &amp; must not do<span class="s-sub">contract</span></summary>
+      <div class="disc-body">
+        <div class="mustcols" style="margin-top:0.9rem">
+          <div class="mustcol must">
+            <h4><span class="pill pass">MUST</span></h4>
+            <ul>
+              <li>Spawn headlessly with the prompt, resuming <code>sessionId</code> when provided.</li>
+              <li>Parse stdout tolerantly — partial output, crashes, and non-JSON are normal.</li>
+              <li>Thread the session id out so the next iteration resumes the same conversation.</li>
+              <li>Map the outcome to a status and return a Zod-parsed <code>HarnessRunResult</code>.</li>
+              <li>Never throw. Any failure becomes a non-<code>completed</code> status.</li>
+            </ul>
+          </div>
+          <div class="mustcol mustnot">
+            <h4><span class="pill fail">MUST NOT</span></h4>
+            <ul>
+              <li>Compute <code>diffHash</code> — the shared Workspace does, so stuck-detection works on any harness for free.</li>
+              <li>Run the verifier — verification is “run this command in the workspace,” identical everywhere.</li>
+              <li>Leak harness specifics — flag dialects, hook tricks stay inside <code>run()</code>.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="disc reveal">
+      <summary>The two mappings: stdout → fields, and outcome → status<span class="s-sub">field + status</span></summary>
+      <div class="disc-body">
+        <div class="grid grid-2" style="align-items:start; margin-top:0.9rem">
+          <div>
+            <p style="font-family:var(--mono); font-size:0.85rem; color:var(--fg)">1 · Field mapping</p>
+            <p>A pure, exported <code>parse&lt;Name&gt;Output(stdout)</code> → <code>{ text, sessionId?, tokens? } | null</code> that finds the result text, latches the <b>first</b> session id across a JSONL stream, finds token usage if present, and returns <code>null</code> when nothing usable parsed (→ <code>crashed</code>).</p>
+          </div>
+          <div>
+            <p style="font-family:var(--mono); font-size:0.85rem; color:var(--fg)">2 · Status mapping</p>
+            <table class="matrix" style="font-size:0.82rem">
+              <tbody>
+                <tr><td>killed for exceeding wall-clock</td><td><span class="pill fail">timeout</span></td></tr>
+                <tr><td>exited non-zero</td><td><span class="pill fail">crashed</span></td></tr>
+                <tr><td>exit 0, parseable, non-empty</td><td><span class="pill pass">completed</span></td></tr>
+                <tr><td>exit 0 but empty / unparseable</td><td><span class="pill gate">truncated</span></td></tr>
+                <tr><td>the exec seam itself threw</td><td><span class="pill fail">crashed</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="disc reveal">
+      <summary>Register it — two tiny edits<span class="s-sub">args.ts · compose.ts</span></summary>
+      <div class="disc-body">
+        <div class="code" style="margin-top:0.9rem">
+          <button class="copy-btn">copy</button>
+<pre><span class="cmt">// src/cli/args.ts — add the literal to the choice union + parser</span>
+<span class="kw">export type</span> HarnessChoice = <span class="str">'claude-code'</span> | <span class="str">'codex'</span> | <span class="str">'droid'</span> | <span class="str">'fake'</span> | <span class="str">'myagent'</span>;
+
+<span class="cmt">// src/cli/compose.ts — wire it in makeHarness()</span>
+<span class="kw">case</span> <span class="str">'myagent'</span>: <span class="kw">return</span> <span class="kw">new</span> <span class="fn">MyAgentAdapter</span>();</pre>
+        </div>
+        <p style="margin-top:0.9rem">Then add your adapter to the shared <code>adapter.contract.test.ts</code> matrix — it runs every adapter through the same scenarios (success / non-zero / garbage / timeout / exec-throws) to prove it never throws and always returns a valid <code>HarnessRunResult</code>.</p>
+      </div>
+    </details>
+  </div>
+</section>
+
+<hr class="section-line" />
+
+<!-- ============================== AGENTIC ============================== -->
+<section id="agentic">
+  <div class="wrap">
+    <div class="eyebrow reveal">Built for agents, by agents</div>
+    <h2 class="reveal">goaly drives coding agents — and is built to be worked on by them.</h2>
+    <p class="lede reveal">The repo ships its own agent tooling: a skill that teaches an agent to
+      onboard a new harness, and a hard set of invariants any contributor — human or model — must preserve.</p>
+
+    <div class="panel reveal" style="padding:1.5rem; margin-top:1.6rem">
+      <div class="skill-card">
+        <div class="skill-badge">🛠️</div>
+        <div>
+          <h3 style="margin-bottom:0.4rem"><code>investigate-harness</code> skill</h3>
+          <p style="margin:0; font-family:var(--mono); font-size:0.85rem; line-height:1.65">A bundled agent skill that probes an unfamiliar CLI and emits a filled adapter. Read-only first (<code>--help</code>, <code>--version</code>), runs the agent only in a throwaway git repo, redacts session ids, and produces the field/flag/status mapping plus the adapter, the two registration edits, and tests.</p>
+        </div>
+      </div>
+      <details class="disc" style="margin-top:1.2rem">
+        <summary>The discovery worksheet it fills in<span class="s-sub">📋</span></summary>
+        <div class="disc-body">
+          <div class="worksheet" style="margin-top:0.9rem">
+            <div class="ws-head">worksheet</div>
+<pre>Harness name (kebab):   &lt;name&gt;
+Binary + version:       &lt;bin&gt; &lt;version&gt;        # flags drift between versions
+Fresh invocation:       &lt;bin&gt; -p "&lt;prompt&gt;" --output-format json
+Resume invocation:      &lt;bin&gt; … --resume &lt;id&gt;
+Prompt delivery:        argv | stdin
+Output shape:           json-object | jsonl-stream | text-only
+Field mapping:
+  result text   &lt;-  .result            # or: last line's .text
+  session id    &lt;-  .session_id        # latch the FIRST seen in a stream
+  token usage   &lt;-  .usage.total_tokens  | (none)
+Status mapping:
+  timeout    &lt;= wall-clock kill
+  crashed    &lt;= exit != 0 | unparseable | exec throws
+  truncated  &lt;= exit 0 but empty / partial result
+  completed  &lt;= exit 0 + parseable non-empty result
+Notes / caveats:        &lt;e.g. no resume -> cold each turn&gt;</pre>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <details class="disc reveal" style="margin-top:1.6rem">
+      <summary>The eight invariants every agent must preserve<span class="s-sub">AGENTS.md</span></summary>
+      <div class="disc-body">
+        <div class="invariants" style="margin-top:0.9rem">
+          <div class="inv"><span class="i-n">1</span><span class="t"><b>Zero-LLM reducer.</b> step/decide/stuck are pure &amp; synchronous — no Promise, clock, IO, or adapter imports.</span></div>
+          <div class="inv"><span class="i-n">2</span><span class="t"><b>Compile once, then freeze.</b> The contract is authored once; no transition rewrites it.</span></div>
+          <div class="inv"><span class="i-n">3</span><span class="t"><b>Two keys for DONE.</b> Frozen verifier passes and the approver doesn't veto. Gate B runs only on a green ladder.</span></div>
+          <div class="inv"><span class="i-n">4</span><span class="t"><b>Fail-closed everywhere.</b> Any error or unparseable output → FAIL / VETO / crashed-run, never a green.</span></div>
+          <div class="inv"><span class="i-n">5</span><span class="t"><b><code>--autonomous</code> moves Gate A only.</b> It auto-accepts but still freezes and logs the contract.</span></div>
+          <div class="inv"><span class="i-n">6</span><span class="t"><b>Parse at every seam (Zod).</b> Nothing reaches the reducer without a parse; ids are branded.</span></div>
+          <div class="inv"><span class="i-n">7</span><span class="t"><b>Write-ahead + resume.</b> Events append before state advances; resume is a replay-fold over the log.</span></div>
+          <div class="inv"><span class="i-n">8</span><span class="t"><b>Stuck detection stays pure</b> over loop histories: no-diff, repeat-failure, oscillation, budget.</span></div>
+        </div>
+      </div>
+    </details>
+
+    <div class="grid grid-2 reveal" style="margin-top:1.6rem; align-items:start">
+      <div class="card">
+        <h3>Fakes-first, zero-IO TDD</h3>
+        <p>The walking skeleton — domain → pure reducer → fakes → driver — is proven end-to-end with zero IO before any subprocess exists. Every seam has a fake, so the whole policy is table-testable.</p>
+      </div>
+      <div class="card">
+        <h3>Docs are part of “done” <span class="pill pass">explicit check</span></h3>
+        <p>Any change to the architecture, the public API, or functionality must update the README and this landing page in the same change — a definition-of-done gate, not optional. This page cites real states, commands, events, and defaults.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== FOOTER ============================== -->
+<footer class="footer" id="footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="#top" style="margin-bottom:0.6rem"><img src="assets/favicon.svg" alt="" /> goaly</a>
+        <p style="font-family:var(--mono); font-size:0.82rem; max-width:34ch">Run a coding agent until the goal is verifiably met — against a contract it can't weaken.</p>
+      </div>
+      <div>
+        <h5>Design docs</h5>
+        <a href="https://github.com/krimvp/goaly/blob/main/DESIGN.md" target="_blank" rel="noopener">DESIGN.md — what &amp; why</a>
+        <a href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">ARCHITECTURE.md — how</a>
+        <a href="https://github.com/krimvp/goaly/blob/main/CONTEXT.md" target="_blank" rel="noopener">CONTEXT.md — glossary</a>
+        <a href="https://github.com/krimvp/goaly/tree/main/docs/adr" target="_blank" rel="noopener">docs/adr — decisions</a>
+      </div>
+      <div>
+        <h5>Extend</h5>
+        <a href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener">Adding a harness</a>
+        <a href="https://github.com/krimvp/goaly/blob/main/AGENTS.md" target="_blank" rel="noopener">AGENTS.md — invariants</a>
+        <a href="https://github.com/krimvp/goaly/tree/main/.claude/skills/investigate-harness" target="_blank" rel="noopener">investigate-harness skill</a>
+      </div>
+      <div>
+        <h5>Project</h5>
+        <a href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">Repository</a>
+        <a href="https://github.com/krimvp/goaly/blob/main/README.md" target="_blank" rel="noopener">README</a>
+        <a href="https://github.com/krimvp/goaly#install" target="_blank" rel="noopener">Install</a>
+      </div>
+    </div>
+    <div class="legal">
+      <span>MIT · requires Node ≥ 20 &amp; git</span>
+      <span>© <span id="year">2026</span> goaly · built with Claude Code</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/app.js" defer></script>
+</body>
+</html>

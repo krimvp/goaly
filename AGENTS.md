@@ -1,9 +1,9 @@
-# AGENTS.md — working on goalorch
+# AGENTS.md — working on goaly
 
 Conventions and guardrails for AI agents (and humans) contributing to this repo. Read this
 first. It overrides generic habits where they conflict.
 
-`goalorch` runs a coding agent in a loop until a goal is **verifiably** met, with a frozen
+`goaly` runs a coding agent in a loop until a goal is **verifiably** met, with a frozen
 success criterion the agent can't weaken. The whole point is correctness under adversarial
 self-interest — so the bar for changes here is high. Start with [`DESIGN.md`](DESIGN.md) (what &
 why), [`ARCHITECTURE.md`](ARCHITECTURE.md) (how), [`CONTEXT.md`](CONTEXT.md) (glossary), and the
@@ -21,7 +21,10 @@ npx vitest run src/path/to/file.test.ts   # one file while iterating
 ```
 
 **Definition of done for any change:** `npm run typecheck` clean, `npm test` green, new behavior
-covered by a test, and none of the invariants below weakened. No exceptions for "small" changes.
+covered by a test, none of the invariants below weakened, and — if the change touches the
+architecture, the public/embeddable API, or user-facing functionality — `README.md` **and** the
+landing page (`docs/index.html`) updated to match (see [Keep the docs in sync](#keep-the-docs-in-sync-explicit-check)).
+No exceptions for "small" changes.
 
 ## The eight invariants (do not break these)
 
@@ -106,6 +109,25 @@ A new harness is **one file** implementing `HarnessAdapter.run()`. See
 **`investigate-harness`** skill (`.claude/skills/investigate-harness/`) to probe an unfamiliar CLI
 and produce the field/flag/status mapping before you write the adapter.
 
+## Keep the docs in sync (explicit check)
+
+The README and the landing page are part of the public contract, not optional decoration. **Any
+change that alters the architecture, the public/embeddable API (`src/index.ts` exports, the CLI
+flags/usage, the `HarnessAdapter`/seam interfaces), or user-facing functionality MUST update both
+of these in the same change:**
+
+- [`README.md`](README.md) — install, usage, flags, supported harnesses, the how-it-works summary.
+- [`docs/index.html`](docs/index.html) — the GitHub Pages landing page (the interactive overview):
+  its pipeline / state-machine / DECIDE / verifier-ladder / seam diagrams, the support matrix, the
+  "adding a harness" guide, and the harness-comparison tabs.
+
+Treat it as a definition-of-done gate. A change that adds or renames a harness, changes a CLI flag,
+alters the state machine / DECIDE table / verifier ladder / stuck detectors, moves or renames a
+seam, changes a default (e.g. judge quorum, confidence floor, `maxIterations`), or adds/removes an
+exported symbol is **not done** until `README.md` and `docs/index.html` reflect it. The landing page
+cites real states, commands, events, statuses, and defaults — if you change those in `src/`, change
+the page so it stays accurate. When in doubt whether a change is "meaningful", assume it is.
+
 ## Anti-patterns (rejected on sight)
 
 - Importing an adapter/LLM/clock into the reducer, or making `step` async.
@@ -114,6 +136,8 @@ and produce the field/flag/status mapping before you write the adapter.
 - An adapter or `verify`/`review` that throws instead of failing closed.
 - A seam that reads external data without a Zod `parse`.
 - Swallowing an error silently (log it, fail closed, or propagate as a typed result).
+- Shipping an architecture / public-API / functionality change without updating `README.md` and the
+  landing page (`docs/index.html`) in the same change.
 
 ## Commits / PRs
 

@@ -17,7 +17,7 @@ describe('GitWorkspace (integration, real git)', () => {
   let root: string;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'goalorch-gw-test-'));
+    root = await mkdtemp(join(tmpdir(), 'goaly-gw-test-'));
     git(root, 'init', '-q');
     git(root, 'config', 'user.email', 'test@example.com');
     git(root, 'config', 'user.name', 'Test User');

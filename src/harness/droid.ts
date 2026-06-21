@@ -21,11 +21,11 @@ import type { HarnessAdapter } from './adapter';
  * {@link parseDroidOutput}.
  *
  * Autonomy: `droid exec` defaults to READ-ONLY, where the agent cannot modify files — useless for
- * a goalorch loop. So we always pass `--auto`. The default is `low` (file create/modify only, no
+ * a goaly loop. So we always pass `--auto`. The default is `low` (file create/modify only, no
  * git/installs/builds): it is the least privilege that still lets the agent do its essential job —
  * editing the working tree — while keeping the orchestrator's HEAD-relative `diff()` honest, since
  * `low` cannot `git commit` (a commit would empty `git diff HEAD` and mislead the judge/approver).
- * goalorch runs verification itself, so the agent needs no build/test privileges. Embedders who
+ * goaly runs verification itself, so the agent needs no build/test privileges. Embedders who
  * want the agent to install deps / build / run tests can opt into `medium`/`high` via the
  * constructor (accepting the commit caveat). We never pass `--skip-permissions-unsafe`.
  */

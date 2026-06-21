@@ -2,11 +2,11 @@
 name: investigate-harness
 description: >-
   Investigate an unfamiliar coding-agent CLI (Claude Code, Codex, Aider, Gemini CLI, Cursor CLI,
-  a custom harness, etc.) to determine how to map it into a goalorch HarnessAdapter. Discovers the
+  a custom harness, etc.) to determine how to map it into a goaly HarnessAdapter. Discovers the
   headless/print invocation, the session-resume mechanism, and the structured-output format; then
   derives the stdout field mapping (result text, session id, token usage) and the status mapping,
   and emits a filled-in adapter skeleton plus the two registration edits. Use when adding a new
-  harness to goalorch, or when the user asks how a specific agent CLI behaves or what needs to be
+  harness to goaly, or when the user asks how a specific agent CLI behaves or what needs to be
   mapped to wrap it.
 ---
 

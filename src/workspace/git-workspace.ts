@@ -70,10 +70,10 @@ export class GitWorkspace implements Workspace {
 
   /**
    * @param excludes paths kept out of diffHash/diff so the orchestrator's own state dir
-   *   (default `.goalorch`) never pollutes stuck-detection, regardless of the repo's
+   *   (default `.goaly`) never pollutes stuck-detection, regardless of the repo's
    *   .gitignore.
    */
-  constructor(root: string, exec: ExecFn = realExec, excludes: readonly string[] = ['.goalorch']) {
+  constructor(root: string, exec: ExecFn = realExec, excludes: readonly string[] = ['.goaly']) {
     this.#root = root;
     this.#exec = exec;
     this.#excludes = excludes;
@@ -86,7 +86,7 @@ export class GitWorkspace implements Workspace {
   }
 
   async diffHash(): Promise<DiffHash> {
-    const tmpIndex = join(tmpdir(), `goalorch-idx-${process.pid}-${tmpIndexCounter++}`);
+    const tmpIndex = join(tmpdir(), `goaly-idx-${process.pid}-${tmpIndexCounter++}`);
     // Ensure no stale index file exists at that path.
     await rm(tmpIndex, { force: true });
 
