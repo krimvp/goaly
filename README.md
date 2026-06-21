@@ -42,7 +42,8 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
   doesn't veto.
 - **Stuck detection** bails before `maxIterations` with a reason: no-diff, repeat-failure, oscillation,
   budget.
-- **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable and **resumable**.
+- **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable, **resumable**, and
+  **inspectable** after the fact (`goaly runs list` / `goaly runs show`).
 
 ## Install
 
@@ -106,6 +107,10 @@ goaly run --goal "..." --verify-cmd "npm test" \
 
 # With a .goalyrc in the repo, the repeated wiring lives in the file — just pass the goal:
 goaly run --goal "make the parser handle empty input"
+
+# Inspect past runs (read-only — replays the run log, re-runs nothing):
+goaly runs list
+goaly runs show run-<id>
 ```
 
 ### Config file
@@ -199,6 +204,29 @@ step-by-step firehose, and prompts / harness output / diff / verifier detail sta
 `info` (secrets discipline). `--log-file <path>` overrides the file location; `--no-log-file` writes
 console only. A logging failure never crashes a run (fail-closed). The pure reducer never logs
 (invariant #1).
+
+### Inspecting past runs
+
+The write-ahead run log is also queryable after the fact, with two **read-only** subcommands that
+**re-run nothing** — they replay the persisted event stream with the *same* fold `--resume` uses, so
+what they render is exactly the state the Driver computed:
+
+```bash
+goaly runs list                  # a table of past runs under ./.goaly
+goaly runs show run-<id>         # full detail for one run
+goaly runs list --workspace ./myrepo   # look elsewhere for the .goaly directory
+```
+
+- **`goaly runs list`** — one row per run: id, status (`DONE` / `FAILED` / `ABORTED`, or
+  `INCOMPLETE` for a run that never finished), iterations, tokens, started/ended, and the goal.
+  Most-recent first.
+- **`goaly runs show <runId>`** — the **frozen contract** (and its hash), the **Gate A** outcome,
+  every iteration's **verifier-ladder verdict** and **Gate B** approver decision, the
+  stuck/failure **reason**, and the totals.
+
+Both parse the log with **Zod on read** and **fail closed**: a corrupt run is *flagged* (`CORRUPT`
+in the table; a non-zero exit for `show`), never silently treated as green or dropped (invariants
+#6/#7). `runs show` exits `1` for an unknown or corrupt run, `0` otherwise.
 
 ### Adding a harness
 

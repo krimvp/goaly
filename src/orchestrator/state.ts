@@ -66,6 +66,27 @@ export function isTerminal(
   return state.tag === 'DONE' || state.tag === 'FAILED' || state.tag === 'ABORTED';
 }
 
+/**
+ * Completed-iteration count for ANY state — pure over the state alone. The single source of
+ * truth shared by the Driver (outcomes) and the read-only run-inspection projection, so an
+ * inspected run reports the same iteration count the Driver computed. 0 before the loop starts.
+ */
+export function iterationCount(state: OrchestratorState): number {
+  switch (state.tag) {
+    case 'RUNNING_AGENT':
+    case 'VERIFYING':
+    case 'AWAIT_GATE_B':
+      return state.ctx.iteration;
+    case 'DONE':
+    case 'FAILED':
+    case 'ABORTED':
+      return state.iterations;
+    case 'COMPILING':
+    case 'AWAIT_GATE_A':
+      return 0;
+  }
+}
+
 /** Build the initial loop context once Gate A approves the frozen contract. */
 export function initialCtx(config: RunConfig, contract: CompiledContract): LoopCtx {
   return {

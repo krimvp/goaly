@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { parseArgs, USAGE, UsageError, type ParsedArgs } from './args';
-import { composeDeps } from './compose';
+import { composeDeps, STATE_DIR } from './compose';
+import { runRuns } from './runs';
 import { drive } from '../driver/driver';
 import { asRunId, type RunId } from '../domain/ids';
 import type { RunOutcome } from '../domain/events';
@@ -37,6 +39,16 @@ export async function main(argv: string[]): Promise<number> {
   if (parsed.command === 'help') {
     process.stdout.write(`${USAGE}\n`);
     return 0;
+  }
+
+  if (parsed.command === 'runs' && parsed.runs !== undefined) {
+    const stateDir = path.join(parsed.workspace, STATE_DIR);
+    return runRuns(
+      parsed.runs,
+      stateDir,
+      (s) => process.stdout.write(s),
+      (s) => process.stderr.write(s),
+    );
   }
 
   const resuming = parsed.resumeRunId !== undefined;
