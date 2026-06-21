@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -44,6 +44,27 @@ describe('GitWorkspace (integration, real git)', () => {
     await writeFile(join(root, 'file.txt'), 'goodbye\n');
     const after = await ws.diffHash();
     expect(after).not.toBe(before);
+  });
+
+  it('diffHash succeeds when the excluded state dir is gitignored AND present', async () => {
+    // Regression: `git add -A -- . :(exclude).goaly` exits non-zero ("paths are ignored") when
+    // `.goaly/` is gitignored and present, which used to make diffHash throw and crash-loop the
+    // driver. The excluded dir must be kept out of the hash without failing.
+    await writeFile(join(root, '.gitignore'), '.goaly/\n');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-q', '-m', 'ignore .goaly');
+    await mkdir(join(root, '.goaly'));
+    await writeFile(join(root, '.goaly', 'state.json'), '{"run":1}\n');
+
+    const ws = new GitWorkspace(root);
+    const a = await ws.diffHash();
+    expect(a).toMatch(/^[0-9a-f]{40}$/);
+
+    // Mutating the excluded dir must not change the hash (it is excluded), proving it never
+    // entered the tree despite being present.
+    await writeFile(join(root, '.goaly', 'state.json'), '{"run":2}\n');
+    const b = await ws.diffHash();
+    expect(b).toBe(a);
   });
 
   it('diffHash does not mutate the real git index', async () => {
