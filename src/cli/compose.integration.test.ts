@@ -10,7 +10,7 @@ import { asRunId } from '../domain/ids';
 import { runProcess } from '../util/spawn';
 
 async function initRepo(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'goalorch-cli-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'goaly-cli-'));
   await runProcess('git', ['-C', dir, 'init', '-q']);
   await runProcess('git', ['-C', dir, 'config', 'user.email', 't@example.com']);
   await runProcess('git', ['-C', dir, 'config', 'user.name', 'tester']);
@@ -49,7 +49,7 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
     expect(outcome.contractHash).not.toBeNull();
   });
 
-  it('ABORTED via no-diff (proves the .goalorch state dir is excluded from the tree hash)', async () => {
+  it('ABORTED via no-diff (proves the .goaly state dir is excluded from the tree hash)', async () => {
     dir = await initRepo();
     const config = makeConfig({
       goal: 'impossible with a noop agent',
@@ -67,7 +67,7 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
 
     const outcome = await drive(deps, config, runId);
 
-    // The noop agent never changes the tree; if .goalorch run-log writes leaked into the hash,
+    // The noop agent never changes the tree; if .goaly run-log writes leaked into the hash,
     // no-diff could never fire and this would be FAILED-at-maxIterations instead.
     expect(outcome.status).toBe('ABORTED');
     expect(outcome.reason).toContain('no-diff');

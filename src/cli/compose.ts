@@ -31,12 +31,12 @@ export type ComposeOptions = {
   runId: RunId;
   /** Override the LLM provider (tests inject a FakeLlm; production uses the CLI provider). */
   llm?: LlmProvider;
-  /** Where run logs live. Default `<workspaceRoot>/.goalorch` (excluded from diffHash). */
+  /** Where run logs live. Default `<workspaceRoot>/.goaly` (excluded from diffHash). */
   stateDir?: string;
 };
 
 /** The orchestrator's own state directory name, kept out of stuck-detection hashing. */
-export const STATE_DIR = '.goalorch';
+export const STATE_DIR = '.goaly';
 
 /**
  * The composition root: assemble a fully-wired {@link DriverDeps} from validated config. This

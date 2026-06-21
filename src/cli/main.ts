@@ -36,7 +36,7 @@ export async function main(argv: string[]): Promise<number> {
   });
 
   process.stderr.write(
-    `goalorch: ${resuming ? 'resuming' : 'starting'} ${runId} ` +
+    `goaly: ${resuming ? 'resuming' : 'starting'} ${runId} ` +
       `(harness=${parsed.harness}, autonomous=${parsed.config.autonomous})\n`,
   );
 
@@ -48,7 +48,7 @@ export async function main(argv: string[]): Promise<number> {
 export function formatOutcome(o: RunOutcome): string {
   const lines = [
     '',
-    `── goalorch run ${o.runId} ──`,
+    `── goaly run ${o.runId} ──`,
     `status:      ${o.status}`,
     `iterations:  ${o.iterations}`,
     `contract:    ${o.contractHash ?? '(none — failed before compile)'}`,

@@ -3,6 +3,6 @@ dist/
 coverage/
 *.log
 .DS_Store
-.goalorch/
+.goaly/
 *.tsbuildinfo
 *.tgz

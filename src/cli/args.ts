@@ -10,15 +10,15 @@ export type ParsedArgs = {
   resumeRunId: string | undefined;
 };
 
-export const USAGE = `goalorch — run a coding agent until a frozen success contract is met.
+export const USAGE = `goaly — run a coding agent until a frozen success contract is met.
 
 Usage:
-  goalorch run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
+  goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
                [--budget-tokens N] [--budget-wall-ms N]
                [--harness claude-code|codex|droid] [--workspace <dir>] [--resume <runId>]
 
-  goalorch help
+  goaly help
 
 Verification:
   --verify-cmd   point at an existing command that must exit 0

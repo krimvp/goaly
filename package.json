@@ -1,5 +1,5 @@
 {
-  "name": "goalorch",
+  "name": "goaly",
   "version": "0.1.0",
   "description": "Harness-agnostic goal-orchestration layer: run a coding agent until a frozen success criterion is verifiably met.",
   "type": "module",
@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "bin": {
-    "goalorch": "./dist/goalorch.js"
+    "goaly": "./dist/goaly.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -25,7 +25,7 @@
   "scripts": {
     "dev": "tsx src/cli/bin.ts",
     "build": "node scripts/build.mjs && tsc -p tsconfig.build.json",
-    "start": "node dist/goalorch.js",
+    "start": "node dist/goaly.js",
     "clean": "rm -rf dist coverage *.tgz",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

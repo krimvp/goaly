@@ -1,11 +1,15 @@
-# goalorch
+# goaly
+
+**🌐 [Interactive overview &amp; architecture →](https://krimvp.github.io/goaly/)** — the landing
+page (`docs/`) explains what this is, how the loop works, the internal architecture, and how to add
+a harness, with interactive diagrams.
 
 A **harness-agnostic goal-orchestration layer**: run a coding agent repeatedly until a goal is
 *verifiably* achieved, with a deterministic thin layer in control and a **frozen** success
 criterion the agent can't weaken mid-loop.
 
 > The anti-reward-hacking core: "until the goal is achieved" must not collapse into "until the
-> agent weakens its own test." goalorch compiles the success contract **once**, freezes it, and
+> agent weakens its own test." goaly compiles the success contract **once**, freezes it, and
 > requires **two independent keys** — a frozen verifier *and* an independent approver — before
 > declaring a run DONE.
 
@@ -30,15 +34,15 @@ COMPILE_VERIFIER → [Gate A: contract approval] → loop {
   doesn't veto.
 - **Stuck detection** bails before `maxIterations` with a reason: no-diff, repeat-failure, oscillation,
   budget.
-- **Write-ahead run log** under `.goalorch/<runId>/` makes every run replayable and **resumable**.
+- **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable and **resumable**.
 
 ## Install
 
-Install it as a standalone CLI (builds `dist/`, then puts `goalorch` on your PATH):
+Install it as a standalone CLI (builds `dist/`, then puts `goaly` on your PATH):
 
 ```bash
 make install        # == npm install -g .  (the `prepare` hook bundles dist/ first)
-goalorch help
+goaly help
 ```
 
 Or build a redistributable tarball, or install from source by hand:
@@ -46,32 +50,32 @@ Or build a redistributable tarball, or install from source by hand:
 ```bash
 npm install         # install deps (also bundles dist/ via the `prepare` hook)
 npm run build       # bundle the standalone CLI + type declarations into dist/
-npm install -g .    # put `goalorch` on your PATH
-make pack           # -> goalorch-<version>.tgz, installable with `npm i -g ./goalorch-*.tgz`
+npm install -g .    # put `goaly` on your PATH
+make pack           # -> goaly-<version>.tgz, installable with `npm i -g ./goaly-*.tgz`
 ```
 
 Requires Node ≥ 20 and `git`. The default adapters shell out to the `claude` / `codex` / `droid`
 CLIs; the LLM judge/approver use a CLI-backed provider by default.
 
-> Add `.goalorch/` to your target repo's `.gitignore`. (goalorch also excludes it from its own
+> Add `.goaly/` to your target repo's `.gitignore`. (goaly also excludes it from its own
 > tree-hash, so its run logs never pollute stuck-detection regardless.)
 
 ## Usage
 
 ```bash
 # Point at an existing test command; a human approves the frozen contract once:
-goalorch run --goal "make the parser handle empty input" --verify-cmd "npm test"
+goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
 
 # Let the agent author the verification, and run unattended (contract still frozen + logged loudly):
-goalorch run --goal "add a /health endpoint returning 200" --generate --autonomous
+goaly run --goal "add a /health endpoint returning 200" --generate --autonomous
 
 # Choose a harness, cap iterations, set a budget, resume a crashed run:
-goalorch run --goal "..." --verify-cmd "pytest -q" --harness codex --max-iterations 8 \
+goaly run --goal "..." --verify-cmd "pytest -q" --harness codex --max-iterations 8 \
              --budget-tokens 500000 --workspace ./myrepo
-goalorch run --goal "..." --resume run-<id> --workspace ./myrepo
+goaly run --goal "..." --resume run-<id> --workspace ./myrepo
 ```
 
-`goalorch help` lists every flag. Exit codes: `0` DONE, `1` FAILED/ABORTED, `2` usage error.
+`goaly help` lists every flag. Exit codes: `0` DONE, `1` FAILED/ABORTED, `2` usage error.
 
 ### Adding a harness
 
@@ -111,5 +115,5 @@ before any subprocess exists; real adapters/verifiers are leaves behind frozen i
 The library works headless; the CLI is a thin caller. Import from the package root:
 
 ```ts
-import { drive, composeDeps, freezeContract, type DriverDeps } from 'goalorch';
+import { drive, composeDeps, freezeContract, type DriverDeps } from 'goaly';
 ```
