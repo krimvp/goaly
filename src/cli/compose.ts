@@ -54,7 +54,9 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       llm,
       writeFile: (rel, content) => writeWorkspaceFile(options.workspaceRoot, rel, content),
     }),
-    gateA: config.autonomous ? new AutoContractGate() : new HumanContractGate(),
+    gateA: config.autonomous
+      ? new AutoContractGate()
+      : new HumanContractGate({ allowRevise: config.maxGateARevisions > 0 }),
     harness: makeHarness(options.harness),
     makeLadder: (contract) => buildLadder(contract, llm),
     approver: new AgentApprover({ llm }),

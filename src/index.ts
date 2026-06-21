@@ -15,7 +15,20 @@ export {
   STATE_DIR,
   type ComposeOptions,
 } from './cli/compose';
-export { parseArgs, USAGE, UsageError, type ParsedArgs, type HarnessChoice } from './cli/args';
+export {
+  parseArgs,
+  USAGE,
+  UsageError,
+  type ParsedArgs,
+  type HarnessChoice,
+  type RawFlags,
+} from './cli/args';
+export {
+  resolveInputSources,
+  defaultReaders,
+  type InputReaders,
+  type ResolvedInputs,
+} from './cli/input-sources';
 export { main, formatOutcome } from './cli/main';
 
 // Seam interfaces.

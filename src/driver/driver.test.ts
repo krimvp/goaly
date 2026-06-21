@@ -50,7 +50,7 @@ function wire(w: Wiring): {
   const approver = new FakeApprover(w.approvals ?? []);
   const deps: DriverDeps = {
     compiler: new FakeCompiler(contract),
-    gateA: w.gate ?? new FakeGate({ approved: true }),
+    gateA: w.gate ?? new FakeGate({ kind: 'approve' }),
     harness,
     makeLadder: () => ladder,
     approver,
@@ -146,11 +146,76 @@ describe('drive() — full loop with zero IO', () => {
     const { deps, harness } = wire({
       scripts: [{ postHash: '0000001' }],
       verdicts: [passVerdict()],
-      gate: new FakeGate({ approved: false, reason: 'bar is wrong' }),
+      gate: new FakeGate({ kind: 'reject', reason: 'bar is wrong' }),
     });
     const outcome = await drive(deps, makeConfig(), runId);
     expect(outcome.status).toBe('ABORTED');
     expect(outcome.reason).toBe('bar is wrong');
+    expect(harness.prompts).toHaveLength(0);
+  });
+
+  it('Gate A revise re-authors the contract, then the APPROVED contract runs the loop', async () => {
+    const draft = makeFakeContract({ goal: 'draft bar' });
+    const revised = makeFakeContract({ goal: 'revised bar' });
+    expect(draft.contractHash).not.toBe(revised.contractHash);
+
+    const ws = new FakeWorkspace('0000000', 'diff');
+    const harness = new FakeHarness([{ postHash: '0000001' }], ws);
+    const compiler = new FakeCompiler([draft, revised]);
+    const runlog = new InMemoryRunLog();
+    const deps: DriverDeps = {
+      compiler,
+      gateA: new FakeGate([
+        { kind: 'revise', feedback: 'make the bar stricter' },
+        { kind: 'approve' },
+      ]),
+      harness,
+      makeLadder: () => new FakeVerifier([passVerdict()]),
+      approver: new FakeApprover([approve()]),
+      workspace: ws,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(),
+      runlog,
+    };
+
+    const outcome = await drive(deps, makeConfig({ maxIterations: 10 }), runId);
+
+    // The loop ran against the APPROVED (revised) contract — only it is ever used.
+    expect(outcome.status).toBe('DONE');
+    expect(outcome.contractHash).toBe(revised.contractHash);
+    // The compiler was re-invoked WITH the human's feedback on the second pass.
+    expect(compiler.feedbacks).toEqual([undefined, 'make the bar stricter']);
+    // The first agent prompt is built from the approved contract's goal, not the draft's.
+    expect(harness.prompts[0]).toContain('revised bar');
+    expect(harness.prompts[0]).not.toContain('draft bar');
+    // Both frozen contracts are audited in the log (the renegotiation is visible).
+    const hashes = new Set(
+      runlog.entries
+        .map((e) => e.contractHash)
+        .filter((h): h is NonNullable<typeof h> => h !== null),
+    );
+    expect(hashes.has(draft.contractHash)).toBe(true);
+    expect(hashes.has(revised.contractHash)).toBe(true);
+  });
+
+  it('Gate A revise past the cap → ABORTED without ever starting the loop', async () => {
+    const draft = makeFakeContract({ goal: 'draft' });
+    const ws = new FakeWorkspace('0000000', 'diff');
+    const harness = new FakeHarness([{ postHash: '0000001' }], ws);
+    const deps: DriverDeps = {
+      compiler: new FakeCompiler(draft),
+      gateA: new FakeGate([{ kind: 'revise', feedback: 'again' }]), // clamps → always revises
+      harness,
+      makeLadder: () => new FakeVerifier([passVerdict()]),
+      approver: new FakeApprover([approve()]),
+      workspace: ws,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(),
+      runlog: new InMemoryRunLog(),
+    };
+    const outcome = await drive(deps, makeConfig({ maxGateARevisions: 2 }), runId);
+    expect(outcome.status).toBe('ABORTED');
+    expect(outcome.reason).toContain('revision cap');
     expect(harness.prompts).toHaveLength(0);
   });
 
@@ -228,7 +293,7 @@ describe('drive() — resume', () => {
     const freshHarness = new FakeHarness([{ postHash: '0000003' }], ws2);
     const deps2: DriverDeps = {
       compiler: new FakeCompiler(new Error('compile must not run on resume')),
-      gateA: new FakeGate({ approved: false, reason: 'gate must not run on resume' }),
+      gateA: new FakeGate({ kind: 'reject', reason: 'gate must not run on resume' }),
       harness: freshHarness,
       makeLadder: () => new FakeVerifier([passVerdict()]),
       approver: new FakeApprover([approve()]),
@@ -266,7 +331,7 @@ describe('drive() — resume', () => {
     const ws2 = new FakeWorkspace('0000000', 'diff');
     const deps2: DriverDeps = {
       compiler: new FakeCompiler(new Error('compile must not run on resume')),
-      gateA: new FakeGate({ approved: true }),
+      gateA: new FakeGate({ kind: 'approve' }),
       harness: new FakeHarness([{ postHash: '0000009' }], ws2),
       makeLadder: () => new FakeVerifier([passVerdict()]),
       approver: new FakeApprover([approve()]),
@@ -295,7 +360,7 @@ describe('drive() — resume', () => {
     const ws = new FakeWorkspace('0000001', 'diff');
     const resumeDeps: DriverDeps = {
       compiler: new FakeCompiler(new Error('must not run')),
-      gateA: new FakeGate({ approved: false, reason: 'must not run' }),
+      gateA: new FakeGate({ kind: 'reject', reason: 'must not run' }),
       harness: new FakeHarness([{ throwError: 'must not run' }], ws),
       makeLadder: () => new FakeVerifier([failVerdict('must not run')]),
       approver: new FakeApprover([]),

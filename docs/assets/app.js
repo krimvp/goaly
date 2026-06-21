@@ -134,14 +134,14 @@
      State machine — clickable nodes
      ===================================================================== */
   const FSM = {
-    COMPILING:     { cmd: "COMPILE_VERIFIER", ev: "CONTRACT_COMPILED / COMPILE_FAILED", d: "Seed state. Emits the compile command; the agent authors and freezes the contract." },
-    AWAIT_GATE_A:  { cmd: "REQUEST_GATE_A",   ev: "GATE_A_DECIDED", d: "Holds the frozen contract while a human (or --autonomous) approves it once. Rejection → ABORTED." },
+    COMPILING:     { cmd: "COMPILE_VERIFIER", ev: "CONTRACT_COMPILED / COMPILE_FAILED", d: "Seed state — also re-entered on a Gate A 'revise'. Emits the compile command (carrying any human feedback); the agent authors and freezes the contract." },
+    AWAIT_GATE_A:  { cmd: "REQUEST_GATE_A",   ev: "GATE_A_DECIDED", d: "Holds the frozen contract for the human (or --autonomous): approve → loop, reject → ABORTED, or give feedback to revise (re-compile, bounded by --max-gate-a-revisions)." },
     RUNNING_AGENT: { cmd: "RUN_AGENT",        ev: "AGENT_RAN", d: "One headless harness turn. On return, iteration++ and the pre/post diff hashes are recorded." },
     VERIFYING:     { cmd: "RUN_VERIFIER",     ev: "VERIFIED", d: "Runs the frozen ladder. A pass routes to Gate B; a fail goes straight to DECIDE (Gate B never runs)." },
     AWAIT_GATE_B:  { cmd: "REQUEST_GATE_B",   ev: "GATE_B_DECIDED", d: "Reached only on a passing ladder. The independent approver may veto. Then DECIDE." },
     DONE:          { cmd: "—",                ev: "(terminal)", d: "Two keys turned: the frozen verifier passed and the approver did not veto. Exit code 0." },
     FAILED:        { cmd: "—",                ev: "(terminal)", d: "Reached maxIterations without satisfying the contract, or compile failed before any contract froze." },
-    ABORTED:       { cmd: "—",                ev: "(terminal)", d: "A stuck detector fired (no-diff, repeat-failure, oscillation, budget) or Gate A rejected the contract." },
+    ABORTED:       { cmd: "—",                ev: "(terminal)", d: "A stuck detector fired (no-diff, repeat-failure, oscillation, budget), or Gate A rejected the contract / exhausted its revise rounds." },
   };
   const fsmDetail = $("#fsm-detail");
   function showFsm(state) {

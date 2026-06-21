@@ -40,7 +40,7 @@ describe('step() transitions', () => {
   it('Gate A approval starts the first iteration with an initial prompt', () => {
     const [s0] = initial(makeConfig());
     const [s1] = step(s0, { tag: 'CONTRACT_COMPILED', contract });
-    const [s2, cmds] = step(s1, { tag: 'GATE_A_DECIDED', decision: { approved: true } });
+    const [s2, cmds] = step(s1, { tag: 'GATE_A_DECIDED', decision: { kind: 'approve' } });
     expect(s2.tag).toBe('RUNNING_AGENT');
     expect(cmds[0]).toMatchObject({ tag: 'RUN_AGENT', sessionId: undefined });
     if (cmds[0]?.tag === 'RUN_AGENT') expect(cmds[0].prompt).toContain(contract.goal);
@@ -51,9 +51,61 @@ describe('step() transitions', () => {
     const [s1] = step(s0, { tag: 'CONTRACT_COMPILED', contract });
     const [s2] = step(s1, {
       tag: 'GATE_A_DECIDED',
-      decision: { approved: false, reason: 'bad bar' },
+      decision: { kind: 'reject', reason: 'bad bar' },
     });
     expect(s2).toMatchObject({ tag: 'ABORTED', reason: 'bad bar' });
+  });
+
+  it('Gate A revise → back to COMPILING with a feedback-carrying COMPILE_VERIFIER', () => {
+    const [s0] = initial(makeConfig());
+    const [s1] = step(s0, { tag: 'CONTRACT_COMPILED', contract });
+    const [s2, cmds] = step(s1, {
+      tag: 'GATE_A_DECIDED',
+      decision: { kind: 'revise', feedback: 'make it stricter' },
+    });
+    expect(s2).toMatchObject({ tag: 'COMPILING', reviseRound: 1 });
+    expect(cmds[0]).toEqual({
+      tag: 'COMPILE_VERIFIER',
+      config: makeConfig(),
+      feedback: 'make it stricter',
+    });
+  });
+
+  it('revise carries reviseRound forward and re-presents at Gate A', () => {
+    const [s0] = initial(makeConfig());
+    const [s1] = step(s0, { tag: 'CONTRACT_COMPILED', contract });
+    const [s2] = step(s1, {
+      tag: 'GATE_A_DECIDED',
+      decision: { kind: 'revise', feedback: 'again' },
+    });
+    // The re-compile lands back at AWAIT_GATE_A with reviseRound preserved.
+    const [s3] = step(s2, { tag: 'CONTRACT_COMPILED', contract });
+    expect(s3).toMatchObject({ tag: 'AWAIT_GATE_A', reviseRound: 1 });
+  });
+
+  it('revise past maxGateARevisions → ABORTED', () => {
+    const config = makeConfig({ maxGateARevisions: 1 });
+    let state = step(initial(config)[0], { tag: 'CONTRACT_COMPILED', contract })[0];
+    // First revise is allowed (round 0 → 1).
+    state = step(state, { tag: 'GATE_A_DECIDED', decision: { kind: 'revise', feedback: 'a' } })[0];
+    state = step(state, { tag: 'CONTRACT_COMPILED', contract })[0];
+    // Second revise exceeds the cap of 1 → abort.
+    const [aborted] = step(state, {
+      tag: 'GATE_A_DECIDED',
+      decision: { kind: 'revise', feedback: 'b' },
+    });
+    expect(aborted).toMatchObject({ tag: 'ABORTED' });
+    if (aborted.tag === 'ABORTED') expect(aborted.reason).toContain('revision cap');
+  });
+
+  it('maxGateARevisions: 0 aborts on the first revise', () => {
+    const config = makeConfig({ maxGateARevisions: 0 });
+    const state = step(initial(config)[0], { tag: 'CONTRACT_COMPILED', contract })[0];
+    const [aborted] = step(state, {
+      tag: 'GATE_A_DECIDED',
+      decision: { kind: 'revise', feedback: 'x' },
+    });
+    expect(aborted).toMatchObject({ tag: 'ABORTED' });
   });
 
   it('AGENT_RAN → VERIFYING + RUN_VERIFIER, threading the session id', () => {
@@ -94,6 +146,6 @@ describe('step() transitions', () => {
 function runningAgent() {
   const [s0] = initial(makeConfig());
   const [s1] = step(s0, { tag: 'CONTRACT_COMPILED', contract });
-  const [s2] = step(s1, { tag: 'GATE_A_DECIDED', decision: { approved: true } });
+  const [s2] = step(s1, { tag: 'GATE_A_DECIDED', decision: { kind: 'approve' } });
   return s2;
 }

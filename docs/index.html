@@ -159,6 +159,8 @@
           <text class="fsm-elabel" x="151" y="156">approved</text>
           <path class="fsm-edge" d="M220,108 C 300,108 300,38 382,38" />
           <text class="fsm-elabel" x="262" y="66">reject → ABORTED</text>
+          <path class="fsm-edge" d="M70,116 C 42,102 42,48 70,34" />
+          <text class="fsm-elabel" x="18" y="78">revise</text>
           <path class="fsm-edge" d="M145,216 L145,247" />
           <path class="fsm-edge" d="M145,290 L145,321" />
           <text class="fsm-elabel" x="151" y="312">ladder pass</text>
@@ -239,7 +241,7 @@
     <!-- Gates -->
     <h3 class="reveal" style="margin-top:3rem">Two gates, and one flag that moves only one</h3>
     <div class="grid grid-3 reveal">
-      <div class="card"><h3><span class="pill gate">Gate A</span> Contract</h3><p>Approves the frozen contract once, before the loop. Default: a human confirms what “done” means. <code>--autonomous</code>: auto-accepted, but still frozen and logged loudly.</p></div>
+      <div class="card"><h3><span class="pill gate">Gate A</span> Contract</h3><p>The human's say over the bar, before the loop. goaly prints the frozen contract and prompts <code>[a]pprove / [f]eedback / [r]eject</code>: <b>approve</b> starts the loop, <b>feedback</b> re-authors the contract from your free-text note and re-prompts (bounded by <code>--max-gate-a-revisions</code>, default 10), <b>reject</b> aborts. <code>--autonomous</code> skips the prompt: auto-accepted, but still frozen and logged loudly.</p></div>
       <div class="card"><h3><span class="pill fail">Gate B</span> Result</h3><p>Every iteration, but only when the ladder passes. The independent approver is veto-only — it can stop a green from becoming DONE, never promote a red. Defaults to reject on uncertainty.</p></div>
       <div class="card"><h3><code>--autonomous</code></h3><p>Moves Gate A only. It skips the human pause, never the freeze and never verification. The two-key contract is identical in both modes.</p></div>
     </div>
@@ -345,7 +347,7 @@
           <tr><td class="feat">Verification</td><td><code>--verify-cmd</code> (existing command) · <code>--generate</code> (the agent authors it)</td></tr>
           <tr><td class="feat">Deterministic rungs</td><td><span class="yes">✓</span> exit-code / test commands, confidence = 1, ungameable</td></tr>
           <tr><td class="feat">LLM-judge rungs</td><td><span class="yes">✓</span> temperature 0, quorum (default 3), confidence floor (default 0.66)</td></tr>
-          <tr><td class="feat">Gate A</td><td>human approval · <code>--autonomous</code> auto-accept (still frozen + logged)</td></tr>
+          <tr><td class="feat">Gate A</td><td>human approve / revise (feedback) / reject · <code>--autonomous</code> auto-accept (still frozen + logged)</td></tr>
           <tr><td class="feat">Gate B</td><td><span class="yes">✓</span> independent approver, veto-only, every iteration</td></tr>
           <tr><td class="feat">Stuck detection</td><td>no-diff · repeat-failure · oscillation · budget</td></tr>
           <tr><td class="feat">Budget</td><td><code>--budget-tokens</code> · <code>--budget-wall-ms</code>, independent of iteration count</td></tr>
@@ -365,7 +367,12 @@ goaly help
 
 <span class="cmt"># point at an existing test; approve the contract once</span>
 goaly run --goal <span class="str">"handle empty input"</span> \
-  --verify-cmd <span class="str">"npm test"</span></pre>
+  --verify-cmd <span class="str">"npm test"</span>
+
+<span class="cmt"># longer goal from a file (or stdin); revise the contract at Gate A up to 3×</span>
+goaly run --goal-file <span class="str">./GOAL.md</span> \
+  --generate --max-gate-a-revisions 3
+cat GOAL.md | goaly run --goal <span class="str">-</span> --generate</pre>
       </div>
       <div class="code">
         <button class="copy-btn">copy</button>

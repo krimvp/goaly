@@ -60,7 +60,7 @@ export type ApprovalInput = {
  * a structural guarantee rather than a discipline.
  */
 export type Command =
-  | { tag: 'COMPILE_VERIFIER'; config: RunConfig }
+  | { tag: 'COMPILE_VERIFIER'; config: RunConfig; feedback?: string }
   | { tag: 'REQUEST_GATE_A'; contract: CompiledContract }
   | { tag: 'RUN_AGENT'; prompt: string; sessionId: SessionId | undefined }
   | { tag: 'RUN_VERIFIER'; contract: CompiledContract }

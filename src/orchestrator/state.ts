@@ -33,8 +33,14 @@ export type LoopCtx = {
 };
 
 export type OrchestratorState =
-  | { readonly tag: 'COMPILING'; readonly config: RunConfig }
-  | { readonly tag: 'AWAIT_GATE_A'; readonly config: RunConfig; readonly contract: CompiledContract }
+  | { readonly tag: 'COMPILING'; readonly config: RunConfig; readonly reviseRound: number }
+  | {
+      readonly tag: 'AWAIT_GATE_A';
+      readonly config: RunConfig;
+      readonly contract: CompiledContract;
+      /** How many Gate A "revise" rounds have already happened (0 on the first presentation). */
+      readonly reviseRound: number;
+    }
   | { readonly tag: 'RUNNING_AGENT'; readonly ctx: LoopCtx }
   | { readonly tag: 'VERIFYING'; readonly ctx: LoopCtx }
   | { readonly tag: 'AWAIT_GATE_B'; readonly ctx: LoopCtx }

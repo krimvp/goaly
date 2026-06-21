@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { JudgeOutput, ApprovalVerdict, Verdict } from './verdict';
+import { JudgeOutput, ApprovalVerdict, Verdict, GateDecision } from './verdict';
 
 describe('Verdict', () => {
   it('rejects confidence outside [0,1]', () => {
@@ -43,5 +43,24 @@ describe('ApprovalVerdict', () => {
   it('rejects a veto without a reason (feedback is mandatory)', () => {
     expect(() => ApprovalVerdict.parse({ veto: true })).toThrow();
     expect(() => ApprovalVerdict.parse({ veto: true, reason: '' })).toThrow();
+  });
+});
+
+describe('GateDecision', () => {
+  it('parses each of the three outcomes', () => {
+    expect(() => GateDecision.parse({ kind: 'approve' })).not.toThrow();
+    expect(() => GateDecision.parse({ kind: 'reject', reason: 'bad bar' })).not.toThrow();
+    expect(() => GateDecision.parse({ kind: 'revise', feedback: 'be stricter' })).not.toThrow();
+  });
+
+  it('requires a non-empty reason on reject and feedback on revise', () => {
+    expect(() => GateDecision.parse({ kind: 'reject' })).toThrow();
+    expect(() => GateDecision.parse({ kind: 'reject', reason: '' })).toThrow();
+    expect(() => GateDecision.parse({ kind: 'revise' })).toThrow();
+    expect(() => GateDecision.parse({ kind: 'revise', feedback: '' })).toThrow();
+  });
+
+  it('rejects the legacy flat {approved} shape (breaking change is intentional)', () => {
+    expect(() => GateDecision.parse({ approved: true })).toThrow();
   });
 });

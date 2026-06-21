@@ -12,7 +12,7 @@ import type { RunOutcome } from '../domain/events';
 export async function main(argv: string[]): Promise<number> {
   let parsed;
   try {
-    parsed = parseArgs(argv);
+    parsed = await parseArgs(argv);
   } catch (e) {
     if (e instanceof UsageError) {
       process.stderr.write(`${e.message}\n\n${USAGE}\n`);

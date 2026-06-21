@@ -49,7 +49,7 @@ function gateEntry(seq: number): RunLogEntry {
     seq,
     ts: 1_700_000_000_000 + seq,
     contractHash: null,
-    event: { tag: 'GATE_A_DECIDED', decision: { approved: true } },
+    event: { tag: 'GATE_A_DECIDED', decision: { kind: 'approve' } },
     stateTagAfter: 'RUNNING',
   };
 }

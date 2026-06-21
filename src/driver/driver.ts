@@ -152,7 +152,7 @@ async function perform(
   switch (command.tag) {
     case 'COMPILE_VERIFIER': {
       try {
-        const contract = await deps.compiler.compile(command.config);
+        const contract = await deps.compiler.compile(command.config, command.feedback);
         return { event: { tag: 'CONTRACT_COMPILED', contract }, ladder: deps.makeLadder(contract) };
       } catch (e) {
         return { event: { tag: 'COMPILE_FAILED', reason: errorMessage(e) } };

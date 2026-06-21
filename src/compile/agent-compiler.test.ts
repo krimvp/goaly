@@ -139,4 +139,35 @@ describe('AgentCompiler — generate verifier', () => {
     // Act + Assert
     await expect(compiler.compile(config)).rejects.toThrow();
   });
+
+  it('threads Gate A revise feedback into the authoring prompt', async () => {
+    // Arrange
+    const llm = new FakeLlm([JSON.stringify({ command: 'npm run check', rubric: '' })]);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({ verifier: { kind: 'generate' } });
+
+    // Act
+    await compiler.compile(config, 'be stricter about error handling');
+
+    // Assert
+    expect(llm.requests).toHaveLength(1);
+    expect(llm.requests[0]?.prompt).toContain('Reviewer feedback');
+    expect(llm.requests[0]?.prompt).toContain('be stricter about error handling');
+  });
+});
+
+describe('AgentCompiler — feedback on an existing verifier', () => {
+  it('ignores Gate A feedback (no LLM call, deterministic recompile)', async () => {
+    // Arrange
+    const llm = new FakeLlm([]);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({ verifier: { kind: 'existing', ref: 'npm test' } });
+
+    // Act
+    const contract = await compiler.compile(config, 'this feedback cannot steer a fixed command');
+
+    // Assert
+    expect(llm.requests).toHaveLength(0);
+    expect(contract.rungs).toEqual([{ kind: 'deterministic', command: 'npm test' }]);
+  });
 });

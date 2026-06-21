@@ -118,11 +118,13 @@ export class AgentCompiler implements VerifierCompiler {
     this.#writeFile = opts.writeFile;
   }
 
-  async compile(config: RunConfig): Promise<CompiledContract> {
+  async compile(config: RunConfig, feedback?: string): Promise<CompiledContract> {
     if (config.verifier.kind === 'existing') {
+      // An existing-command contract has no LLM authoring step, so there is nothing for a
+      // Gate A revise note to steer — recompilation is deterministic and feedback is ignored.
       return this.#compileExisting(config, config.verifier.ref);
     }
-    return this.#compileGenerate(config, config.verifier.intent);
+    return this.#compileGenerate(config, config.verifier.intent, feedback);
   }
 
   #compileExisting(config: RunConfig, ref: string): CompiledContract {
@@ -139,6 +141,7 @@ export class AgentCompiler implements VerifierCompiler {
   async #compileGenerate(
     config: RunConfig,
     intent: string | undefined,
+    feedback: string | undefined,
   ): Promise<CompiledContract> {
     const guidanceParts = [`Goal: ${config.goal}`];
     if (intent !== undefined && intent.length > 0) {
@@ -146,6 +149,11 @@ export class AgentCompiler implements VerifierCompiler {
     }
     if (config.rubric !== undefined && config.rubric.length > 0) {
       guidanceParts.push(`Rubric guidance: ${config.rubric}`);
+    }
+    if (feedback !== undefined && feedback.length > 0) {
+      guidanceParts.push(
+        `Reviewer feedback on the previous contract attempt (revise accordingly): ${feedback}`,
+      );
     }
     guidanceParts.push('Author verification as JSON only.');
 

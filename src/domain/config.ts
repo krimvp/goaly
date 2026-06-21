@@ -46,6 +46,12 @@ export const RunConfig = z.object({
   rubric: z.string().optional(),
   /** Gates contract approval (Gate A) ONLY. Never skips the freeze. */
   autonomous: z.boolean().default(false),
+  /**
+   * Max free-text "revise" rounds a human may take at Gate A before the run aborts. Bounds
+   * the pre-loop renegotiation (each round re-authors and re-freezes the contract). 0 disables
+   * revision entirely (Gate A stays binary). Ignored in `--autonomous` (auto-approve, no pause).
+   */
+  maxGateARevisions: z.number().int().nonnegative().default(10),
   maxIterations: z.number().int().positive().default(10),
   budget: BudgetConfig.default({}),
   stuckPolicy: StuckPolicy.default({}),
@@ -73,6 +79,7 @@ export const CliInput = z.object({
   intent: z.string().optional(),
   rubric: z.string().optional(),
   autonomous: z.coerce.boolean().optional(),
+  maxGateARevisions: z.coerce.number().int().nonnegative().optional(),
   maxIterations: z.coerce.number().int().positive().optional(),
   budgetTokens: z.coerce.number().int().positive().optional(),
   budgetWallClockMs: z.coerce.number().int().positive().optional(),
@@ -95,6 +102,9 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     verifier,
     ...(input.rubric !== undefined ? { rubric: input.rubric } : {}),
     ...(input.autonomous !== undefined ? { autonomous: input.autonomous } : {}),
+    ...(input.maxGateARevisions !== undefined
+      ? { maxGateARevisions: input.maxGateARevisions }
+      : {}),
     ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
     budget,
   } satisfies RunConfigInput);

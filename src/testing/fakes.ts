@@ -99,25 +99,46 @@ export class FakeApprover implements Approver {
 }
 
 export class FakeCompiler implements VerifierCompiler {
-  readonly #contract: CompiledContract | Error;
-  constructor(contract: CompiledContract | Error) {
-    this.#contract = contract;
+  readonly #contracts: (CompiledContract | Error)[];
+  #i = 0;
+  /** The `feedback` arg of each compile() call, in order (undefined when none was passed). */
+  readonly feedbacks: (string | undefined)[] = [];
+  /** The config of each compile() call, in order. */
+  readonly configs: RunConfig[] = [];
+
+  constructor(contract: CompiledContract | Error | (CompiledContract | Error)[]) {
+    this.#contracts = Array.isArray(contract) ? contract : [contract];
   }
-  async compile(_config: RunConfig): Promise<CompiledContract> {
-    if (this.#contract instanceof Error) throw this.#contract;
-    return this.#contract;
+
+  async compile(config: RunConfig, feedback?: string): Promise<CompiledContract> {
+    this.configs.push(config);
+    this.feedbacks.push(feedback);
+    // Clamp to the last scripted entry so a single-element script keeps returning it.
+    const idx = Math.min(this.#i, this.#contracts.length - 1);
+    this.#i += 1;
+    const next = this.#contracts[idx];
+    if (next === undefined) throw new Error('FakeCompiler: no contract scripted');
+    if (next instanceof Error) throw next;
+    return next;
   }
 }
 
 export class FakeGate implements ContractGate {
-  readonly #decision: GateDecision;
+  readonly #decisions: GateDecision[];
+  #i = 0;
   readonly seen: CompiledContract[] = [];
-  constructor(decision: GateDecision = { approved: true }) {
-    this.#decision = decision;
+
+  constructor(decision: GateDecision | GateDecision[] = { kind: 'approve' }) {
+    this.#decisions = Array.isArray(decision) ? decision : [decision];
   }
+
   async approveContract(contract: CompiledContract): Promise<GateDecision> {
     this.seen.push(contract);
-    return this.#decision;
+    const idx = Math.min(this.#i, this.#decisions.length - 1);
+    this.#i += 1;
+    const next = this.#decisions[idx];
+    if (next === undefined) throw new Error('FakeGate: no decision scripted');
+    return next;
   }
 }
 

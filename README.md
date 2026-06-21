@@ -19,7 +19,7 @@ See [`DESIGN.md`](DESIGN.md) (what & why), [`ARCHITECTURE.md`](ARCHITECTURE.md) 
 ## How it works
 
 ```
-COMPILE_VERIFIER → [Gate A: contract approval] → loop {
+COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
     RUN_AGENT → verifier ladder → [Gate B: result approval] → DECIDE
 } → DONE | FAILED | ABORTED
 ```
@@ -30,6 +30,10 @@ COMPILE_VERIFIER → [Gate A: contract approval] → loop {
 - The **verifier ladder** runs cheapest-and-hardest-to-game first: deterministic checks (exit codes,
   tests) before any LLM judge, short-circuiting on the first deterministic fail. A rung that errors is
   **fail-closed** — a malformed grader is never a green.
+- **Gate A is the human's say over the bar.** Before the loop you can approve the frozen contract,
+  **reject** it (abort), or give **free-text feedback to revise** it — goaly re-authors the contract
+  and re-presents it, bounded by `--max-gate-a-revisions` (default 10; `0` disables revision).
+  `--autonomous` skips this pause entirely, never the freeze.
 - **Two keys for DONE:** the frozen verifier passes *and* the independent approver (Gate B, veto-only)
   doesn't veto.
 - **Stuck detection** bails before `maxIterations` with a reason: no-diff, repeat-failure, oscillation,
@@ -69,11 +73,33 @@ goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
 # Let the agent author the verification, and run unattended (contract still frozen + logged loudly):
 goaly run --goal "add a /health endpoint returning 200" --generate --autonomous
 
+# Provide a longer, well-specified goal from a file (or stdin), and revise the contract
+# interactively at Gate A up to 3 times before it sticks:
+goaly run --goal-file ./GOAL.md --generate --max-gate-a-revisions 3
+cat ./GOAL.md | goaly run --goal - --generate
+
 # Choose a harness, cap iterations, set a budget, resume a crashed run:
 goaly run --goal "..." --verify-cmd "pytest -q" --harness codex --max-iterations 8 \
              --budget-tokens 500000 --workspace ./myrepo
 goaly run --goal "..." --resume run-<id> --workspace ./myrepo
 ```
+
+Goal, intent, and rubric each accept one source: inline (`--goal "…"`), a file (`--goal-file <path>`),
+or stdin (`--goal -`). Giving a field more than one source is a usage error.
+
+At **Gate A** (unless `--autonomous`), goaly prints the frozen contract and prompts:
+
+```
+Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject:
+```
+
+- `a` / `approve` (or `y`/`yes`) — accept the contract and start the loop.
+- `f` / `feedback` — type a free-text note; goaly re-authors the contract from it and re-prompts,
+  up to `--max-gate-a-revisions` times. Empty feedback is treated as a reject.
+- `r` / `reject` (anything else) — abort; the loop never starts.
+
+> Piping the goal via stdin (`--goal -`) consumes stdin, so there's nothing left for the interactive
+> prompt — use `--autonomous` or `--goal-file` in that case.
 
 `goaly help` lists every flag. Exit codes: `0` DONE, `1` FAILED/ABORTED, `2` usage error.
 

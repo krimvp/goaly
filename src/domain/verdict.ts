@@ -47,9 +47,19 @@ export const ApprovalVerdict = z
   });
 export type ApprovalVerdict = z.infer<typeof ApprovalVerdict>;
 
-/** Gate A decision over the freshly compiled (and about-to-be-frozen) contract. */
-export const GateDecision = z.object({
-  approved: z.boolean(),
-  reason: z.string().optional(),
-});
+/**
+ * Gate A decision over the freshly compiled (and about-to-be-frozen) contract. Three
+ * mutually exclusive outcomes:
+ *  - `approve`: the freeze stands and the loop starts.
+ *  - `reject`: abort the run (the loop never starts).
+ *  - `revise`: re-author the contract with the human's free-text feedback, then re-present
+ *    at Gate A. This is *pre-approval* renegotiation only — the contract that finally enters
+ *    the loop is still frozen and never rewritten mid-loop (invariant #2). Each revise round
+ *    produces its own logged `contractHash`; only the approved one is ever verified against.
+ */
+export const GateDecision = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('approve') }),
+  z.object({ kind: z.literal('reject'), reason: z.string().min(1) }),
+  z.object({ kind: z.literal('revise'), feedback: z.string().min(1) }),
+]);
 export type GateDecision = z.infer<typeof GateDecision>;

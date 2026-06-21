@@ -17,7 +17,7 @@ export type StepResult = readonly [OrchestratorState, Command[]];
 /** Seed the machine: COMPILING + a single COMPILE_VERIFIER command. */
 export function initial(config: RunConfig): StepResult {
   return [
-    { tag: 'COMPILING', config },
+    { tag: 'COMPILING', config, reviseRound: 0 },
     [{ tag: 'COMPILE_VERIFIER', config }],
   ];
 }
@@ -25,9 +25,9 @@ export function initial(config: RunConfig): StepResult {
 export function step(state: OrchestratorState, event: OrchestratorEvent): StepResult {
   switch (state.tag) {
     case 'COMPILING':
-      return stepCompiling(state.config, event);
+      return stepCompiling(state.config, state.reviseRound, event);
     case 'AWAIT_GATE_A':
-      return stepAwaitGateA(state.config, state.contract, event);
+      return stepAwaitGateA(state.config, state.contract, state.reviseRound, event);
     case 'RUNNING_AGENT':
       return stepRunningAgent(state.ctx, event);
     case 'VERIFYING':
@@ -41,11 +41,15 @@ export function step(state: OrchestratorState, event: OrchestratorEvent): StepRe
   }
 }
 
-function stepCompiling(config: RunConfig, event: OrchestratorEvent): StepResult {
+function stepCompiling(
+  config: RunConfig,
+  reviseRound: number,
+  event: OrchestratorEvent,
+): StepResult {
   switch (event.tag) {
     case 'CONTRACT_COMPILED':
       return [
-        { tag: 'AWAIT_GATE_A', config, contract: event.contract },
+        { tag: 'AWAIT_GATE_A', config, contract: event.contract, reviseRound },
         [{ tag: 'REQUEST_GATE_A', contract: event.contract }],
       ];
     case 'COMPILE_FAILED':
@@ -61,24 +65,47 @@ function stepCompiling(config: RunConfig, event: OrchestratorEvent): StepResult 
 function stepAwaitGateA(
   config: RunConfig,
   contract: CompiledContract,
+  reviseRound: number,
   event: OrchestratorEvent,
 ): StepResult {
   if (event.tag !== 'GATE_A_DECIDED') throw invalidTransition('AWAIT_GATE_A', event);
 
-  if (!event.decision.approved) {
-    return [
-      {
-        tag: 'ABORTED',
-        reason: event.decision.reason ?? 'contract rejected at Gate A',
-        iterations: 0,
-        contractHash: contract.contractHash,
-      },
-      [],
-    ];
+  switch (event.decision.kind) {
+    case 'approve': {
+      const ctx = initialCtx(config, contract);
+      return startIteration(ctx, buildInitialPrompt(contract), undefined);
+    }
+    case 'reject':
+      return [
+        {
+          tag: 'ABORTED',
+          reason: event.decision.reason,
+          iterations: 0,
+          contractHash: contract.contractHash,
+        },
+        [],
+      ];
+    case 'revise': {
+      // Pre-approval renegotiation: bounded by maxGateARevisions so the loop always terminates.
+      // The reducer stays pure — it only emits a re-compile command carrying the human's
+      // feedback; the Driver performs the recompile and a fresh CONTRACT_COMPILED returns here.
+      if (reviseRound + 1 > config.maxGateARevisions) {
+        return [
+          {
+            tag: 'ABORTED',
+            reason: `Gate A revision cap (${config.maxGateARevisions}) reached without approval`,
+            iterations: 0,
+            contractHash: contract.contractHash,
+          },
+          [],
+        ];
+      }
+      return [
+        { tag: 'COMPILING', config, reviseRound: reviseRound + 1 },
+        [{ tag: 'COMPILE_VERIFIER', config, feedback: event.decision.feedback }],
+      ];
+    }
   }
-
-  const ctx = initialCtx(config, contract);
-  return startIteration(ctx, buildInitialPrompt(contract), undefined);
 }
 
 function stepRunningAgent(ctx: LoopCtx, event: OrchestratorEvent): StepResult {

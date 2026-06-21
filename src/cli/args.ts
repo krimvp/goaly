@@ -1,4 +1,5 @@
 import { CliInput, cliInputToRunConfig, type RunConfig } from '../domain/config';
+import { resolveInputSources, defaultReaders, type InputReaders } from './input-sources';
 
 export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'fake';
 
@@ -15,20 +16,34 @@ export const USAGE = `goaly — run a coding agent until a frozen success contra
 Usage:
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
-               [--budget-tokens N] [--budget-wall-ms N]
+               [--max-gate-a-revisions N] [--budget-tokens N] [--budget-wall-ms N]
                [--harness claude-code|codex|droid] [--workspace <dir>] [--resume <runId>]
 
   goaly help
+
+Goal / intent / rubric input (choose ONE source per field):
+  --goal "<text>"   inline value
+  --goal-file <p>   read the value from a file
+  --goal -          read the value from stdin (a lone "-")
+  --intent/--intent-file and --rubric/--rubric-file work the same way.
+  Giving a field more than one source — or piping stdin to more than one field — is an error.
 
 Verification:
   --verify-cmd   point at an existing command that must exit 0
   --generate     have the agent author the verification (optionally guided by --intent)
 
 Gate A (contract approval):
-  default        a human approves the frozen contract once before the loop
-  --autonomous   auto-accept the contract (still frozen; logged loudly)`;
+  default                     print the frozen contract and prompt for one of:
+                                a / approve   accept it and start the loop
+                                f / feedback  type a note; the contract is re-authored & re-shown
+                                r / reject    abort the run (the loop never starts)
+  --max-gate-a-revisions N    cap the free-text revise rounds (default 10; 0 disables revision)
+  --autonomous                skip the prompt: auto-accept (still frozen; logged loudly)
 
-type RawFlags = Record<string, string | boolean>;
+  Note: piping the goal via stdin (--goal -) leaves no stdin for the interactive prompt;
+  pair it with --autonomous, or read the goal from a file (--goal-file) instead.`;
+
+export type RawFlags = Record<string, string | boolean>;
 
 function parseFlags(tokens: string[]): RawFlags {
   const flags: RawFlags = {};
@@ -61,7 +76,10 @@ function str(flags: RawFlags, key: string): string | undefined {
   return v;
 }
 
-export function parseArgs(argv: string[]): ParsedArgs {
+export async function parseArgs(
+  argv: string[],
+  readers: InputReaders = defaultReaders,
+): Promise<ParsedArgs> {
   const [command, ...rest] = argv;
 
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') {
@@ -73,15 +91,21 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
   const flags = parseFlags(rest);
 
+  // Goal/intent/rubric may come from inline flags, files, or stdin — resolve to strings first.
+  const resolved = await resolveInputSources(flags, readers);
+
   const cliInput = CliInput.parse({
-    goal: str(flags, 'goal'),
+    goal: resolved.goal,
     ...(str(flags, 'verify-cmd') !== undefined ? { verifyCmd: str(flags, 'verify-cmd') } : {}),
     ...(flags['generate'] !== undefined ? { generate: true } : {}),
-    ...(str(flags, 'intent') !== undefined ? { intent: str(flags, 'intent') } : {}),
-    ...(str(flags, 'rubric') !== undefined ? { rubric: str(flags, 'rubric') } : {}),
+    ...(resolved.intent !== undefined ? { intent: resolved.intent } : {}),
+    ...(resolved.rubric !== undefined ? { rubric: resolved.rubric } : {}),
     ...(flags['autonomous'] !== undefined ? { autonomous: true } : {}),
     ...(str(flags, 'max-iterations') !== undefined
       ? { maxIterations: str(flags, 'max-iterations') }
+      : {}),
+    ...(str(flags, 'max-gate-a-revisions') !== undefined
+      ? { maxGateARevisions: str(flags, 'max-gate-a-revisions') }
       : {}),
     ...(str(flags, 'budget-tokens') !== undefined
       ? { budgetTokens: str(flags, 'budget-tokens') }
