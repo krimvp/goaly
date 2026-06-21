@@ -449,13 +449,14 @@ goaly run --goal <span class="str">"…"</span> --model <span class="str">claude
       </div>
       <div class="tabpane" id="tab-cx">
         <dl class="kv">
-          <dt>fresh</dt><dd><code>codex exec "&lt;prompt&gt;" --json</code></dd>
-          <dt>resume</dt><dd><code>codex exec resume &lt;id&gt; "&lt;prompt&gt;" --json</code></dd>
+          <dt>fresh</dt><dd><code>codex exec --full-auto "&lt;prompt&gt;" --json</code></dd>
+          <dt>resume</dt><dd><code>codex exec resume &lt;id&gt; --full-auto "&lt;prompt&gt;" --json</code></dd>
+          <dt>writes ←</dt><dd><code>--full-auto</code> — harness role needs a writable sandbox (<code>exec</code> is read-only by default)</dd>
           <dt>prompt</dt><dd>argv</dd>
           <dt>output</dt><dd>jsonl-stream — the last result-bearing line carries the answer</dd>
-          <dt>result ←</dt><dd>last line's result / message field</dd>
-          <dt>session ←</dt><dd>thread id — latch the first established at stream start</dd>
-          <dt>tokens ←</dt><dd>usage block if present (optional)</dd>
+          <dt>result ←</dt><dd>last <code>agent_message</code>'s <code>item.text</code> (or a flat <code>result</code>/<code>message</code>)</dd>
+          <dt>session ←</dt><dd><code>thread_id</code> — latch the first established at stream start</dd>
+          <dt>tokens ←</dt><dd><code>turn.completed.usage</code> (input+output) if present (optional)</dd>
         </dl>
       </div>
       <div class="tabpane" id="tab-dr">

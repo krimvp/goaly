@@ -58,11 +58,48 @@ describe('parseCodexOutput', () => {
     const stdout = JSON.stringify({ content: [{ text: 'a' }, { text: 'b' }] });
     expect(parseCodexOutput(stdout)?.text).toBe('ab');
   });
+
+  // Regression: current codex nests assistant text under `item` and usage on `turn.completed`.
+  // Before the `item` traversal, this parsed to null and every codex run was misclassified crashed.
+  it('extracts text/session/tokens from the current item.completed / turn.completed events', () => {
+    const stdout = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'th-9' }),
+      JSON.stringify({ type: 'item.completed', item: { id: 'a', type: 'agent_message', text: 'thinking…' } }),
+      JSON.stringify({
+        type: 'item.started',
+        item: { id: 'b', type: 'command_execution', command: 'node --test', aggregated_output: 'ok', exit_code: 0, status: 'completed' },
+      }),
+      JSON.stringify({ type: 'item.completed', item: { id: 'c', type: 'agent_message', text: 'Updated sum.mjs.' } }),
+      JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 23, cached_input_tokens: 90 } }),
+    ].join('\n');
+    const parsed = parseCodexOutput(stdout);
+    expect(parsed?.text).toBe('Updated sum.mjs.'); // last agent_message wins; command output is not text
+    expect(parsed?.sessionId).toBe('th-9');
+    expect(parsed?.tokens).toBe(123);
+  });
 });
 
 describe('CodexAdapter', () => {
   it('has the name "codex"', () => {
     expect(new CodexAdapter().name).toBe('codex');
+  });
+
+  // Regression: the current codex event format (item.completed / turn.completed) must classify as
+  // `completed` with its text and tokens — before the `item` traversal it parsed to null → crashed.
+  it('classifies the current codex event format as completed', async () => {
+    const stdout = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'th-1' }),
+      JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Updated sum.mjs.' } }),
+      JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 23 } }),
+    ].join('\n');
+    const adapter = new CodexAdapter({ exec: fakeExec({ stdout, stderr: '', code: 0 }) });
+
+    const result = await adapter.run('go');
+
+    expect(result.status).toBe('completed');
+    expect(result.output).toBe('Updated sum.mjs.');
+    expect(result.sessionId).toBe('th-1');
+    expect(result.tokensUsed).toBe(123);
   });
 
   it('maps a clean success run to status "completed" with session id and tokens', async () => {
@@ -76,8 +113,8 @@ describe('CodexAdapter', () => {
     expect(result.output).toBe('all done, files written');
     expect(result.sessionId).toBe('codex-thread-42');
     expect(result.tokensUsed).toBe(123);
-    // Default (no resume) args.
-    expect(sink.args[0]).toEqual(['exec', 'do the thing', '--json']);
+    // Default (no resume) args — --full-auto enables the writable sandbox the harness needs.
+    expect(sink.args[0]).toEqual(['exec', '--full-auto', 'do the thing', '--json']);
   });
 
   it('passes a resume flag and session id when resuming', async () => {
@@ -88,7 +125,14 @@ describe('CodexAdapter', () => {
     const sid = SessionId.parse('prev-session');
     await adapter.run('continue', sid);
 
-    expect(sink.args[0]).toEqual(['exec', 'resume', 'prev-session', 'continue', '--json']);
+    expect(sink.args[0]).toEqual([
+      'exec',
+      'resume',
+      'prev-session',
+      '--full-auto',
+      'continue',
+      '--json',
+    ]);
   });
 
   it('threads --model before the prompt positional (fresh + resume)', async () => {
@@ -97,10 +141,19 @@ describe('CodexAdapter', () => {
     const adapter = new CodexAdapter({ exec, model: 'gpt-x' });
 
     await adapter.run('do it');
-    expect(sink.args[0]).toEqual(['exec', '--model', 'gpt-x', 'do it', '--json']);
+    expect(sink.args[0]).toEqual(['exec', '--full-auto', '--model', 'gpt-x', 'do it', '--json']);
 
     await adapter.run('more', SessionId.parse('prev'));
-    expect(sink.args[1]).toEqual(['exec', 'resume', 'prev', '--model', 'gpt-x', 'more', '--json']);
+    expect(sink.args[1]).toEqual([
+      'exec',
+      'resume',
+      'prev',
+      '--full-auto',
+      '--model',
+      'gpt-x',
+      'more',
+      '--json',
+    ]);
   });
 
   it('maps malformed stdout to "crashed" but still a valid RunResult', async () => {
