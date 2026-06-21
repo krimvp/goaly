@@ -63,7 +63,8 @@ make pack           # -> goaly-<version>.tgz, installable with `npm i -g ./goaly
 ```
 
 Requires Node ≥ 20 and `git`. The default adapters shell out to the `claude` / `codex` / `droid`
-CLIs; the LLM judge/approver use a CLI-backed provider by default.
+CLIs; the LLM compile/judge/approve steps use a CLI-backed provider (`claude` by default, switchable
+with `--llm-provider`). Pick the model per layer with `--model` / `--llm-model` (see Usage).
 
 > Add `.goaly/` to your target repo's `.gitignore`. (goaly also excludes it from its own
 > tree-hash, so its run logs never pollute stuck-detection regardless.)
@@ -86,10 +87,25 @@ cat ./GOAL.md | goaly run --goal - --generate
 goaly run --goal "..." --verify-cmd "pytest -q" --harness codex --max-iterations 8 \
              --budget-tokens 500000 --workspace ./myrepo
 goaly run --goal "..." --resume run-<id> --workspace ./myrepo
+
+# Pick a model for the harness, and a different model for the LLM steps (judge/approver/compiler):
+goaly run --goal "..." --verify-cmd "npm test" --harness claude-code \
+             --model claude-opus-4-8 --llm-model claude-sonnet-4-6
+
+# Run the LLM steps on a different CLI entirely (kept read-only so they never touch the tree):
+goaly run --goal "..." --generate --autonomous --harness codex \
+             --model gpt-5-codex --llm-provider codex --judge-model o3
 ```
 
 Goal, intent, and rubric each accept one source: inline (`--goal "…"`), a file (`--goal-file <path>`),
 or stdin (`--goal -`). Giving a field more than one source is a usage error.
+
+**Model selection** is optional and never enters the frozen contract — it's pure wiring. `--model`
+is the global default (the harness *and* the LLM steps); `--llm-model` overrides all LLM steps; and
+`--judge-model` / `--approver-model` / `--compiler-model` override a single step. Precedence per LLM
+step: per-step flag → `--llm-model` → `--model` → the tool's own default. `--llm-provider`
+(`claude` default, or `codex` / `droid`) picks which CLI runs those steps — handy when the harness
+and the LLM steps should share a model namespace. Omit them all and every tool uses its own default.
 
 At **Gate A** (unless `--autonomous`), goaly prints the frozen contract and prompts:
 

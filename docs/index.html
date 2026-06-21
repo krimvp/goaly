@@ -345,6 +345,7 @@
         <tbody>
           <tr><td class="feat">Harnesses</td><td><span class="pill pass">claude-code</span> <span class="pill pass">codex</span> <span class="pill pass">droid</span> <span class="pill neutral">fake</span> — adding one is a single file</td></tr>
           <tr><td class="feat">Verification</td><td><code>--verify-cmd</code> (existing command) · <code>--generate</code> (the agent authors it)</td></tr>
+          <tr><td class="feat">Model selection</td><td><code>--model</code> (harness + LLM steps) · <code>--llm-model</code> · per-step <code>--judge/approver/compiler-model</code> · <code>--llm-provider</code> claude/codex/droid — pure wiring, never enters the frozen contract</td></tr>
           <tr><td class="feat">Deterministic rungs</td><td><span class="yes">✓</span> exit-code / test commands, confidence = 1, ungameable</td></tr>
           <tr><td class="feat">LLM-judge rungs</td><td><span class="yes">✓</span> temperature 0, quorum (default 3), confidence floor (default 0.66)</td></tr>
           <tr><td class="feat">Gate A</td><td>human approve / revise (feedback) / reject · <code>--autonomous</code> auto-accept (still frozen + logged)</td></tr>
@@ -383,7 +384,11 @@ goaly run --goal <span class="str">"add a /health endpoint"</span> \
 <span class="cmt"># choose a harness, cap iters, set a budget, resume</span>
 goaly run --goal <span class="str">"…"</span> --harness codex \
   --max-iterations 8 --budget-tokens 500000
-goaly run --goal <span class="str">"…"</span> --resume run-&lt;id&gt;</pre>
+goaly run --goal <span class="str">"…"</span> --resume run-&lt;id&gt;
+
+<span class="cmt"># model for the harness + a different model (and CLI) for the LLM steps</span>
+goaly run --goal <span class="str">"…"</span> --model <span class="str">claude-opus-4-8</span> \
+  --llm-model <span class="str">claude-sonnet-4-6</span> --llm-provider claude</pre>
       </div>
     </div>
     <p class="lede reveal" style="margin-top:0.9rem; font-size:0.82rem">Exit codes — <span class="pill pass">0 DONE</span> <span class="pill fail">1 FAILED / ABORTED</span> <span class="pill neutral">2 usage error</span></p>

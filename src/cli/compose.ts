@@ -23,7 +23,11 @@ import { DroidAdapter } from '../harness/droid';
 import { SystemClock } from '../driver/clock';
 import { SystemBudgetMeter } from '../driver/budget';
 import { CliLlmProvider } from '../llm/cli-provider';
-import type { HarnessChoice } from './args';
+import { AgentCliLlmProvider } from '../llm/agent-cli-provider';
+import { codexExtractor } from '../harness/codex';
+import { droidExtractor } from '../harness/droid';
+import { resolveModels, type ModelSelection } from './models';
+import type { HarnessChoice, LlmProviderChoice } from './args';
 
 export type ComposeOptions = {
   harness: HarnessChoice;
@@ -31,6 +35,10 @@ export type ComposeOptions = {
   runId: RunId;
   /** Override the LLM provider (tests inject a FakeLlm; production uses the CLI provider). */
   llm?: LlmProvider;
+  /** Which CLI runs the LLM workflow steps (judge / approver / compiler). Default `claude`. */
+  llmProvider?: LlmProviderChoice;
+  /** Raw model-selection flags; resolved into per-seam models via the cascade. */
+  models?: ModelSelection;
   /** Where run logs live. Default `<workspaceRoot>/.goaly` (excluded from diffHash). */
   stateDir?: string;
 };
@@ -44,27 +52,82 @@ export const STATE_DIR = '.goaly';
  * only place that turns the frozen contract's rungs into a runnable Ladder.
  */
 export function composeDeps(config: RunConfig, options: ComposeOptions): DriverDeps {
-  const llm = options.llm ?? new CliLlmProvider();
+  const models = resolveModels(options.models ?? {});
+  const provider = options.llmProvider ?? 'claude';
+  // An injected `llm` (tests) overrides every step; otherwise build a provider per step so each
+  // can carry its own resolved model. The model is wiring — it never enters the frozen contract.
+  const llmFor = (model: string | undefined): LlmProvider =>
+    options.llm ?? makeLlmProvider(provider, model);
   const clock = new SystemClock();
   const workspace = new GitWorkspace(options.workspaceRoot);
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
 
   return {
     compiler: new AgentCompiler({
-      llm,
+      llm: llmFor(models.compiler),
       writeFile: (rel, content) => writeWorkspaceFile(options.workspaceRoot, rel, content),
     }),
     gateA: config.autonomous
       ? new AutoContractGate()
       : new HumanContractGate({ allowRevise: config.maxGateARevisions > 0 }),
-    harness: makeHarness(options.harness),
-    makeLadder: (contract) => buildLadder(contract, llm),
-    approver: new AgentApprover({ llm }),
+    harness: makeHarness(options.harness, models.harness),
+    makeLadder: (contract) => buildLadder(contract, llmFor(models.judge)),
+    approver: new AgentApprover({ llm: llmFor(models.approver) }),
     workspace,
     clock,
     budget: new SystemBudgetMeter(config.budget, clock),
     runlog: new FileRunLog(path.join(stateDir, options.runId)),
   };
+}
+
+/**
+ * Build the LLM provider for the workflow steps. `claude` uses the lean `claude -p` completion;
+ * `codex`/`droid` wrap their agentic CLI in a one-shot READ-ONLY mode (codex `--sandbox read-only`,
+ * droid's default no-`--auto` exec) so a judge / approver / compiler can use that tool's model
+ * without ever mutating the working tree it is judging. The resolved per-step model is threaded in.
+ */
+export function makeLlmProvider(choice: LlmProviderChoice, model: string | undefined): LlmProvider {
+  switch (choice) {
+    case 'claude':
+      return new CliLlmProvider(model !== undefined ? { model } : {});
+    case 'codex':
+      return new AgentCliLlmProvider({
+        name: 'codex',
+        command: 'codex',
+        extractor: codexExtractor,
+        buildArgs: (prompt) => codexCompletionArgs(prompt, model),
+      });
+    case 'droid':
+      return new AgentCliLlmProvider({
+        name: 'droid',
+        command: 'droid',
+        extractor: droidExtractor,
+        buildArgs: (prompt) => droidCompletionArgs(prompt, model),
+      });
+  }
+}
+
+/** codex one-shot completion argv — READ-ONLY (`--sandbox read-only`), model before the prompt. */
+export function codexCompletionArgs(prompt: string, model: string | undefined): string[] {
+  return [
+    'exec',
+    '--sandbox',
+    'read-only',
+    ...(model !== undefined ? ['--model', model] : []),
+    prompt,
+    '--json',
+  ];
+}
+
+/** droid one-shot completion argv — READ-ONLY (no `--auto`, droid's `exec` default cannot edit). */
+export function droidCompletionArgs(prompt: string, model: string | undefined): string[] {
+  return [
+    'exec',
+    '--output-format',
+    'json',
+    ...(model !== undefined ? ['--model', model] : []),
+    prompt,
+  ];
 }
 
 /** Turn the frozen contract's ordered rungs into a Ladder of concrete verifiers. */
@@ -82,14 +145,15 @@ export function buildLadder(contract: CompiledContract, llm: LlmProvider): Verif
   return new Ladder(rungs);
 }
 
-function makeHarness(choice: HarnessChoice): HarnessAdapter {
+function makeHarness(choice: HarnessChoice, model: string | undefined): HarnessAdapter {
+  const opts = model !== undefined ? { model } : {};
   switch (choice) {
     case 'claude-code':
-      return new ClaudeCodeAdapter();
+      return new ClaudeCodeAdapter(opts);
     case 'codex':
-      return new CodexAdapter();
+      return new CodexAdapter(opts);
     case 'droid':
-      return new DroidAdapter();
+      return new DroidAdapter(opts);
     case 'fake':
       return new NoopHarness();
   }

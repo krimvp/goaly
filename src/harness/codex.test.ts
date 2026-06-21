@@ -91,6 +91,18 @@ describe('CodexAdapter', () => {
     expect(sink.args[0]).toEqual(['exec', 'resume', 'prev-session', 'continue', '--json']);
   });
 
+  it('threads --model before the prompt positional (fresh + resume)', async () => {
+    const sink = { args: [] as string[][], prompts: [] as string[] };
+    const exec = fakeExec({ stdout: successJsonl, stderr: '', code: 0 }, sink);
+    const adapter = new CodexAdapter({ exec, model: 'gpt-x' });
+
+    await adapter.run('do it');
+    expect(sink.args[0]).toEqual(['exec', '--model', 'gpt-x', 'do it', '--json']);
+
+    await adapter.run('more', SessionId.parse('prev'));
+    expect(sink.args[1]).toEqual(['exec', 'resume', 'prev', '--model', 'gpt-x', 'more', '--json']);
+  });
+
   it('maps malformed stdout to "crashed" but still a valid RunResult', async () => {
     const exec = fakeExec({ stdout: 'totally not json', stderr: 'boom', code: 1 });
     const adapter = new CodexAdapter({ exec });

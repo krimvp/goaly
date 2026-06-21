@@ -122,6 +122,23 @@ describe('ClaudeCodeAdapter', () => {
     ]);
   });
 
+  it('threads --model after --output-format json and before --resume', async () => {
+    const capture = { args: [] as string[][], prompts: [] as string[] };
+    const exec = fakeExec(
+      { stdout: JSON.stringify({ result: 'ok', session_id: 'sess' }), stderr: '', code: 0 },
+      capture,
+    );
+    const adapter = new ClaudeCodeAdapter({ exec, model: 'opus-x' });
+
+    await adapter.run('do it');
+    expect(capture.args[0]).toEqual(['-p', 'do it', '--output-format', 'json', '--model', 'opus-x']);
+
+    await adapter.run('again', SessionId.parse('sess-prev'));
+    expect(capture.args[1]).toEqual([
+      '-p', 'again', '--output-format', 'json', '--model', 'opus-x', '--resume', 'sess-prev',
+    ]);
+  });
+
   it('parses through extra log lines around the json', async () => {
     const stdout = [
       'warning: experimental flag',

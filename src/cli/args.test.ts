@@ -79,6 +79,44 @@ describe('parseArgs', () => {
     expect(a.resumeRunId).toBe('run-123');
   });
 
+  describe('model selection', () => {
+    it('defaults to no model flags and the claude LLM provider', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.models).toEqual({});
+      expect(a.llmProvider).toBe('claude');
+    });
+
+    it('parses the full cascade of model flags and --llm-provider', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true',
+        '--model', 'opus', '--llm-model', 'sonnet', '--judge-model', 'haiku',
+        '--approver-model', 'opus', '--compiler-model', 'sonnet', '--llm-provider', 'codex',
+      ]);
+      expect(a.models).toEqual({
+        model: 'opus', llmModel: 'sonnet', judgeModel: 'haiku',
+        approverModel: 'opus', compilerModel: 'sonnet',
+      });
+      expect(a.llmProvider).toBe('codex');
+    });
+
+    it('supports the --model=value form', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--model=opus']);
+      expect(a.models.model).toBe('opus');
+    });
+
+    it('throws UsageError on an empty model value', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--model=']),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('throws UsageError on an unknown --llm-provider', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--llm-provider', 'bogus']),
+      ).rejects.toThrow(UsageError);
+    });
+  });
+
   describe('goal / intent / rubric input sources', () => {
     it('reads the goal from a file and trims the trailing newline', async () => {
       const a = await parseArgs(

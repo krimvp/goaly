@@ -1,8 +1,9 @@
-import { z } from 'zod';
 import { coerceSessionId, type SessionId } from '../domain/ids';
 import { HarnessRunResult } from '../domain/events';
 import { runProcess } from '../util/spawn';
 import type { HarnessAdapter } from './adapter';
+import { parseAgentOutput, flatExtractor, type AgentOutput } from '../agent-cli/output';
+import { classifyHarnessRun } from './classify';
 
 /**
  * Seam #1 implementation for Factory's `droid` CLI (https://docs.factory.ai/cli).
@@ -13,12 +14,8 @@ import type { HarnessAdapter } from './adapter';
  *   Fresh turn:   droid exec --output-format json --auto <level> "<prompt>"
  *   Resume turn:  droid exec --output-format json --auto <level> --session-id <id> "<prompt>"
  *
- * `--output-format json` makes droid emit a single result envelope (the Anthropic agent-SDK
- * shape) on stdout, e.g.:
- *   {"type":"result","subtype":"success","is_error":false,"result":"…",
- *    "session_id":"<uuid>","usage":{"input_tokens":N,"output_tokens":M, …}}
- * We parse it tolerantly (whole-object, object-amid-noise, or a JSONL stream) in
- * {@link parseDroidOutput}.
+ * Output shape (the Anthropic agent-SDK envelope) is parsed tolerantly by the shared
+ * {@link parseAgentOutput} core via {@link droidExtractor}.
  *
  * Autonomy: `droid exec` defaults to READ-ONLY, where the agent cannot modify files — useless for
  * a goaly loop. So we always pass `--auto`. The default is `low` (file create/modify only, no
@@ -28,6 +25,9 @@ import type { HarnessAdapter } from './adapter';
  * goaly runs verification itself, so the agent needs no build/test privileges. Embedders who
  * want the agent to install deps / build / run tests can opt into `medium`/`high` via the
  * constructor (accepting the commit caveat). We never pass `--skip-permissions-unsafe`.
+ *
+ * (The read-only default is exploited elsewhere: the droid LLM provider omits `--auto` entirely so
+ * a judge/approver can never mutate the tree it is judging.)
  */
 
 /**
@@ -51,125 +51,16 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 /** Least-privilege default: edit files, but no git/installs/builds (keeps `diff HEAD` honest). */
 const DEFAULT_AUTONOMY: AutonomyLevel = 'low';
 
-/**
- * Tolerant schema for droid's headless JSON. The result text lives in `result` (we also accept a
- * few aliases); `session_id` threads the conversation; `usage` carries token counts; `is_error`
- * flags a soft failure reported in an otherwise-clean (exit-0) envelope. All fields optional and
- * `.passthrough()` so a partial/odd payload still parses.
- */
-const DroidUsage = z
-  .object({
-    input_tokens: z.number().optional(),
-    output_tokens: z.number().optional(),
-    total_tokens: z.number().optional(),
-  })
-  .passthrough();
-
-const DroidJson = z
-  .object({
-    result: z.string().optional(),
-    text: z.string().optional(),
-    response: z.string().optional(),
-    session_id: z.string().optional(),
-    sessionId: z.string().optional(),
-    usage: DroidUsage.optional(),
-    is_error: z.boolean().optional(),
-    subtype: z.string().optional(),
-  })
-  .passthrough();
-
-export type ParsedDroidOutput = {
-  text: string;
-  sessionId?: string;
-  tokens?: number;
-  /** True when droid reported an error result despite a clean exit (→ treat as `truncated`). */
-  isError?: boolean;
-};
-
-/** Read a single JSON object out of a string, or `null` if it is not a JSON object. */
-function tryJsonObject(raw: string): Record<string, unknown> | null {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
-  try {
-    const value: unknown = JSON.parse(trimmed);
-    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-      return value as Record<string, unknown>;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/** Pull a token count out of a (possibly absent) usage block, preferring an explicit total. */
-function tokensFromUsage(usage: z.infer<typeof DroidUsage> | undefined): number | undefined {
-  if (usage === undefined) return undefined;
-  if (typeof usage.total_tokens === 'number') return usage.total_tokens;
-  const input = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0;
-  const output = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0;
-  const sum = input + output;
-  return sum > 0 ? sum : undefined;
-}
-
-/** Read a session id from any parsed object, even one that carries no result text. */
-function readSessionId(obj: Record<string, unknown>): string | undefined {
-  const parsed = DroidJson.safeParse(obj);
-  if (!parsed.success) return undefined;
-  return parsed.data.session_id ?? parsed.data.sessionId;
-}
-
-/** Normalize one parsed JSON object into our minimal output shape, or `null` if it has no text. */
-function fromJsonObject(obj: Record<string, unknown>): ParsedDroidOutput | null {
-  const parsed = DroidJson.safeParse(obj);
-  if (!parsed.success) return null;
-  const data = parsed.data;
-  const text = data.result ?? data.text ?? data.response;
-  if (text === undefined) return null;
-  const sessionId = data.session_id ?? data.sessionId;
-  const tokens = tokensFromUsage(data.usage);
-  return {
-    text,
-    ...(sessionId !== undefined ? { sessionId } : {}),
-    ...(tokens !== undefined ? { tokens } : {}),
-    ...(data.is_error !== undefined ? { isError: data.is_error } : {}),
-  };
-}
+/** Field strategy for droid's flat result envelope (result/session_id/usage/is_error). */
+export const droidExtractor = flatExtractor({ errorKey: 'is_error' });
 
 /**
- * Tolerantly parse droid headless stdout. Handles three shapes, in order:
- *   1. The whole stdout is one JSON object (`--output-format json`, the common case).
- *   2. A single JSON object surrounded by log/noise lines.
- *   3. A JSONL stream where the LAST result-bearing line is the answer.
- * Returns `null` when no JSON object carrying a `result`/`text`/`response` field is found, so the
- * adapter maps that to `crashed`. Never throws.
+ * Tolerantly parse droid headless stdout (whole-object, object-amid-noise, or a JSONL stream).
+ * Returns `null` when no JSON object carries a `result`/`text`/`response` field. Never throws. A
+ * thin wrapper over the shared {@link parseAgentOutput} core.
  */
-export function parseDroidOutput(stdout: string): ParsedDroidOutput | null {
-  // Fast path: the entire payload is one JSON object.
-  const whole = tryJsonObject(stdout);
-  if (whole !== null) {
-    const direct = fromJsonObject(whole);
-    if (direct !== null) return direct;
-  }
-
-  // Line-oriented (stream) path: keep the LAST text-bearing object, but latch the FIRST session id
-  // seen on ANY line (an init line can carry session_id with no result text — losing it would
-  // break `--session-id` resume; a later per-message id must not clobber the stream's thread id).
-  const lines = stdout.split(/\r?\n/);
-  let last: ParsedDroidOutput | null = null;
-  let streamSessionId: string | undefined;
-  for (const line of lines) {
-    const obj = tryJsonObject(line);
-    if (obj === null) continue;
-    const sid = readSessionId(obj);
-    if (sid !== undefined && streamSessionId === undefined) streamSessionId = sid;
-    const candidate = fromJsonObject(obj);
-    if (candidate !== null) last = candidate;
-  }
-  if (last === null) return null;
-  if (last.sessionId === undefined && streamSessionId !== undefined) {
-    return { ...last, sessionId: streamSessionId };
-  }
-  return last;
+export function parseDroidOutput(stdout: string): AgentOutput | null {
+  return parseAgentOutput(stdout, droidExtractor);
 }
 
 /**
@@ -177,8 +68,14 @@ export function parseDroidOutput(stdout: string): ParsedDroidOutput | null {
  * for a flag value). A `sessionId` is a branded, allowlisted string (it can never begin with `-`),
  * so threading it into `--session-id` is safe.
  */
-function buildArgs(prompt: string, auto: AutonomyLevel, sessionId?: SessionId): string[] {
+function buildArgs(
+  prompt: string,
+  auto: AutonomyLevel,
+  model: string | undefined,
+  sessionId?: SessionId,
+): string[] {
   const args = ['exec', '--output-format', 'json', '--auto', auto];
+  if (model !== undefined) args.push('--model', model);
   if (sessionId !== undefined) args.push('--session-id', sessionId);
   args.push(prompt);
   return args;
@@ -206,16 +103,19 @@ export class DroidAdapter implements HarnessAdapter {
   readonly name = 'droid';
   readonly #exec: ExecFn;
   readonly #auto: AutonomyLevel;
+  readonly #model: string | undefined;
 
-  constructor(opts: { exec?: ExecFn; timeoutMs?: number; auto?: AutonomyLevel } = {}) {
+  constructor(
+    opts: { exec?: ExecFn; timeoutMs?: number; auto?: AutonomyLevel; model?: string } = {},
+  ) {
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#exec = opts.exec ?? defaultExec(timeoutMs);
     this.#auto = opts.auto ?? DEFAULT_AUTONOMY;
+    this.#model = opts.model;
   }
 
   async run(prompt: string, sessionId?: SessionId): Promise<HarnessRunResult> {
-    const args = buildArgs(prompt, this.#auto, sessionId);
-    const fallbackSession = coerceSessionId(sessionId, UNKNOWN_SESSION);
+    const args = buildArgs(prompt, this.#auto, this.#model, sessionId);
 
     let result: { stdout: string; stderr: string; code: number; timedOut?: boolean };
     try {
@@ -224,46 +124,18 @@ export class DroidAdapter implements HarnessAdapter {
       // The exec seam should never reject, but fail-closed if it does.
       return HarnessRunResult.parse({
         output: err instanceof Error ? err.message : String(err),
-        sessionId: fallbackSession,
+        sessionId: coerceSessionId(sessionId, UNKNOWN_SESSION),
         status: 'crashed',
       });
     }
 
-    const parsed = parseDroidOutput(result.stdout);
-
-    if (result.timedOut === true) {
-      // Salvage any text/session we managed to parse before the kill.
-      return HarnessRunResult.parse({
-        output: parsed?.text ?? result.stderr,
-        sessionId: coerceSessionId(parsed?.sessionId ?? sessionId, UNKNOWN_SESSION),
-        status: 'timeout',
-      });
-    }
-
-    if (result.code !== 0) {
-      return HarnessRunResult.parse({
-        output: result.stderr.length > 0 ? result.stderr : (parsed?.text ?? ''),
-        sessionId: coerceSessionId(parsed?.sessionId ?? sessionId, UNKNOWN_SESSION),
-        status: 'crashed',
-      });
-    }
-
-    // Exit 0 but no parseable JSON result, or an empty body → truncated.
-    if (parsed === null || parsed.text.length === 0) {
-      return HarnessRunResult.parse({
-        output: result.stderr,
-        sessionId: coerceSessionId(parsed?.sessionId ?? sessionId, UNKNOWN_SESSION),
-        status: 'truncated',
-      });
-    }
-
-    // Exit 0 with text, but droid flagged the result as an error → treat as a partial run.
-    const status = parsed.isError === true ? 'truncated' : 'completed';
-    return HarnessRunResult.parse({
-      output: parsed.text,
-      sessionId: coerceSessionId(parsed.sessionId ?? sessionId, UNKNOWN_SESSION),
-      status,
-      ...(parsed.tokens !== undefined ? { tokensUsed: parsed.tokens } : {}),
+    return classifyHarnessRun({
+      parsed: parseDroidOutput(result.stdout),
+      code: result.code,
+      stderr: result.stderr,
+      timedOut: result.timedOut,
+      sessionId,
+      unknownSession: UNKNOWN_SESSION,
     });
   }
 }

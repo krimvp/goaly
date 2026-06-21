@@ -11,6 +11,7 @@ export { drive, type DriverDeps, type DriveOptions } from './driver/driver';
 export {
   composeDeps,
   buildLadder,
+  makeLlmProvider,
   NoopHarness,
   STATE_DIR,
   type ComposeOptions,
@@ -21,8 +22,15 @@ export {
   UsageError,
   type ParsedArgs,
   type HarnessChoice,
+  type LlmProviderChoice,
   type RawFlags,
 } from './cli/args';
+export {
+  ModelSelection,
+  resolveModels,
+  type ModelSelectionInput,
+  type ResolvedModels,
+} from './cli/models';
 export {
   resolveInputSources,
   defaultReaders,
@@ -54,10 +62,21 @@ export { JudgeVerifier } from './verify/judge';
 export { AgentApprover } from './verify/agent-approver';
 export { AgentCompiler } from './compile/agent-compiler';
 export { AutoContractGate, HumanContractGate } from './compile/gates';
-export { ClaudeCodeAdapter } from './harness/claude-code';
-export { CodexAdapter } from './harness/codex';
-export { DroidAdapter, type AutonomyLevel } from './harness/droid';
-export { CliLlmProvider } from './llm/cli-provider';
+export { ClaudeCodeAdapter, parseClaudeOutput } from './harness/claude-code';
+export { CodexAdapter, parseCodexOutput, codexExtractor } from './harness/codex';
+export { DroidAdapter, parseDroidOutput, droidExtractor, type AutonomyLevel } from './harness/droid';
+export { CliLlmProvider, buildLlmArgs } from './llm/cli-provider';
+export { AgentCliLlmProvider } from './llm/agent-cli-provider';
+
+// Shared agent-CLI output parsing (reused by harness adapters + LLM providers).
+export {
+  parseAgentOutput,
+  flatExtractor,
+  type AgentOutput,
+  type AgentFields,
+  type FieldExtractor,
+} from './agent-cli/output';
+export { classifyHarnessRun } from './harness/classify';
 
 // Utilities.
 export { freezeContract, hashContract, sha256Hex } from './util/hash';

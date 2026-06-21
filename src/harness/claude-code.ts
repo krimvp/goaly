@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
-import { z } from 'zod';
 import { SessionId, coerceSessionId } from '../domain/ids';
 import { HarnessRunResult } from '../domain/events';
 import type { HarnessAdapter } from './adapter';
+import { parseAgentOutput, flatExtractor, type AgentOutput } from '../agent-cli/output';
+import { classifyHarnessRun } from './classify';
 
 /**
  * Injectable subprocess seam. Returns the raw stdout/stderr, the process exit code, and a
@@ -19,128 +20,21 @@ const UNKNOWN_SESSION = 'claude-unknown';
 /** Default wall-clock budget for a single headless invocation. */
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
-/**
- * Zod schema for the tolerant shape of Claude Code headless JSON. Claude's `--output-format json`
- * emits an object with (at least) `result`, `session_id`, and a `usage` block. We accept any of a
- * few field aliases and ignore everything else; all fields are optional so a partial/odd payload
- * still parses (and we then decide truncated vs completed by content).
- */
-const ClaudeUsage = z
-  .object({
-    input_tokens: z.number().optional(),
-    output_tokens: z.number().optional(),
-    total_tokens: z.number().optional(),
-  })
-  .passthrough();
-
-const ClaudeJson = z
-  .object({
-    result: z.string().optional(),
-    text: z.string().optional(),
-    response: z.string().optional(),
-    session_id: z.string().optional(),
-    sessionId: z.string().optional(),
-    usage: ClaudeUsage.optional(),
-    total_cost_usd: z.number().optional(),
-  })
-  .passthrough();
-
-export type ParsedClaudeOutput = {
-  text: string;
-  sessionId?: string;
-  tokens?: number;
-};
+/** Field strategy for Claude Code's flat `--output-format json` envelope (result/session_id/usage). */
+const claudeExtractor = flatExtractor();
 
 /**
- * Attempt to read a single JSON object out of an unknown string. Returns `null` if it does not
- * parse as a JSON object. Used both for whole-stdout JSON and for individual stream-json lines.
+ * Tolerantly parse Claude Code headless stdout (whole-object, object-amid-noise, or stream-json,
+ * keeping the LAST result-bearing line). Returns `null` when no JSON object carries text. Never
+ * throws. A thin wrapper over the shared {@link parseAgentOutput} core.
  */
-function tryJsonObject(raw: string): Record<string, unknown> | null {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
-  try {
-    const value: unknown = JSON.parse(trimmed);
-    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-      return value as Record<string, unknown>;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/** Pull a token count out of a (possibly absent) usage block, preferring an explicit total. */
-function tokensFromUsage(usage: z.infer<typeof ClaudeUsage> | undefined): number | undefined {
-  if (usage === undefined) return undefined;
-  if (typeof usage.total_tokens === 'number') return usage.total_tokens;
-  const input = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0;
-  const output = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0;
-  const sum = input + output;
-  return sum > 0 ? sum : undefined;
-}
-
-/** Read a session id from any parsed object, even one that carries no result text. */
-function readSessionId(obj: Record<string, unknown>): string | undefined {
-  const parsed = ClaudeJson.safeParse(obj);
-  if (!parsed.success) return undefined;
-  return parsed.data.session_id ?? parsed.data.sessionId;
-}
-
-/** Normalize one parsed JSON object into our minimal output shape, or `null` if it has no text. */
-function fromJsonObject(obj: Record<string, unknown>): ParsedClaudeOutput | null {
-  const parsed = ClaudeJson.safeParse(obj);
-  if (!parsed.success) return null;
-  const data = parsed.data;
-  const text = data.result ?? data.text ?? data.response;
-  if (text === undefined) return null;
-  const sessionId = data.session_id ?? data.sessionId;
-  const tokens = tokensFromUsage(data.usage);
-  return {
-    text,
-    ...(sessionId !== undefined ? { sessionId } : {}),
-    ...(tokens !== undefined ? { tokens } : {}),
-  };
-}
-
-/**
- * Tolerantly parse Claude Code headless stdout. Handles three shapes, in order:
- *   1. The whole stdout is one JSON object (`--output-format json`).
- *   2. The stdout has log/noise lines around a single JSON object line.
- *   3. Stream-json: many JSON lines where the LAST result-bearing line is the answer.
- * Returns `null` when no JSON object carrying a `result`/`text`/`response` field is found.
- */
-export function parseClaudeOutput(stdout: string): ParsedClaudeOutput | null {
-  // Fast path: the entire payload is one JSON object.
-  const whole = tryJsonObject(stdout);
-  if (whole !== null) {
-    const direct = fromJsonObject(whole);
-    if (direct !== null) return direct;
-  }
-
-  // Line-oriented (stream-json) path: keep the LAST text-bearing object, but accumulate the
-  // session id from ANY line (the init line carries session_id with no result text — losing it
-  // would break `--resume`). Latch the first session id seen.
-  const lines = stdout.split(/\r?\n/);
-  let last: ParsedClaudeOutput | null = null;
-  let streamSessionId: string | undefined;
-  for (const line of lines) {
-    const obj = tryJsonObject(line);
-    if (obj === null) continue;
-    const sid = readSessionId(obj);
-    if (sid !== undefined && streamSessionId === undefined) streamSessionId = sid;
-    const candidate = fromJsonObject(obj);
-    if (candidate !== null) last = candidate;
-  }
-  if (last === null) return null;
-  if (last.sessionId === undefined && streamSessionId !== undefined) {
-    return { ...last, sessionId: streamSessionId };
-  }
-  return last;
+export function parseClaudeOutput(stdout: string): AgentOutput | null {
+  return parseAgentOutput(stdout, claudeExtractor);
 }
 
 /**
  * Real subprocess implementation. Assumed CLI contract:
- *   claude -p "<prompt>" --output-format json [--resume <sessionId>]
+ *   claude -p "<prompt>" --output-format json [--model <model>] [--resume <sessionId>]
  * stdout is JSON (object or stream-json lines); a non-zero exit code means failure; the prompt is
  * passed as an argv value. We also write the prompt to stdin as a fallback for CLI builds that
  * read the prompt from stdin. Never rejects: maps spawn errors to a non-zero code instead.
@@ -204,19 +98,18 @@ function defaultExec(timeoutMs: number): ExecFn {
 export class ClaudeCodeAdapter implements HarnessAdapter {
   readonly name = 'claude-code';
   readonly #exec: ExecFn;
+  readonly #model: string | undefined;
 
-  constructor(opts: { exec?: ExecFn; timeoutMs?: number } = {}) {
+  constructor(opts: { exec?: ExecFn; timeoutMs?: number; model?: string } = {}) {
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#exec = opts.exec ?? defaultExec(timeoutMs);
+    this.#model = opts.model;
   }
 
   async run(prompt: string, sessionId?: SessionId): Promise<HarnessRunResult> {
     const args = ['-p', prompt, '--output-format', 'json'];
-    if (sessionId !== undefined) {
-      args.push('--resume', sessionId);
-    }
-
-    const fallbackSession = coerceSessionId(sessionId, UNKNOWN_SESSION);
+    if (this.#model !== undefined) args.push('--model', this.#model);
+    if (sessionId !== undefined) args.push('--resume', sessionId);
 
     let result: { stdout: string; stderr: string; code: number; timedOut?: boolean };
     try {
@@ -225,44 +118,18 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       // The exec seam should never reject, but fail-closed if it does.
       return HarnessRunResult.parse({
         output: err instanceof Error ? err.message : String(err),
-        sessionId: fallbackSession,
+        sessionId: coerceSessionId(sessionId, UNKNOWN_SESSION),
         status: 'crashed',
       });
     }
 
-    if (result.timedOut === true) {
-      return HarnessRunResult.parse({
-        output: result.stderr,
-        sessionId: fallbackSession,
-        status: 'timeout',
-      });
-    }
-
-    const parsed = parseClaudeOutput(result.stdout);
-
-    if (result.code !== 0) {
-      return HarnessRunResult.parse({
-        output: result.stderr.length > 0 ? result.stderr : (parsed?.text ?? ''),
-        sessionId: coerceSessionId(parsed?.sessionId ?? sessionId, UNKNOWN_SESSION),
-        status: 'crashed',
-      });
-    }
-
-    // Exit 0 but no parseable JSON result, or an empty body → truncated.
-    if (parsed === null || parsed.text.length === 0) {
-      return HarnessRunResult.parse({
-        output: result.stderr,
-        sessionId: coerceSessionId(parsed?.sessionId ?? sessionId, UNKNOWN_SESSION),
-        status: 'truncated',
-      });
-    }
-
-    const resolvedSession = coerceSessionId(parsed.sessionId ?? sessionId, UNKNOWN_SESSION);
-    return HarnessRunResult.parse({
-      output: parsed.text,
-      sessionId: resolvedSession,
-      status: 'completed',
-      ...(parsed.tokens !== undefined ? { tokensUsed: parsed.tokens } : {}),
+    return classifyHarnessRun({
+      parsed: parseClaudeOutput(result.stdout),
+      code: result.code,
+      stderr: result.stderr,
+      timedOut: result.timedOut,
+      sessionId,
+      unknownSession: UNKNOWN_SESSION,
     });
   }
 }
