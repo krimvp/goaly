@@ -1,0 +1,47 @@
+import { describe, it, expect } from 'vitest';
+import { JudgeOutput, ApprovalVerdict, Verdict } from './verdict';
+
+describe('Verdict', () => {
+  it('rejects confidence outside [0,1]', () => {
+    expect(() => Verdict.parse({ pass: true, confidence: 1.5, detail: '' })).toThrow();
+  });
+});
+
+describe('JudgeOutput', () => {
+  it('accepts a passing sample with no failing criteria', () => {
+    expect(() => JudgeOutput.parse({ pass: true, confidence: 0.9, failing_criteria: [] })).not.toThrow();
+  });
+
+  it('accepts a failing sample with at least one failing criterion', () => {
+    expect(() =>
+      JudgeOutput.parse({ pass: false, confidence: 0.8, failing_criteria: ['missing edge case'] }),
+    ).not.toThrow();
+  });
+
+  it('rejects an inconsistent sample (pass but with failing criteria)', () => {
+    expect(() =>
+      JudgeOutput.parse({ pass: true, confidence: 0.9, failing_criteria: ['x'] }),
+    ).toThrow();
+  });
+
+  it('rejects an inconsistent sample (fail but no failing criteria)', () => {
+    expect(() =>
+      JudgeOutput.parse({ pass: false, confidence: 0.9, failing_criteria: [] }),
+    ).toThrow();
+  });
+});
+
+describe('ApprovalVerdict', () => {
+  it('accepts a non-veto with no reason', () => {
+    expect(() => ApprovalVerdict.parse({ veto: false })).not.toThrow();
+  });
+
+  it('accepts a veto with a reason', () => {
+    expect(() => ApprovalVerdict.parse({ veto: true, reason: 'empty test' })).not.toThrow();
+  });
+
+  it('rejects a veto without a reason (feedback is mandatory)', () => {
+    expect(() => ApprovalVerdict.parse({ veto: true })).toThrow();
+    expect(() => ApprovalVerdict.parse({ veto: true, reason: '' })).toThrow();
+  });
+});

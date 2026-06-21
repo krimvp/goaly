@@ -1,0 +1,30 @@
+{
+  "name": "goalorch",
+  "version": "0.1.0",
+  "description": "Harness-agnostic goal-orchestration layer: run a coding agent until a frozen success criterion is verifiably met.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "goalorch": "./bin/goalorch.mjs"
+  },
+  "scripts": {
+    "dev": "tsx bin/goalorch.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@vitest/coverage-v8": "^2.1.8",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}
