@@ -97,11 +97,24 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(status.stdout).toContain(' M file.txt');
   });
 
-  it('diff includes untracked files', async () => {
+  it('diff includes untracked files with their CONTENT (not just the name)', async () => {
+    // A from-scratch build is all untracked files; the judge/approver must see what the worker
+    // actually wrote, so the diff has to carry the content, not a bare filename list.
     const ws = new GitWorkspace(root);
-    await writeFile(join(root, 'new-untracked.txt'), 'fresh\n');
+    await writeFile(join(root, 'new-untracked.txt'), 'fresh-untracked-line\n');
     const text = await ws.diff();
     expect(text).toContain('new-untracked.txt');
+    expect(text).toContain('fresh-untracked-line'); // the actual content reaches the keys
+    expect(text).toContain('+fresh-untracked-line'); // rendered as an added-file diff
+  });
+
+  it('diff renders multiple untracked files, each with content', async () => {
+    const ws = new GitWorkspace(root);
+    await writeFile(join(root, 'a.js'), 'const A = 1;\n');
+    await writeFile(join(root, 'b.css'), '.b { color: red; }\n');
+    const text = await ws.diff();
+    expect(text).toContain('const A = 1;');
+    expect(text).toContain('.b { color: red; }');
   });
 
   it('diff includes tracked modifications', async () => {
