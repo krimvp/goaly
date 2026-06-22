@@ -71,17 +71,20 @@ for spec in "${increments[@]}"; do
   echo "==================== INCREMENT $n / ${#increments[@]} ===================="
   echo ">> $goal" | cut -c1-100
 
-  $GOALY run \
-    --goal "$goal" \
-    --intent "$intent" \
-    --rubric "$rubric" \
-    --generate --autonomous \
-    --harness "$HARNESS" --model "$MODEL" --llm-model "$LLM_MODEL" \
-    --workspace "$WORKSPACE" --max-iterations "$MAX_ITERS" \
-    --harness-timeout-ms 900000 --llm-timeout-ms 900000
+  # Authored files must live UNDER the workspace — goaly fail-closes on an absolute/outside path,
+  # so we steer the compiler to relative paths explicitly.
+  intent="$intent Author any files at RELATIVE paths under the workspace only (never absolute paths)."
 
-  # Only advance the diff baseline when the increment actually reached DONE.
-  if $GOALY runs list --workspace "$WORKSPACE" | grep -q "DONE"; then
+  # goaly exits 0 only on DONE (1 on FAILED/ABORTED). `set -e` already aborts the whole script on a
+  # non-zero exit, so if we reach the next line the increment reached two-key DONE.
+  if $GOALY run \
+      --goal "$goal" \
+      --intent "$intent" \
+      --rubric "$rubric" \
+      --generate --autonomous \
+      --harness "$HARNESS" --model "$MODEL" --llm-model "$LLM_MODEL" \
+      --workspace "$WORKSPACE" --max-iterations "$MAX_ITERS" \
+      --harness-timeout-ms 900000 --llm-timeout-ms 900000; then
     git -C "$WORKSPACE" add -A
     git -C "$WORKSPACE" commit -q -m "increment $n (goaly): ${goal:0:60}"
     echo ">> increment $n committed — diff baseline reset for the next run"
