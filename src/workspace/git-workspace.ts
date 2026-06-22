@@ -61,9 +61,17 @@ const realExec: ExecFn = async (cmd, args, opts) => {
  * exposes the working-tree diff plus untracked files, and runs shell commands without ever
  * rejecting on a non-zero exit.
  */
+/**
+ * Wraps the verify exec into a sandboxed one. Applied ONLY inside `run()` (alongside
+ * `scrubVerifyEnv`) — never around the git plumbing, which needs the real `.git` + full env. The
+ * default is identity (no sandbox). The composition root injects the real sandbox wrapper (issue #9).
+ */
+export type RunExecWrapper = (exec: ExecFn) => ExecFn;
+
 export class GitWorkspace implements Workspace {
   readonly #root: string;
   readonly #exec: ExecFn;
+  readonly #runExec: ExecFn;
   readonly #excludes: readonly string[];
   readonly #scrubVerifyEnv: boolean;
 
@@ -74,15 +82,19 @@ export class GitWorkspace implements Workspace {
    * @param scrubVerifyEnv when true (default) the verify command (`run`) is spawned with a
    *   credential-scrubbed environment so worker/model-authored verification code
    *   cannot read the parent process's secrets. Git operations (diffHash/diff) keep the full env.
+   * @param runLauncher OPTIONAL wrapper applied to the exec used by `run()` ONLY (issue #9): it
+   *   jails the verify command without ever touching the git plumbing's `#exec`. Default identity.
    */
   constructor(
     root: string,
     exec: ExecFn = realExec,
     excludes: readonly string[] = ['.goaly'],
     scrubVerifyEnv = true,
+    runLauncher?: RunExecWrapper,
   ) {
     this.#root = root;
     this.#exec = exec;
+    this.#runExec = runLauncher !== undefined ? runLauncher(exec) : exec;
     this.#excludes = excludes;
     this.#scrubVerifyEnv = scrubVerifyEnv;
   }
@@ -203,7 +215,7 @@ export class GitWorkspace implements Workspace {
       // The verify command runs worker/model-authored code on the host: deny it the parent's
       // ambient secrets. Git operations above deliberately keep the full env.
       const env = this.#scrubVerifyEnv ? scrubEnv(process.env) : undefined;
-      const result = await this.#exec(command, [], {
+      const result = await this.#runExec(command, [], {
         cwd: this.#root,
         shell: true,
         ...(env !== undefined ? { env } : {}),

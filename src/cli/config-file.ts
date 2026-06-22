@@ -56,6 +56,10 @@ const ConfigFileSchema = z
     'log-level': FlagValue.optional(),
     'log-file': FlagValue.optional(),
     'no-log-file': FlagValue.optional(),
+    sandbox: FlagValue.optional(),
+    'sandbox-net': FlagValue.optional(),
+    'sandbox-image': FlagValue.optional(),
+    'sandbox-runtime': FlagValue.optional(),
   })
   .strict();
 

@@ -82,7 +82,61 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   (`*_TOKEN`, `*_KEY`, `*SECRET*`, `AWS_*`, `GITHUB_*`, …) from its environment so they can't be
   exfiltrated through a check. PATH/HOME and the rest of the toolchain environment are kept, so
   ordinary test commands are unaffected. (This narrows, but does not eliminate, the host trust
-  boundary — only run `--autonomous` against repositories you trust.)
+  boundary — only run `--autonomous` against repositories you trust, or pass `--sandbox`.)
+
+### Sandboxing
+
+The env-scrub above narrows the host trust boundary; `--sandbox` (opt-in OS isolation, ADR
+[0007](docs/adr/0007-sandboxing-model.md)) *enforces* it. **It's off by default** — without the flag
+behavior is byte-for-byte unchanged and the caller is responsible for isolation (CI/container). When
+on, goaly jails the **two untrusted-code execs** — the coding agent **and** the verify command — at
+the composition root; the pure reducer and git plumbing (`diff`/`diffHash`, which must read the real
+`.git`) are never touched.
+
+| Flag | Meaning |
+| --- | --- |
+| `--sandbox[=<mode>]` | `none` (default, no isolation) · `auto` (best available: `bwrap` on Linux, else `container`) · `bwrap` (Linux bubblewrap) · `container` (a `docker`/`podman run --rm`, portable, covers macOS). Bare `--sandbox` means `--sandbox=auto`. |
+| `--sandbox-net <v>` | verifier egress: `none` (default when sandboxed) · `allow`. The **agent always keeps egress** (it needs the model API). |
+| `--sandbox-image <ref>` | container image (`container` mode only; default `debian:stable-slim`). |
+| `--sandbox-runtime <r>` | `docker` (default) · `podman` (`container` mode only). |
+
+**Fail-closed (invariant #4):** if a requested mechanism is **absent on the host, the run refuses to
+start** — a clear error, no subprocess spawned — it never silently downgrades to unsandboxed. The
+flags parse with Zod (invariant #6); an unknown mode/value is a usage error.
+
+**Per-seam profiles** (applied only when sandboxed):
+
+| Seam | Filesystem | Network | Env |
+| --- | --- | --- | --- |
+| **Harness** (the coding agent) | rw workspace, ro system | **allow** (needs the model API) | full (needs API keys) |
+| **Verifier** (the verify command) | rw workspace, ro system | **none** by default (`--sandbox-net allow` to open it) | already credential-scrubbed |
+
+In **both** seams the workspace is bound read-write while the rest of the system is read-only, and
+`$HOME` credential locations (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.docker`,
+`~/.kube`, `~/.npmrc`) are **denied** — defense in depth on top of the env scrub.
+
+**Network/FS tension:** a verify command that fetches the network (e.g. an `npm test` that installs
+or hits a service) will **fail with the default `--sandbox-net none`** — pass `--sandbox-net allow`
+to let the verifier reach the network. This tradeoff is an explicit, documented toggle, not a hidden
+default. The container path mirrors the workspace at the **same absolute path** inside the jail so
+pinned/relative paths still resolve.
+
+```bash
+# Jail the agent and the verifier; auto-pick the host mechanism (refuses to start if none is present):
+goaly run --goal "..." --verify-cmd "npm test" --sandbox
+
+# Force Linux bubblewrap, and let the verifier reach the network (npm test fetches):
+goaly run --goal "..." --verify-cmd "npm test" --sandbox=bwrap --sandbox-net allow
+
+# Portable container jail on a custom image / runtime (covers macOS via Docker/podman):
+goaly run --goal "..." --verify-cmd "npm test" \
+             --sandbox=container --sandbox-image node:20-slim --sandbox-runtime podman
+```
+
+> The threat model (ADR 0007): `--sandbox` defends against secret exfiltration via the verifier/agent
+> (FS + env + egress), host-FS damage outside the workspace, and `$HOME` credential reads. It does
+> **not** defend against a compromised model endpoint the agent is allowed to talk to, supply-chain
+> code pulled with the network on, kernel/sandbox-escape 0-days, or anything when `--sandbox` is off.
 
 ## Install
 
@@ -149,6 +203,10 @@ goaly run --goal "..." --verify-cmd "npm test" --stream-transcript
 # Cap how long each step may run (subprocess kill-timeouts, in ms):
 goaly run --goal "..." --verify-cmd "npm test" \
              --harness-timeout-ms 900000 --llm-timeout-ms 120000 --verify-timeout-ms 60000
+
+# Jail the agent AND the verifier in an OS sandbox (refuses to start if no mechanism is present):
+goaly run --goal "..." --verify-cmd "npm test" --sandbox            # auto-detect (bwrap / container)
+goaly run --goal "..." --verify-cmd "npm test" --sandbox=bwrap --sandbox-net allow   # let npm fetch
 
 # Add an approximate USD cost to the end-of-run spend report (tokens-only without it):
 goaly run --goal "..." --verify-cmd "npm test" --cost-table ./prices.json

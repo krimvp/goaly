@@ -125,6 +125,59 @@ describe('parseArgs', () => {
     expect(a.resumeRunId).toBe('run-123');
   });
 
+  describe('--sandbox (issue #9)', () => {
+    const run = ['run', '--goal', 'g', '--verify-cmd', 'true'];
+
+    it('defaults to mode none with no network (Option 1)', async () => {
+      const a = await parseArgs([...run]);
+      expect(a.sandbox).toEqual({ mode: 'none', network: 'none' });
+    });
+
+    it('parses an explicit mode', async () => {
+      expect((await parseArgs([...run, '--sandbox=bwrap'])).sandbox.mode).toBe('bwrap');
+      expect((await parseArgs([...run, '--sandbox=container'])).sandbox.mode).toBe('container');
+    });
+
+    it('bare --sandbox means auto', async () => {
+      expect((await parseArgs([...run, '--sandbox'])).sandbox.mode).toBe('auto');
+    });
+
+    it('parses the network toggle and container knobs', async () => {
+      const a = await parseArgs([
+        ...run, '--sandbox=container', '--sandbox-net', 'allow',
+        '--sandbox-image', 'node:20', '--sandbox-runtime', 'podman',
+      ]);
+      expect(a.sandbox).toEqual({
+        mode: 'container', network: 'allow', image: 'node:20', runtime: 'podman',
+      });
+    });
+
+    it('rejects an unknown mode / net / runtime (fail-closed)', async () => {
+      await expect(parseArgs([...run, '--sandbox=firejail'])).rejects.toThrow(UsageError);
+      await expect(parseArgs([...run, '--sandbox-net', 'partial'])).rejects.toThrow(UsageError);
+      await expect(parseArgs([...run, '--sandbox-runtime', 'lxc'])).rejects.toThrow(UsageError);
+    });
+
+    it('is defaultable from .goalyrc', async () => {
+      const a = await parseArgs(
+        [...run, '--workspace', '/ws'],
+        undefined,
+        fakeConfig({ '/ws/.goalyrc': JSON.stringify({ sandbox: 'bwrap', 'sandbox-net': 'allow' }) }),
+      );
+      expect(a.sandbox.mode).toBe('bwrap');
+      expect(a.sandbox.network).toBe('allow');
+    });
+
+    it('a CLI --sandbox overrides the .goalyrc default', async () => {
+      const a = await parseArgs(
+        [...run, '--workspace', '/ws', '--sandbox=container'],
+        undefined,
+        fakeConfig({ '/ws/.goalyrc': JSON.stringify({ sandbox: 'bwrap' }) }),
+      );
+      expect(a.sandbox.mode).toBe('container');
+    });
+  });
+
   describe('model selection', () => {
     it('defaults to no model flags and the claude LLM provider', async () => {
       const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);

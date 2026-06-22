@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CliInput, cliInputToRunConfig, type RunConfig } from '../domain/config';
+import { SandboxPolicy } from '../sandbox/policy';
 import { LogLevel } from '../log/logger';
 import { ModelSelection, type ModelSelectionInput } from './models';
 import { resolveInputSources, defaultReaders, type InputReaders } from './input-sources';
@@ -51,6 +52,8 @@ export type ParsedArgs = {
   streamFile: string | undefined;
   /** Per-step subprocess timeouts (pure wiring; each absent ⇒ that step keeps its default). */
   timeouts: StepTimeouts;
+  /** Opt-in OS-isolation policy (issue #9). Default `mode: 'none'` ⇒ behavior byte-for-byte unchanged. */
+  sandbox: SandboxPolicy;
   /** Optional `--cost-table` JSON path: prices the token report (USD per 1M tokens). Default off. */
   costTablePath: string | undefined;
   /** Config files that supplied default flags, lowest-precedence first (pure wiring; for logging). */
@@ -67,6 +70,8 @@ Usage:
                [--harness claude-code|codex|droid] [--model <m>] [--llm-model <m>]
                [--llm-provider claude|codex|droid] [--harness-timeout-ms N]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
+               [--sandbox[=none|auto|bwrap|container]] [--sandbox-net none|allow]
+               [--sandbox-image <ref>] [--sandbox-runtime docker|podman]
                [--cost-table <path>] [--workspace <dir>] [--resume <runId>]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
                [--stream] [--stream-transcript] [--stream-file <path>]
@@ -119,6 +124,24 @@ Per-step timeouts (subprocess kill-timeouts in milliseconds; all optional, pure 
   --llm-timeout-ms N       cap each LLM step: judge / approver / compiler (default 600000)
   --verify-timeout-ms N    cap the verify command (default: unbounded). A timeout is a
                            fail-closed non-zero exit, i.e. a verifier FAIL — never a green.
+
+Sandboxing (opt-in OS isolation — issue #9; default OFF, behavior unchanged without it):
+  --sandbox[=<mode>]  jail the two untrusted-code execs — the coding agent AND the verify command —
+                      where <mode> is one of:
+                        none       (default) no isolation; the caller is responsible (CI/container)
+                        auto       detect the best available mechanism (bwrap on Linux, else container)
+                        bwrap      Linux bubblewrap
+                        container  a docker/podman 'run --rm' (portable; covers macOS)
+                      Bare --sandbox means --sandbox=auto. If a requested mechanism is absent the run
+                      REFUSES TO START (fail-closed) — it never silently runs unsandboxed. Per-seam
+                      profile: the agent keeps network + full env; the verifier gets no network by
+                      default + the already-scrubbed env; $HOME credentials (~/.ssh, ~/.aws, …) are
+                      denied in both; git plumbing is never sandboxed.
+  --sandbox-net <v>   verifier egress: none (default when sandboxed) | allow. The agent always keeps
+                      egress (it needs the model API). NOTE: 'npm test' that fetches the network needs
+                      --sandbox-net allow.
+  --sandbox-image <ref>      container image (container mode only; default debian:stable-slim)
+  --sandbox-runtime <r>      docker | podman (container mode only; default docker)
 
 Config file (so the same wiring need not be repeated every run):
   Defaults are read from a JSON config in two layers (later overrides earlier):
@@ -286,6 +309,7 @@ export async function parseArgs(
     streamTranscript: flags['stream-transcript'] !== undefined || str(flags, 'stream-file') !== undefined,
     streamFile: str(flags, 'stream-file'),
     timeouts: parseTimeouts(flags),
+    sandbox: parseSandbox(flags),
     costTablePath: str(flags, 'cost-table'),
     configSources,
   };
@@ -322,6 +346,42 @@ function parseLogLevel(value: string | undefined): LogLevel {
   const parsed = LogLevel.safeParse(value);
   if (!parsed.success) {
     throw new UsageError(`unknown log level: ${value} (expected debug | info | warn | error)`);
+  }
+  return parsed.data;
+}
+
+/**
+ * Build the opt-in sandbox policy from the flags, validating each at the Zod seam (invariant #6):
+ * an unknown `--sandbox` mode / `--sandbox-net` value / `--sandbox-runtime` is a usage error, never
+ * a silent fallback. `--sandbox` with NO value (a boolean flag) means `--sandbox=auto`. Absent flags
+ * are omitted so the schema's defaults apply (`mode: 'none'` ⇒ behavior unchanged). The `network`
+ * here is the VERIFIER default; the harness seam always re-overrides to `allow` downstream.
+ */
+function parseSandbox(flags: RawFlags): SandboxPolicy {
+  const raw = flags['sandbox'];
+  // `--sandbox` (boolean) ⇒ auto; `--sandbox=<mode>` ⇒ that mode; absent ⇒ none (the default).
+  const mode = raw === true ? 'auto' : raw;
+  const net = str(flags, 'sandbox-net');
+  const image = str(flags, 'sandbox-image');
+  const runtime = str(flags, 'sandbox-runtime');
+  const parsed = SandboxPolicy.safeParse({
+    ...(mode !== undefined ? { mode } : {}),
+    ...(net !== undefined ? { network: net } : {}),
+    ...(image !== undefined ? { image } : {}),
+    ...(runtime !== undefined ? { runtime } : {}),
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const key = issue?.path[0];
+    const flag =
+      key === 'network'
+        ? '--sandbox-net'
+        : key === 'runtime'
+          ? '--sandbox-runtime'
+          : key === 'image'
+            ? '--sandbox-image'
+            : '--sandbox';
+    throw new UsageError(`${flag}: ${issue?.message ?? 'invalid sandbox option'}`);
   }
   return parsed.data;
 }
@@ -423,6 +483,7 @@ function baseArgs(
     streamTranscript: false,
     streamFile: undefined,
     timeouts: {},
+    sandbox: SandboxPolicy.parse({}),
     costTablePath: undefined,
     configSources: [],
   };

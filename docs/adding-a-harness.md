@@ -287,6 +287,13 @@ The subprocess is **not** your problem: `AgentCliHarness` builds the default exe
 the shared `runProcess` (output cap, timeout, process-group kill, never-reject). Tests inject a fake
 `AgentExecFn` instead.
 
+**The sandbox is not your problem either.** When `--sandbox` is on, `compose.ts` wraps the injected
+`exec` around your codec's `command`/argv at the composition root (`src/sandbox/`, ADR 0007) — it
+rewrites `[command, ...args]` into the jailed invocation (bwrap / container) before spawning. This is
+**transparent to codec authors**: you write your `harnessArgs`/`readonlyArgs` exactly as you would
+unsandboxed and **do nothing** for the sandbox; the launcher prefix is added (or, by default, is an
+identity passthrough) entirely outside the codec.
+
 Supporting `--model` is optional but cheap: thread the `model` argument into your `*Args` (before the
 prompt positional). The composition root passes the resolved harness model in for you. The wall-clock
 cap is handled the same way — `makeHarness` threads `--harness-timeout-ms` into `AgentCliHarness`, and
