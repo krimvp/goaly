@@ -29,7 +29,7 @@ function renderContract(contract: CompiledContract): string {
   });
   lines.push(`rubric: ${contract.rubric.length > 0 ? contract.rubric : '(none)'}`);
   if (contract.generatedFiles.length > 0) {
-    lines.push(`generatedFiles: ${contract.generatedFiles.join(', ')}`);
+    lines.push(`generatedFiles: ${contract.generatedFiles.map((f) => f.path).join(', ')}`);
   }
   lines.push('==========================================================');
   return lines.join('\n');

@@ -93,7 +93,7 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
       runId,
       noLogConsole: true,
       llm: new FakeLlm([
-        { text: '{"command":"true","rubric":"is it done"}', tokensUsed: 800 },
+        { text: '{"command":"printf ok","rubric":"is it done"}', tokensUsed: 800 },
         { text: '{"pass":true,"confidence":1,"failing_criteria":[]}', tokensUsed: 1200 },
         { text: '{"veto":false}', tokensUsed: 400 },
       ]),
@@ -133,7 +133,7 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
     });
     const runId = asRunId('run-cli-usage-resume');
     const llmScript = [
-      { text: '{"command":"true","rubric":"is it done"}', tokensUsed: 800 },
+      { text: '{"command":"printf ok","rubric":"is it done"}', tokensUsed: 800 },
       { text: '{"pass":true,"confidence":1,"failing_criteria":[]}', tokensUsed: 1200 },
       { text: '{"veto":false}', tokensUsed: 400 },
     ];

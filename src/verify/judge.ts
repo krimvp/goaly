@@ -2,6 +2,7 @@ import { JudgeOutput, type Verdict } from '../domain/verdict';
 import type { LlmProvider } from '../llm/provider';
 import type { Verifier } from '../verify/verifier';
 import type { Workspace } from '../workspace/workspace';
+import { UNTRUSTED_SYSTEM_CLAUSE, wrapUntrusted } from './prompt-safety';
 
 /**
  * Extract the first balanced JSON object from arbitrary text. Tolerates ```json fences,
@@ -66,7 +67,8 @@ const SYSTEM_PROMPT =
   'Respond with ONLY a single JSON object and no other text, matching exactly: ' +
   '{ "pass": boolean, "confidence": number, "failing_criteria": string[] }. ' +
   'confidence is a number in [0,1]. failing_criteria MUST be empty if and only if pass is true. ' +
-  'Do not include markdown fences, explanations, or any surrounding prose.';
+  'Do not include markdown fences, explanations, or any surrounding prose. ' +
+  UNTRUSTED_SYSTEM_CLAUSE;
 
 /**
  * LLM quorum verifier. Calls the model `quorum` times at temperature 0, tolerantly parses
@@ -133,7 +135,7 @@ export class JudgeVerifier implements Verifier {
     return [
       `GOAL:\n${goal}`,
       `RUBRIC:\n${this.#rubric}`,
-      `DIFF:\n${diff}`,
+      `DIFF:\n${wrapUntrusted(diff, { label: 'DIFF' })}`,
       'Return ONLY the JSON verdict described in the system instructions.',
     ].join('\n\n');
   }
