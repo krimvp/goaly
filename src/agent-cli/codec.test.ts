@@ -3,7 +3,16 @@ import { SessionId } from '../domain/ids';
 import { claudeCodec } from './claude-codec';
 import { codexCodec } from './codex-codec';
 import { droidCodec, makeDroidCodec } from './droid-codec';
-import { classifyFlatRun, runCodecHarness, type AgentCliCodec, type AgentExecFn } from './codec';
+import { mkdtemp, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  classifyFlatRun,
+  defaultAgentExec,
+  runCodecHarness,
+  type AgentCliCodec,
+  type AgentExecFn,
+} from './codec';
 
 const sid = (s: string): SessionId => SessionId.parse(s);
 
@@ -169,5 +178,22 @@ describe('runCodecHarness', () => {
     expect(result.status).toBe('completed');
     expect(result.output).toBe('done');
     expect(kinds).toEqual(['session', 'message', 'usage', 'done']);
+  });
+});
+
+describe('defaultAgentExec cwd (the agent runs IN the workspace)', () => {
+  it('spawns the binary in the provided cwd, not goaly\'s process cwd', async () => {
+    const ws = await realpath(await mkdtemp(join(tmpdir(), 'goaly-cwd-')));
+    const exec = defaultAgentExec('node', 5000, false, ws);
+    const r = await exec(['-e', 'process.stdout.write(process.cwd())'], { prompt: '' });
+    expect(r.code).toBe(0);
+    expect(await realpath(r.stdout.trim())).toBe(ws);
+    expect(r.stdout.trim()).not.toBe(process.cwd()); // would be the bug: agent in goaly's cwd
+  });
+
+  it('falls back to the inherited cwd when none is given (sandbox sets the jail cwd itself)', async () => {
+    const exec = defaultAgentExec('node', 5000, false);
+    const r = await exec(['-e', 'process.stdout.write(process.cwd())'], { prompt: '' });
+    expect(await realpath(r.stdout.trim())).toBe(await realpath(process.cwd()));
   });
 });
