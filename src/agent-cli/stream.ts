@@ -68,8 +68,13 @@ export type StreamEventExtractor = (obj: Record<string, unknown>) => AgentStream
 /** An optional sink the seams forward live events to. The tap guards every call (fail-closed). */
 export type AgentEventSink = (event: AgentStreamEvent) => void;
 
-/** Which seam a stream event came from, for phase-tagged consumer surfaces (`[agent]`, `[judge]`…). */
-export type StreamPhase = 'agent' | 'compile' | 'judge' | 'approve';
+/**
+ * Which seam a stream event came from, for phase-tagged consumer surfaces (`[agent]`, `[judge]`…).
+ * A Zod enum (not a bare union) so a durable transcript reader can validate the phase at the seam
+ * (issue #28) — same "parse at every seam" discipline as the event taxonomy itself.
+ */
+export const StreamPhase = z.enum(['agent', 'compile', 'judge', 'approve']);
+export type StreamPhase = z.infer<typeof StreamPhase>;
 
 /** A consumer sink that also receives the originating {@link StreamPhase} (driver/compose side). */
 export type PhasedStreamSink = (phase: StreamPhase, event: AgentStreamEvent) => void;
