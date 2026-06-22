@@ -37,6 +37,19 @@ import { makeStreamRenderer, streamLogFields } from './stream-render';
 import { resolveModels, type ModelSelection } from './models';
 import { independenceWarnings } from './independence';
 import type { HarnessChoice, LlmProviderChoice, StepTimeouts } from './args';
+import { claudeCodec } from '../agent-cli/claude-codec';
+import {
+  makeLauncher,
+  neutralAgentExec,
+  networkForSeam,
+  withSandboxAgent,
+  withSandboxVerify,
+  SandboxUnavailableError,
+  type SandboxLauncher,
+} from '../sandbox';
+import { DEFAULT_AGENT_TIMEOUT_MS } from '../agent-cli/codec';
+import type { SandboxPolicy } from '../sandbox/policy';
+import type { ExecFn } from '../workspace/git-workspace';
 
 export type ComposeOptions = {
   harness: HarnessChoice;
@@ -50,6 +63,14 @@ export type ComposeOptions = {
   models?: ModelSelection;
   /** Per-step subprocess timeouts (harness / LLM steps / verify command). Each absent ⇒ default. */
   timeouts?: StepTimeouts;
+  /**
+   * Opt-in OS-isolation policy (issue #9). Absent / `mode: 'none'` ⇒ identity passthrough, so the
+   * harness and verifier execs are byte-for-byte the current calls. Any other mode is detected
+   * fail-closed: if the requested mechanism is absent the run refuses to start.
+   */
+  sandbox?: SandboxPolicy;
+  /** Inject the sandbox launcher directly (tests); bypasses host detection from {@link sandbox}. */
+  sandboxLauncher?: SandboxLauncher;
   /** Where run logs live. Default `<workspaceRoot>/.goaly` (excluded from diffHash). */
   stateDir?: string;
   /** Minimum diagnostic log level. Default `info`. */
@@ -93,6 +114,33 @@ export type ComposeOptions = {
 /** The orchestrator's own state directory name, kept out of stuck-detection hashing. */
 export const STATE_DIR = '.goaly';
 
+/** The default (off) sandbox policy: identity passthrough, behavior byte-for-byte unchanged. */
+function defaultPolicy(): SandboxPolicy {
+  return { mode: 'none', network: 'none' };
+}
+
+/**
+ * Build the sandbox launcher ONCE from the policy (issue #9). A directly-injected launcher (tests)
+ * wins; otherwise {@link makeLauncher} probes the host fail-closed. `none` (the default) ⇒ identity.
+ */
+function makeSandboxLauncher(options: ComposeOptions): SandboxLauncher {
+  if (options.sandboxLauncher !== undefined) return options.sandboxLauncher;
+  return makeLauncher(options.sandbox ?? defaultPolicy());
+}
+
+/**
+ * Fail-closed (invariant #4): an {@link UnavailableLauncher} (a requested mechanism that the host
+ * lacks) makes the run REFUSE TO START — throw before any subprocess is composed, never a silent
+ * downgrade to unsandboxed.
+ */
+function refuseIfUnavailable(launcher: SandboxLauncher): void {
+  if (!launcher.available) {
+    throw new SandboxUnavailableError(
+      launcher.unavailableReason ?? 'requested sandbox mechanism is unavailable',
+    );
+  }
+}
+
 /**
  * The composition root: assemble a fully-wired {@link DriverDeps} from validated config. This
  * is the only place that knows which concrete adapter/verifier/gate backs each seam, and the
@@ -111,7 +159,17 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   // tree hash, so stuck-detection sees only the agent's real work — not coverage dirs / build output
   // a verifier drops between iterations. Deduped so an explicit `.goaly` in --diff-ignore is a no-op.
   const excludes = [...new Set([STATE_DIR, ...config.diffIgnore])];
-  const workspace = new GitWorkspace(options.workspaceRoot, undefined, excludes);
+  // Build the sandbox launcher ONCE (issue #9). `none` ⇒ identity; any other mode is detected
+  // fail-closed (an absent mechanism makes the run refuse to start — never silently unsandboxed).
+  const launcher = makeSandboxLauncher(options);
+  refuseIfUnavailable(launcher);
+  // The verifier seam: wrap ONLY GitWorkspace.run() — never the git plumbing. The dedicated
+  // run-launcher injection point applies the jail inside run(), where scrubVerifyEnv already lives.
+  const runLauncher = launcher.identity
+    ? undefined
+    : (exec: ExecFn): ExecFn =>
+        withSandboxVerify(exec, launcher, networkForSeam(options.sandbox ?? defaultPolicy(), 'verifier'));
+  const workspace = new GitWorkspace(options.workspaceRoot, undefined, excludes, true, runLauncher);
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
   const logger = options.logger ?? buildRunLogger(options, stateDir);
   const streamSink = buildStreamSink(options, logger, stateDir, options.now ?? (() => clock.now()));
@@ -148,7 +206,11 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     gateA: config.autonomous
       ? new AutoContractGate()
       : new HumanContractGate({ allowRevise: config.maxGateARevisions > 0 }),
-    harness: makeHarness(options.harness, models.harness, timeouts.harnessMs),
+    harness: makeHarness(options.harness, models.harness, timeouts.harnessMs, {
+      launcher,
+      workspace: options.workspaceRoot,
+      policy: options.sandbox ?? defaultPolicy(),
+    }),
     makeLadder: (contract) => buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs),
     approver: new AgentApprover({ llm: llmFor(models.approver, 'approve') }),
     workspace,
@@ -321,14 +383,24 @@ export function buildLadder(
   return new Ladder(rungs);
 }
 
+/** The sandbox wiring threaded into {@link makeHarness}: the launcher + the harness-seam profile. */
+type HarnessSandbox = {
+  launcher: SandboxLauncher;
+  workspace: string;
+  policy: SandboxPolicy;
+};
+
 function makeHarness(
   choice: HarnessChoice,
   model: string | undefined,
-  timeoutMs?: number,
+  timeoutMs: number | undefined,
+  sandbox: HarnessSandbox,
 ): HarnessAdapter {
+  const exec = sandboxedHarnessExec(choice, timeoutMs, sandbox);
   const opts = {
     ...(model !== undefined ? { model } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(exec !== undefined ? { exec } : {}),
   };
   switch (choice) {
     case 'claude-code':
@@ -340,6 +412,32 @@ function makeHarness(
     case 'fake':
       return new NoopHarness();
   }
+}
+
+/**
+ * Build the SANDBOXED harness exec (issue #9) for a codec-backed adapter, or `undefined` when no
+ * sandbox is active (the adapter then uses its default exec — byte-for-byte the current call). The
+ * whole agent-CLI invocation is untrusted, so we wrap the entire exec. The neutral spawner runs
+ * the launcher's rewritten `[binary, ...argv]`; the harness seam always keeps network egress.
+ */
+function sandboxedHarnessExec(
+  choice: HarnessChoice,
+  timeoutMs: number | undefined,
+  sandbox: HarnessSandbox,
+): ReturnType<typeof withSandboxAgent> | undefined {
+  if (sandbox.launcher.identity || choice === 'fake') return undefined;
+  const codec =
+    choice === 'codex' ? codexCodec : choice === 'droid' ? droidCodec : claudeCodec;
+  const budget = timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
+  const inner = neutralAgentExec(budget, codec.promptOnStdin);
+  return withSandboxAgent(codec.command, inner, sandbox.launcher, {
+    workspace: sandbox.workspace,
+    network: networkForSeam(sandbox.policy, 'harness'),
+    // The harness keeps the FULL host env (NOT scrubbed): the agent CLI needs its API keys to
+    // authenticate. The container launcher re-exports each NAME with `-e` (a fresh `docker`/`podman
+    // run` inherits nothing); bwrap inherits the env naturally and ignores this.
+    env: process.env,
+  });
 }
 
 /**

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { GitWorkspace } from './git-workspace';
+import type { ExecFn, RunExecWrapper } from './git-workspace';
 
 /** Run a git command synchronously in `cwd`, throwing on failure (setup only). */
 function git(cwd: string, ...args: string[]): void {
@@ -201,5 +202,44 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(hash).toBe('a'.repeat(40));
     expect(calls.some((c) => c.includes('add'))).toBe(true);
     expect(calls.some((c) => c.includes('write-tree'))).toBe(true);
+  });
+
+  // WORKSPEC §2 "Subtlety": the sandbox runLauncher must wrap ONLY the exec used by run() — never
+  // the git plumbing (diff/diffHash), which needs the real `.git` + full env. This pins the seam
+  // where that mistake would actually happen: the #runExec split in the constructor.
+  it('runLauncher wraps ONLY run(); diff/diffHash use the bare git-plumbing exec', async () => {
+    const plumbingCalls: string[][] = [];
+    const exec: ExecFn = async (cmd, args) => {
+      plumbingCalls.push([cmd, ...args]);
+      if (args.includes('write-tree')) {
+        return { stdout: 'b'.repeat(40) + '\n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    };
+
+    // The launcher spy rewrites the verify command so a wrapped run() is observable, and records
+    // that it was invoked. If the plumbing went through it, the recorded count would be > 1.
+    const wrapCalls: Array<{ cmd: string; args: string[] }> = [];
+    const runLauncher: RunExecWrapper = (inner) => async (cmd, args, opts) => {
+      wrapCalls.push({ cmd, args });
+      return inner('JAILED', [cmd, ...args], opts);
+    };
+
+    const ws = new GitWorkspace(root, exec, ['.goaly'], true, runLauncher);
+
+    // Plumbing: must NOT touch the launcher.
+    await ws.diffHash();
+    await ws.diff();
+    expect(wrapCalls).toEqual([]); // launcher never invoked for git plumbing
+    expect(plumbingCalls.some((c) => c[0] === 'git')).toBe(true);
+    expect(plumbingCalls.every((c) => c[0] !== 'JAILED')).toBe(true);
+
+    // run(): must go through the wrapped exec exactly once.
+    const before = plumbingCalls.length;
+    const result = await ws.run('npm test');
+    expect(wrapCalls).toEqual([{ cmd: 'npm test', args: [] }]);
+    expect(result.exitCode).toBe(0);
+    // The wrapped exec rewrote the command to the synthetic 'JAILED' binary — proof run() used it.
+    expect(plumbingCalls[before]?.[0]).toBe('JAILED');
   });
 });

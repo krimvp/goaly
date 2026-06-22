@@ -3,6 +3,7 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { parseArgs, USAGE, UsageError, type ParsedArgs } from './args';
 import { composeDeps, STATE_DIR } from './compose';
+import { SandboxUnavailableError } from '../sandbox';
 import { runRuns } from './runs';
 import { drive } from '../driver/driver';
 import { asRunId, type RunId } from '../domain/ids';
@@ -71,20 +72,32 @@ export async function main(argv: string[]): Promise<number> {
   const resuming = parsed.resumeRunId !== undefined;
   const runId: RunId =
     parsed.resumeRunId !== undefined ? asRunId(parsed.resumeRunId) : asRunId(`run-${randomUUID()}`);
-  const deps = composeDeps(parsed.config, {
-    harness: parsed.harness,
-    models: parsed.models,
-    llmProvider: parsed.llmProvider,
-    workspaceRoot: parsed.workspace,
-    runId,
-    logLevel: parsed.logLevel,
-    timeouts: parsed.timeouts,
-    ...(parsed.logFile !== undefined ? { logFile: parsed.logFile } : {}),
-    ...(parsed.noLogFile ? { noLogFile: true } : {}),
-    ...(parsed.stream ? { stream: true } : {}),
-    ...(parsed.streamTranscript ? { streamTranscript: true } : {}),
-    ...(parsed.streamFile !== undefined ? { streamFile: parsed.streamFile } : {}),
-  });
+  let deps;
+  try {
+    deps = composeDeps(parsed.config, {
+      harness: parsed.harness,
+      models: parsed.models,
+      llmProvider: parsed.llmProvider,
+      workspaceRoot: parsed.workspace,
+      runId,
+      logLevel: parsed.logLevel,
+      timeouts: parsed.timeouts,
+      sandbox: parsed.sandbox,
+      ...(parsed.logFile !== undefined ? { logFile: parsed.logFile } : {}),
+      ...(parsed.noLogFile ? { noLogFile: true } : {}),
+      ...(parsed.stream ? { stream: true } : {}),
+      ...(parsed.streamTranscript ? { streamTranscript: true } : {}),
+      ...(parsed.streamFile !== undefined ? { streamFile: parsed.streamFile } : {}),
+    });
+  } catch (e) {
+    // Fail-closed (invariant #4): a requested sandbox mechanism that the host lacks REFUSES TO
+    // START — a clear message and a non-zero exit, never a silent unsandboxed run.
+    if (e instanceof SandboxUnavailableError) {
+      process.stderr.write(`goaly: ${e.message}\n`);
+      return 2;
+    }
+    throw e;
+  }
 
   // Human-facing startup banner, routed through the logger so it respects --log-level and lands
   // in the diagnostics file too. The run outcome below stays on stdout (the machine-facing result).
