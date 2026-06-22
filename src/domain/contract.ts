@@ -27,7 +27,7 @@ export type Rung = z.infer<typeof Rung>;
 
 /**
  * A verification file the compiler authored, pinned by the sha256 of its content at freeze time
- * (finding C1). Recording only the path let the worker rewrite the file the frozen command runs —
+ * Recording only the path let the worker rewrite the file the frozen command runs —
  * keeping `npm test` "frozen" while the bar it measures was rewritten. Pinning the content hash
  * makes that tampering detectable: a guard re-hashes each file before verifying and fails closed
  * if it moved.
@@ -53,7 +53,7 @@ export const CompiledContract = z.object({
   /**
    * Files the compiler authored while writing new verification, each pinned by content hash. Part
    * of the frozen bar: a guard rung re-checks them every iteration so the worker can't rewrite the
-   * tests the frozen command runs (finding C1).
+   * tests the frozen command runs.
    */
   generatedFiles: z.array(GeneratedFile).default([]),
   contractHash: ContractHash,

@@ -43,14 +43,19 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
   `--autonomous` skips this pause entirely, never the freeze.
 - **Two keys for DONE:** the frozen verifier passes *and* the independent approver (Gate B, veto-only)
   doesn't veto.
-- **Stuck detection** bails before `maxIterations` with a reason: no-diff, repeat-failure, oscillation,
-  budget.
+- **Stuck detection** bails before `maxIterations` with a reason: no-diff, repeat-failure (volatile
+  tokens like timestamps / PIDs / temp paths are normalized away first, so a noisy-but-identical
+  failure still trips it), short-period oscillation (period-N, not just A,B,A,B), and budget. Use
+  `--diff-ignore` to keep verifier-produced artifacts (coverage dirs, `__pycache__`, build output)
+  out of the tree hash so they can't make a no-op agent look like it changed something.
 - **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable, **resumable**, and
   **inspectable** after the fact (`goaly runs list` / `goaly runs show`).
 - **Per-run spend report:** every run ends with a token breakdown by layer — the **harness** vs. the
   **LLM steps** (compiler / judge / approver) — and against any `--budget-tokens` cap. It's folded
-  from the run log, so `--resume` and `goaly runs show` rebuild the same numbers; missing token data
-  degrades to "unknown", never a crash. Optional USD cost via `--cost-table`; **tokens-only by default**.
+  from the run log, so `--resume` and `goaly runs show` rebuild the same numbers; a harness/provider
+  that reports no usage degrades that spend to **"unknown" loudly** (a warning + an `unknown` mark on
+  the budget) so the token cap is never silently read as zero — wall-clock stays the backstop. Optional
+  USD cost via `--cost-table`; **tokens-only by default**.
 
 ## Hardening against reward-hacking
 

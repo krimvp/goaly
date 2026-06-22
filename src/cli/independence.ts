@@ -4,7 +4,7 @@ import type { ResolvedModels } from './models';
 /**
  * "Two independent keys" (invariant #3) is only real if the verifier's judge rung and the Gate B
  * approver — and ideally the worker — do not collapse onto a single model with correlated blind
- * spots (finding C3). The cascade in {@link resolveModels} makes that collapse the DEFAULT: with a
+ * spots. The cascade in {@link resolveModels} makes that collapse the DEFAULT: with a
  * single `--model X` (or no overrides at all) the judge and the approver resolve to the same model.
  * These are advisory warnings, surfaced loudly at composition; they never fail a run.
  */

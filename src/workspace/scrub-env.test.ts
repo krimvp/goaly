@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { isSecretEnvName, scrubEnv } from './scrub-env';
 
-describe('isSecretEnvName (C5)', () => {
+describe('isSecretEnvName', () => {
   it('flags credential-looking names', () => {
     for (const name of [
       'AWS_SECRET_ACCESS_KEY',
@@ -25,7 +25,7 @@ describe('isSecretEnvName (C5)', () => {
   });
 });
 
-describe('scrubEnv (C5)', () => {
+describe('scrubEnv', () => {
   it('drops secrets but keeps the toolchain environment, without mutating the input', () => {
     const env: NodeJS.ProcessEnv = {
       PATH: '/usr/bin',

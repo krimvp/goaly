@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { independenceWarnings } from './independence';
 import { resolveModels } from './models';
 
-describe('independenceWarnings (C3)', () => {
+describe('independenceWarnings', () => {
   it('warns on the default cascade: --model X collapses judge, approver, and worker', () => {
     const resolved = resolveModels({ model: 'claude-x' });
     const w = independenceWarnings(resolved, 'claude-code', 'claude');

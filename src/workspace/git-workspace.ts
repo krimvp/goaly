@@ -72,7 +72,7 @@ export class GitWorkspace implements Workspace {
    *   (default `.goaly`) never pollutes stuck-detection, regardless of the repo's
    *   .gitignore.
    * @param scrubVerifyEnv when true (default) the verify command (`run`) is spawned with a
-   *   credential-scrubbed environment (finding C5) so worker/model-authored verification code
+   *   credential-scrubbed environment so worker/model-authored verification code
    *   cannot read the parent process's secrets. Git operations (diffHash/diff) keep the full env.
    */
   constructor(
@@ -201,7 +201,7 @@ export class GitWorkspace implements Workspace {
     // Honor the Workspace "never rejects" contract even if the injected exec throws.
     try {
       // The verify command runs worker/model-authored code on the host: deny it the parent's
-      // ambient secrets (finding C5). Git operations above deliberately keep the full env.
+      // ambient secrets. Git operations above deliberately keep the full env.
       const env = this.#scrubVerifyEnv ? scrubEnv(process.env) : undefined;
       const result = await this.#exec(command, [], {
         cwd: this.#root,

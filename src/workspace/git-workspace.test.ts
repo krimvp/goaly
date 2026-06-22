@@ -67,6 +67,25 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(b).toBe(a);
   });
 
+  it('diffHash ignores verifier-produced artifacts under a configured exclude', async () => {
+    // A verifier writes coverage output / __pycache__ between iterations; with those paths excluded,
+    // the tree hash must not move, so a no-op agent can't look like it changed something.
+    const ws = new GitWorkspace(root, undefined, ['.goaly', 'coverage', '__pycache__']);
+    const before = await ws.diffHash();
+
+    await mkdir(join(root, 'coverage'));
+    await writeFile(join(root, 'coverage', 'lcov.info'), 'TN:\nSF:file.txt\n');
+    await mkdir(join(root, '__pycache__'));
+    await writeFile(join(root, '__pycache__', 'mod.pyc'), 'bytecode\n');
+
+    const after = await ws.diffHash();
+    expect(after).toBe(before);
+
+    // A real source change is still detected (the exclude doesn't blind genuine work).
+    await writeFile(join(root, 'file.txt'), 'changed by the agent\n');
+    expect(await ws.diffHash()).not.toBe(before);
+  });
+
   it('diffHash does not mutate the real git index', async () => {
     const ws = new GitWorkspace(root);
     // Introduce an unstaged change.
@@ -128,7 +147,7 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(result.stdout).toContain('done');
   });
 
-  it('scrubs credential-looking env vars from the verify command (C5)', async () => {
+  it('scrubs credential-looking env vars from the verify command', async () => {
     process.env.GOALY_TEST_TOKEN = 'super-secret';
     process.env.GOALY_TEST_PLAIN = 'visible';
     try {
@@ -154,7 +173,7 @@ describe('GitWorkspace (integration, real git)', () => {
     }
   });
 
-  it('fileHash hashes a real file, tracks edits, and returns null for missing/escaping paths (C1)', async () => {
+  it('fileHash hashes a real file, tracks edits, and returns null for missing/escaping paths', async () => {
     const ws = new GitWorkspace(root);
     await writeFile(join(root, 'gen.test.ts'), 'test("x", () => {})');
     const h1 = await ws.fileHash('gen.test.ts');

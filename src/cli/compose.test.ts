@@ -97,7 +97,7 @@ describe('buildLadder — verify timeout threading', () => {
     expect(calls).toEqual([{ command: 'npm test' }]);
   });
 
-  it('prepends a generated-files guard that fails closed before the command runs (C1)', async () => {
+  it('prepends a generated-files guard that fails closed before the command runs', async () => {
     const contract = freezeContract({
       goal: 'g',
       rungs: [{ kind: 'deterministic', command: 'npm test' }],

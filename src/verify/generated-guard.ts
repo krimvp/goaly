@@ -4,7 +4,7 @@ import type { Verifier } from './verifier';
 import type { Workspace } from '../workspace/workspace';
 
 /**
- * Integrity guard for compiler-authored verification files (finding C1). The frozen contract pins
+ * Integrity guard for compiler-authored verification files. The frozen contract pins
  * each generated file by content hash; this rung re-hashes them before the deterministic command
  * runs and FAILS closed if any was modified or removed since the contract was frozen. It closes the
  * gap where the frozen command (`vitest run authored.test.ts`) stays fixed while the worker — which

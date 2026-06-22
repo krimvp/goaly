@@ -222,7 +222,7 @@
       <div class="ladder" id="ladder">
         <div class="rung det"><span class="rk">det · 1</span><span class="rbody"><b><code>npm test</code> exits 0</b><p>tests / exit codes — ungameable, confidence = 1</p></span><span class="rstat"></span></div>
         <div class="rung det"><span class="rk">det · 2</span><span class="rbody"><b><code>npm run lint</code> exits 0</b><p>static checks before any model is consulted</p></span><span class="rstat"></span></div>
-        <div class="rung judge"><span class="rk">judge · 3</span><span class="rbody"><b>LLM quorum vs. the frozen rubric</b><p>only the fuzzy residual — temp 0, best-of-N, confidence floor</p></span><span class="rstat"></span></div>
+        <div class="rung judge"><span class="rk">judge · 3</span><span class="rbody"><b>LLM quorum vs. the frozen rubric</b><p>only the fuzzy residual — best-of-N (diversity temp), confidence floor</p></span><span class="rstat"></span></div>
       </div>
       <p class="ladder-note" id="ladder-note"></p>
 
@@ -231,8 +231,8 @@
         <div class="disc-body">
           <ul>
             <li><b>Frozen rubric</b> — criteria authored once; the bar can't drift to meet the work.</li>
-            <li><b>Temperature 0 + structured output</b> — a Zod schema <code>{pass, confidence, failing_criteria[]}</code>, no free-form “looks good”.</li>
-            <li><b>Quorum, not one call</b> — best-of-N majority (default 3) + a confidence floor (default 0.66).</li>
+            <li><b>Structured output</b> — a Zod schema <code>{pass, confidence, failing_criteria[]}</code>, no free-form “looks good”.</li>
+            <li><b>Quorum, not one call</b> — best-of-N majority (default 3) + a confidence floor (default 0.66). A multi-sample quorum samples at a small <b>diversity temperature</b> (not 0) so the N samples actually differ; a single-sample judge stays at temperature 0.</li>
             <li><b>Independent grader</b> — fed goal + rubric + diff + verdicts, not the worker's self-justification.</li>
           </ul>
         </div>
@@ -252,9 +252,9 @@
     <p class="lede reveal">Bail <em>before</em> the iteration cap with an actionable reason. Pure over the histories stored in loop state.</p>
     <div class="rows reveal">
       <div class="row"><span class="rn">01</span><div class="rt"><b>No-diff</b><p>The working tree is unchanged after a whole iteration → the agent is spinning.</p></div></div>
-      <div class="row"><span class="rn">02</span><div class="rt"><b>Repeat-failure</b><p>The same normalized verifier failure N times in a row (default 3) → same wall.</p></div></div>
-      <div class="row"><span class="rn">03</span><div class="rt"><b>Oscillation</b><p>The diff hash flip-flops A,B,A,B between two states → flip-flopping.</p></div></div>
-      <div class="row"><span class="rn">04</span><div class="rt"><b>Budget</b><p>Token / wall-clock caps, metered by the driver — independent of iteration count.</p></div></div>
+      <div class="row"><span class="rn">02</span><div class="rt"><b>Repeat-failure</b><p>The same normalized verifier failure N times in a row (default 3) → same wall. Volatile tokens (timestamps, PIDs, hex ids, temp paths) are scrubbed first, so a noisy-but-identical failure still matches.</p></div></div>
+      <div class="row"><span class="rn">03</span><div class="rt"><b>Oscillation</b><p>The diff hash cycles with a short period (A,B,A,B; A,B,C,A,B,C; …, period-N up to 4) → flip-flopping. Verifier artifacts can be kept out of the hash with <code>--diff-ignore</code>.</p></div></div>
+      <div class="row"><span class="rn">04</span><div class="rt"><b>Budget</b><p>Token / wall-clock caps, metered by the driver — independent of iteration count. Unreported usage is marked <code>unknown</code> loudly (never a silent zero); wall-clock stays the backstop.</p></div></div>
     </div>
   </div>
 </section>
@@ -350,7 +350,7 @@
           <tr><td class="feat">Verification</td><td><code>--verify-cmd</code> (existing command) · <code>--generate</code> (the agent authors it)</td></tr>
           <tr><td class="feat">Model selection</td><td><code>--model</code> (harness + LLM steps) · <code>--llm-model</code> · per-step <code>--judge/approver/compiler-model</code> · <code>--llm-provider</code> claude/codex/droid — pure wiring, never enters the frozen contract</td></tr>
           <tr><td class="feat">Deterministic rungs</td><td><span class="yes">✓</span> exit-code / test commands, confidence = 1, ungameable</td></tr>
-          <tr><td class="feat">LLM-judge rungs</td><td><span class="yes">✓</span> temperature 0, quorum (default 3), confidence floor (default 0.66)</td></tr>
+          <tr><td class="feat">LLM-judge rungs</td><td><span class="yes">✓</span> quorum (default 3, sampled at a diversity temperature; single-sample stays temp 0), confidence floor (default 0.66)</td></tr>
           <tr><td class="feat">Gate A</td><td>human approve / revise (feedback) / reject · <code>--autonomous</code> auto-accept (still frozen + logged)</td></tr>
           <tr><td class="feat">Gate B</td><td><span class="yes">✓</span> independent approver, veto-only, every iteration</td></tr>
           <tr><td class="feat">Stuck detection</td><td>no-diff · repeat-failure · oscillation · budget</td></tr>

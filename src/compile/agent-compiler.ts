@@ -65,7 +65,7 @@ function extractBalancedJson(text: string): string | undefined {
 }
 
 /**
- * Reject a verification command that trivially exits 0 without measuring anything (finding C4).
+ * Reject a verification command that trivially exits 0 without measuring anything.
  * An autonomously-authored bar like `true`, `:`, or `exit 0` would pass both keys vacuously, so a
  * generated command made only of no-op segments is refused at compile (→ COMPILE_FAILED) rather
  * than frozen as a hollow contract. Conservative on purpose: it only flags commands whose EVERY
@@ -191,7 +191,7 @@ export class AgentCompiler implements VerifierCompiler {
       );
     }
 
-    // Pin each authored file by the hash of the exact content we write, so the C1 guard can detect
+    // Pin each authored file by the hash of the exact content we write, so the integrity guard can detect
     // any later tampering with the bar. Content hashing matches GitWorkspace.fileHash (sha256 of the
     // utf8 content).
     const generatedFiles: GeneratedFile[] = [];
