@@ -74,6 +74,9 @@ export class GitWorkspace implements Workspace {
   readonly #runExec: ExecFn;
   readonly #excludes: readonly string[];
   readonly #scrubVerifyEnv: boolean;
+  /** What `diff()` compares the working tree against. Defaults to `HEAD`; advanced by `checkpoint()`
+   *  or pointed elsewhere by `setBaseline()` (the `--baseline` flag / `--resume` reconstruction). */
+  #baseline = 'HEAD';
 
   /**
    * @param excludes paths kept out of diffHash/diff so the orchestrator's own state dir
@@ -106,6 +109,39 @@ export class GitWorkspace implements Workspace {
   }
 
   async diffHash(): Promise<DiffHash> {
+    return DiffHash.parse(await this.#snapshotTree());
+  }
+
+  /**
+   * Point {@link diff} at a different baseline (a git ref or tree SHA). Pure in-memory wiring — it
+   * never spawns git, so an invalid ref is caught by the caller's fail-closed validation, not here.
+   */
+  setBaseline(ref: string): void {
+    this.#baseline = ref;
+  }
+
+  /**
+   * Snapshot the full working tree into a git TREE object (never a commit) and adopt it as the new
+   * baseline, so the NEXT `diff()` is computed against current progress. The snapshot reuses the same
+   * throwaway-index `write-tree` dance as {@link diffHash}, so the user's real index/staging area,
+   * `HEAD`, the current branch and `git log` are all left untouched (issue #47). We do NOT pin the
+   * tree behind a `refs/goaly/*` ref: the object is freshly written and only becomes unreachable at
+   * run end, and `git gc` collecting a dangling tree later is explicitly fine — so there is zero
+   * lasting footprint on the user's repo. Returns the tree SHA as the baseline handle.
+   */
+  async checkpoint(): Promise<DiffHash> {
+    const tree = await this.#snapshotTree();
+    this.#baseline = tree;
+    return DiffHash.parse(tree);
+  }
+
+  /**
+   * The non-mutating tree snapshot shared by {@link diffHash} and {@link checkpoint}: stage the whole
+   * working tree into a throwaway `GIT_INDEX_FILE` (so the user's index is never clobbered), drop the
+   * excluded paths, and `write-tree` the result to a content-addressed tree SHA. Throws (fail-closed)
+   * on any git failure — never returns a silently empty/partial tree.
+   */
+  async #snapshotTree(): Promise<string> {
     const tmpIndex = join(tmpdir(), `goaly-idx-${process.pid}-${tmpIndexCounter++}`);
     // Ensure no stale index file exists at that path.
     await rm(tmpIndex, { force: true });
@@ -147,7 +183,7 @@ export class GitWorkspace implements Workspace {
         throw new Error(`git write-tree failed (code ${tree.code}): ${tree.stderr.trim()}`);
       }
 
-      return DiffHash.parse(tree.stdout.trim());
+      return tree.stdout.trim();
     } finally {
       await rm(tmpIndex, { force: true });
     }
@@ -155,14 +191,15 @@ export class GitWorkspace implements Workspace {
 
   async diff(): Promise<string> {
     const ps = this.#pathspec();
-    let tracked = await this.#exec('git', ['-C', this.#root, 'diff', 'HEAD', ...ps], {
+    let tracked = await this.#exec('git', ['-C', this.#root, 'diff', this.#baseline, ...ps], {
       cwd: this.#root,
     });
 
     // `git diff` exits 0 whether or not there are changes; a non-zero exit means an actual error
-    // (commonly an unborn branch with no HEAD). Fall back to diffing against the empty tree so
-    // staged/tracked content still appears — and surface a loud marker rather than a silent empty
-    // diff if even that fails (a silent empty diff would mislead Gate B and the judge verifier).
+    // (commonly an unborn branch with no HEAD, or a baseline ref that no longer resolves). Fall back
+    // to diffing against the empty tree so staged/tracked content still appears — and surface a loud
+    // marker rather than a silent empty diff if even that fails (a silent empty diff would mislead
+    // Gate B and the judge verifier).
     if (tracked.code !== 0) {
       const fallback = await this.#exec('git', ['-C', this.#root, 'diff', EMPTY_TREE, ...ps], {
         cwd: this.#root,
@@ -254,4 +291,19 @@ export class GitWorkspace implements Workspace {
       return { exitCode: 127, stdout: '', stderr: errorMessage(e) };
     }
   }
+}
+
+/**
+ * True when `ref` resolves to a real object in the git repo at `root` (`git rev-parse --verify`).
+ * Used to validate a `--baseline <ref>` fail-closed BEFORE the run starts (invariant #6: parse at the
+ * seam) so an unknown ref refuses to start rather than silently degrading the diff. The exec is
+ * injectable so the check is unit-testable without spawning git.
+ */
+export async function refResolves(root: string, ref: string, exec: ExecFn = realExec): Promise<boolean> {
+  // `^{object}` peels the ref to the object it names; `--verify --quiet` exits non-zero (and prints
+  // nothing) when it does not resolve.
+  const r = await exec('git', ['-C', root, 'rev-parse', '--verify', '--quiet', `${ref}^{object}`], {
+    cwd: root,
+  });
+  return r.code === 0;
 }

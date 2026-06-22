@@ -7,7 +7,13 @@ export * from './domain';
 export * from './orchestrator';
 
 // The Driver and composition root.
-export { drive, type DriverDeps, type DriveOptions } from './driver/driver';
+export {
+  drive,
+  recordCheckpoint,
+  type DriverDeps,
+  type DriveOptions,
+  type CheckpointDeps,
+} from './driver/driver';
 export {
   composeDeps,
   buildLadder,

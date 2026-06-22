@@ -48,6 +48,13 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
   failure still trips it), short-period oscillation (period-N, not just A,B,A,B), and budget. Use
   `--diff-ignore` to keep verifier-produced artifacts (coverage dirs, `__pycache__`, build output)
   out of the tree hash so they can't make a no-op agent look like it changed something.
+- **Diff baseline** — the worker's diff (what the Gate-B approver reviews) is computed against `HEAD`
+  by default, but `--baseline <ref>` points it at any git ref/SHA instead. Chain a multi-step build by
+  pointing each run at where the last one finished, so every run reviews only its own delta —
+  **without `git commit`-ing onto the user's branch**. The baseline only changes what `diff()` is
+  computed *against*; the working-tree hash that drives stuck-detection is unaffected. (goaly can also
+  advance the baseline internally via a private tree snapshot — no commit, no `HEAD`/branch/index
+  movement — recorded so `--resume` reconstructs it.)
 - **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable, **resumable**, and
   **inspectable** after the fact (`goaly runs list` / `goaly runs show`).
 - **Per-run spend report:** every run ends with a token breakdown by layer — the **harness** vs. the
@@ -202,6 +209,9 @@ goaly run --goal "..." --verify-cmd "pytest -q" --harness codex --max-iterations
              --budget-tokens 500000 --workspace ./myrepo
 goaly run --goal "..." --resume run-<id> --workspace ./myrepo
 
+# Diff against a baseline instead of HEAD — keep a multi-step build's diff small with no commits:
+goaly run --goal "step 2 of the build" --verify-cmd "npm test" --baseline <ref-or-sha>
+
 # Pick a model for the harness, and a different model for the LLM steps (judge/approver/compiler):
 goaly run --goal "..." --verify-cmd "npm test" --harness claude-code \
              --model claude-opus-4-8 --llm-model claude-sonnet-4-6
@@ -292,6 +302,24 @@ never enters the frozen contract):
 A verify command that exceeds its timeout is SIGKILL'd and reported as a **non-zero exit — i.e. a
 verifier FAIL, never a green** (fail-closed, invariant #4). Each value must be a positive integer
 number of milliseconds.
+
+### Diff baseline (`--baseline`)
+
+The worker's diff — the text the **Gate-B approver** reviews — is computed against `HEAD` by default.
+`--baseline <ref>` makes `goaly` diff against any git ref or SHA instead. This lets you chain a
+multi-step build **without committing onto the user's branch**: point run *N+1* at the tree run *N*
+finished on, and each run reviews only its own delta.
+
+- The ref is validated to resolve (`git rev-parse --verify`) **before the run starts** — an unknown
+  ref refuses to start (fail-closed), never a silently degraded diff. Precedence: **CLI flag > config**.
+- It changes only what `diff()` is computed *against*. The **working-tree content hash** that drives
+  no-diff / oscillation detection is unchanged (it always hashes the working tree), so stuck-detection
+  stays meaningful. The empty-tree fallback for a repo with no `HEAD` still applies.
+- `goaly` can also advance the baseline **internally** via a private tree snapshot — a `git write-tree`
+  through a throwaway index, so it writes **no commit and never moves `HEAD`, the branch, or the user's
+  staging area** (objects are left dangling, gc-collectable; no `refs/goaly/*` is left behind). Each
+  snapshot is recorded in the run log so `--resume` reconstructs the advanced baseline. (The *policy*
+  for when to snapshot automatically is a follow-up; this ships the primitive + the explicit flag.)
 
 ### Per-run spend report
 

@@ -167,4 +167,29 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
     expect(resumed.usage).toEqual(first.usage);
     expect(resumed.usage?.total.tokens).toBe(2400);
   });
+
+  it('threads --baseline through to the workspace diff (issue #47)', async () => {
+    dir = await initRepo();
+    const firstSha = (await runProcess('git', ['-C', dir, 'rev-parse', 'HEAD'])).stdout.trim();
+    // Advance HEAD so there is a difference between the first commit and the working tree.
+    await writeFile(path.join(dir, 'README.md'), '# fixture v2\n');
+    await runProcess('git', ['-C', dir, 'commit', '-qam', 'v2']);
+
+    const config = makeConfig({ goal: 'g', verifier: { kind: 'existing', ref: 'true' }, autonomous: true });
+    // No baseline ⇒ diff() is against HEAD (the working tree is clean) ⇒ empty.
+    const def = composeDeps(config, { harness: 'fake', workspaceRoot: dir, runId: asRunId('run-bl-default'), noLogConsole: true });
+    expect(await def.workspace.diff()).toBe('');
+
+    // baseline = the first commit ⇒ diff() now shows the README change introduced by v2.
+    const based = composeDeps(config, {
+      harness: 'fake',
+      workspaceRoot: dir,
+      runId: asRunId('run-bl-set'),
+      noLogConsole: true,
+      baseline: firstSha,
+    });
+    const diff = await based.workspace.diff();
+    expect(diff).toContain('README.md');
+    expect(diff).toContain('fixture v2');
+  });
 });
