@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Time-Loop Foundry</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 24px;
+    background: #0c0e14;
+    color: #f4f4f6;
+    font: 14px/1.5 system-ui, sans-serif;
+  }
+  h1 { margin: 0; font-size: 20px; font-weight: 600; }
+  canvas {
+    background: #1b1f2a;
+    border: 1px solid #454c5e;
+    border-radius: 4px;
+    image-rendering: pixelated;
+  }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  button {
+    font: inherit;
+    color: #f4f4f6;
+    background: #2a3140;
+    border: 1px solid #454c5e;
+    border-radius: 4px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  button:hover { background: #3a4255; }
+  .hud { color: #9aa3b8; font-variant-numeric: tabular-nums; }
+  .hint { color: #6b7488; font-size: 12px; }
+</style>
+</head>
+<body>
+  <h1>Time-Loop Foundry</h1>
+  <canvas id="game" width="240" height="240"></canvas>
+  <div class="controls">
+    <button id="endLoop" type="button">Bake echo (end loop)</button>
+    <span class="hud" id="hud"></span>
+  </div>
+  <p class="hint">Move with the arrow keys. Bake an echo to replay your run as a ghost in the next loop.</p>
+
+  <script type="module">
+    import { parseLevel, step, endLoop } from './src/engine.js';
+    import { drawWorld } from './src/render.js';
+
+    const CELL = 24;
+
+    // A small starting level. '@' marks the worker start, 'O' ore, '#' wall.
+    const LEVEL = [
+      '##########',
+      '#@.......#',
+      '#..####..#',
+      '#..#O.#..#',
+      '#..#..#..#',
+      '#..####..#',
+      '#.......O#',
+      '#..O.....#',
+      '#........#',
+      '##########',
+    ].join('\n');
+
+    let world = parseLevel(LEVEL);
+
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    canvas.width = world.width * CELL;
+    canvas.height = world.height * CELL;
+
+    const hud = document.getElementById('hud');
+
+    function redraw() {
+      drawWorld(ctx, world, CELL);
+      hud.textContent =
+        `loop ${world.loopCount} · tick ${world.tick} · echoes ${world.echoes.length}`;
+    }
+
+    const KEY_ACTIONS = {
+      ArrowUp: 'up',
+      ArrowDown: 'down',
+      ArrowLeft: 'left',
+      ArrowRight: 'right',
+    };
+
+    // Arrow keys advance the world one step, then redraw.
+    window.addEventListener('keydown', (event) => {
+      const action = KEY_ACTIONS[event.key];
+      if (!action) return;
+      event.preventDefault();
+      world = step(world, action);
+      redraw();
+    });
+
+    // Bake the current recording into an echo and start the next loop.
+    document.getElementById('endLoop').addEventListener('click', () => {
+      world = endLoop(world);
+      redraw();
+    });
+
+    redraw();
+  </script>
+</body>
+</html>

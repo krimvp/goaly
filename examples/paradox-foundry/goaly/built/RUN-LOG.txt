@@ -1,0 +1,63 @@
+PARADOX FOUNDRY — built by goaly in 6 small increments (each two-key DONE).
+Pattern: tiny sub-goal -> goaly --generate (opus harness, sonnet LLM steps) -> commit -> repeat.
+Committing between runs resets 'git diff HEAD' so every nested prompt stays small.
+
+  6f333fa increment 6 (goaly): playable index.html
+  a173516 increment 5 (goaly): canvas renderer
+  576cf29 increment 4 (goaly): collision paradox detection
+  c6b9c43 increment 3 (goaly): time-loop echo replay
+  2c9be12 increment 2 (goaly): Extend src/engine.js: give the worker an inventory with a ca
+  0f0257f increment 1 (goaly): Create src/engine.js (pure ES module: no DOM, no Math.random
+  2ce5daf empty workspace
+
+── /tmp/staged.log ──
+==================== INCREMENT 1 / 7 ====================
+2026-06-22T20:26:18.706Z INFO  contract compiled runId=run-92103fa3-c3c4-43ce-a733-fa5549e25dde contractHash=f83ea3637fba4daa041a4410348b60876d1963bbe88e3c00618b9d4d8fca08a6 rungs=2 llmTokens=58841
+2026-06-22T20:27:24.495Z INFO  agent ran runId=run-92103fa3-c3c4-43ce-a733-fa5549e25dde status=completed changed=true tokensSpent=289018 budgetExceeded=false
+2026-06-22T20:27:38.043Z INFO  verified runId=run-92103fa3-c3c4-43ce-a733-fa5549e25dde pass=true confidence=0.9766666666666666 llmTokens=77574
+2026-06-22T20:27:41.755Z INFO  gate B decided runId=run-92103fa3-c3c4-43ce-a733-fa5549e25dde veto=false llmTokens=26147
+2026-06-22T20:27:41.759Z INFO  run finished runId=run-92103fa3-c3c4-43ce-a733-fa5549e25dde status=DONE iterations=1 tokensTotal=392739
+status:      DONE
+==================== INCREMENT 2 / 7 ====================
+2026-06-22T20:30:06.628Z INFO  contract compiled runId=run-5c6deed1-fcbf-4442-b1dd-9f49040c54b0 contractHash=f77cfe381f0ccc7f567d099dfaaf8cbfb96403b2e7ae055805eb601ee2ee0bd9 rungs=2 llmTokens=88672
+2026-06-22T20:31:13.076Z INFO  agent ran runId=run-5c6deed1-fcbf-4442-b1dd-9f49040c54b0 status=completed changed=true tokensSpent=444316 budgetExceeded=false
+2026-06-22T20:33:45.775Z INFO  verified runId=run-5c6deed1-fcbf-4442-b1dd-9f49040c54b0 pass=true confidence=0.96 llmTokens=93915
+2026-06-22T20:34:38.820Z INFO  gate B decided runId=run-5c6deed1-fcbf-4442-b1dd-9f49040c54b0 veto=false llmTokens=31867
+2026-06-22T20:34:38.827Z INFO  run finished runId=run-5c6deed1-fcbf-4442-b1dd-9f49040c54b0 status=DONE iterations=1 tokensTotal=570098
+status:      DONE
+==================== INCREMENT 3 / 7 ====================
+2026-06-22T20:38:21.973Z INFO  run finished runId=run-4f59e607-d1ac-4d7e-ae2a-e1fd6a27c683 status=FAILED iterations=0 tokensTotal=207531
+status:      FAILED
+
+── /tmp/inc3.log ──
+2026-06-22T20:43:22.981Z INFO  contract compiled runId=run-dc65fb2c-1855-4f29-8703-9a34e48097fa contractHash=5854b29aab6d0cbdc333bf77436d102559ec71c322602565cc4965c05580f489 rungs=2 llmTokens=179968
+2026-06-22T20:46:42.315Z INFO  agent ran runId=run-dc65fb2c-1855-4f29-8703-9a34e48097fa status=completed changed=true tokensSpent=813966 budgetExceeded=false
+2026-06-22T20:51:02.769Z INFO  verified runId=run-dc65fb2c-1855-4f29-8703-9a34e48097fa pass=true confidence=0.8733333333333334 llmTokens=98932
+2026-06-22T20:52:12.890Z INFO  gate B decided runId=run-dc65fb2c-1855-4f29-8703-9a34e48097fa veto=false llmTokens=31371
+2026-06-22T20:52:12.894Z INFO  run finished runId=run-dc65fb2c-1855-4f29-8703-9a34e48097fa status=DONE iterations=1 tokensTotal=944269
+status:      DONE
+
+── /tmp/inc4.log ──
+2026-06-22T20:57:20.362Z INFO  contract compiled runId=run-1acec445-42c8-43e4-b517-d0583117f602 contractHash=334feb492dca18bd16cbaa574bfbd5221dd74105a1f67b4ca08d4befad6b08bd rungs=2 llmTokens=356943
+2026-06-22T21:08:42.086Z INFO  agent ran runId=run-1acec445-42c8-43e4-b517-d0583117f602 status=completed changed=true tokensSpent=2054732 budgetExceeded=false
+2026-06-22T21:16:54.417Z INFO  verified runId=run-1acec445-42c8-43e4-b517-d0583117f602 pass=true confidence=0.81 llmTokens=112698
+2026-06-22T21:19:24.462Z INFO  gate B decided runId=run-1acec445-42c8-43e4-b517-d0583117f602 veto=false llmTokens=36594
+2026-06-22T21:19:24.466Z INFO  run finished runId=run-1acec445-42c8-43e4-b517-d0583117f602 status=DONE iterations=1 tokensTotal=2204024
+status:      DONE
+
+── /tmp/inc5.log ──
+2026-06-22T21:20:13.514Z INFO  contract compiled runId=run-608d5903-765e-4805-a6e4-e8c59a52b1d8 contractHash=9e5f34062d3c3fc03d671042c162efd818ef9ed91278b4d5398489495cef34aa rungs=2 llmTokens=23320
+2026-06-22T21:21:16.992Z INFO  agent ran runId=run-608d5903-765e-4805-a6e4-e8c59a52b1d8 status=completed changed=true tokensSpent=291579 budgetExceeded=false
+2026-06-22T21:22:14.544Z INFO  verified runId=run-608d5903-765e-4805-a6e4-e8c59a52b1d8 pass=true confidence=0.9400000000000001 llmTokens=76128
+2026-06-22T21:22:40.138Z INFO  gate B decided runId=run-608d5903-765e-4805-a6e4-e8c59a52b1d8 veto=false llmTokens=25770
+2026-06-22T21:22:40.148Z INFO  run finished runId=run-608d5903-765e-4805-a6e4-e8c59a52b1d8 status=DONE iterations=1 tokensTotal=393477
+status:      DONE
+
+── /tmp/inc6.log ──
+2026-06-22T21:23:34.741Z INFO  contract compiled runId=run-31aa22c3-af97-469c-9bf7-59608e4e7a93 contractHash=f6a951cfc6827cc3ef222851b6e05bc46021104a6294ee592984ece38acf92b8 rungs=2 llmTokens=25479
+2026-06-22T21:25:06.497Z INFO  agent ran runId=run-31aa22c3-af97-469c-9bf7-59608e4e7a93 status=completed changed=true tokensSpent=465309 budgetExceeded=false
+2026-06-22T21:26:04.660Z INFO  verified runId=run-31aa22c3-af97-469c-9bf7-59608e4e7a93 pass=true confidence=0.9499999999999998 llmTokens=76196
+2026-06-22T21:26:23.066Z INFO  gate B decided runId=run-31aa22c3-af97-469c-9bf7-59608e4e7a93 veto=false llmTokens=25614
+2026-06-22T21:26:23.075Z INFO  run finished runId=run-31aa22c3-af97-469c-9bf7-59608e4e7a93 status=DONE iterations=1 tokensTotal=567119
+status:      DONE
+
