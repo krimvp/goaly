@@ -46,6 +46,7 @@ import {
   withSandboxVerify,
   SandboxUnavailableError,
   type SandboxLauncher,
+  type SandboxProxy,
 } from '../sandbox';
 import { DEFAULT_AGENT_TIMEOUT_MS } from '../agent-cli/codec';
 import type { SandboxPolicy } from '../sandbox/policy';
@@ -71,6 +72,12 @@ export type ComposeOptions = {
   sandbox?: SandboxPolicy;
   /** Inject the sandbox launcher directly (tests); bypasses host detection from {@link sandbox}. */
   sandboxLauncher?: SandboxLauncher;
+  /**
+   * The running egress proxy when the sandbox policy uses an allowlist (issue #39). Started at the
+   * composition edge (main.ts) before deps are composed and torn down after the run; threaded into
+   * both jailed seams so they pin their proxy env vars at it. Absent ⇒ no allowlist active.
+   */
+  egressProxy?: SandboxProxy;
   /** Where run logs live. Default `<workspaceRoot>/.goaly` (excluded from diffHash). */
   stateDir?: string;
   /** Minimum diagnostic log level. Default `info`. */
@@ -168,7 +175,12 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   const runLauncher = launcher.identity
     ? undefined
     : (exec: ExecFn): ExecFn =>
-        withSandboxVerify(exec, launcher, networkForSeam(options.sandbox ?? defaultPolicy(), 'verifier'));
+        withSandboxVerify(
+          exec,
+          launcher,
+          networkForSeam(options.sandbox ?? defaultPolicy(), 'verifier'),
+          options.egressProxy,
+        );
   const workspace = new GitWorkspace(options.workspaceRoot, undefined, excludes, true, runLauncher);
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
   const logger = options.logger ?? buildRunLogger(options, stateDir);
@@ -210,6 +222,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       launcher,
       workspace: options.workspaceRoot,
       policy: options.sandbox ?? defaultPolicy(),
+      ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
     }),
     makeLadder: (contract) => buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs),
     approver: new AgentApprover({ llm: llmFor(models.approver, 'approve') }),
@@ -388,6 +401,8 @@ type HarnessSandbox = {
   launcher: SandboxLauncher;
   workspace: string;
   policy: SandboxPolicy;
+  /** The running egress proxy when the policy uses an allowlist (issue #39). */
+  proxy?: SandboxProxy;
 };
 
 function makeHarness(
@@ -437,6 +452,8 @@ function sandboxedHarnessExec(
     // authenticate. The container launcher re-exports each NAME with `-e` (a fresh `docker`/`podman
     // run` inherits nothing); bwrap inherits the env naturally and ignores this.
     env: process.env,
+    // The egress proxy when an allowlist is active (issue #39); the launcher pins the jail at it.
+    ...(sandbox.proxy !== undefined ? { proxy: sandbox.proxy } : {}),
   });
 }
 

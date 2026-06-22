@@ -158,6 +158,35 @@ describe('parseArgs', () => {
       await expect(parseArgs([...run, '--sandbox-runtime', 'lxc'])).rejects.toThrow(UsageError);
     });
 
+    it('parses an egress allowlist from --sandbox-net allow:<hosts> (issue #39)', async () => {
+      const a = await parseArgs([
+        ...run, '--sandbox=bwrap', '--sandbox-net', 'allow:api.anthropic.com, *.npmjs.org ,host:443',
+      ]);
+      // Whitespace around each host is trimmed; empty entries dropped.
+      expect(a.sandbox.network).toEqual({
+        allowlist: ['api.anthropic.com', '*.npmjs.org', 'host:443'],
+      });
+    });
+
+    it('rejects an empty or malformed allowlist (fail-closed)', async () => {
+      await expect(parseArgs([...run, '--sandbox-net', 'allow:'])).rejects.toThrow(UsageError);
+      await expect(parseArgs([...run, '--sandbox-net', 'allow: , '])).rejects.toThrow(UsageError);
+      await expect(
+        parseArgs([...run, '--sandbox-net', 'allow:has space']),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('reads an allowlist from .goalyrc too (issue #39)', async () => {
+      const a = await parseArgs(
+        [...run, '--workspace', '/ws'],
+        undefined,
+        fakeConfig({
+          '/ws/.goalyrc': JSON.stringify({ sandbox: 'bwrap', 'sandbox-net': 'allow:registry.npmjs.org' }),
+        }),
+      );
+      expect(a.sandbox.network).toEqual({ allowlist: ['registry.npmjs.org'] });
+    });
+
     it('is defaultable from .goalyrc', async () => {
       const a = await parseArgs(
         [...run, '--workspace', '/ws'],

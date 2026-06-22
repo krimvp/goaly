@@ -70,7 +70,8 @@ Usage:
                [--harness claude-code|codex|droid] [--model <m>] [--llm-model <m>]
                [--llm-provider claude|codex|droid] [--harness-timeout-ms N]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
-               [--sandbox[=none|auto|bwrap|container]] [--sandbox-net none|allow]
+               [--sandbox[=none|auto|bwrap|container]]
+               [--sandbox-net none|allow|allow:<host,…>]
                [--sandbox-image <ref>] [--sandbox-runtime docker|podman]
                [--cost-table <path>] [--workspace <dir>] [--resume <runId>]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
@@ -351,11 +352,29 @@ function parseLogLevel(value: string | undefined): LogLevel {
 }
 
 /**
+ * Parse the `--sandbox-net` value into the policy's `network` shape. `none`/`allow` map to the
+ * literals; an `allow:<host,host,…>` value (issue #39) maps to an `{ allowlist }` object so only the
+ * listed hosts are reachable. Returns the raw value untouched for anything else so the Zod seam
+ * produces the usage error (fail-closed, invariant #6).
+ */
+function parseSandboxNet(net: string): unknown {
+  const prefix = 'allow:';
+  if (!net.startsWith(prefix)) return net;
+  const allowlist = net
+    .slice(prefix.length)
+    .split(',')
+    .map((h) => h.trim())
+    .filter((h) => h.length > 0);
+  return { allowlist };
+}
+
+/**
  * Build the opt-in sandbox policy from the flags, validating each at the Zod seam (invariant #6):
  * an unknown `--sandbox` mode / `--sandbox-net` value / `--sandbox-runtime` is a usage error, never
  * a silent fallback. `--sandbox` with NO value (a boolean flag) means `--sandbox=auto`. Absent flags
  * are omitted so the schema's defaults apply (`mode: 'none'` ⇒ behavior unchanged). The `network`
- * here is the VERIFIER default; the harness seam always re-overrides to `allow` downstream.
+ * here is the VERIFIER default; the harness seam re-overrides to `allow` downstream UNLESS an
+ * allowlist is set (issue #39), in which case the allowlist constrains both seams.
  */
 function parseSandbox(flags: RawFlags): SandboxPolicy {
   const raw = flags['sandbox'];
@@ -366,7 +385,7 @@ function parseSandbox(flags: RawFlags): SandboxPolicy {
   const runtime = str(flags, 'sandbox-runtime');
   const parsed = SandboxPolicy.safeParse({
     ...(mode !== undefined ? { mode } : {}),
-    ...(net !== undefined ? { network: net } : {}),
+    ...(net !== undefined ? { network: parseSandboxNet(net) } : {}),
     ...(image !== undefined ? { image } : {}),
     ...(runtime !== undefined ? { runtime } : {}),
   });

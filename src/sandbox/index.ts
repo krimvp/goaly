@@ -12,11 +12,16 @@ export { SandboxUnavailableError } from './launcher';
 export { withSandboxAgent, withSandboxVerify, type SandboxExecOpts } from './sandboxed-exec';
 export {
   SandboxPolicy,
+  SandboxAllowlist,
+  AllowlistHost,
   networkForSeam,
+  isAllowlist,
   type SandboxSeam,
   type SandboxRunOpts,
   type SandboxNetwork,
+  type SandboxProxy,
 } from './policy';
+export { startEgressProxy, type EgressProxy } from './proxy';
 
 /** Options for {@link makeLauncher}: inject the host probe + platform so tests never touch a host. */
 export type MakeLauncherOpts = {
