@@ -65,6 +65,32 @@ describe('BwrapLauncher.wrap', () => {
     expect(wrap('allow').args).not.toContain('--unshare-net');
   });
 
+  it('routes an allowlist through the egress proxy via --setenv, keeping the network up (issue #39)', () => {
+    const { args } = new BwrapLauncher(HOME).wrap('npm', ['test'], {
+      workspace: WS,
+      network: { allowlist: ['*.npmjs.org'] },
+      proxy: { port: 8123 },
+    });
+    // Network stays up (no --unshare-net) so the jail can reach the host-loopback proxy.
+    expect(args).not.toContain('--unshare-net');
+    const joined = args.join(' ');
+    expect(joined).toContain('--setenv HTTPS_PROXY http://127.0.0.1:8123');
+    expect(joined).toContain('--setenv https_proxy http://127.0.0.1:8123');
+    expect(joined).toContain('--setenv ALL_PROXY http://127.0.0.1:8123');
+    expect(joined).toContain('--setenv NO_PROXY localhost,127.0.0.1');
+    // The original command still runs last, unchanged.
+    expect(args.slice(args.indexOf('--'))).toEqual(['--', 'npm', 'test']);
+  });
+
+  it('fails closed when an allowlist is requested without a running proxy (issue #39)', () => {
+    expect(() =>
+      new BwrapLauncher(HOME).wrap('npm', ['test'], {
+        workspace: WS,
+        network: { allowlist: ['x.com'] },
+      }),
+    ).toThrow(/no egress-proxy/);
+  });
+
   it('ends with the -- separator then the original command and args, in order', () => {
     const { args } = wrap('none');
     const sep = args.indexOf('--');

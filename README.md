@@ -96,7 +96,7 @@ the composition root; the pure reducer and git plumbing (`diff`/`diffHash`, whic
 | Flag | Meaning |
 | --- | --- |
 | `--sandbox[=<mode>]` | `none` (default, no isolation) · `auto` (best available: `bwrap` on Linux, else `container`) · `bwrap` (Linux bubblewrap) · `container` (a `docker`/`podman run --rm`, portable, covers macOS). Bare `--sandbox` means `--sandbox=auto`. |
-| `--sandbox-net <v>` | verifier egress: `none` (default when sandboxed) · `allow`. The **agent always keeps egress** (it needs the model API). |
+| `--sandbox-net <v>` | egress policy: `none` (default when sandboxed) · `allow` (full egress) · `allow:<host,…>` (an **allowlist** — only the listed hosts are reachable). With `none`/`allow` the **agent always keeps full egress** (it needs the model API); an allowlist constrains **both** seams, so the agent's model-API host must be on the list too. |
 | `--sandbox-image <ref>` | container image (`container` mode only; default `debian:stable-slim`). |
 | `--sandbox-runtime <r>` | `docker` (default) · `podman` (`container` mode only). |
 
@@ -110,6 +110,16 @@ flags parse with Zod (invariant #6); an unknown mode/value is a usage error.
 | --- | --- | --- | --- |
 | **Harness** (the coding agent) | rw workspace, ro system | **allow** (needs the model API) | full (needs API keys) |
 | **Verifier** (the verify command) | rw workspace, ro system | **none** by default (`--sandbox-net allow` to open it) | already credential-scrubbed |
+
+An **allowlist** (`--sandbox-net allow:<host,…>`) is the exception to the per-seam split: it applies
+to **both** seams at once. Each host may be a bare hostname (`api.anthropic.com`), a subdomain
+wildcard (`*.npmjs.org` — matches the base domain and any subdomain), and may pin a port
+(`host:443`). The network stays up but is routed through a small allowlisting egress proxy goaly
+starts on the host (loopback); only the listed hosts are reachable, every other egress is **denied**
+(HTTP 403 / refused CONNECT), and denied attempts are recorded and summarized after the run
+(`sandbox egress denied`). The point (issue #39): `npm test` can reach the registry without *also*
+opening the unrestricted exfiltration egress that full `allow` does — but because both seams are
+constrained, the agent's model-API host must itself be on the list.
 
 In **both** seams the workspace is bound read-write while the rest of the system is read-only, and
 `$HOME` credential locations (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.docker`,
@@ -128,6 +138,11 @@ goaly run --goal "..." --verify-cmd "npm test" --sandbox
 # Force Linux bubblewrap, and let the verifier reach the network (npm test fetches):
 goaly run --goal "..." --verify-cmd "npm test" --sandbox=bwrap --sandbox-net allow
 
+# Allowlist egress: only these hosts are reachable from BOTH seams; all other egress is denied.
+# (The agent's model-API host must be on the list too — here api.anthropic.com.)
+goaly run --goal "..." --verify-cmd "npm test" --sandbox \
+             --sandbox-net allow:api.anthropic.com,*.npmjs.org,registry.yarnpkg.com
+
 # Portable container jail on a custom image / runtime (covers macOS via Docker/podman):
 goaly run --goal "..." --verify-cmd "npm test" \
              --sandbox=container --sandbox-image node:20-slim --sandbox-runtime podman
@@ -137,6 +152,11 @@ goaly run --goal "..." --verify-cmd "npm test" \
 > (FS + env + egress), host-FS damage outside the workspace, and `$HOME` credential reads. It does
 > **not** defend against a compromised model endpoint the agent is allowed to talk to, supply-chain
 > code pulled with the network on, kernel/sandbox-escape 0-days, or anything when `--sandbox` is off.
+> The `allow:<host,…>` allowlist is **proxy-based** filtering: a strong guardrail and audit trail for
+> cooperating tooling (the agent CLI, npm, pip, git-over-https) that honours the proxy env vars, **not**
+> an airtight jail against deliberately malicious native code that opens raw sockets bypassing the proxy
+> (a hard kernel-level allowlist via netns + nftables is future work). It is fail-closed: if the proxy
+> can't start, the run errors rather than running with unrestricted egress.
 
 ## Install
 

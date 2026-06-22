@@ -1,7 +1,7 @@
 import type { AgentExecFn } from '../agent-cli/codec';
 import type { ExecFn } from '../workspace/git-workspace';
 import type { SandboxLauncher } from './launcher';
-import type { SandboxNetwork } from './policy';
+import type { SandboxNetwork, SandboxProxy } from './policy';
 
 /**
  * The two untrusted-code exec seams differ in shape, so each gets its own wrapper. Both are pure
@@ -21,6 +21,12 @@ export type SandboxExecOpts = {
    * can authenticate (API keys); the verifier seam's env is already scrubbed upstream.
    */
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * The running egress proxy to route through when `network` is an allowlist (issue #39). Threaded
+   * into the launcher so it can pin the jail's proxy env vars at it. Required whenever `network` is
+   * an allowlist; absent under an allowlist ⇒ the launcher fails closed.
+   */
+  readonly proxy?: SandboxProxy;
 };
 
 /**
@@ -48,6 +54,7 @@ export function withSandboxAgent(
       workspace: opts.workspace,
       network: opts.network,
       ...(opts.env !== undefined ? { env: opts.env } : {}),
+      ...(opts.proxy !== undefined ? { proxy: opts.proxy } : {}),
     });
     // A real jail: spawn the launcher binary with its full argv. The inner exec is the neutral
     // spawner, so prepend the binary as argv[0].
@@ -69,6 +76,7 @@ export function withSandboxVerify(
   exec: ExecFn,
   launcher: SandboxLauncher,
   network: SandboxNetwork,
+  proxy?: SandboxProxy,
 ): ExecFn {
   return (cmd, args, opts) => {
     // Identity launcher (NoneLauncher) ONLY: forward the ORIGINAL call byte-for-byte, shell and all
@@ -85,6 +93,7 @@ export function withSandboxVerify(
       workspace: opts.cwd,
       network,
       ...(opts.env !== undefined ? { env: opts.env } : {}),
+      ...(proxy !== undefined ? { proxy } : {}),
     });
     const { shell: _shell, ...rest } = opts;
     return exec(wrapped.command, wrapped.args, rest);

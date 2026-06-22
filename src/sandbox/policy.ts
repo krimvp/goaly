@@ -18,9 +18,78 @@ import { z } from 'zod';
 export const SandboxMode = z.enum(['none', 'auto', 'bwrap', 'container']);
 export type SandboxMode = z.infer<typeof SandboxMode>;
 
-/** Binary egress toggle for slice 1 (an allowlist is a follow-up). */
-export const SandboxNetwork = z.enum(['none', 'allow']);
+/**
+ * A single egress-allowlist host (issue #39): a bare hostname (`api.anthropic.com`), a subdomain
+ * wildcard (`*.npmjs.org`), each optionally pinned to a port (`host:443`). Non-empty; the host part
+ * is lower-cased by the proxy when matched.
+ */
+export const AllowlistHost = z
+  .string()
+  .trim()
+  .min(1)
+  .regex(
+    /^(\*\.)?[A-Za-z0-9._-]+(:\d{1,5})?$/,
+    'expected a host, *.host wildcard, or host:port',
+  );
+export type AllowlistHost = z.infer<typeof AllowlistHost>;
+
+/**
+ * Egress restricted to an allowlist (issue #39): the network stays up but is routed through the
+ * allowlisting egress proxy, so only the listed hosts are reachable and everything else is denied.
+ */
+export const SandboxAllowlist = z
+  .object({ allowlist: z.array(AllowlistHost).min(1) })
+  .strict();
+export type SandboxAllowlist = z.infer<typeof SandboxAllowlist>;
+
+/**
+ * The egress policy (issue #39 extends the slice-1 binary toggle with an allowlist):
+ *  - `none`  — cut the network entirely.
+ *  - `allow` — keep the host network, fully open.
+ *  - `{ allowlist }` — keep the network but route it through an allowlisting proxy: only the listed
+ *    hosts (the model API + package registries, say) are reachable; all other egress is denied.
+ */
+export const SandboxNetwork = z.union([
+  z.literal('none'),
+  z.literal('allow'),
+  SandboxAllowlist,
+]);
 export type SandboxNetwork = z.infer<typeof SandboxNetwork>;
+
+/** Is this resolved egress value an allowlist (vs. the `none`/`allow` literals)? Pure narrowing. */
+export function isAllowlist(network: SandboxNetwork): network is SandboxAllowlist {
+  return typeof network === 'object';
+}
+
+/**
+ * The standard env vars cooperating clients honour to route egress through a proxy (issue #39).
+ * Both cases are set because tools differ in which they read.
+ */
+export const PROXY_ENV_VARS = [
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'ALL_PROXY',
+  'all_proxy',
+] as const;
+
+/** Hosts that must never be proxied (the loopback the jail uses for the proxy itself). */
+export const PROXY_NO_PROXY = 'localhost,127.0.0.1';
+
+/**
+ * Build the in-jail proxy URL from the host the jail reaches the proxy on and the run's proxy port.
+ * Fail-closed (invariant #4): an allowlist with no running proxy is a hard error, never silent
+ * unrestricted egress. PURE.
+ */
+export function proxyUrlFor(host: string, proxy: SandboxProxy | undefined): string {
+  if (proxy === undefined) {
+    throw new Error(
+      'sandbox egress allowlist requested but no egress-proxy port was provided to the launcher',
+    );
+  }
+  return `http://${host}:${proxy.port}`;
+}
 
 /** The container runtime, when `mode === 'container'` (or `auto` resolves to it). */
 export const SandboxRuntime = z.enum(['docker', 'podman']);
@@ -62,6 +131,12 @@ export const DEFAULT_CONTAINER_RUNTIME: SandboxRuntime = 'docker';
  */
 export type SandboxSeam = 'harness' | 'verifier';
 
+/** The running egress proxy a jail routes through under an allowlist (issue #39): its host port. */
+export type SandboxProxy = {
+  /** The proxy's listening port on the host (bound to loopback). */
+  readonly port: number;
+};
+
 /**
  * The per-run options a launcher needs to rewrite a command: the workspace it may write, whether
  * egress is allowed, and the (already-prepared, possibly scrubbed) env to pass through.
@@ -69,17 +144,28 @@ export type SandboxSeam = 'harness' | 'verifier';
 export type SandboxRunOpts = {
   /** Absolute workspace path bound read-write (and mirrored inside a container). */
   readonly workspace: string;
-  /** Egress: `allow` keeps the host network; `none` cuts it off. */
+  /** Egress: `allow` keeps the host network; `none` cuts it off; `{ allowlist }` proxies it. */
   readonly network: SandboxNetwork;
   /** The environment to expose inside the jail (container `-e` passthrough). */
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * The egress proxy to route through when `network` is an allowlist (issue #39). The launcher
+   * derives the in-jail proxy URL from it (bwrap shares the host loopback; a container reaches the
+   * host via its gateway alias). Required whenever `network` is an allowlist — absent ⇒ fail-closed.
+   */
+  readonly proxy?: SandboxProxy;
 };
 
 /**
- * Resolve the policy's network toggle for one seam. The harness always keeps egress (it must reach
- * the model API); the verifier honours the policy (default `none`). Pure.
+ * Resolve the policy's egress for one seam. Pure.
+ *  - An `{ allowlist }` policy constrains BOTH seams: the harness's model-API host must simply be on
+ *    the list too (issue #39). This is the whole point — `npm test` no longer opens exfiltration
+ *    egress just because the harness needs the API.
+ *  - Otherwise the harness always keeps full egress (it must reach the model API) and the verifier
+ *    honours the policy (default `none`).
  */
 export function networkForSeam(policy: SandboxPolicy, seam: SandboxSeam): SandboxNetwork {
+  if (isAllowlist(policy.network)) return policy.network;
   if (seam === 'harness') return 'allow';
   return policy.network;
 }

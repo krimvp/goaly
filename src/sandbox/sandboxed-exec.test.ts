@@ -121,6 +121,23 @@ describe('withSandboxAgent', () => {
     expect(seen).toEqual(['claude', 'JAILED', '-p', 'hi']);
   });
 
+  it('threads an egress-proxy allowlist into the launcher (issue #39)', async () => {
+    let seen: string[] = [];
+    const inner: AgentExecFn = async (args) => {
+      seen = args;
+      return agentResult;
+    };
+    const wrapped = withSandboxAgent('claude', inner, new BwrapLauncher('/home/me'), {
+      workspace: '/w',
+      network: { allowlist: ['api.anthropic.com'] },
+      proxy: { port: 7777 },
+    });
+    await wrapped(['-p', 'hi'], { prompt: 'hi' });
+    const joined = seen.join(' ');
+    expect(joined).toContain('--setenv HTTPS_PROXY http://127.0.0.1:7777');
+    expect(joined).not.toContain('--unshare-net');
+  });
+
   it('an UnavailableLauncher reaching the wrapper throws (fail-closed), never an unsandboxed run', () => {
     const inner: AgentExecFn = async () => agentResult;
     const wrapped = withSandboxAgent('claude', inner, new UnavailableLauncher('bwrap missing'), {
@@ -184,6 +201,24 @@ describe('withSandboxVerify', () => {
     const wrapped = withSandboxVerify(tap, new BwrapLauncher('/home/me'), 'allow');
     await wrapped('npm test', [], { cwd: '/w', shell: true });
     expect(seen).not.toContain('--unshare-net');
+  });
+
+  it('threads an egress-proxy allowlist into the verifier launcher (issue #39)', async () => {
+    let seen: string[] = [];
+    const tap: ExecFn = async (_cmd, args) => {
+      seen = args;
+      return execResult;
+    };
+    const wrapped = withSandboxVerify(
+      tap,
+      new BwrapLauncher('/home/me'),
+      { allowlist: ['registry.npmjs.org'] },
+      { port: 7777 },
+    );
+    await wrapped('npm test', [], { cwd: '/w', shell: true });
+    const joined = seen.join(' ');
+    expect(joined).toContain('--setenv HTTPS_PROXY http://127.0.0.1:7777');
+    expect(joined).not.toContain('--unshare-net');
   });
 
   it('a non-identity launcher is jailed even when its binary name collides with `sh` (no fail-open)', async () => {

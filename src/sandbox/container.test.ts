@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ContainerLauncher } from './container';
+import { ContainerLauncher, CONTAINER_HOST_GATEWAY } from './container';
 import { DEFAULT_CONTAINER_IMAGE } from './policy';
 
 const WS = '/work/repo';
@@ -34,6 +34,32 @@ describe('ContainerLauncher.wrap', () => {
     const on = new ContainerLauncher().wrap('x', [], { workspace: WS, network: 'allow' });
     expect(off.args.join(' ')).toContain('--network none');
     expect(on.args.join(' ')).not.toContain('--network none');
+  });
+
+  it('routes an allowlist through the egress proxy via a host-gateway alias + -e (issue #39)', () => {
+    const { args } = new ContainerLauncher().wrap('npm', ['test'], {
+      workspace: WS,
+      network: { allowlist: ['*.npmjs.org'] },
+      proxy: { port: 8123 },
+    });
+    const joined = args.join(' ');
+    // The bridge network stays up (no --network none) and the host is reachable via the alias.
+    expect(joined).not.toContain('--network none');
+    expect(joined).toContain(`--add-host ${CONTAINER_HOST_GATEWAY}:host-gateway`);
+    expect(args).toContain(`HTTPS_PROXY=http://${CONTAINER_HOST_GATEWAY}:8123`);
+    expect(args).toContain(`all_proxy=http://${CONTAINER_HOST_GATEWAY}:8123`);
+    expect(args).toContain('NO_PROXY=localhost,127.0.0.1');
+    // The image + original command still run last.
+    expect(args.slice(-3)).toEqual([DEFAULT_CONTAINER_IMAGE, 'npm', 'test']);
+  });
+
+  it('fails closed when an allowlist is requested without a running proxy (issue #39)', () => {
+    expect(() =>
+      new ContainerLauncher().wrap('x', [], {
+        workspace: WS,
+        network: { allowlist: ['x.com'] },
+      }),
+    ).toThrow(/no egress-proxy/);
   });
 
   it('passes env NAMEs through with -e (never the secret values in argv)', () => {
