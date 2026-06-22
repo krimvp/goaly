@@ -18,6 +18,7 @@ import { AgentCompiler } from '../compile/agent-compiler';
 import { AutoContractGate, HumanContractGate } from '../compile/gates';
 import { GitWorkspace } from '../workspace/git-workspace';
 import { FileRunLog } from '../runlog/file-runlog';
+import { StreamTranscriptSink, STREAM_FILE } from '../runlog/stream-transcript';
 import { ClaudeCodeAdapter } from '../harness/claude-code';
 import { CodexAdapter } from '../harness/codex';
 import { DroidAdapter } from '../harness/droid';
@@ -78,6 +79,15 @@ export type ComposeOptions = {
    * threaded into the harness (via `DriverDeps.onStreamEvent`) and the LLM-step providers.
    */
   onStreamEvent?: PhasedStreamSink;
+  /**
+   * Durable stream transcript (issue #28): persist every phase-tagged stream event as canonical
+   * JSONL to a per-run file for offline replay. `streamTranscript: true` writes to the default
+   * `<stateDir>/<runId>/stream.jsonl`. Opt-in; a SEPARATE file from the run log — never the state
+   * replay source — and fail-closed (a write failure degrades to "no transcript").
+   */
+  streamTranscript?: boolean;
+  /** Override the stream-transcript path (implies {@link streamTranscript}). Default next to the run log. */
+  streamFile?: string;
 };
 
 /** The orchestrator's own state directory name, kept out of stuck-detection hashing. */
@@ -104,7 +114,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   const workspace = new GitWorkspace(options.workspaceRoot, undefined, excludes);
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
   const logger = options.logger ?? buildRunLogger(options, stateDir);
-  const streamSink = buildStreamSink(options, logger);
+  const streamSink = buildStreamSink(options, logger, stateDir, options.now ?? (() => clock.now()));
 
   // Warn loudly when the "two independent keys" collapse onto one model. Skipped when
   // the caller injects its own `llm` — then the resolved per-seam models are not what runs, so the
@@ -152,21 +162,31 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
 }
 
 /**
- * Assemble the one phase-tagged stream sink (issue #23) that fans every event out to the three
+ * Assemble the one phase-tagged stream sink (issue #23) that fans every event out to the
  * driver-side consumer surfaces — the `--stream` live stderr view, the diagnostics logger (at
- * `debug`, respecting `--log-level`), and any embedder subscription. Returns `undefined` when no
- * consumer is active so a default run builds NO taps and pays zero streaming overhead. Each branch
- * is guarded: a throwing consumer can never crash a run or starve the others (fail-closed).
+ * `debug`, respecting `--log-level`), the durable transcript (issue #28), and any embedder
+ * subscription. Returns `undefined` when no consumer is active so a default run builds NO taps and
+ * pays zero streaming overhead. Each branch is guarded: a throwing consumer can never crash a run
+ * or starve the others (fail-closed).
  */
-function buildStreamSink(options: ComposeOptions, logger: Logger): PhasedStreamSink | undefined {
+function buildStreamSink(
+  options: ComposeOptions,
+  logger: Logger,
+  stateDir: string,
+  now: () => number,
+): PhasedStreamSink | undefined {
   const renderer = options.stream === true ? makeStreamRenderer(streamRendererOpts(options)) : undefined;
   const routeToLog = (options.logLevel ?? 'info') === 'debug';
+  const transcript = buildTranscriptSink(options, stateDir, now);
   const embedder = options.onStreamEvent;
-  if (renderer === undefined && !routeToLog && embedder === undefined) return undefined;
+  if (renderer === undefined && !routeToLog && transcript === undefined && embedder === undefined) {
+    return undefined;
+  }
 
   return (phase, event) => {
     if (renderer !== undefined) renderer(phase, event);
     if (routeToLog) logger.debug('stream', streamLogFields(phase, event));
+    if (transcript !== undefined) transcript(phase, event); // already fail-closed inside the sink
     if (embedder !== undefined) {
       try {
         embedder(phase, event);
@@ -175,6 +195,24 @@ function buildStreamSink(options: ComposeOptions, logger: Logger): PhasedStreamS
       }
     }
   };
+}
+
+/**
+ * Build the durable stream-transcript subscriber (issue #28) when enabled. `streamFile` sets an
+ * explicit path; `streamTranscript: true` uses the default `<stateDir>/<runId>/stream.jsonl`.
+ * Returns the bound, already-fail-closed {@link PhasedStreamSink}, or `undefined` when no transcript
+ * was requested.
+ */
+function buildTranscriptSink(
+  options: ComposeOptions,
+  stateDir: string,
+  now: () => number,
+): PhasedStreamSink | undefined {
+  const file =
+    options.streamFile ??
+    (options.streamTranscript === true ? path.join(stateDir, options.runId, STREAM_FILE) : undefined);
+  if (file === undefined) return undefined;
+  return new StreamTranscriptSink({ path: file, now }).record;
 }
 
 function streamRendererOpts(options: ComposeOptions): { write?: (line: string) => void } {

@@ -143,6 +143,9 @@ goaly run --goal "..." --verify-cmd "npm test" --log-file ./run.log   # or --no-
 # Watch the agent's turns live — tool calls, messages, token counts — for the run AND the LLM steps:
 goaly run --goal "..." --verify-cmd "npm test" --stream
 
+# Persist that same stream durably for offline replay (.goaly/<runId>/stream.jsonl), any harness:
+goaly run --goal "..." --verify-cmd "npm test" --stream-transcript
+
 # Cap how long each step may run (subprocess kill-timeouts, in ms):
 goaly run --goal "..." --verify-cmd "npm test" \
              --harness-timeout-ms 900000 --llm-timeout-ms 120000 --verify-timeout-ms 60000
@@ -328,6 +331,20 @@ stream never touches the frozen contract, the verifier ladder, or the two-key de
 **not** written to the run log (resume stays a fold over `OrchestratorEvent` only); and a streaming
 failure degrades to "no live output", never a changed outcome (fail-closed).
 
+**Durable stream transcript** (`--stream-transcript`) persists that *same* canonical stream to a
+**separate per-run file**, `.goaly/<runId>/stream.jsonl` — one `{ phase, …event, ts }` object per
+line, the `AgentStreamEvent` shape verbatim. Where `--stream` is the live view and `--log-level
+debug` folds the events into the human diagnostics file, the transcript is the **programmatic
+substrate**: a full-fidelity record any consumer (a UI, a cost report, an analyzer) can replay
+**offline without re-running the agent**, independent of log level or rotation. Because the events
+are already tool-neutral, the artifact is **identical in shape across claude-code / codex / droid**
+and future harnesses — that's the point. It is **uncapped** (never size-rotated — a dropped `usage`
+or `tool` line would corrupt an offline cost report), and read back with the exported
+`readStreamTranscript(stateDir, runId)`, which Zod-validates each line and **drops** any corrupt one.
+Crucially it is **NOT** the replay log: it is observational, so resume stays a pure fold over
+`OrchestratorEvent` only, and a transcript write failure degrades to "no transcript", never a changed
+outcome (fail-closed). `--stream-file <path>` overrides the location. Opt-in; off by default.
+
 ### Inspecting past runs
 
 The write-ahead run log is also queryable after the fact, with two **read-only** subcommands that
@@ -411,6 +428,18 @@ The library works headless; the CLI is a thin caller. Import from the package ro
 
 ```ts
 import { drive, composeDeps, freezeContract, type DriverDeps } from 'goaly';
+```
+
+Subscribe to the live stream programmatically with `composeDeps({ onStreamEvent })`, or have goaly
+persist it and read it back offline — the same canonical `AgentStreamEvent` shape across every
+harness:
+
+```ts
+import { composeDeps, drive, readStreamTranscript } from 'goaly';
+
+const deps = composeDeps(config, { /* … */ runId, streamTranscript: true });
+await drive(deps, config, runId);
+const stream = await readStreamTranscript('.goaly', runId); // [{ phase, kind, …, ts }] | null
 ```
 
 ## License

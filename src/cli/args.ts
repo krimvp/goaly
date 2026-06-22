@@ -45,6 +45,10 @@ export type ParsedArgs = {
   noLogFile: boolean;
   /** Stream the agent run AND the LLM steps' intermediate turns live to stderr (opt-in). */
   stream: boolean;
+  /** Persist the canonical stream as JSONL to `<workspace>/.goaly/<runId>/stream.jsonl` (opt-in). */
+  streamTranscript: boolean;
+  /** Override the stream-transcript path (implies `--stream-transcript`). */
+  streamFile: string | undefined;
   /** Per-step subprocess timeouts (pure wiring; each absent ⇒ that step keeps its default). */
   timeouts: StepTimeouts;
   /** Optional `--cost-table` JSON path: prices the token report (USD per 1M tokens). Default off. */
@@ -65,7 +69,7 @@ Usage:
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
                [--cost-table <path>] [--workspace <dir>] [--resume <runId>]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
-               [--stream]
+               [--stream] [--stream-transcript] [--stream-file <path>]
 
   goaly runs list [--workspace <dir>]
   goaly runs show <runId> [--workspace <dir>]
@@ -142,7 +146,7 @@ Diagnostics (leveled, structured logging — separate from the write-ahead run l
                     <workspace>/.goaly/<runId>/goaly.log; size-rotated, 5 MiB × 3 archives).
   --no-log-file     console only — write no diagnostics file.
 
-Live streaming (opt-in observability — issue #23):
+Live streaming & transcript (opt-in observability — issues #23 / #28):
   --stream          render the agent run AND the LLM steps' intermediate turns (tool uses,
                     assistant messages, token counts) to stderr as they happen, each tagged by
                     phase ([agent] / [compile] / [judge] / [approve]). Independent of --log-level
@@ -151,6 +155,14 @@ Live streaming (opt-in observability — issue #23):
                     log. All bundled harnesses stream (claude-code & droid via stream-json, codex
                     via its --json JSONL); a tool that only emits a final envelope degrades to a
                     closing summary.
+  --stream-transcript  ALSO persist that canonical stream durably as JSONL to
+                    <workspace>/.goaly/<runId>/stream.jsonl — one { phase, ...event, ts } object per
+                    line, identical in shape across every harness. A SEPARATE file from the run log
+                    (never the replay source); read it back offline with readStreamTranscript().
+                    Independent of --stream and --log-level; fail-closed (a write failure degrades
+                    to "no transcript", never a changed outcome).
+  --stream-file <p> write the transcript to <p> instead of the default path (implies
+                    --stream-transcript).
 
 Run history & inspection (read-only — pure replay of the write-ahead run log, no re-running):
   goaly runs list           a table of past runs under <workspace>/.goaly: id, status, iterations,
@@ -271,6 +283,8 @@ export async function parseArgs(
     logFile: str(flags, 'log-file'),
     noLogFile: flags['no-log-file'] !== undefined,
     stream: flags['stream'] !== undefined,
+    streamTranscript: flags['stream-transcript'] !== undefined || str(flags, 'stream-file') !== undefined,
+    streamFile: str(flags, 'stream-file'),
     timeouts: parseTimeouts(flags),
     costTablePath: str(flags, 'cost-table'),
     configSources,
@@ -406,6 +420,8 @@ function baseArgs(
     logFile: undefined,
     noLogFile: false,
     stream: false,
+    streamTranscript: false,
+    streamFile: undefined,
     timeouts: {},
     costTablePath: undefined,
     configSources: [],

@@ -236,11 +236,27 @@ describe('parseArgs', () => {
       expect(a.logFile).toBeUndefined();
       expect(a.noLogFile).toBe(false);
       expect(a.stream).toBe(false);
+      expect(a.streamTranscript).toBe(false);
+      expect(a.streamFile).toBeUndefined();
     });
 
     it('parses --stream as an opt-in boolean', async () => {
       const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--stream']);
       expect(a.stream).toBe(true);
+    });
+
+    it('parses --stream-transcript as an opt-in boolean (issue #28)', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--stream-transcript']);
+      expect(a.streamTranscript).toBe(true);
+      expect(a.streamFile).toBeUndefined();
+    });
+
+    it('--stream-file sets the path AND implies --stream-transcript', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--stream-file', '/tmp/s.jsonl',
+      ]);
+      expect(a.streamFile).toBe('/tmp/s.jsonl');
+      expect(a.streamTranscript).toBe(true);
     });
 
     it('parses --log-level, --log-file and --no-log-file', async () => {

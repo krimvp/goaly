@@ -152,12 +152,12 @@ export {
 export {
   AgentStreamEvent,
   StreamTap,
+  StreamPhase,
   flatStreamExtractor,
   sdkStreamExtractor,
   usageEventFromBlock,
   type StreamEventExtractor,
   type AgentEventSink,
-  type StreamPhase,
   type PhasedStreamSink,
 } from './agent-cli/stream';
 export {
@@ -166,6 +166,18 @@ export {
   makeStreamRenderer,
   type StreamRendererOptions,
 } from './cli/stream-render';
+
+// Durable, standardized cross-agent stream transcript (issue #28): the canonical stream persisted
+// per-run as JSONL for offline replay — a SEPARATE file from the write-ahead run log, never the
+// state source. `readStreamTranscript` is the embedder-facing offline reader; the sink is exported
+// so an embedder can persist its own stream subscription the same way.
+export {
+  StreamTranscriptSink,
+  StreamTranscriptEntry,
+  readStreamTranscript,
+  STREAM_FILE,
+  type StreamTranscriptOptions,
+} from './runlog/stream-transcript';
 
 // Diagnostic logging seam (human-facing observability; NOT the durable run log).
 export {
