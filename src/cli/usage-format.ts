@@ -1,4 +1,5 @@
-import type { TokenUsage, UsageReport } from '../domain/usage';
+import type { TokenUsage, UsageReport, TokenBreakdown } from '../domain/usage';
+import { isEmptyBreakdown } from '../domain/usage';
 import type { CostView } from './cost';
 
 /** Group an integer with thousands separators, deterministically (no locale). */
@@ -7,6 +8,16 @@ function group(n: number): string {
 }
 
 const usd = (n: number): string => `$${n.toFixed(2)}`;
+
+/** A compact one-line per-category split (only the categories that were actually reported). */
+function breakdownText(b: TokenBreakdown): string {
+  const parts: string[] = [];
+  if (b.input !== undefined) parts.push(`in ${group(b.input)}`);
+  if (b.output !== undefined) parts.push(`out ${group(b.output)}`);
+  if (b.cacheRead !== undefined) parts.push(`cache-read ${group(b.cacheRead)}`);
+  if (b.cacheWrite !== undefined) parts.push(`cache-write ${group(b.cacheWrite)}`);
+  return parts.join(' · ');
+}
 
 /** Human text for one layer's token spend, surfacing unknowns rather than implying a zero. */
 function tokensText(layer: TokenUsage): string {
@@ -47,6 +58,12 @@ export function formatUsage(u: UsageReport, cost?: CostView): string[] {
     totalLine += `  ≈ ${usd(cost.total)}${cost.partial ? '+ (some models unpriced)' : ''}`;
   }
   lines.push(totalLine);
+
+  // The per-category split (input / output / cache) — present once a provider reports usage; this is
+  // the cache spend the old input+output total dropped, so surface it under the total.
+  if (u.total.breakdown !== undefined && !isEmptyBreakdown(u.total.breakdown)) {
+    lines.push(`  ${'by category'.padEnd(13)}${breakdownText(u.total.breakdown)}`);
+  }
 
   if (u.budget.tokens !== undefined) {
     const pct = Math.round((u.budget.spent / u.budget.tokens) * 100);

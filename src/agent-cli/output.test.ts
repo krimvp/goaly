@@ -11,7 +11,33 @@ describe('parseAgentOutput (shared core)', () => {
       session_id: 's1',
       usage: { input_tokens: 4, output_tokens: 6 },
     });
-    expect(parseAgentOutput(s, flat)).toEqual({ text: 'hi', sessionId: 's1', tokens: 10 });
+    expect(parseAgentOutput(s, flat)).toEqual({
+      text: 'hi',
+      sessionId: 's1',
+      tokens: 10,
+      breakdown: { input: 4, output: 6 },
+    });
+  });
+
+  it('COUNTS cache tokens in the total and the breakdown (regression: input+output dropped them)', () => {
+    // A realistic Claude usage block: the bulk of the input is cached, which the old
+    // input+output math ignored entirely (counting 15 of 21,061 real tokens).
+    const s = JSON.stringify({
+      result: 'done',
+      session_id: 's1',
+      usage: {
+        input_tokens: 3,
+        output_tokens: 12,
+        cache_read_input_tokens: 17_773,
+        cache_creation_input_tokens: 3_273,
+      },
+    });
+    expect(parseAgentOutput(s, flat)).toEqual({
+      text: 'done',
+      sessionId: 's1',
+      tokens: 21_061,
+      breakdown: { input: 3, output: 12, cacheRead: 17_773, cacheWrite: 3_273 },
+    });
   });
 
   it('prefers an explicit total over the input/output sum', () => {

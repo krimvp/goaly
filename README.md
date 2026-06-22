@@ -51,11 +51,13 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
 - **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable, **resumable**, and
   **inspectable** after the fact (`goaly runs list` / `goaly runs show`).
 - **Per-run spend report:** every run ends with a token breakdown by layer — the **harness** vs. the
-  **LLM steps** (compiler / judge / approver) — and against any `--budget-tokens` cap. It's folded
-  from the run log, so `--resume` and `goaly runs show` rebuild the same numbers; a harness/provider
-  that reports no usage degrades that spend to **"unknown" loudly** (a warning + an `unknown` mark on
-  the budget) so the token cap is never silently read as zero — wall-clock stays the backstop. Optional
-  USD cost via `--cost-table`; **tokens-only by default**.
+  **LLM steps** (compiler / judge / approver) — and against any `--budget-tokens` cap. Totals count
+  **every category, cache included** (input + output + cache-read + cache-write), with a per-category
+  split surfaced — so cache-heavy providers like Claude aren't undercounted. It's folded from the run
+  log, so `--resume` and `goaly runs show` rebuild the same numbers; a harness/provider that reports
+  no usage degrades that spend to **"unknown" loudly** (a warning + an `unknown` mark on the budget)
+  so the token cap is never silently read as zero — wall-clock stays the backstop. Optional USD cost
+  via `--cost-table` (flat **or per-category** rates); **tokens-only by default**.
 
 ## Hardening against reward-hacking
 
@@ -227,8 +229,15 @@ spend:
   approver       4,556 tokens
   llm subtotal  19,661 tokens
   total        501,774 tokens
+  by category  in 412 · out 18,902 · cache-read 471,902 · cache-write 10,558
 budget:      501,774 / 500,000 tokens (100%) — budget exceeded
 ```
+
+**Counts every token category — including cache.** The per-call total is the sum of **input +
+output + cache-read + cache-write** (or a provider-supplied `total_tokens`), and the categories are
+kept as a breakdown (the `by category` line). This matters for cache-heavy providers like Claude,
+where cache-read is usually the *majority* of real throughput — counting only input+output would make
+both the report and the `--budget-tokens` guard a gross undercount.
 
 **Fail-closed:** a harness or provider that doesn't surface usage degrades that layer to `unknown`
 (never a silent zero, never a crash). The default `claude` provider runs `--output-format json` so
@@ -248,13 +257,21 @@ spend:
 ```
 
 **Cost is opt-in.** Pricing is volatile, so the log stays **tokens-only** and cost is a print-time
-overlay: pass `--cost-table <path>` to a JSON file mapping **model → USD per 1,000,000 tokens** (a
-`"default"` key prices any unlisted model). Each layer is priced by *its* resolved model; a layer
-whose model isn't priced is left out and the total is marked approximate.
+overlay: pass `--cost-table <path>` to a JSON file mapping **model → price** (a `"default"` key
+prices any unlisted model). A price is either a single blended **USD per 1,000,000 tokens** number,
+or a **per-category** object — `input` / `output` / `cacheRead` / `cacheWrite` rates (plus an
+optional `default` for un-split spend). Per-category rates are the accurate choice, since output,
+input, and the two cache buckets are priced very differently (output ≈ 5× input, cache-read ≈ 0.1×).
+Each layer is priced by *its* resolved model; a category (or layer) whose model isn't priced is left
+out and the total is marked approximate.
 
 ```jsonc
-// prices.json — USD per 1M tokens; "default" covers anything unlisted
-{ "claude-opus-4-8": 15, "claude-sonnet-4-6": 3, "default": 5 }
+// prices.json — a flat $/1M rate, or a per-category map; "default" covers anything unlisted
+{
+  "claude-opus-4-8": { "input": 15, "output": 75, "cacheRead": 1.5, "cacheWrite": 18.75 },
+  "claude-sonnet-4-6": 3,
+  "default": 5
+}
 ```
 
 Goal, intent, and rubric each accept one source: inline (`--goal "…"`), a file (`--goal-file <path>`),

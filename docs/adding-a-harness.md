@@ -112,15 +112,18 @@ You supply the small, tool-specific pieces.
 
 ### 1. Field mapping — a `FieldExtractor`
 
-A `FieldExtractor` is `(obj) => { text?, sessionId?, tokens?, isError? }`: pull those fields out of
-**one** parsed JSON object by your CLI's key names. The codec's `parse` is then a one-liner over the
-shared core.
+A `FieldExtractor` is `(obj) => { text?, sessionId?, tokens?, breakdown?, isError? }`: pull those
+fields out of **one** parsed JSON object by your CLI's key names. `tokens` is the all-inclusive total
+(input + output + cache-read + cache-write, or a provider `total_tokens`); `breakdown` is the
+optional per-category split (`{ input?, output?, cacheRead?, cacheWrite? }`) the cost overlay prices
+per-rate. The codec's `parse` is then a one-liner over the shared core.
 
 ```ts
 import { parseAgentOutput, flatExtractor, type FieldExtractor } from './output';
 
 // If your envelope is FLAT (text under result/text/response, session under session_id/sessionId,
-// tokens in a `usage` block) you don't write one at all — reuse the shared factory:
+// tokens in a `usage` block — input/output AND cache_read/cache_creation are read for you) you
+// don't write one at all — reuse the shared factory:
 const fieldExtractor = flatExtractor();                  // claude-code & droid use exactly this
 // droid only adds a soft-error flag: flatExtractor({ errorKey: 'is_error' })
 
@@ -325,9 +328,11 @@ it is judging. The good news: **you already wrote everything it needs** — your
 dialect and `fieldExtractor`/`streamExtractor`.
 
 `complete()` returns an `LlmCompletion`, not a bare string: `text` is the result, and the **optional
-`tokensUsed`** (with a `tokenSource: 'reported' | 'estimated'` marker) feeds the
+`tokensUsed`** (with a `tokenSource: 'reported' | 'estimated'` marker, plus an optional per-category
+`tokenBreakdown` for a reported count) feeds the
 [per-run spend report](../README.md#per-run-spend-report). `AgentCliLlmProvider` fills it in from the
-same `usage` block your `FieldExtractor` already reads; and when you wire a `streamExtractor`, it
+same `usage` block your `FieldExtractor` already reads (cache buckets included); and when you wire a
+`streamExtractor`, it
 **estimates** the spend from the streamed turns whenever the CLI reports no usage (issue #24) — all
 internal. Surfacing nothing is still fine — a missing count degrades to "unknown", never a crash.
 

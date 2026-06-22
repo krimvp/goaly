@@ -1,3 +1,5 @@
+import type { TokenBreakdown } from '../domain/usage';
+
 /**
  * An INTERNAL seam — deliberately NOT one of the four real seams. The LLM provider varies
  * *inside* the judge/approver/compiler, not across the Verifier/Approver interfaces, so it
@@ -25,6 +27,11 @@ export type LlmCompletion = {
    * (treated as reported/unknown), so existing token-metering behavior is unchanged.
    */
   tokenSource?: 'reported' | 'estimated';
+  /**
+   * Per-category split of `tokensUsed` (input/output/cache-read/cache-write) when the provider
+   * reports one. Present only for a `reported` count; lets the cost overlay price per category.
+   */
+  tokenBreakdown?: TokenBreakdown;
 };
 
 export interface LlmProvider {

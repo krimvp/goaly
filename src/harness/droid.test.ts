@@ -39,6 +39,7 @@ describe('parseDroidOutput', () => {
       text: 'ready',
       sessionId: '37afb4b6-fb90-480f-971e-56cbf7ad1cae',
       tokens: 13718,
+      breakdown: { input: 13716, output: 2, cacheRead: 0, cacheWrite: 0 },
       isError: false,
     });
   });

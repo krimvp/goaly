@@ -72,3 +72,72 @@ describe('computeCost', () => {
     expect(cost.partial).toBe(false);
   });
 });
+
+describe('computeCost — per-category rates', () => {
+  it('prices each category at its own rate (output 5×, cache-read 0.1×)', () => {
+    const r = report({
+      harness: {
+        tokens: 1_021_000,
+        calls: 1,
+        unknownCalls: 0,
+        breakdown: { input: 1_000, output: 20_000, cacheRead: 1_000_000, cacheWrite: 0 },
+      },
+      compiler: { tokens: 0, calls: 0, unknownCalls: 0 },
+      verifier: { tokens: 0, calls: 0, unknownCalls: 0 },
+      approver: { tokens: 0, calls: 0, unknownCalls: 0 },
+      llm: { tokens: 0, calls: 0, unknownCalls: 0 },
+      total: { tokens: 1_021_000, calls: 1, unknownCalls: 0 },
+      budget: { spent: 1_021_000, exceeded: false },
+    });
+    const cost = computeCost(r, models, {
+      'harness-model': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+    });
+    // input 1k@3 = 0.003; output 20k@15 = 0.300; cacheRead 1M@0.3 = 0.300; cacheWrite 0 = 0.
+    expect(cost.harness).toBeCloseTo(0.603);
+    expect(cost.partial).toBe(false);
+  });
+
+  it('prices flat-total spend (no split) at the category entry’s default rate', () => {
+    // The harness reported only a flat total (no breakdown) — the per-category entry’s `default`
+    // rate covers it, so it is still priced and not partial.
+    const r = report({
+      harness: { tokens: 1_000_000, calls: 1, unknownCalls: 0 },
+      compiler: { tokens: 0, calls: 0, unknownCalls: 0 },
+      verifier: { tokens: 0, calls: 0, unknownCalls: 0 },
+      approver: { tokens: 0, calls: 0, unknownCalls: 0 },
+      llm: { tokens: 0, calls: 0, unknownCalls: 0 },
+      total: { tokens: 1_000_000, calls: 1, unknownCalls: 0 },
+      budget: { spent: 1_000_000, exceeded: false },
+    });
+    const cost = computeCost(r, models, { 'harness-model': { input: 3, default: 2 } });
+    expect(cost.harness).toBeCloseTo(2); // 1M @ default $2
+    expect(cost.partial).toBe(false);
+  });
+
+  it('goes partial when a reported category has no rate and no default', () => {
+    const r = report({
+      harness: {
+        tokens: 1_000_000,
+        calls: 1,
+        unknownCalls: 0,
+        breakdown: { input: 1_000_000, cacheRead: 0 },
+      },
+      compiler: { tokens: 0, calls: 0, unknownCalls: 0 },
+      verifier: { tokens: 0, calls: 0, unknownCalls: 0 },
+      approver: { tokens: 0, calls: 0, unknownCalls: 0 },
+      llm: { tokens: 0, calls: 0, unknownCalls: 0 },
+      total: { tokens: 1_000_000, calls: 1, unknownCalls: 0 },
+      budget: { spent: 1_000_000, exceeded: false },
+    });
+    // Only output is priced; the reported `input` spend has no rate → partial.
+    const cost = computeCost(r, models, { 'harness-model': { output: 15 } });
+    expect(cost.partial).toBe(true);
+  });
+
+  it('parses a per-category price table; rejects an unknown rate key (fail-closed)', () => {
+    expect(parsePriceTable('{"m": {"input": 3, "output": 15, "cacheRead": 0.3}}')).toEqual({
+      m: { input: 3, output: 15, cacheRead: 0.3 },
+    });
+    expect(() => parsePriceTable('{"m": {"bogus": 1}}')).toThrow();
+  });
+});

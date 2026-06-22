@@ -3,7 +3,7 @@ import { DiffHash, SessionId, ContractHash, RunId } from './ids';
 import { CompiledContract } from './contract';
 import { Verdict, ApprovalVerdict, GateDecision } from './verdict';
 import { RunConfig } from './config';
-import { TokenUsage, UsageReport } from './usage';
+import { TokenUsage, TokenBreakdown, UsageReport } from './usage';
 
 /** What a harness adapter returns. `diffHash` is computed by the Workspace, not here. */
 export const HarnessRunResult = z.object({
@@ -17,6 +17,11 @@ export const HarnessRunResult = z.object({
    * `tokensUsed` is absent (the spend is genuinely unknown — never a silent zero).
    */
   tokenSource: z.enum(['reported', 'estimated']).optional(),
+  /**
+   * Per-category split of `tokensUsed` (input/output/cache-read/cache-write) when the harness
+   * reported one. Present only for a `reported` count (an estimate has no split); absent otherwise.
+   */
+  tokenBreakdown: TokenBreakdown.optional(),
 });
 export type HarnessRunResult = z.infer<typeof HarnessRunResult>;
 
