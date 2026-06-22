@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DiffHash, SessionId, ContractHash, RunId } from './ids';
 import { CompiledContract } from './contract';
+import { Plan } from './plan';
 import { Verdict, ApprovalVerdict, GateDecision } from './verdict';
 import { RunConfig } from './config';
 import { TokenUsage, TokenBreakdown, UsageReport } from './usage';
@@ -49,6 +50,32 @@ export type BudgetSnapshot = z.infer<typeof BudgetSnapshot>;
  * a Zod schema.
  */
 export const OrchestratorEvent = z.discriminatedUnion('tag', [
+  /**
+   * Phased mode (issue #48): the Driver ran the planner and it produced a FROZEN, hashed plan of
+   * sub-goals. Logged loudly (with its `planHash`) so the decomposition the run executed is auditable;
+   * no transition rewrites it.
+   */
+  z.object({
+    tag: z.literal('PLAN_COMPILED'),
+    plan: Plan,
+    /** LLM spend authoring the plan (absent only if the call never reached the model). */
+    llm: TokenUsage.optional(),
+  }),
+  /** Phased mode: the planner errored / emitted an unparseable or over-long plan → typed FAILED. */
+  z.object({
+    tag: z.literal('PLAN_FAILED'),
+    reason: z.string(),
+    llm: TokenUsage.optional(),
+  }),
+  /** Phased mode: the plan gate decided (approve / reject / revise) — the plan-level Gate A. */
+  z.object({ tag: z.literal('PLAN_GATE_DECIDED'), decision: GateDecision }),
+  /**
+   * Phased mode: a phase completed (both keys) and the Driver took a workspace checkpoint (#47) to
+   * scope the NEXT phase's diff. Unlike the bare {@link CHECKPOINTED} marker this event IS fed to
+   * `step()` — it drives the advance to the next phase — AND records the new baseline tree so resume
+   * re-enters mid-plan against the advanced baseline.
+   */
+  z.object({ tag: z.literal('PHASE_CHECKPOINTED'), tree: DiffHash }),
   z.object({
     tag: z.literal('CONTRACT_COMPILED'),
     contract: CompiledContract,
@@ -113,6 +140,9 @@ export type ApprovalInput = {
  * a structural guarantee rather than a discipline.
  */
 export type Command =
+  | { tag: 'PLAN'; config: RunConfig; feedback?: string }
+  | { tag: 'REQUEST_PLAN_GATE'; plan: Plan }
+  | { tag: 'CHECKPOINT_PHASE' }
   | { tag: 'COMPILE_VERIFIER'; config: RunConfig; feedback?: string }
   | { tag: 'REQUEST_GATE_A'; contract: CompiledContract }
   | { tag: 'RUN_AGENT'; prompt: string; sessionId: SessionId | undefined }

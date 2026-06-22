@@ -16,6 +16,8 @@ import { JudgeVerifier } from '../verify/judge';
 import { AgentApprover } from '../verify/agent-approver';
 import { AgentCompiler } from '../compile/agent-compiler';
 import { AutoContractGate, HumanContractGate } from '../compile/gates';
+import { AgentPlanner } from '../plan/agent-planner';
+import { AutoPlanGate, HumanPlanGate } from '../plan/plan-gates';
 import { GitWorkspace } from '../workspace/git-workspace';
 import { FileRunLog } from '../runlog/file-runlog';
 import { StreamTranscriptSink, STREAM_FILE } from '../runlog/stream-transcript';
@@ -227,6 +229,13 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     gateA: config.autonomous
       ? new AutoContractGate()
       : new HumanContractGate({ allowRevise: config.maxGateARevisions > 0 }),
+    // The phased planner + plan gate (issue #48). Always wired (cheap to construct); only exercised
+    // when `--phased` seeds the machine at PLANNING. The plan gate mirrors Gate A: autonomous
+    // auto-accepts (still frozen + logged loudly), otherwise a human approves/revises/rejects.
+    planner: new AgentPlanner({ llm: llmFor(models.planner, 'plan') }),
+    planGate: config.autonomous
+      ? new AutoPlanGate()
+      : new HumanPlanGate({ allowRevise: config.maxGateARevisions > 0 }),
     harness: makeHarness(options.harness, models.harness, timeouts.harnessMs, {
       launcher,
       workspace: options.workspaceRoot,

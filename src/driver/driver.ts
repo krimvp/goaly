@@ -11,6 +11,8 @@ import { initial, step } from '../orchestrator/step';
 import { replay } from '../runlog/replay';
 import type { VerifierCompiler } from '../compile/compiler';
 import type { ContractGate } from '../compile/gateA';
+import type { Planner } from '../plan/planner';
+import type { PlanGate } from '../plan/plan-gate';
 import type { HarnessAdapter } from '../harness/adapter';
 import type { Verifier } from '../verify/verifier';
 import type { Approver } from '../verify/approver';
@@ -37,6 +39,14 @@ const SENTINEL_POST_HASH: DiffHash = DiffHash.parse('0000001');
 export type DriverDeps = {
   compiler: VerifierCompiler;
   gateA: ContractGate;
+  /**
+   * The planning seam (issue #48) — required only for a `--phased` run. Optional so the classic
+   * single-contract Driver wiring (and every existing test) needs no planner; a PLAN command with no
+   * planner fails closed to a typed PLAN_FAILED rather than throwing.
+   */
+  planner?: Planner;
+  /** The plan gate (issue #48) — the plan-level Gate A. Optional; absent ⇒ a phased run can't start. */
+  planGate?: PlanGate;
   harness: HarnessAdapter;
   makeLadder: (contract: CompiledContract) => Verifier;
   approver: Approver;
@@ -241,6 +251,22 @@ async function buildUsageReport(deps: DriverDeps): Promise<UsageReport | undefin
  */
 function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void {
   switch (event.tag) {
+    case 'PLAN_COMPILED':
+      log.info('plan compiled', {
+        planHash: event.plan.planHash,
+        phases: event.plan.phases.length,
+        ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
+      });
+      return;
+    case 'PLAN_FAILED':
+      log.error('plan failed', { reason: event.reason });
+      return;
+    case 'PLAN_GATE_DECIDED':
+      log.info('plan gate decided', { decision: event.decision.kind });
+      return;
+    case 'PHASE_CHECKPOINTED':
+      log.info('phase checkpointed', { tree: event.tree });
+      return;
     case 'CONTRACT_COMPILED':
       log.info('contract compiled', {
         contractHash: event.contract.contractHash,
@@ -320,6 +346,49 @@ async function perform(
   };
 
   switch (command.tag) {
+    case 'PLAN': {
+      // The planner is an LLM step, read-only like the compiler. Fail-closed: no planner wired, or a
+      // planner that throws / emits an unparseable plan, becomes a typed PLAN_FAILED — never a skip.
+      if (deps.planner === undefined) {
+        return { event: { tag: 'PLAN_FAILED', reason: 'no planner configured for a phased run' } };
+      }
+      try {
+        const plan = await deps.planner.plan(command.config, command.feedback);
+        const llm = meterStep('plan');
+        return { event: { tag: 'PLAN_COMPILED', plan, ...(llm !== undefined ? { llm } : {}) } };
+      } catch (e) {
+        const llm = meterStep('plan');
+        return {
+          event: { tag: 'PLAN_FAILED', reason: errorMessage(e), ...(llm !== undefined ? { llm } : {}) },
+        };
+      }
+    }
+
+    case 'REQUEST_PLAN_GATE': {
+      // Fail-closed: a missing plan gate can never silently approve — it rejects (the run aborts).
+      if (deps.planGate === undefined) {
+        return {
+          event: {
+            tag: 'PLAN_GATE_DECIDED',
+            decision: { kind: 'reject', reason: 'no plan gate configured for a phased run' },
+          },
+        };
+      }
+      const decision = await deps.planGate.approvePlan(command.plan);
+      return { event: { tag: 'PLAN_GATE_DECIDED', decision } };
+    }
+
+    case 'CHECKPOINT_PHASE': {
+      // Take an internal workspace checkpoint (#47) between phases: snapshot the tree as the new diff
+      // baseline so the NEXT phase's diff (and its Gate-B input) excludes this phase's work. The
+      // workspace adopts it immediately; the PHASE_CHECKPOINTED event records the tree so resume
+      // re-points the baseline by replay. A snapshot that throws propagates to the Driver's
+      // fail-closed catch → ABORTED, never a silently empty baseline.
+      const tree = await deps.workspace.checkpoint();
+      log.info('phase checkpoint recorded', { tree });
+      return { event: { tag: 'PHASE_CHECKPOINTED', tree } };
+    }
+
     case 'COMPILE_VERIFIER': {
       try {
         const contract = await deps.compiler.compile(command.config, command.feedback);

@@ -28,6 +28,15 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
 } → DONE | FAILED | ABORTED
 ```
 
+With `--phased` (issue #48) the same machine is wrapped one level up — one big goal becomes a **frozen
+plan of frozen contracts**:
+
+```
+PLAN → [plan gate: approve / revise / reject] →
+    for each phase:  COMPILE_VERIFIER → [Gate A] → loop{ RUN_AGENT → ladder → Gate B → DECIDE } → CHECKPOINT
+  → ACCEPT (cumulative contract on the ORIGINAL goal) → DONE | FAILED | ABORTED
+```
+
 - The **control flow has zero LLM calls.** A pure reducer `step(state, event) -> [state, Command[]]`
   owns all policy; an imperative Driver performs the effects it requests. Everything stochastic
   (running the agent, judging, approving) hides behind boolean/value interfaces at four real seams.
@@ -55,6 +64,15 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
   computed *against*; the working-tree hash that drives stuck-detection is unaffected. (goaly can also
   advance the baseline internally via a private tree snapshot — no commit, no `HEAD`/branch/index
   movement — recorded so `--resume` reconstructs it.)
+- **Phased decomposition (`--phased`)** turns one large goal into a **frozen, ordered plan** of
+  sub-goals, each executed as its own frozen, two-key contract, with an internal **checkpoint** between
+  phases so each phase's diff (and the approver's Gate-B input) stays small. The plan is **hashed +
+  logged and no transition rewrites it** — re-planning is only the bounded, human-gated revise path
+  (the plan gate mirrors Gate A, capped by `--max-gate-a-revisions`). The whole run is **DONE only when
+  a final cumulative ACCEPT contract — authored against the *original* goal — passes both keys**, so
+  phases passing individually can never green a goal whose whole is broken. `--budget-tokens` is the
+  whole-run cap (summed across phases) and `--resume` re-enters mid-plan without repeating completed
+  phases. `--autonomous` auto-accepts the plan and each phase contract (still frozen + logged loudly).
 - **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable, **resumable**, and
   **inspectable** after the fact (`goaly runs list` / `goaly runs show`).
 - **Per-run spend report:** every run ends with a token breakdown by layer — the **harness** vs. the
@@ -212,6 +230,10 @@ goaly run --goal "..." --resume run-<id> --workspace ./myrepo
 # Diff against a baseline instead of HEAD — keep a multi-step build's diff small with no commits:
 goaly run --goal "step 2 of the build" --verify-cmd "npm test" --baseline <ref-or-sha>
 
+# Phased: decompose one big goal into a frozen plan of small, individually-verified phases, finished
+# by a cumulative ACCEPT contract that re-verifies the ORIGINAL goal end-to-end:
+goaly run --goal-file ./BIG_GOAL.md --generate --phased --max-phases 8 --autonomous
+
 # Pick a model for the harness, and a different model for the LLM steps (judge/approver/compiler):
 goaly run --goal "..." --verify-cmd "npm test" --harness claude-code \
              --model claude-opus-4-8 --llm-model claude-sonnet-4-6
@@ -320,6 +342,38 @@ finished on, and each run reviews only its own delta.
   staging area** (objects are left dangling, gc-collectable; no `refs/goaly/*` is left behind). Each
   snapshot is recorded in the run log so `--resume` reconstructs the advanced baseline. (The *policy*
   for when to snapshot automatically is a follow-up; this ships the primitive + the explicit flag.)
+
+### Phased decomposition (`--phased`)
+
+A large goal produces a large diff that the judge/approver must ingest every iteration. `--phased`
+decomposes it **inside goaly** — generalizing "one frozen contract" to "a frozen plan of frozen
+contracts" — while keeping the freeze and two-key guarantees intact:
+
+1. **PLAN.** A read-only **planner** seam (LLM, like the compiler) authors an ordered list of
+   sub-goals. The plan is **hashed (`planHash`), logged, and frozen** — no transition rewrites it.
+2. **Plan gate.** The plan is presented for approval, exactly like Gate A: **approve / revise /
+   reject**. Revising re-authors the plan, bounded by `--max-gate-a-revisions` — re-planning is never
+   an automatic "make it easier", only this explicit, gated, logged renegotiation.
+3. **Per phase.** Each sub-goal runs as a normal **frozen, two-key contract** (`--generate` authors
+   its verification, steered by the sub-goal's intent/rubric). Between phases goaly takes an internal
+   **checkpoint** (the private tree snapshot above), so phase *N*'s diff — and the approver's Gate-B
+   input — excludes phase *N-1*'s work and stays small.
+4. **ACCEPT.** A final **cumulative acceptance contract** is authored against the **original** goal and
+   verified end-to-end (prefer a deterministic full-suite/build rung here — it runs on the whole tree,
+   is ungameable, and costs no prompt size). **The whole run is DONE only when this acceptance passes
+   both keys**, so decomposition can't green a goal whose parts pass but whole doesn't.
+
+| Flag / config key | Meaning | Default |
+| --- | --- | --- |
+| `--phased` | enable phased decomposition | off |
+| `--max-phases` | cap the planner's sub-goal phases (acceptance added on top) | `20` |
+| `--planner-model` | model for the planner step only (follows the usual LLM cascade otherwise) | tool default |
+
+Invariant-preserving by construction: the planner is an LLM step the **Driver** performs (the reducer
+stays zero-LLM), the plan and each phase contract are frozen + logged (even under `--autonomous`,
+which auto-accepts but never skips the freeze), a planner error / unparseable / over-long plan is a
+typed **FAILED** (fail-closed, never a skipped check), `--budget-tokens` is the **whole-run** cap, and
+`--resume` re-enters mid-plan via the write-ahead log without repeating completed phases.
 
 ### Per-run spend report
 

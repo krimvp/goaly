@@ -132,6 +132,34 @@
       </div>
       <div class="detail" id="pipeline-detail"></div>
     </div>
+
+    <div class="pipeline-wrap reveal" style="margin-top:1.6rem">
+      <p class="lede" style="margin-bottom:.8rem"><code>--phased</code> wraps that same machine one level
+        up — one big goal becomes a <b>frozen plan of frozen contracts</b> (issue&nbsp;#48):</p>
+      <div class="pipeline">
+        <div class="stage" data-stage="plan"><span class="st-k">PLAN</span><span class="st-s">author + freeze plan</span></div>
+        <span class="arrow">→</span>
+        <div class="stage gate" data-stage="plangate"><span class="st-k">plan gate</span><span class="st-s">approve / revise / reject</span></div>
+        <span class="arrow">→</span>
+        <div class="loop-band">
+          <span class="loop-tag">for each phase ↻ (COMPILE → Gate A → loop → DECIDE)</span>
+          <div class="stage" data-stage="phase"><span class="st-k">phase contract</span><span class="st-s">frozen, two-key</span></div>
+          <span class="arrow">→</span>
+          <div class="stage" data-stage="checkpoint"><span class="st-k">CHECKPOINT</span><span class="st-s">scope next phase's diff</span></div>
+        </div>
+        <span class="arrow">→</span>
+        <div class="stage" data-stage="accept"><span class="st-k">ACCEPT</span><span class="st-s">cumulative, original goal</span></div>
+        <div class="term-row">
+          <div class="term done">DONE ✔</div>
+          <div class="term failed">FAILED</div>
+          <div class="term aborted">ABORTED</div>
+        </div>
+      </div>
+      <p class="lede" style="margin-top:.8rem">The plan is hashed + logged and no transition rewrites it
+        (re-planning is only the bounded, gated revise path). The whole run is <b>DONE only when the
+        cumulative ACCEPT contract — authored against the original goal — passes both keys</b>, so phases
+        passing individually can't green a broken whole.</p>
+    </div>
   </div>
 </section>
 
@@ -186,6 +214,12 @@
       </div>
       <div class="detail" id="fsm-detail" style="min-height:156px"></div>
     </div>
+    <p class="lede reveal" style="margin-top:1rem"><code>--phased</code> (issue&nbsp;#48) adds a thin outer
+      ring of pure states around this same graph: <b>PLANNING → AWAIT_PLAN_GATE</b> before the phases,
+      a <b>CHECKPOINTING</b> hop between them, and the per-phase <code>COMPILING…AWAIT_GATE_B</code>
+      loop reused verbatim — a phase reaching both keys checkpoints and advances instead of ending the
+      run; only the final cumulative <b>ACCEPT</b> phase reaching DONE ends it. Still zero-LLM: the
+      planner is an effect the Driver performs.</p>
 
     <!-- DECIDE -->
     <h3 class="reveal" style="margin-top:3rem">DECIDE — the truth table, made interactive</h3>
@@ -246,6 +280,7 @@
       <div class="card"><h3><span class="pill gate">Gate A</span> Contract</h3><p>The human's say over the bar, before the loop. goaly prints the frozen contract and prompts <code>[a]pprove / [f]eedback / [r]eject</code>: <b>approve</b> starts the loop, <b>feedback</b> re-authors the contract from your free-text note and re-prompts (bounded by <code>--max-gate-a-revisions</code>, default 10), <b>reject</b> aborts. <code>--autonomous</code> skips the prompt: auto-accepted, but still frozen and logged loudly.</p></div>
       <div class="card"><h3><span class="pill fail">Gate B</span> Result</h3><p>Every iteration, but only when the ladder passes. The independent approver is veto-only — it can stop a green from becoming DONE, never promote a red. Defaults to reject on uncertainty.</p></div>
       <div class="card"><h3><code>--autonomous</code></h3><p>Moves Gate A only. It skips the human pause, never the freeze and never verification. The two-key contract is identical in both modes.</p></div>
+      <div class="card"><h3><span class="pill gate">Plan gate</span> <code>--phased</code></h3><p>The plan-level Gate A (issue&nbsp;#48). Before any phase runs, goaly prints the frozen <b>plan of sub-goals</b> (hashed + logged) and prompts <b>approve / revise / reject</b> — re-planning is only this bounded, gated path (capped by <code>--max-gate-a-revisions</code>), never an automatic "make it easier". <code>--autonomous</code> auto-accepts the plan and each phase contract, still frozen + logged.</p></div>
     </div>
 
     <!-- Stuck + budget -->
@@ -353,6 +388,7 @@
           <tr><td class="feat">Deterministic rungs</td><td><span class="yes">✓</span> exit-code / test commands, confidence = 1, ungameable</td></tr>
           <tr><td class="feat">LLM-judge rungs</td><td><span class="yes">✓</span> quorum (default 3, sampled at a diversity temperature; single-sample stays temp 0), confidence floor (default 0.66)</td></tr>
           <tr><td class="feat">Gate A</td><td>human approve / revise (feedback) / reject · <code>--autonomous</code> auto-accept (still frozen + logged)</td></tr>
+          <tr><td class="feat">Phased decomposition</td><td><code>--phased</code> — author a <b>frozen, hashed plan</b> of sub-goals (plan gate mirrors Gate A; re-plan only via the bounded, gated revise path), run each as its own frozen two-key contract with an internal <b>checkpoint</b> between phases (small per-phase diffs), then a <b>cumulative ACCEPT</b> contract on the <i>original</i> goal — whole-run DONE needs <b>both keys on acceptance</b> · <code>--max-phases</code> (default 20) · <code>--planner-model</code> · <code>--budget-tokens</code> is the whole-run cap · <code>--resume</code> re-enters mid-plan · fail-closed (a bad/over-long plan ⇒ FAILED)</td></tr>
           <tr><td class="feat">Gate B</td><td><span class="yes">✓</span> independent approver, veto-only, every iteration</td></tr>
           <tr><td class="feat">Stuck detection</td><td>no-diff · repeat-failure · oscillation · budget</td></tr>
           <tr><td class="feat">Diff baseline</td><td><code>--baseline &lt;ref&gt;</code> — compute the worker's diff (the Gate-B approver's input) against any git ref/SHA instead of <code>HEAD</code> · chain a multi-step build with no commits onto the user's branch (each run reviews only its delta) · validated to resolve <b>before the run starts</b> (fail-closed on an unknown ref) · precedence <code>CLI &gt; config</code> · changes only what <code>diff()</code> is computed <i>against</i> — the working-tree hash driving stuck-detection is unaffected · goaly can also advance it <b>internally</b> via a private <code>git write-tree</code> snapshot (<b>no commit, no <code>HEAD</code>/branch/index move</b>; objects dangle, gc-collectable) recorded so <code>--resume</code> reconstructs it</td></tr>
@@ -401,6 +437,10 @@ goaly run --goal <span class="str">"…"</span> --resume run-&lt;id&gt;
 
 <span class="cmt"># diff against a baseline instead of HEAD — small diffs across a multi-step build, no commits</span>
 goaly run --goal <span class="str">"step 2"</span> --baseline <span class="str">&lt;ref-or-sha&gt;</span>
+
+<span class="cmt"># phased: a frozen plan of small verified phases + a cumulative accept on the original goal</span>
+goaly run --goal-file <span class="str">./BIG_GOAL.md</span> \
+  --generate --phased --max-phases 8 --autonomous
 
 <span class="cmt"># model for the harness + a different model (and CLI) for the LLM steps</span>
 goaly run --goal <span class="str">"…"</span> --model <span class="str">claude-opus-4-8</span> \

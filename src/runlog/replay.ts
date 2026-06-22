@@ -44,6 +44,12 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
       baseline = entry.event.tree;
       continue;
     }
+    // A PHASE_CHECKPOINTED entry (issue #48) BOTH advances the diff baseline AND drives the reducer to
+    // the next phase — so, unlike the bare marker, it is fed to `step()` below. Record the baseline
+    // here so a resume mid-plan re-enters against the advanced baseline.
+    if (entry.event.tag === 'PHASE_CHECKPOINTED') {
+      baseline = entry.event.tree;
+    }
     if (entry.event.tag === 'CONTRACT_COMPILED') {
       contract = entry.event.contract;
       contractHash = entry.event.contract.contractHash;

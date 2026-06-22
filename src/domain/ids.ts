@@ -41,6 +41,17 @@ export const ContractHash = z
   .brand<'ContractHash'>();
 export type ContractHash = z.infer<typeof ContractHash>;
 
+/**
+ * A content hash of the canonicalized frozen PLAN (issue #48). Like {@link ContractHash} but for the
+ * ordered plan of sub-goals: hashed once, logged, and never rewritten by any transition. Re-planning
+ * is only the bounded, human-gated revise path (each attempt freezes its own hash).
+ */
+export const PlanHash = z
+  .string()
+  .regex(/^[0-9a-f]{7,64}$/, 'planHash must be 7-64 lowercase hex chars')
+  .brand<'PlanHash'>();
+export type PlanHash = z.infer<typeof PlanHash>;
+
 /** Helpers for constructing branded ids from trusted internal sources. */
 export const asSessionId = (s: string): SessionId => SessionId.parse(s);
 
@@ -59,3 +70,4 @@ export function coerceSessionId(candidate: string | undefined, fallback = 'unkno
 export const asRunId = (s: string): RunId => RunId.parse(s);
 export const asDiffHash = (s: string): DiffHash => DiffHash.parse(s);
 export const asContractHash = (s: string): ContractHash => ContractHash.parse(s);
+export const asPlanHash = (s: string): PlanHash => PlanHash.parse(s);

@@ -2,6 +2,7 @@ import { SessionId, DiffHash } from '../domain/ids';
 import { HarnessRunResult, type BudgetSnapshot, type ApprovalInput } from '../domain/events';
 import { type Verdict, type ApprovalVerdict, type GateDecision } from '../domain/verdict';
 import type { CompiledContract, Rung, UnhashedContract } from '../domain/contract';
+import { freezePlan, type Plan, type SubGoal } from '../domain/plan';
 import { RunConfig, type RunConfigInput } from '../domain/config';
 import { initialCtx, type LoopCtx } from '../orchestrator/state';
 import type { HarnessAdapter } from '../harness/adapter';
@@ -9,6 +10,8 @@ import type { Verifier } from '../verify/verifier';
 import type { Approver } from '../verify/approver';
 import type { VerifierCompiler } from '../compile/compiler';
 import type { ContractGate } from '../compile/gateA';
+import type { Planner } from '../plan/planner';
+import type { PlanGate } from '../plan/plan-gate';
 import type { Workspace, CommandResult } from '../workspace/workspace';
 import type { Clock } from '../driver/clock';
 import type { BudgetMeter } from '../driver/budget';
@@ -129,6 +132,56 @@ export class FakeCompiler implements VerifierCompiler {
     const next = this.#contracts[idx];
     if (next === undefined) throw new Error('FakeCompiler: no contract scripted');
     if (next instanceof Error) throw next;
+    return next;
+  }
+}
+
+/** Build a frozen plan for tests from sub-goals (each may be a bare goal string or a SubGoal). */
+export function makePlan(...phases: (string | SubGoal)[]): Plan {
+  const subs: SubGoal[] = phases.map((p) => (typeof p === 'string' ? { goal: p } : p));
+  return freezePlan({ phases: subs.length > 0 ? subs : [{ goal: 'phase 1' }] });
+}
+
+/** Scripted planner. Clamps to the last scripted entry; an Error entry throws (planner failure). */
+export class FakePlanner implements Planner {
+  readonly #plans: (Plan | Error)[];
+  #i = 0;
+  /** The `feedback` arg of each plan() call, in order (undefined when none was passed). */
+  readonly feedbacks: (string | undefined)[] = [];
+  readonly configs: RunConfig[] = [];
+
+  constructor(plan: Plan | Error | (Plan | Error)[]) {
+    this.#plans = Array.isArray(plan) ? plan : [plan];
+  }
+
+  async plan(config: RunConfig, feedback?: string): Promise<Plan> {
+    this.configs.push(config);
+    this.feedbacks.push(feedback);
+    const idx = Math.min(this.#i, this.#plans.length - 1);
+    this.#i += 1;
+    const next = this.#plans[idx];
+    if (next === undefined) throw new Error('FakePlanner: no plan scripted');
+    if (next instanceof Error) throw next;
+    return next;
+  }
+}
+
+/** Scripted plan gate (mirrors FakeGate). Defaults to approve. */
+export class FakePlanGate implements PlanGate {
+  readonly #decisions: GateDecision[];
+  #i = 0;
+  readonly seen: Plan[] = [];
+
+  constructor(decision: GateDecision | GateDecision[] = { kind: 'approve' }) {
+    this.#decisions = Array.isArray(decision) ? decision : [decision];
+  }
+
+  async approvePlan(plan: Plan): Promise<GateDecision> {
+    this.seen.push(plan);
+    const idx = Math.min(this.#i, this.#decisions.length - 1);
+    this.#i += 1;
+    const next = this.#decisions[idx];
+    if (next === undefined) throw new Error('FakePlanGate: no decision scripted');
     return next;
   }
 }

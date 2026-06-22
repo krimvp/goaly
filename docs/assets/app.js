@@ -114,6 +114,31 @@
       d: "Zero-LLM. DONE needs <b>two keys</b> (ladder passes AND no veto). Otherwise apply the backstops: stuck → ABORTED, iteration cap → FAILED, else CONTINUE with feedback threaded into the next prompt.",
       pills: ['<span class="pill pass">two keys → DONE</span>', '<span class="pill neutral">else continue</span>'],
     },
+    plan: {
+      t: "PLAN — author then freeze the plan (--phased)",
+      d: "A read-only planner seam (LLM, like the compiler) decomposes one big goal into an <b>ordered list of sub-goals</b>. The plan is hashed (<code>planHash</code>), logged, and <b>frozen</b> — no transition rewrites it. A planner error / unparseable / over-long plan is a typed FAILED (fail-closed).",
+      pills: ['<span class="pill violet">fuzzy / LLM</span>', '<span class="pill pass">→ planHash</span>'],
+    },
+    plangate: {
+      t: "Plan gate — the plan-level Gate A",
+      d: "The frozen plan is presented for <b>approve / revise / reject</b>, exactly like Gate A. Re-planning is only this bounded, gated path (capped by <code>--max-gate-a-revisions</code>) — never an automatic “make it easier”. <code>--autonomous</code> auto-accepts, still frozen + logged.",
+      pills: ['<span class="pill gate">human · once</span>', '<span class="pill neutral">or auto-accept</span>'],
+    },
+    phase: {
+      t: "Phase contract — a normal frozen, two-key run",
+      d: "Each sub-goal runs as its <b>own</b> frozen contract through the exact same COMPILE → Gate A → loop → DECIDE machine. <code>--generate</code> authors the phase's verification (steered by the sub-goal's intent/rubric).",
+      pills: ['<span class="pill pass">frozen contract</span>', '<span class="pill neutral">reused machine</span>'],
+    },
+    checkpoint: {
+      t: "CHECKPOINT — scope the next phase's diff",
+      d: "Between phases the Driver takes an internal <b>tree snapshot</b> (no commit, no <code>HEAD</code>/branch move) and adopts it as the new diff baseline, so phase N's diff — and the approver's Gate-B input — excludes phase N-1's work. Recorded so <code>--resume</code> re-enters mid-plan.",
+      pills: ['<span class="pill neutral">private snapshot</span>', '<span class="pill pass">small diffs</span>'],
+    },
+    accept: {
+      t: "ACCEPT — cumulative contract on the original goal",
+      d: "A final acceptance contract is authored against the <b>original</b> goal and verified end-to-end (prefer a deterministic full-suite/build rung — ungameable, runs on the whole tree). <b>The whole run is DONE only when this passes both keys</b>, so phases passing individually can't green a broken whole.",
+      pills: ['<span class="pill pass">two keys → DONE</span>', '<span class="pill fail">or FAILED</span>'],
+    },
   };
 
   const pipeDetail = $("#pipeline-detail");

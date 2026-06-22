@@ -70,6 +70,7 @@ export const USAGE = `goaly — run a coding agent until a frozen success contra
 
 Usage:
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
+               [--phased [--max-phases N]] [--planner-model <m>]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
                [--max-gate-a-revisions N] [--budget-tokens N] [--budget-wall-ms N]
                [--diff-ignore "<p1,p2,…>"]
@@ -99,6 +100,20 @@ Verification:
   --verify-cmd   point at an existing command that must exit 0
   --generate     have the agent author the verification (optionally guided by --intent)
 
+Phased decomposition (issue #48 — split one big goal into a frozen plan of small, verified phases):
+  --phased       author a FROZEN, ordered plan of sub-goals, then run each as its own frozen,
+                 two-key contract with a checkpoint (#47) between phases (so each phase's diff stays
+                 small), finished by a cumulative ACCEPT contract that re-verifies the ORIGINAL goal
+                 end-to-end. The plan is hashed + logged and no transition rewrites it; re-planning is
+                 only the bounded, human-gated revise path (the plan gate mirrors Gate A, capped by
+                 --max-gate-a-revisions). The whole run is DONE only when the cumulative acceptance
+                 passes BOTH keys — phases passing individually can't green a goal whose whole fails.
+                 --autonomous auto-accepts the plan and each phase contract (still frozen + logged).
+                 --budget-tokens is the whole-run cap (summed across phases); --resume re-enters
+                 mid-plan without repeating completed phases.
+  --max-phases N cap how many sub-goal phases the planner may emit (default 20; the acceptance phase
+                 is always added on top). An over-long plan is refused at planning (fail-closed).
+
 Diff baseline (issue #47 — keep a run's diff small without touching the user's git history):
   --baseline <ref>  compute the worker's diff (the approver's Gate-B input) against <ref> — any git
                     ref or SHA — instead of HEAD. Validated to resolve before the run starts
@@ -120,6 +135,7 @@ Model selection (all optional; default = each tool's own default):
   --judge-model <m>     model for the LLM-judge rung only
   --approver-model <m>  model for the Gate-B approver only
   --compiler-model <m>  model for the verification compiler only
+  --planner-model <m>   model for the phased planner only (--phased)
   --llm-provider <p>    which CLI runs the LLM steps: claude (default) | codex | droid
   Precedence per LLM step: per-step flag → --llm-model → --model. The harness follows --model.
 
@@ -291,6 +307,8 @@ export async function parseArgs(
     ...(resolved.intent !== undefined ? { intent: resolved.intent } : {}),
     ...(resolved.rubric !== undefined ? { rubric: resolved.rubric } : {}),
     ...(flags['autonomous'] !== undefined ? { autonomous: true } : {}),
+    ...(flags['phased'] !== undefined ? { phased: true } : {}),
+    ...(str(flags, 'max-phases') !== undefined ? { maxPhases: str(flags, 'max-phases') } : {}),
     ...(str(flags, 'max-iterations') !== undefined
       ? { maxIterations: str(flags, 'max-iterations') }
       : {}),
@@ -446,6 +464,7 @@ function parseModels(flags: RawFlags): ModelSelection {
   add('judgeModel', 'judge-model');
   add('approverModel', 'approver-model');
   add('compilerModel', 'compiler-model');
+  add('plannerModel', 'planner-model');
   try {
     return ModelSelection.parse(raw);
   } catch (e) {

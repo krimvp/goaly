@@ -22,6 +22,7 @@ function startupFields(parsed: ParsedArgs): Record<string, string> {
   if (m.judgeModel !== undefined) fields.judgeModel = m.judgeModel;
   if (m.approverModel !== undefined) fields.approverModel = m.approverModel;
   if (m.compilerModel !== undefined) fields.compilerModel = m.compilerModel;
+  if (m.plannerModel !== undefined) fields.plannerModel = m.plannerModel;
   if (parsed.llmProvider !== 'claude') fields.llmProvider = parsed.llmProvider;
   return fields;
 }

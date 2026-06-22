@@ -1,7 +1,9 @@
 import type { OrchestratorEvent, Command, HarnessRunResult } from '../domain/events';
 import type { RunConfig } from '../domain/config';
 import type { CompiledContract, Rung } from '../domain/contract';
-import type { OrchestratorState, LoopCtx } from './state';
+import type { Plan } from '../domain/plan';
+import { phaseConfig, isAcceptancePhase } from '../domain/plan';
+import type { OrchestratorState, LoopCtx, PlanProgress } from './state';
 import { initialCtx } from './state';
 import { decide, type Decision } from './decide';
 import { normalizeDetail } from './stuck';
@@ -14,20 +16,35 @@ import { normalizeDetail } from './stuck';
  */
 export type StepResult = readonly [OrchestratorState, Command[]];
 
-/** Seed the machine: COMPILING + a single COMPILE_VERIFIER command. */
+/**
+ * Seed the machine. A phased run (issue #48) starts at PLANNING + a single PLAN command; the classic
+ * single-contract run starts at COMPILING + a single COMPILE_VERIFIER command.
+ */
 export function initial(config: RunConfig): StepResult {
+  if (config.phased) {
+    return [
+      { tag: 'PLANNING', config, reviseRound: 0 },
+      [{ tag: 'PLAN', config }],
+    ];
+  }
   return [
-    { tag: 'COMPILING', config, reviseRound: 0 },
+    { tag: 'COMPILING', config, reviseRound: 0, plan: undefined },
     [{ tag: 'COMPILE_VERIFIER', config }],
   ];
 }
 
 export function step(state: OrchestratorState, event: OrchestratorEvent): StepResult {
   switch (state.tag) {
+    case 'PLANNING':
+      return stepPlanning(state.config, state.reviseRound, event);
+    case 'AWAIT_PLAN_GATE':
+      return stepAwaitPlanGate(state.config, state.plan, state.reviseRound, event);
+    case 'CHECKPOINTING':
+      return stepCheckpointing(state.progress, event);
     case 'COMPILING':
-      return stepCompiling(state.config, state.reviseRound, event);
+      return stepCompiling(state.config, state.reviseRound, state.plan, event);
     case 'AWAIT_GATE_A':
-      return stepAwaitGateA(state.config, state.contract, state.reviseRound, event);
+      return stepAwaitGateA(state.config, state.contract, state.reviseRound, state.plan, event);
     case 'RUNNING_AGENT':
       return stepRunningAgent(state.ctx, event);
     case 'VERIFYING':
@@ -41,20 +58,102 @@ export function step(state: OrchestratorState, event: OrchestratorEvent): StepRe
   }
 }
 
+// ---- phased: PLAN → plan gate → (phases) → ACCEPT ------------------------
+
+function stepPlanning(config: RunConfig, reviseRound: number, event: OrchestratorEvent): StepResult {
+  switch (event.tag) {
+    case 'PLAN_COMPILED':
+      return [
+        { tag: 'AWAIT_PLAN_GATE', config, plan: event.plan, reviseRound },
+        [{ tag: 'REQUEST_PLAN_GATE', plan: event.plan }],
+      ];
+    case 'PLAN_FAILED':
+      // Fail-closed (invariant #4): an unparseable / over-long plan is a typed FAILED, never a skip.
+      return [{ tag: 'FAILED', reason: event.reason, iterations: 0, contractHash: undefined }, []];
+    default:
+      throw invalidTransition('PLANNING', event);
+  }
+}
+
+function stepAwaitPlanGate(
+  config: RunConfig,
+  plan: Plan,
+  reviseRound: number,
+  event: OrchestratorEvent,
+): StepResult {
+  if (event.tag !== 'PLAN_GATE_DECIDED') throw invalidTransition('AWAIT_PLAN_GATE', event);
+
+  switch (event.decision.kind) {
+    case 'approve':
+      // Freeze stands. Start phase 0 — derive its scoped config and compile its own contract.
+      return startPhase(
+        { baseConfig: config, plan, phaseIndex: 0, priorIterations: 0 },
+      );
+    case 'reject':
+      return [
+        { tag: 'ABORTED', reason: event.decision.reason, iterations: 0, contractHash: undefined },
+        [],
+      ];
+    case 'revise': {
+      // Bounded, gated re-plan — never an automatic "make it easier" (mirrors Gate A revise). The
+      // reducer only emits a re-plan command carrying the human's feedback; the Driver re-plans.
+      if (reviseRound + 1 > config.maxGateARevisions) {
+        return [
+          {
+            tag: 'ABORTED',
+            reason: `plan revision cap (${config.maxGateARevisions}) reached without approval`,
+            iterations: 0,
+            contractHash: undefined,
+          },
+          [],
+        ];
+      }
+      return [
+        { tag: 'PLANNING', config, reviseRound: reviseRound + 1 },
+        [{ tag: 'PLAN', config, feedback: event.decision.feedback }],
+      ];
+    }
+  }
+}
+
+function stepCheckpointing(progress: PlanProgress, event: OrchestratorEvent): StepResult {
+  if (event.tag !== 'PHASE_CHECKPOINTED') throw invalidTransition('CHECKPOINTING', event);
+  // The checkpoint advanced the diff baseline; move to the next phase (which may be acceptance).
+  return startPhase({ ...progress, phaseIndex: progress.phaseIndex + 1 });
+}
+
+/** Begin a phase: derive its scoped config from the frozen plan and compile its own contract. */
+function startPhase(progress: PlanProgress): StepResult {
+  const cfg = phaseConfig(progress.baseConfig, progress.plan, progress.phaseIndex);
+  return [
+    { tag: 'COMPILING', config: cfg, reviseRound: 0, plan: progress },
+    [{ tag: 'COMPILE_VERIFIER', config: cfg }],
+  ];
+}
+
+// ---- per-phase loop (reused unchanged for the single-contract run) --------
+
 function stepCompiling(
   config: RunConfig,
   reviseRound: number,
+  plan: PlanProgress | undefined,
   event: OrchestratorEvent,
 ): StepResult {
   switch (event.tag) {
     case 'CONTRACT_COMPILED':
       return [
-        { tag: 'AWAIT_GATE_A', config, contract: event.contract, reviseRound },
+        { tag: 'AWAIT_GATE_A', config, contract: event.contract, reviseRound, plan },
         [{ tag: 'REQUEST_GATE_A', contract: event.contract }],
       ];
     case 'COMPILE_FAILED':
+      // A phase whose contract won't even compile fails the whole run (no silent skip).
       return [
-        { tag: 'FAILED', reason: event.reason, iterations: 0, contractHash: undefined },
+        {
+          tag: 'FAILED',
+          reason: withPhase(plan, event.reason),
+          iterations: plan?.priorIterations ?? 0,
+          contractHash: undefined,
+        },
         [],
       ];
     default:
@@ -66,21 +165,22 @@ function stepAwaitGateA(
   config: RunConfig,
   contract: CompiledContract,
   reviseRound: number,
+  plan: PlanProgress | undefined,
   event: OrchestratorEvent,
 ): StepResult {
   if (event.tag !== 'GATE_A_DECIDED') throw invalidTransition('AWAIT_GATE_A', event);
 
   switch (event.decision.kind) {
     case 'approve': {
-      const ctx = initialCtx(config, contract);
+      const ctx = initialCtx(config, contract, plan);
       return startIteration(ctx, buildInitialPrompt(contract), undefined);
     }
     case 'reject':
       return [
         {
           tag: 'ABORTED',
-          reason: event.decision.reason,
-          iterations: 0,
+          reason: withPhase(plan, event.decision.reason),
+          iterations: plan?.priorIterations ?? 0,
           contractHash: contract.contractHash,
         },
         [],
@@ -94,14 +194,14 @@ function stepAwaitGateA(
           {
             tag: 'ABORTED',
             reason: `Gate A revision cap (${config.maxGateARevisions}) reached without approval`,
-            iterations: 0,
+            iterations: plan?.priorIterations ?? 0,
             contractHash: contract.contractHash,
           },
           [],
         ];
       }
       return [
-        { tag: 'COMPILING', config, reviseRound: reviseRound + 1 },
+        { tag: 'COMPILING', config, reviseRound: reviseRound + 1, plan },
         [{ tag: 'COMPILE_VERIFIER', config, feedback: event.decision.feedback }],
       ];
     }
@@ -164,6 +264,8 @@ function stepAwaitGateB(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
 
 /** Turn a pure Decision into the next state + commands. */
 function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
+  // Whole-run iteration count: in a phased run, sum the completed phases' iterations.
+  const iterations = (ctx.plan?.priorIterations ?? 0) + ctx.iteration;
   switch (decision.kind) {
     case 'CONTINUE': {
       const next: LoopCtx = { ...ctx, feedback: decision.feedback };
@@ -171,16 +273,13 @@ function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
       return startIteration(next, prompt, ctx.sessionId);
     }
     case 'DONE':
-      return [
-        { tag: 'DONE', iterations: ctx.iteration, contractHash: ctx.contract.contractHash },
-        [],
-      ];
+      return phaseDone(ctx, iterations);
     case 'FAILED':
       return [
         {
           tag: 'FAILED',
-          reason: decision.reason,
-          iterations: ctx.iteration,
+          reason: withPhase(ctx.plan, decision.reason),
+          iterations,
           contractHash: ctx.contract.contractHash,
         },
         [],
@@ -189,13 +288,43 @@ function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
       return [
         {
           tag: 'ABORTED',
-          reason: decision.reason,
-          iterations: ctx.iteration,
+          reason: withPhase(ctx.plan, decision.reason),
+          iterations,
           contractHash: ctx.contract.contractHash,
         },
         [],
       ];
   }
+}
+
+/**
+ * A phase satisfied both keys. For the classic single-contract run (`plan === undefined`) and for the
+ * FINAL cumulative acceptance phase, this is whole-run DONE. For any earlier phase, the run is NOT
+ * done: take a checkpoint (#47) to scope the next phase's diff, then advance. This is the heart of
+ * invariant #3 under decomposition — the whole run is DONE only when the cumulative acceptance
+ * contract passes both keys, so phases passing individually can't green a goal whose whole fails.
+ */
+function phaseDone(ctx: LoopCtx, iterations: number): StepResult {
+  const progress = ctx.plan;
+  if (progress === undefined || isAcceptancePhase(progress.plan, progress.phaseIndex)) {
+    return [{ tag: 'DONE', iterations, contractHash: ctx.contract.contractHash }, []];
+  }
+  return [
+    { tag: 'CHECKPOINTING', progress: { ...progress, priorIterations: iterations } },
+    [{ tag: 'CHECKPOINT_PHASE' }],
+  ];
+}
+
+/** A short, human-readable label for the current phase (for terminal reasons). */
+function phaseLabel(progress: PlanProgress): string {
+  return isAcceptancePhase(progress.plan, progress.phaseIndex)
+    ? 'cumulative acceptance phase'
+    : `phase ${progress.phaseIndex + 1}/${progress.plan.phases.length}`;
+}
+
+/** Prefix a terminal reason with the failing phase when in a phased run; pass through otherwise. */
+function withPhase(plan: PlanProgress | undefined, reason: string): string {
+  return plan === undefined ? reason : `${phaseLabel(plan)}: ${reason}`;
 }
 
 function startIteration(

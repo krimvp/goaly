@@ -28,6 +28,9 @@ export function summarizeUsage(events: OrchestratorEvent[], budget: BudgetConfig
           event.run.tokenBreakdown,
         );
         break;
+      case 'PLAN_COMPILED':
+      case 'PLAN_FAILED':
+      // The planner (issue #48) is an LLM authoring step like the compiler; fold its spend in there.
       case 'CONTRACT_COMPILED':
       case 'COMPILE_FAILED':
         addLlmStep(compiler, event.llm);

@@ -53,6 +53,19 @@ export const RunConfig = z.object({
    */
   maxGateARevisions: z.number().int().nonnegative().default(10),
   maxIterations: z.number().int().positive().default(10),
+  /**
+   * Phased decomposition (issue #48). When true the run first authors a FROZEN, ordered plan of
+   * sub-goals (the planning phase), executes each as its own frozen, two-key contract with a
+   * checkpoint (#47) between phases, then verifies the ORIGINAL goal end-to-end with a final
+   * cumulative acceptance contract. Off ⇒ the classic single-contract loop, behavior unchanged.
+   */
+  phased: z.boolean().default(false),
+  /**
+   * Upper bound on how many sub-goal phases the planner may emit (excludes the acceptance phase).
+   * A frozen plan with more phases is rejected at planning (→ FAILED), so a pathological planner
+   * can't explode the run. Only consulted in `--phased`.
+   */
+  maxPhases: z.number().int().positive().default(20),
   budget: BudgetConfig.default({}),
   stuckPolicy: StuckPolicy.default({}),
   /**
@@ -87,6 +100,8 @@ export const CliInput = z.object({
   intent: z.string().optional(),
   rubric: z.string().optional(),
   autonomous: z.coerce.boolean().optional(),
+  phased: z.coerce.boolean().optional(),
+  maxPhases: z.coerce.number().int().positive().optional(),
   maxGateARevisions: z.coerce.number().int().nonnegative().optional(),
   maxIterations: z.coerce.number().int().positive().optional(),
   budgetTokens: z.coerce.number().int().positive().optional(),
@@ -121,6 +136,8 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     verifier,
     ...(input.rubric !== undefined ? { rubric: input.rubric } : {}),
     ...(input.autonomous !== undefined ? { autonomous: input.autonomous } : {}),
+    ...(input.phased !== undefined ? { phased: input.phased } : {}),
+    ...(input.maxPhases !== undefined ? { maxPhases: input.maxPhases } : {}),
     ...(input.maxGateARevisions !== undefined
       ? { maxGateARevisions: input.maxGateARevisions }
       : {}),

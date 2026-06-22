@@ -88,6 +88,7 @@ src/
   driver/      driver, clock, budget                    — effects + seam #4
   verify/      verifier, ladder, deterministic, judge, approver, agent-approver   — seam #2/#3
   compile/     compiler, agent-compiler, gateA, gates   — Phase 1 + freeze + Gate A
+  plan/        planner, agent-planner, plan-gate, plan-gates — phased decomposition (#48): freeze a plan of contracts
   agent-cli/   codec, <tool>-codec, output, stream, estimate — one deep codec per CLI (seam-shared)
   harness/     adapter, agent-cli-harness, claude-code, codex, droid — seam #1
   workspace/   workspace, git-workspace                 — harness-independent diff/run
