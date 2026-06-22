@@ -117,10 +117,17 @@ export function defaultAgentExec(
   command: string,
   timeoutMs: number,
   promptOnStdin: boolean,
+  cwd?: string,
 ): AgentExecFn {
   return async (args, input, onStdout) => {
     const r = await runProcess(command, args, {
       timeoutMs,
+      // Run the agent IN the workspace, not goaly's own cwd. Otherwise the agent edits whatever
+      // directory goaly was invoked from, and a `--workspace` that differs from that cwd (e.g. under
+      // `npm run`, which resets cwd to the package root) makes every edit land outside the tree goaly
+      // diffs/verifies — the run then no-diff-aborts despite a real build. When sandboxed, the
+      // launcher sets the jail's cwd instead and this default exec is not used.
+      ...(cwd !== undefined ? { cwd } : {}),
       ...(promptOnStdin ? { input: input.prompt } : {}),
       ...(onStdout !== undefined ? { onStdout } : {}),
     });

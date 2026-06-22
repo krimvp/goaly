@@ -187,9 +187,37 @@ export class GitWorkspace implements Workspace {
 
     const sections: string[] = [tracked.stdout];
     if (untrackedFiles.length > 0) {
-      sections.push(`\n--- untracked files ---\n${untrackedFiles.join('\n')}\n`);
+      sections.push(`\n--- untracked files ---\n`);
+      for (const file of untrackedFiles) {
+        sections.push(await this.#untrackedDiff(file));
+      }
     }
     return sections.join('');
+  }
+
+  /**
+   * Render a single untracked (agent-created) file as an added-file diff, so the two LLM keys
+   * (judge + Gate B approver) see its CONTENT — not just its name. `git diff HEAD` omits untracked
+   * files entirely, so a from-scratch build (every file untracked) would otherwise reach both keys
+   * as a bare filename list, leaving them unable to inspect what the worker actually wrote — the very
+   * thing the "two keys ingest the diff" guarantee depends on. `--no-index` against `/dev/null` is
+   * NON-MUTATING (it never touches the index, preserving diffHash's purity) and exits 1 when the
+   * content differs from the empty file — i.e. always — which is expected, not an error. Binary files
+   * are summarised by git ("Binary files … differ"). Fail-soft: if rendering fails for any other
+   * reason we still surface the filename, never silently dropping a worker-authored file.
+   */
+  async #untrackedDiff(file: string): Promise<string> {
+    const added = await this.#exec(
+      'git',
+      ['-C', this.#root, 'diff', '--no-index', '--', '/dev/null', file],
+      { cwd: this.#root },
+    );
+    // `git diff --no-index` exits 0 (identical — unreachable here) or 1 (differs); anything else is a
+    // real failure, so fall back to the name so the file is never invisible to the keys.
+    if (added.code === 0 || added.code === 1) {
+      return added.stdout;
+    }
+    return `${file}\n`;
   }
 
   async fileHash(relPath: string): Promise<string | null> {

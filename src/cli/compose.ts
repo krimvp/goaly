@@ -413,6 +413,9 @@ function makeHarness(
 ): HarnessAdapter {
   const exec = sandboxedHarnessExec(choice, timeoutMs, sandbox);
   const opts = {
+    // Run the agent IN the workspace, not goaly's invocation cwd (which `npm run` resets to the
+    // package root). Only the default exec reads this; the sandbox exec sets the jail's cwd itself.
+    cwd: sandbox.workspace,
     ...(model !== undefined ? { model } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(exec !== undefined ? { exec } : {}),

@@ -31,7 +31,7 @@ export function parseClaudeOutput(stdout: string): AgentOutput | null {
  * on hostile/partial output — failures become `crashed | truncated | timeout`.
  */
 export class ClaudeCodeAdapter extends AgentCliHarness {
-  constructor(opts: { exec?: ExecFn; timeoutMs?: number; model?: string } = {}) {
+  constructor(opts: { exec?: ExecFn; timeoutMs?: number; model?: string; cwd?: string } = {}) {
     super(claudeCodec, opts);
   }
 }

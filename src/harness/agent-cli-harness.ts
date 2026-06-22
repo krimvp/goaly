@@ -23,11 +23,16 @@ export class AgentCliHarness implements HarnessAdapter {
   readonly #exec: AgentExecFn;
   readonly #model: string | undefined;
 
-  constructor(codec: AgentCliCodec, opts: { exec?: AgentExecFn; timeoutMs?: number; model?: string } = {}) {
+  constructor(
+    codec: AgentCliCodec,
+    opts: { exec?: AgentExecFn; timeoutMs?: number; model?: string; cwd?: string } = {},
+  ) {
     this.name = codec.name;
     this.#codec = codec;
     const timeoutMs = opts.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
-    this.#exec = opts.exec ?? defaultAgentExec(codec.command, timeoutMs, codec.promptOnStdin);
+    // `cwd` makes the agent run inside the workspace (seam #1). An injected `exec` (e.g. the sandbox
+    // wrapper, which sets the jail's cwd itself) takes precedence and ignores it.
+    this.#exec = opts.exec ?? defaultAgentExec(codec.command, timeoutMs, codec.promptOnStdin, opts.cwd);
     this.#model = opts.model;
   }
 

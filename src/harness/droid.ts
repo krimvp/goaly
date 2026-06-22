@@ -38,7 +38,7 @@ export function parseDroidOutput(stdout: string): AgentOutput | null {
  */
 export class DroidAdapter extends AgentCliHarness {
   constructor(
-    opts: { exec?: ExecFn; timeoutMs?: number; auto?: AutonomyLevel; model?: string } = {},
+    opts: { exec?: ExecFn; timeoutMs?: number; auto?: AutonomyLevel; model?: string; cwd?: string } = {},
   ) {
     super(makeDroidCodec(opts.auto ?? DEFAULT_AUTONOMY), opts);
   }
