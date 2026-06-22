@@ -18,6 +18,22 @@ export interface Workspace {
   /** The working-tree diff as text, for the approver's Gate B input. */
   diff(): Promise<string>;
   /**
+   * Snapshot the current working tree into a baseline handle (a git tree object) WITHOUT writing a
+   * user-visible commit, moving HEAD/the branch, or touching the user's index — then make subsequent
+   * {@link diff} compare against it. Returns the baseline handle (a tree SHA) so the Driver can record
+   * it write-ahead and `--resume` can re-point the baseline by replaying the log. This is the
+   * "internal checkpoint" primitive: it lets goaly keep a run's diff small across a multi-step build
+   * without mutating the user's git history (issue #47). The no-op tree hash ({@link diffHash}) is
+   * unaffected — the baseline changes only what `diff()` is computed *against*.
+   */
+  checkpoint(): Promise<DiffHash>;
+  /**
+   * Set what {@link diff} compares against (a git ref or tree SHA; default `HEAD`). The caller is
+   * responsible for having validated that the ref resolves (the CLI does so fail-closed before the
+   * run starts); a baseline that fails to resolve at diff time falls back like a missing HEAD.
+   */
+  setBaseline(ref: string): void;
+  /**
    * Run a shell command in the workspace root. An optional `timeoutMs` kills the command (SIGKILL)
    * after that many ms and reports it as a non-zero exit, so a hung verify command fails closed
    * instead of stalling the loop forever.

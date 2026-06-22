@@ -125,6 +125,13 @@ describe('parseArgs', () => {
     expect(a.resumeRunId).toBe('run-123');
   });
 
+  it('captures --baseline ref (issue #47); defaults to undefined (⇒ HEAD)', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--baseline', 'main']);
+    expect(a.baseline).toBe('main');
+    const b = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+    expect(b.baseline).toBeUndefined();
+  });
+
   describe('--sandbox (issue #9)', () => {
     const run = ['run', '--goal', 'g', '--verify-cmd', 'true'];
 

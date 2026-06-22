@@ -1,7 +1,7 @@
 import type { RunConfig } from '../domain/config';
 import type { CompiledContract } from '../domain/contract';
 import type { Command } from '../domain/events';
-import type { ContractHash } from '../domain/ids';
+import type { ContractHash, DiffHash } from '../domain/ids';
 import type { OrchestratorState } from '../orchestrator/state';
 import { initial, step } from '../orchestrator/step';
 import type { RunLogEntry } from './runlog';
@@ -16,6 +16,12 @@ export type ReplayResult = {
   readonly contract: CompiledContract | null;
   /** The frozen contract's hash, mirrored for convenience (null before compile). */
   readonly contractHash: ContractHash | null;
+  /**
+   * The tree SHA of the most recent internal checkpoint (issue #47), or null if none was taken. The
+   * Driver re-points the workspace's diff baseline at this on `--resume` so the resumed run keeps the
+   * same small-diff baseline it had advanced to. A baseline marker, never part of the reducer fold.
+   */
+  readonly baseline: DiffHash | null;
 };
 
 /**
@@ -28,8 +34,16 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
   let [state, commands] = initial(config);
   let contract: CompiledContract | null = null;
   let contractHash: ContractHash | null = null;
+  let baseline: DiffHash | null = null;
 
   for (const entry of entries) {
+    // A CHECKPOINTED entry is a diff-baseline marker, NOT a reducer transition: it is never fed to
+    // `step()` (the reducer stays unaffected, invariant #1). We only remember the latest tree so the
+    // Driver can re-point the baseline on resume.
+    if (entry.event.tag === 'CHECKPOINTED') {
+      baseline = entry.event.tree;
+      continue;
+    }
     if (entry.event.tag === 'CONTRACT_COMPILED') {
       contract = entry.event.contract;
       contractHash = entry.event.contract.contractHash;
@@ -37,5 +51,5 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
     [state, commands] = step(state, entry.event);
   }
 
-  return { state, commands, contract, contractHash };
+  return { state, commands, contract, contractHash, baseline };
 }

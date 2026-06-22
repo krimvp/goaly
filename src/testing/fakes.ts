@@ -157,6 +157,8 @@ export class FakeWorkspace implements Workspace {
   #diffText: string;
   readonly #cmdResults: CommandResult[];
   readonly #fileHashes: Map<string, string> = new Map();
+  /** Every baseline `setBaseline()`/`checkpoint()` adopted, in order — for asserting resume wiring. */
+  readonly baselineCalls: string[] = [];
   constructor(hash = '0000000', diffText = '', cmdResults: CommandResult[] = []) {
     this.#hash = hash;
     this.#diffText = diffText;
@@ -164,6 +166,19 @@ export class FakeWorkspace implements Workspace {
   }
   setHash(hash: string): void {
     this.#hash = hash;
+  }
+  /** The currently-active diff baseline (the last one adopted), or undefined if none was set. */
+  get baseline(): string | undefined {
+    return this.baselineCalls[this.baselineCalls.length - 1];
+  }
+  setBaseline(ref: string): void {
+    this.baselineCalls.push(ref);
+  }
+  /** Snapshot the current tree hash as the new baseline and return it (no real git). */
+  async checkpoint(): Promise<DiffHash> {
+    const tree = DiffHash.parse(this.#hash);
+    this.baselineCalls.push(tree);
+    return tree;
   }
   /** Stub a file's content hash (the integrity guard reads this); `null` clears it (simulates deletion). */
   setFileHash(relPath: string, sha256: string | null): void {

@@ -83,6 +83,18 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     /** LLM spend by the approver (absent only if the call never reached the model). */
     llm: TokenUsage.optional(),
   }),
+  /**
+   * An internal workspace checkpoint (issue #47): the Driver snapshotted the working tree into a git
+   * TREE object (no user-visible commit, no HEAD/branch move) and adopted it as the new diff baseline.
+   * It is a baseline MARKER, not a reducer transition — it is NEVER fed to `step()` (replay skips it);
+   * it exists only so `--resume` can reconstruct the advanced baseline by replaying the log. Carries
+   * the tree SHA so the reconstruction is deterministic.
+   */
+  z.object({
+    tag: z.literal('CHECKPOINTED'),
+    /** The git tree SHA snapshotted as the new diff baseline. */
+    tree: DiffHash,
+  }),
 ]);
 export type OrchestratorEvent = z.infer<typeof OrchestratorEvent>;
 

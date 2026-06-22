@@ -78,6 +78,12 @@ export type ComposeOptions = {
    * both jailed seams so they pin their proxy env vars at it. Absent ⇒ no allowlist active.
    */
   egressProxy?: SandboxProxy;
+  /**
+   * Diff baseline (issue #47): the git ref/SHA `diff()` (and thus Gate B) compares the working tree
+   * against, instead of `HEAD`. The CLI validates it resolves fail-closed BEFORE composing; here it
+   * is just adopted onto the workspace. Absent ⇒ baseline stays `HEAD` (behavior unchanged).
+   */
+  baseline?: string;
   /** Where run logs live. Default `<workspaceRoot>/.goaly` (excluded from diffHash). */
   stateDir?: string;
   /** Minimum diagnostic log level. Default `info`. */
@@ -182,6 +188,9 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
           options.egressProxy,
         );
   const workspace = new GitWorkspace(options.workspaceRoot, undefined, excludes, true, runLauncher);
+  // Adopt an explicit `--baseline` (issue #47) so `diff()`/Gate B compare against it instead of HEAD.
+  // The CLI already validated it resolves (fail-closed); a resumed run re-points it from the log.
+  if (options.baseline !== undefined) workspace.setBaseline(options.baseline);
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
   const logger = options.logger ?? buildRunLogger(options, stateDir);
   const streamSink = buildStreamSink(options, logger, stateDir, options.now ?? (() => clock.now()));

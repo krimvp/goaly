@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { drive, type DriverDeps } from '../driver/driver';
-import { RunId } from '../domain/ids';
+import { RunId, DiffHash } from '../domain/ids';
+import type { RunLogEntry } from './runlog';
 import {
   FakeHarness,
   FakeVerifier,
@@ -71,5 +72,49 @@ describe('replay()', () => {
     expect(state.tag).toBe('COMPILING');
     expect(c).toBeNull();
     expect(contractHash).toBeNull();
+  });
+
+  // ---- diff-baseline checkpoints (issue #47) ------------------------------
+
+  it('skips a CHECKPOINTED entry in the reducer fold but reconstructs the baseline from it', async () => {
+    const runlog = await driveAndStore();
+    const stored = (await runlog.read())!;
+
+    // The Driver-computed terminal state, with NO checkpoint in the stream.
+    const withoutCheckpoint = replay(stored.header.config, stored.entries);
+    expect(withoutCheckpoint.state.tag).toBe('DONE');
+    expect(withoutCheckpoint.baseline).toBeNull();
+
+    // Splice a CHECKPOINTED marker into the middle of the stream (after the first AGENT_RAN). It must
+    // NOT disturb the reducer fold (the reducer never sees it) — the terminal state is identical —
+    // and the latest tree must surface as the reconstructed baseline.
+    const tree = DiffHash.parse('a'.repeat(40));
+    const insertAt = stored.entries.findIndex((e) => e.event.tag === 'AGENT_RAN') + 1;
+    const marker: RunLogEntry = {
+      runId,
+      seq: 999,
+      ts: 1,
+      contractHash: contract.contractHash,
+      event: { tag: 'CHECKPOINTED', tree },
+      stateTagAfter: 'VERIFYING',
+    };
+    const spliced = [...stored.entries.slice(0, insertAt), marker, ...stored.entries.slice(insertAt)];
+
+    const withCheckpoint = replay(stored.header.config, spliced);
+    expect(withCheckpoint.state).toEqual(withoutCheckpoint.state); // reducer unaffected
+    expect(withCheckpoint.baseline).toBe(tree);
+  });
+
+  it('keeps only the LAST checkpoint tree when several are logged', () => {
+    const mk = (tree: string): RunLogEntry => ({
+      runId,
+      seq: 0,
+      ts: 0,
+      contractHash: null,
+      event: { tag: 'CHECKPOINTED', tree: DiffHash.parse(tree) },
+      stateTagAfter: 'COMPILING',
+    });
+    const { baseline } = replay(makeConfig(), [mk('b'.repeat(40)), mk('c'.repeat(40))]);
+    expect(baseline).toBe('c'.repeat(40));
   });
 });

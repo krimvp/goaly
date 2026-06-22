@@ -103,6 +103,10 @@ export async function drive(
     seq = resumed.seq;
     contractHash = resumed.contractHash;
     if (resumed.contract !== null) ladder = deps.makeLadder(resumed.contract);
+    // Re-point the diff baseline at the last internal checkpoint (issue #47) so a resumed run keeps
+    // the same small-diff baseline it had advanced to. This OVERRIDES any `--baseline` set at compose
+    // time: the logged checkpoint reflects real progress and is the authoritative resume state.
+    if (resumed.baseline !== null) deps.workspace.setBaseline(resumed.baseline);
   } else {
     [state, commands] = initial(config);
     seq = 0;
@@ -171,6 +175,45 @@ export async function drive(
     ...(usage !== undefined ? { tokensTotal: usage.total.tokens } : {}),
   });
   return { ...outcome, ...(usage !== undefined ? { usage } : {}) };
+}
+
+/** The Driver capabilities {@link recordCheckpoint} needs (a narrow slice of {@link DriverDeps}). */
+export type CheckpointDeps = Pick<DriverDeps, 'workspace' | 'runlog' | 'clock'> & {
+  logger?: Logger;
+};
+
+/**
+ * Take an internal workspace checkpoint and record it write-ahead (issue #47). The Driver effect is:
+ * snapshot the working tree into a git TREE (no user-visible commit, no HEAD/branch move — see
+ * {@link Workspace.checkpoint}), adopt it as the new diff baseline, and append a `CHECKPOINTED` event
+ * to the run log so `--resume` reconstructs the advanced baseline by replaying the log.
+ *
+ * This is the PRIMITIVE; the *policy* of when to checkpoint (e.g. between phases of a large build) is
+ * deliberately a separate concern (issue #46) — so this is not wired into the standard verify/Gate-B
+ * loop, where advancing the baseline mid-run would shrink what Gate B's approver reviews. The reducer
+ * is untouched: a `CHECKPOINTED` event is a baseline marker, never fed to `step()`. Returns the next
+ * `seq` and the snapshotted tree SHA. Fail-closed: a checkpoint snapshot that throws propagates to the
+ * caller's loop, which resolves to a crashed/ABORTED run — never a silently empty baseline.
+ */
+export async function recordCheckpoint(
+  deps: CheckpointDeps,
+  runId: RunId,
+  seq: number,
+  contractHash: ContractHash | null,
+  stateTagAfter: string,
+): Promise<{ seq: number; tree: DiffHash }> {
+  const tree = await deps.workspace.checkpoint();
+  const next = seq + 1;
+  await deps.runlog.append({
+    runId,
+    seq: next,
+    ts: deps.clock.now(),
+    contractHash,
+    event: { tag: 'CHECKPOINTED', tree },
+    stateTagAfter,
+  });
+  (deps.logger ?? noopLogger).info('checkpoint recorded', { tree });
+  return { seq: next, tree };
 }
 
 /**
@@ -414,6 +457,8 @@ type Resumed = {
   seq: number;
   contractHash: ContractHash | null;
   contract: CompiledContract | null;
+  /** The latest internal checkpoint's tree SHA (issue #47), or null when none was taken. */
+  baseline: DiffHash | null;
 };
 
 /**
@@ -424,13 +469,16 @@ async function resume(deps: DriverDeps, config: RunConfig): Promise<Resumed> {
   const stored = await deps.runlog.read();
   if (stored === null) {
     const [state, commands] = initial(config);
-    return { state, commands, seq: 0, contractHash: null, contract: null };
+    return { state, commands, seq: 0, contractHash: null, contract: null, baseline: null };
   }
 
   // Same replay-fold the read-only `runs` inspection uses — a single source of truth so an
   // inspected run's state matches exactly what resume reconstructs here.
-  const { state, commands, contract, contractHash } = replay(stored.header.config, stored.entries);
-  return { state, commands, seq: stored.entries.length, contractHash, contract };
+  const { state, commands, contract, contractHash, baseline } = replay(
+    stored.header.config,
+    stored.entries,
+  );
+  return { state, commands, seq: stored.entries.length, contractHash, contract, baseline };
 }
 
 function buildOutcome(state: OrchestratorState, runId: RunId): RunOutcome {

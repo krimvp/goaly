@@ -37,6 +37,12 @@ export type ParsedArgs = {
   models: ModelSelection;
   llmProvider: LlmProviderChoice;
   workspace: string;
+  /**
+   * Diff baseline (issue #47): the git ref/SHA `diff()`/Gate-B compare the working tree against,
+   * instead of `HEAD`. Pure wiring — never enters the frozen contract. Validated to resolve
+   * (fail-closed) before the run starts. Precedence: CLI flag > config file.
+   */
+  baseline: string | undefined;
   resumeRunId: string | undefined;
   /** Minimum diagnostic log level (default `info`). Pure wiring — never enters the contract. */
   logLevel: LogLevel;
@@ -73,7 +79,7 @@ Usage:
                [--sandbox[=none|auto|bwrap|container]]
                [--sandbox-net none|allow|allow:<host,…>]
                [--sandbox-image <ref>] [--sandbox-runtime docker|podman]
-               [--cost-table <path>] [--workspace <dir>] [--resume <runId>]
+               [--cost-table <path>] [--baseline <ref>] [--workspace <dir>] [--resume <runId>]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
                [--stream] [--stream-transcript] [--stream-file <path>]
 
@@ -92,6 +98,14 @@ Goal / intent / rubric input (choose ONE source per field):
 Verification:
   --verify-cmd   point at an existing command that must exit 0
   --generate     have the agent author the verification (optionally guided by --intent)
+
+Diff baseline (issue #47 — keep a run's diff small without touching the user's git history):
+  --baseline <ref>  compute the worker's diff (the approver's Gate-B input) against <ref> — any git
+                    ref or SHA — instead of HEAD. Validated to resolve before the run starts
+                    (fail-closed on an unknown ref). Use it to chain multi-step builds: point run
+                    N+1 at where run N finished, so each run reviews only its own delta — no
+                    user-visible commits required. The no-op tree hash that drives stuck-detection is
+                    unaffected (it always hashes the working tree). Precedence: CLI flag > config.
 
 Stuck-detection tuning:
   --diff-ignore "<p1,p2,…>"  comma-separated extra paths kept OUT of the working-tree hash that
@@ -302,6 +316,7 @@ export async function parseArgs(
     models: parseModels(flags),
     llmProvider: parseLlmProvider(str(flags, 'llm-provider')),
     workspace: str(flags, 'workspace') ?? process.cwd(),
+    baseline: str(flags, 'baseline'),
     resumeRunId: str(flags, 'resume'),
     logLevel: parseLogLevel(str(flags, 'log-level')),
     logFile: str(flags, 'log-file'),
@@ -494,6 +509,7 @@ function baseArgs(
     models: ModelSelection.parse({}),
     llmProvider: 'claude',
     workspace,
+    baseline: undefined,
     resumeRunId: undefined,
     logLevel: 'info',
     logFile: undefined,

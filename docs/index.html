@@ -355,6 +355,7 @@
           <tr><td class="feat">Gate A</td><td>human approve / revise (feedback) / reject · <code>--autonomous</code> auto-accept (still frozen + logged)</td></tr>
           <tr><td class="feat">Gate B</td><td><span class="yes">✓</span> independent approver, veto-only, every iteration</td></tr>
           <tr><td class="feat">Stuck detection</td><td>no-diff · repeat-failure · oscillation · budget</td></tr>
+          <tr><td class="feat">Diff baseline</td><td><code>--baseline &lt;ref&gt;</code> — compute the worker's diff (the Gate-B approver's input) against any git ref/SHA instead of <code>HEAD</code> · chain a multi-step build with no commits onto the user's branch (each run reviews only its delta) · validated to resolve <b>before the run starts</b> (fail-closed on an unknown ref) · precedence <code>CLI &gt; config</code> · changes only what <code>diff()</code> is computed <i>against</i> — the working-tree hash driving stuck-detection is unaffected · goaly can also advance it <b>internally</b> via a private <code>git write-tree</code> snapshot (<b>no commit, no <code>HEAD</code>/branch/index move</b>; objects dangle, gc-collectable) recorded so <code>--resume</code> reconstructs it</td></tr>
           <tr><td class="feat">Budget</td><td><code>--budget-tokens</code> · <code>--budget-wall-ms</code>, independent of iteration count · the token cap governs <b>total</b> spend (harness + LLM steps)</td></tr>
           <tr><td class="feat">Spend report</td><td><span class="yes">✓</span> per-run token breakdown by layer — harness vs. the LLM steps (compiler / judge / approver) — vs. the budget cap, folded from the log so <code>--resume</code> and <code>goaly runs show</code> rebuild it · totals count <b>every category incl. cache</b> (input + output + cache-read + cache-write), surfaced as a per-category split — so cache-heavy providers aren't undercounted · missing usage degrades to <code>unknown</code> · when a step <b>streams</b> but reports no usage, spend is <b>estimated</b> locally from the turns (~4 chars/token) and marked estimated-vs-reported (still counts against the cap) · optional USD cost via <code>--cost-table</code> (model → flat $/1M <b>or per-category</b> rates), tokens-only by default</td></tr>
           <tr><td class="feat">Resume</td><td><span class="yes">✓</span> <code>--resume run-&lt;id&gt;</code> — replay-fold from the write-ahead log</td></tr>
@@ -397,6 +398,9 @@ goaly run --goal <span class="str">"add a /health endpoint"</span> \
 goaly run --goal <span class="str">"…"</span> --harness codex \
   --max-iterations 8 --budget-tokens 500000
 goaly run --goal <span class="str">"…"</span> --resume run-&lt;id&gt;
+
+<span class="cmt"># diff against a baseline instead of HEAD — small diffs across a multi-step build, no commits</span>
+goaly run --goal <span class="str">"step 2"</span> --baseline <span class="str">&lt;ref-or-sha&gt;</span>
 
 <span class="cmt"># model for the harness + a different model (and CLI) for the LLM steps</span>
 goaly run --goal <span class="str">"…"</span> --model <span class="str">claude-opus-4-8</span> \

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { GitWorkspace } from './git-workspace';
+import { GitWorkspace, refResolves } from './git-workspace';
 import type { ExecFn, RunExecWrapper } from './git-workspace';
 
 /** Run a git command synchronously in `cwd`, throwing on failure (setup only). */
@@ -254,5 +254,101 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(result.exitCode).toBe(0);
     // The wrapped exec rewrote the command to the synthetic 'JAILED' binary — proof run() used it.
     expect(plumbingCalls[before]?.[0]).toBe('JAILED');
+  });
+
+  // ---- diff baseline + internal checkpoints (issue #47) -------------------
+
+  it('setBaseline retargets diff() without affecting the no-op tree hash (diffHash)', async () => {
+    const ws = new GitWorkspace(root);
+    // Make a tracked change vs HEAD.
+    await writeFile(join(root, 'file.txt'), 'changed-line\n');
+
+    const vsHead = await ws.diff();
+    expect(vsHead).toContain('changed-line'); // the default baseline is HEAD
+
+    const hashBefore = await ws.diffHash();
+    // Point the baseline at the current tree (its own SHA): diff() now shows nothing, because the
+    // working tree equals the baseline.
+    const tree = await ws.checkpoint();
+    const vsCheckpoint = await ws.diff();
+    expect(vsCheckpoint).toBe(''); // no delta against a baseline that IS the current tree
+
+    // diffHash is the WORKING-TREE content hash — independent of the baseline (invariant #8). It must
+    // not move just because the baseline did, so stuck-detection stays meaningful.
+    expect(await ws.diffHash()).toBe(hashBefore);
+    expect(tree).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('checkpoint advances the baseline so the NEXT diff is only the delta since the snapshot', async () => {
+    const ws = new GitWorkspace(root);
+    await writeFile(join(root, 'file.txt'), 'first step\n');
+    await ws.checkpoint(); // baseline := tree-after-first-step
+
+    // A second change: diff() must show ONLY the new delta, not the cumulative change from HEAD.
+    await writeFile(join(root, 'file.txt'), 'second step\n');
+    const delta = await ws.diff();
+    expect(delta).toContain('second step');
+    expect(delta).toContain('-first step'); // the previous content is the baseline, shown as removed
+    expect(delta).not.toContain('hello'); // the original committed content is below the baseline
+  });
+
+  it('checkpoint never writes a commit and never moves HEAD/the branch (no user-visible footprint)', async () => {
+    const ws = new GitWorkspace(root);
+    const headBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout;
+    const logBefore = spawnSync('git', ['log', '--oneline'], { cwd: root, encoding: 'utf8' }).stdout;
+    const branchBefore = spawnSync('git', ['symbolic-ref', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout;
+
+    await writeFile(join(root, 'file.txt'), 'work in progress\n');
+    await ws.checkpoint();
+
+    expect(spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout).toBe(headBefore);
+    expect(spawnSync('git', ['log', '--oneline'], { cwd: root, encoding: 'utf8' }).stdout).toBe(logBefore);
+    expect(spawnSync('git', ['symbolic-ref', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout).toBe(branchBefore);
+    // And no goaly ref was left behind (objects may dangle, but never a leftover ref).
+    const refs = spawnSync('git', ['for-each-ref', 'refs/goaly'], { cwd: root, encoding: 'utf8' }).stdout;
+    expect(refs).toBe('');
+  });
+
+  it("checkpoint leaves the user's index/staging area untouched", async () => {
+    const ws = new GitWorkspace(root);
+    // Pre-stage a change in the REAL index, plus an unstaged change in another file.
+    await writeFile(join(root, 'staged.txt'), 'staged content\n');
+    git(root, 'add', 'staged.txt');
+    await writeFile(join(root, 'file.txt'), 'unstaged edit\n');
+
+    const statusBefore = spawnSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).stdout;
+    await ws.checkpoint();
+    const statusAfter = spawnSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).stdout;
+
+    // The throwaway GIT_INDEX_FILE means the real index is byte-for-byte unchanged: the staged file
+    // is still staged ('A '), the unstaged edit still unstaged (' M').
+    expect(statusAfter).toBe(statusBefore);
+    expect(statusAfter).toContain('A  staged.txt');
+    expect(statusAfter).toContain(' M file.txt');
+  });
+
+  it('diff() empty-tree fallback still works when there is no HEAD (unborn branch)', async () => {
+    const bare = await mkdtemp(join(tmpdir(), 'goaly-gw-unborn-'));
+    try {
+      git(bare, 'init', '-q');
+      git(bare, 'config', 'user.email', 'test@example.com');
+      git(bare, 'config', 'user.name', 'Test User');
+      await writeFile(join(bare, 'fresh.txt'), 'brand new\n');
+      git(bare, 'add', '-A'); // staged but never committed ⇒ HEAD is unborn
+
+      const ws = new GitWorkspace(bare); // default baseline HEAD ⇒ falls back to the empty tree
+      const text = await ws.diff();
+      expect(text).toContain('fresh.txt');
+      expect(text).toContain('brand new');
+    } finally {
+      await rm(bare, { recursive: true, force: true });
+    }
+  });
+
+  it('refResolves is true for a real ref and false for an unknown one (fail-closed --baseline guard)', async () => {
+    expect(await refResolves(root, 'HEAD')).toBe(true);
+    const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim();
+    expect(await refResolves(root, sha)).toBe(true);
+    expect(await refResolves(root, 'no-such-ref')).toBe(false);
   });
 });

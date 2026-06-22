@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { formatOutcome } from './main';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { formatOutcome, main } from './main';
 import { formatUsage } from './usage-format';
 import type { RunOutcome } from '../domain/events';
 import type { UsageReport } from '../domain/usage';
@@ -113,5 +117,52 @@ describe('formatOutcome', () => {
   it('omits the spend block when usage is absent', () => {
     const text = formatOutcome(outcome({ usage: undefined }));
     expect(text).not.toContain('spend:');
+  });
+});
+
+describe('main() — --baseline validation (issue #47)', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'goaly-main-baseline-'));
+    const git = (...args: string[]): void => {
+      const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test User');
+    await writeFile(join(root, 'f.txt'), 'x\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** Capture process.stderr around a call so the usage error is asserted without leaking to the run. */
+  async function captureStderr(fn: () => Promise<number>): Promise<{ code: number; err: string }> {
+    const writes: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((s: string | Uint8Array): boolean => {
+      writes.push(typeof s === 'string' ? s : Buffer.from(s).toString());
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const code = await fn();
+      return { code, err: writes.join('') };
+    } finally {
+      process.stderr.write = orig;
+    }
+  }
+
+  it('refuses to start (exit 2) on an unresolvable --baseline, before any run', async () => {
+    const { code, err } = await captureStderr(() =>
+      main(['run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--baseline', 'no-such-ref']),
+    );
+    expect(code).toBe(2);
+    expect(err).toContain('--baseline no-such-ref');
   });
 });

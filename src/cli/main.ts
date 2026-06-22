@@ -6,6 +6,7 @@ import { composeDeps, STATE_DIR } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
 import { runRuns } from './runs';
 import { drive } from '../driver/driver';
+import { refResolves } from '../workspace/git-workspace';
 import { asRunId, type RunId } from '../domain/ids';
 import type { RunOutcome } from '../domain/events';
 import { resolveModels } from './models';
@@ -69,6 +70,18 @@ export async function main(argv: string[]): Promise<number> {
     }
   }
 
+  // Validate --baseline (issue #47) fail-closed BEFORE the run starts: an unknown ref refuses to
+  // start rather than silently degrading the diff (invariant #6, parse at the seam). On resume the
+  // baseline is reconstructed from the log instead, so the flag is moot then.
+  if (parsed.baseline !== undefined && parsed.resumeRunId === undefined) {
+    if (!(await refResolves(parsed.workspace, parsed.baseline))) {
+      process.stderr.write(
+        `--baseline ${parsed.baseline}: not a resolvable git ref in ${parsed.workspace}\n\n${USAGE}\n`,
+      );
+      return 2;
+    }
+  }
+
   const resuming = parsed.resumeRunId !== undefined;
   const runId: RunId =
     parsed.resumeRunId !== undefined ? asRunId(parsed.resumeRunId) : asRunId(`run-${randomUUID()}`);
@@ -92,6 +105,7 @@ export async function main(argv: string[]): Promise<number> {
         llmProvider: parsed.llmProvider,
         workspaceRoot: parsed.workspace,
         runId,
+        ...(parsed.baseline !== undefined ? { baseline: parsed.baseline } : {}),
         logLevel: parsed.logLevel,
         timeouts: parsed.timeouts,
         sandbox: parsed.sandbox,
