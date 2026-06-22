@@ -478,8 +478,9 @@ goaly runs show run-&lt;id&gt;</pre>
       </div>
       <div class="tabpane active" id="tab-cc">
         <dl class="kv">
-          <dt>fresh</dt><dd><code>claude -p "&lt;prompt&gt;" --output-format json</code></dd>
-          <dt>resume</dt><dd><code>claude -p "&lt;prompt&gt;" --output-format json --resume &lt;id&gt;</code></dd>
+          <dt>fresh</dt><dd><code>claude -p "&lt;prompt&gt;" --output-format json --permission-mode acceptEdits</code></dd>
+          <dt>resume</dt><dd><code>claude -p "&lt;prompt&gt;" --output-format json --permission-mode acceptEdits --resume &lt;id&gt;</code></dd>
+          <dt>writes ←</dt><dd><code>--permission-mode acceptEdits</code> — harness role needs to apply edits; headless <code>-p</code> auto-DENIES the edit prompt by default (read role omits it)</dd>
           <dt>prompt</dt><dd>argv (with a stdin fallback)</dd>
           <dt>output</dt><dd>json-object, or stream-json (one JSON object per line)</dd>
           <dt>result ←</dt><dd><code>.result</code> ?? <code>.text</code> ?? <code>.response</code></dd>

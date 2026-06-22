@@ -84,6 +84,7 @@ Every serious harness exposes these; find each for your target:
 | Capability | Claude Code | Codex | What you need |
 |---|---|---|---|
 | Headless / print invocation | `claude -p "<prompt>"` | `codex exec --full-auto "<prompt>"` | how to run one non-interactive turn |
+| Write autonomy *(harness role)* | `--permission-mode acceptEdits` | `--full-auto` | let the **write** role apply edits — both CLIs deny writes headlessly by default; the read-only LLM role omits it |
 | Structured output | `--output-format json` | `--json` (JSONL stream) | a machine-readable result |
 | Session resume | `--resume <id>` | `codex exec resume <id>` | continue the same conversation |
 | Streaming turns *(optional)* | `--output-format stream-json --verbose` | `--json` (already a JSONL stream) | per-turn events for live observability (issue #23) |

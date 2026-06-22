@@ -98,8 +98,10 @@ describe('ClaudeCodeAdapter', () => {
     expect(res.tokensUsed).toBe(123);
     // Result is a valid HarnessRunResult.
     expect(() => HarnessRunResult.parse(res)).not.toThrow();
-    // CLI contract: claude -p <prompt> --output-format json
-    expect(capture.args[0]).toEqual(['-p', 'do the thing', '--output-format', 'json']);
+    // CLI contract: claude -p <prompt> --output-format json --permission-mode acceptEdits
+    expect(capture.args[0]).toEqual([
+      '-p', 'do the thing', '--output-format', 'json', '--permission-mode', 'acceptEdits',
+    ]);
   });
 
   it('adds --resume <sessionId> when a session is provided', async () => {
@@ -117,6 +119,8 @@ describe('ClaudeCodeAdapter', () => {
       'continue',
       '--output-format',
       'json',
+      '--permission-mode',
+      'acceptEdits',
       '--resume',
       'sess-prev',
     ]);
@@ -131,11 +135,14 @@ describe('ClaudeCodeAdapter', () => {
     const adapter = new ClaudeCodeAdapter({ exec, model: 'opus-x' });
 
     await adapter.run('do it');
-    expect(capture.args[0]).toEqual(['-p', 'do it', '--output-format', 'json', '--model', 'opus-x']);
+    expect(capture.args[0]).toEqual([
+      '-p', 'do it', '--output-format', 'json', '--permission-mode', 'acceptEdits', '--model', 'opus-x',
+    ]);
 
     await adapter.run('again', SessionId.parse('sess-prev'));
     expect(capture.args[1]).toEqual([
-      '-p', 'again', '--output-format', 'json', '--model', 'opus-x', '--resume', 'sess-prev',
+      '-p', 'again', '--output-format', 'json', '--permission-mode', 'acceptEdits',
+      '--model', 'opus-x', '--resume', 'sess-prev',
     ]);
   });
 

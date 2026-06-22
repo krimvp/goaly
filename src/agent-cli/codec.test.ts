@@ -14,18 +14,21 @@ const sid = (s: string): SessionId => SessionId.parse(s);
  */
 describe('AgentCliCodec argv dialects', () => {
   describe('claude', () => {
-    it('harnessArgs: -p <prompt> --output-format json, then model, then resume', () => {
+    it('harnessArgs: -p <prompt> --output-format json --permission-mode acceptEdits, then model, then resume', () => {
       expect(claudeCodec.harnessArgs({ prompt: 'go', model: undefined, stream: false })).toEqual([
-        '-p', 'go', '--output-format', 'json',
+        '-p', 'go', '--output-format', 'json', '--permission-mode', 'acceptEdits',
       ]);
       expect(
         claudeCodec.harnessArgs({ prompt: 'go', model: 'opus', sessionId: sid('s-1'), stream: false }),
-      ).toEqual(['-p', 'go', '--output-format', 'json', '--model', 'opus', '--resume', 's-1']);
+      ).toEqual([
+        '-p', 'go', '--output-format', 'json', '--permission-mode', 'acceptEdits',
+        '--model', 'opus', '--resume', 's-1',
+      ]);
     });
 
-    it('harnessArgs: streaming swaps json → stream-json --verbose', () => {
+    it('harnessArgs: streaming swaps json → stream-json --verbose (still acceptEdits)', () => {
       expect(claudeCodec.harnessArgs({ prompt: 'go', model: undefined, stream: true })).toEqual([
-        '-p', 'go', '--output-format', 'stream-json', '--verbose',
+        '-p', 'go', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits',
       ]);
     });
 
@@ -133,7 +136,9 @@ describe('runCodecHarness', () => {
       code: 0,
     });
     const result = await runCodecHarness(spyCodec(captured), exec, 'opus', 'go', sid('prev'));
-    expect(captured.args[0]).toEqual(['-p', 'go', '--output-format', 'json', '--model', 'opus', '--resume', 'prev']);
+    expect(captured.args[0]).toEqual([
+      '-p', 'go', '--output-format', 'json', '--permission-mode', 'acceptEdits', '--model', 'opus', '--resume', 'prev',
+    ]);
     expect(result.status).toBe('completed');
     expect(result.output).toBe('done');
     expect(result.tokensUsed).toBe(9);
