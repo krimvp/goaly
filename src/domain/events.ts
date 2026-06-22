@@ -25,6 +25,13 @@ export const BudgetSnapshot = z.object({
   tokensSpent: z.number().int().nonnegative().optional(),
   /** The portion of `tokensSpent` that is a local estimate (issue #24). Omitted when none was. */
   tokensEstimated: z.number().int().nonnegative().optional(),
+  /**
+   * True when ≥1 token-spending call reported NO usage and could not be estimated, so
+   * `tokensSpent` understates true spend — the token cap is partially blind and wall-clock is the
+   * real backstop. Surfaced loudly (logged + in the report) rather than silently read as zero spend
+   * (invariant #4, fail-closed). Omitted when every call's spend was accounted for.
+   */
+  tokensUnknown: z.boolean().optional(),
   wallClockMs: z.number().int().nonnegative().optional(),
   exceeded: z.boolean(),
 });

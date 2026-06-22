@@ -97,12 +97,16 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   // plain LlmProvider, and an injected test `llm` is metered just the same.
   const llmMeter = new LlmTokenMeter();
   const clock = new SystemClock();
-  const workspace = new GitWorkspace(options.workspaceRoot);
+  // Keep the orchestrator's own state dir AND any user-listed verifier artifacts out of the
+  // tree hash, so stuck-detection sees only the agent's real work — not coverage dirs / build output
+  // a verifier drops between iterations. Deduped so an explicit `.goaly` in --diff-ignore is a no-op.
+  const excludes = [...new Set([STATE_DIR, ...config.diffIgnore])];
+  const workspace = new GitWorkspace(options.workspaceRoot, undefined, excludes);
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
   const logger = options.logger ?? buildRunLogger(options, stateDir);
   const streamSink = buildStreamSink(options, logger);
 
-  // Warn loudly when the "two independent keys" collapse onto one model (finding C3). Skipped when
+  // Warn loudly when the "two independent keys" collapse onto one model. Skipped when
   // the caller injects its own `llm` — then the resolved per-seam models are not what runs, so the
   // wiring warning would be misleading (and noisy in tests/embedders).
   if (options.llm === undefined) {
@@ -270,7 +274,7 @@ export function buildLadder(
           llm,
         }),
   );
-  // Pin compiler-authored verification files (finding C1): a guard runs FIRST and fails closed if
+  // Pin compiler-authored verification files: a guard runs FIRST and fails closed if
   // any frozen generated file was modified/removed, so the worker can't rewrite the bar the frozen
   // command measures. No generated files ⇒ no guard (the common --verify-cmd path is unchanged).
   if (contract.generatedFiles.length > 0) {

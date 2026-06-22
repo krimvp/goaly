@@ -109,10 +109,13 @@ stabilized:
 
 - **Freeze the rubric in the compile phase** — judging criteria authored once,
   approved, frozen. The bar can't drift to meet the work.
-- **Temperature 0 + structured output** — force a schema
-  `{pass, confidence, failing_criteria[]}`, no free-form "looks good."
+- **Structured output** — force a schema `{pass, confidence, failing_criteria[]}`,
+  no free-form "looks good."
 - **Quorum, not a single call** — best-of-N (e.g. 3) majority vote + a confidence
-  floor.
+  floor. A multi-sample quorum samples at a small **diversity temperature** (not 0) so
+  best-of-N actually reduces variance instead of re-rolling the same near-deterministic
+  answer N times; a single-sample (`quorum = 1`) judge stays at temperature 0 for maximal
+  stability.
 - **Independent from the worker** — different context (ideally different model), fed
   only goal + frozen rubric + diff + deterministic-check output, *not* the worker's
   self-justification. The grader must not be the one who did the work.

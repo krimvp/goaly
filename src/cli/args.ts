@@ -59,6 +59,7 @@ Usage:
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
                [--max-gate-a-revisions N] [--budget-tokens N] [--budget-wall-ms N]
+               [--diff-ignore "<p1,p2,…>"]
                [--harness claude-code|codex|droid] [--model <m>] [--llm-model <m>]
                [--llm-provider claude|codex|droid] [--harness-timeout-ms N]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
@@ -81,6 +82,13 @@ Goal / intent / rubric input (choose ONE source per field):
 Verification:
   --verify-cmd   point at an existing command that must exit 0
   --generate     have the agent author the verification (optionally guided by --intent)
+
+Stuck-detection tuning:
+  --diff-ignore "<p1,p2,…>"  comma-separated extra paths kept OUT of the working-tree hash that
+                             drives no-diff/oscillation detection, beyond the always-excluded
+                             .goaly state dir. List verifier-produced artifacts (e.g.
+                             "coverage,__pycache__,dist") so a verifier's side effects between
+                             iterations don't make a no-op agent look like it changed something.
 
 Model selection (all optional; default = each tool's own default):
   --model <m>           model for the harness AND the LLM steps (the global default)
@@ -245,6 +253,7 @@ export async function parseArgs(
     ...(str(flags, 'budget-wall-ms') !== undefined
       ? { budgetWallClockMs: str(flags, 'budget-wall-ms') }
       : {}),
+    ...(str(flags, 'diff-ignore') !== undefined ? { diffIgnore: str(flags, 'diff-ignore') } : {}),
   });
 
   const harness = parseHarness(str(flags, 'harness'));

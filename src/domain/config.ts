@@ -56,6 +56,14 @@ export const RunConfig = z.object({
   budget: BudgetConfig.default({}),
   stuckPolicy: StuckPolicy.default({}),
   /**
+   * Extra paths kept out of `diffHash`/`diff` beyond the orchestrator's own `.goaly` state dir.
+   * Verifier side effects (coverage dirs, `__pycache__`, build output) otherwise land between
+   * the iter-N and iter-N+1 tree snapshots and make a no-op agent look like it changed something —
+   * list those artifact paths here so stuck-detection hashes only the agent's real work. Pure
+   * wiring; never enters the frozen contract.
+   */
+  diffIgnore: z.array(z.string().min(1)).default([]),
+  /**
    * Quorum size + confidence floor for any LLM-judge rung. Frozen with the contract.
    */
   judge: z
@@ -83,6 +91,8 @@ export const CliInput = z.object({
   maxIterations: z.coerce.number().int().positive().optional(),
   budgetTokens: z.coerce.number().int().positive().optional(),
   budgetWallClockMs: z.coerce.number().int().positive().optional(),
+  /** Comma-separated extra paths to keep out of diffHash/diff. */
+  diffIgnore: z.string().optional(),
 });
 export type CliInput = z.infer<typeof CliInput>;
 
@@ -97,6 +107,15 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
   if (input.budgetTokens !== undefined) budget.tokens = input.budgetTokens;
   if (input.budgetWallClockMs !== undefined) budget.wallClockMs = input.budgetWallClockMs;
 
+  // Split the comma-separated --diff-ignore into trimmed, non-empty paths.
+  const diffIgnore =
+    input.diffIgnore !== undefined
+      ? input.diffIgnore
+          .split(',')
+          .map((p) => p.trim())
+          .filter((p) => p.length > 0)
+      : [];
+
   return RunConfig.parse({
     goal: input.goal,
     verifier,
@@ -107,5 +126,6 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
       : {}),
     ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
     budget,
+    ...(diffIgnore.length > 0 ? { diffIgnore } : {}),
   } satisfies RunConfigInput);
 }

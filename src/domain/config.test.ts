@@ -9,6 +9,7 @@ describe('RunConfig', () => {
     expect(c.maxGateARevisions).toBe(10);
     expect(c.stuckPolicy).toEqual({ noDiff: true, repeatFailureThreshold: 3, oscillation: true });
     expect(c.judge).toEqual({ quorum: 3, confidenceFloor: 0.66 });
+    expect(c.diffIgnore).toEqual([]);
   });
 
   it('rejects an empty goal', () => {
@@ -66,5 +67,21 @@ describe('cliInputToRunConfig', () => {
   it('defaults to a generate verifier when no command is given', () => {
     const c = cliInputToRunConfig(CliInput.parse({ goal: 'g' }));
     expect(c.verifier.kind).toBe('generate');
+  });
+
+  it('splits a comma-separated --diff-ignore into trimmed paths', () => {
+    const input = CliInput.parse({ goal: 'g', verifyCmd: 'true', diffIgnore: 'coverage, __pycache__ ,dist' });
+    const c = cliInputToRunConfig(input);
+    expect(c.diffIgnore).toEqual(['coverage', '__pycache__', 'dist']);
+  });
+
+  it('omits diffIgnore (defaults to []) when the flag is absent or blank', () => {
+    expect(cliInputToRunConfig(CliInput.parse({ goal: 'g', verifyCmd: 'true' })).diffIgnore).toEqual(
+      [],
+    );
+    expect(
+      cliInputToRunConfig(CliInput.parse({ goal: 'g', verifyCmd: 'true', diffIgnore: ' , ' }))
+        .diffIgnore,
+    ).toEqual([]);
   });
 });

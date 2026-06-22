@@ -34,6 +34,11 @@ export type FakeRunScript = {
   tokensUsed?: number;
   /** When set (with a wired FakeWorkspace), advances the workspace hash, simulating a change. */
   postHash?: string;
+  /**
+   * When set (with a wired FakeWorkspace), updates the `.gitignore` content hash during the run —
+   * simulates the agent adding/editing a `.gitignore` entry mid-run (the gitignore-change warning).
+   */
+  gitignoreHash?: string;
   /** When set, `run()` throws — used to simulate a mid-loop crash for resume tests. */
   throwError?: string;
 };
@@ -58,6 +63,9 @@ export class FakeHarness implements HarnessAdapter {
     if (s.throwError !== undefined) throw new Error(s.throwError);
     if (s.postHash !== undefined && this.#workspace !== undefined) {
       this.#workspace.setHash(s.postHash);
+    }
+    if (s.gitignoreHash !== undefined && this.#workspace !== undefined) {
+      this.#workspace.setFileHash('.gitignore', s.gitignoreHash);
     }
     const sid = sessionId ?? SessionId.parse('fake-session-1');
     return HarnessRunResult.parse({
@@ -157,7 +165,7 @@ export class FakeWorkspace implements Workspace {
   setHash(hash: string): void {
     this.#hash = hash;
   }
-  /** Stub a file's content hash (the C1 guard reads this); `null` clears it (simulates deletion). */
+  /** Stub a file's content hash (the integrity guard reads this); `null` clears it (simulates deletion). */
   setFileHash(relPath: string, sha256: string | null): void {
     if (sha256 === null) this.#fileHashes.delete(relPath);
     else this.#fileHashes.set(relPath, sha256);

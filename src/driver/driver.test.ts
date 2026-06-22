@@ -451,4 +451,55 @@ describe('drive() — diagnostic logging', () => {
     expect(err?.msg).toBe('compile failed');
     expect(err?.fields).toMatchObject({ reason: 'cannot author a verifier' });
   });
+
+  it('warns loudly when the harness reports no token usage', async () => {
+    const { logger, records } = recordingLogger('debug');
+    const { deps } = wire({
+      scripts: [{ postHash: '0000001' }], // no tokensUsed → unaccounted spend
+      verdicts: [passVerdict()],
+      approvals: [approve()],
+      logger,
+    });
+
+    await drive(deps, makeConfig({ goal: 'make the thing work' }), runId);
+
+    const warn = records.find(
+      (r) => r.level === 'warn' && r.msg.includes('harness reported no token usage'),
+    );
+    expect(warn).toBeDefined();
+  });
+
+  it('does not warn about token usage when the harness reports it', async () => {
+    const { logger, records } = recordingLogger('debug');
+    const { deps } = wire({
+      scripts: [{ postHash: '0000001', tokensUsed: 1234 }],
+      verdicts: [passVerdict()],
+      approvals: [approve()],
+      logger,
+    });
+
+    await drive(deps, makeConfig({ goal: 'make the thing work' }), runId);
+
+    const warn = records.find(
+      (r) => r.level === 'warn' && r.msg.includes('harness reported no token usage'),
+    );
+    expect(warn).toBeUndefined();
+  });
+
+  it('warns when .gitignore changes during the agent run', async () => {
+    const { logger, records } = recordingLogger('debug');
+    const { deps } = wire({
+      scripts: [{ postHash: '0000001', gitignoreHash: 'a'.repeat(64) }],
+      verdicts: [passVerdict()],
+      approvals: [approve()],
+      logger,
+    });
+
+    await drive(deps, makeConfig({ goal: 'make the thing work' }), runId);
+
+    const warn = records.find(
+      (r) => r.level === 'warn' && r.msg.includes('.gitignore changed'),
+    );
+    expect(warn).toBeDefined();
+  });
 });

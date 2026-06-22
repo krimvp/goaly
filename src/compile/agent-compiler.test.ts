@@ -158,7 +158,7 @@ describe('AgentCompiler — generate verifier', () => {
   });
 });
 
-describe('isVacuousCommand (C4)', () => {
+describe('isVacuousCommand', () => {
   it('flags trivially-passing no-ops', () => {
     for (const cmd of ['true', ':', 'exit 0', 'exit', '  true  ', 'true; :', 'true && exit 0', '']) {
       expect(isVacuousCommand(cmd)).toBe(true);
@@ -172,7 +172,7 @@ describe('isVacuousCommand (C4)', () => {
   });
 });
 
-describe('AgentCompiler — vacuous generated command (C4)', () => {
+describe('AgentCompiler — vacuous generated command', () => {
   it('refuses to freeze a contract whose authored command trivially passes', async () => {
     const llm = new FakeLlm([JSON.stringify({ command: 'true', rubric: '' })]);
     const compiler = new AgentCompiler({ llm });

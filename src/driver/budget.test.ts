@@ -49,6 +49,39 @@ describe('SystemBudgetMeter', () => {
     expect(snap.tokensEstimated).toBe(100);
   });
 
+  it('marks the budget unknown (not zero) when a call reports no usage', () => {
+    const meter = new SystemBudgetMeter({ tokens: 100 }, new ManualClock(0));
+    meter.record(undefined); // a harness/LLM call that surfaced no usage
+    const snap = meter.snapshot();
+    // Not silently zero: the gap is marked so wall-clock is understood to dominate.
+    expect(snap.tokensSpent).toBe(0);
+    expect(snap.tokensUnknown).toBe(true);
+    expect(snap.exceeded).toBe(false);
+  });
+
+  it('keeps the unknown mark sticky once any call was unaccounted', () => {
+    const meter = new SystemBudgetMeter({}, new ManualClock(0));
+    meter.record(undefined); // blind call
+    meter.record(50); // a later reported call
+    const snap = meter.snapshot();
+    expect(snap.tokensSpent).toBe(50);
+    expect(snap.tokensUnknown).toBe(true);
+  });
+
+  it('counts a batched step’s own unaccounted sub-calls as unknown', () => {
+    const meter = new SystemBudgetMeter({}, new ManualClock(0));
+    // A judge quorum summed to 30 tokens but one of its samples reported nothing.
+    meter.record(30, 0, { unknownCalls: 1 });
+    expect(meter.snapshot().tokensUnknown).toBe(true);
+  });
+
+  it('omits tokensUnknown when every call was accounted for', () => {
+    const meter = new SystemBudgetMeter({}, new ManualClock(0));
+    meter.record(10);
+    meter.record(20, 5);
+    expect(meter.snapshot().tokensUnknown).toBeUndefined();
+  });
+
   it('with no caps configured, never exceeded regardless of spend or elapsed time', () => {
     const clock = new ManualClock(0);
     const meter = new SystemBudgetMeter({}, clock);

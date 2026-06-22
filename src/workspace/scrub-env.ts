@@ -1,6 +1,6 @@
 /**
- * Strip credential-looking variables from an environment before it is handed to the verify command
- * (finding C5). The verifier runs worker-authored code on the host every iteration; in `--autonomous`
+ * Strip credential-looking variables from an environment before it is handed to the verify command.
+ * The verifier runs worker-authored code on the host every iteration; in `--autonomous`
  * `--generate` that code is entirely model-authored. Leaking the parent process's secrets (API keys,
  * cloud credentials, tokens) into it is an exfiltration channel that has nothing to do with checking
  * whether the goal was met. We cannot sandbox the host portably without new deps, but we can deny the

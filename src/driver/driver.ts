@@ -219,6 +219,7 @@ function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void
         ...(event.budget.tokensEstimated !== undefined
           ? { tokensEstimated: event.budget.tokensEstimated }
           : {}),
+        ...(event.budget.tokensUnknown === true ? { tokensUnknown: true } : {}),
         budgetExceeded: event.budget.exceeded,
       });
       if (command.tag === 'RUN_AGENT') {
@@ -252,12 +253,26 @@ async function perform(
   ladder: Verifier | null,
   llmMeter: LlmTokenMeter,
 ): Promise<Performed> {
+  const log = deps.logger ?? noopLogger;
+
   // Read the LLM spend accrued by THIS command (the loop is sequential, so the meter holds only the
   // call(s) just made) and count it against the token budget so the cap governs total spend, not
   // just the harness. Returns the per-event usage to persist, or undefined when no LLM call ran.
-  const meterStep = (): TokenUsage | undefined => {
+  const meterStep = (step: string): TokenUsage | undefined => {
     const usage = deltaToUsage(llmMeter.take());
-    if (usage !== undefined) deps.budget.record(usage.tokens, usage.estimatedTokens ?? 0);
+    if (usage !== undefined) {
+      deps.budget.record(usage.tokens, usage.estimatedTokens ?? 0, {
+        unknownCalls: usage.unknownCalls,
+      });
+      // Loud, not silent: an unaccounted LLM call means the token cap can't see this spend, so
+      // wall-clock is the real backstop for it. Surfaced at warn level rather than read as zero.
+      if (usage.unknownCalls > 0) {
+        log.warn('llm step reported no token usage — token budget is partly blind, wall-clock governs', {
+          step,
+          unknownCalls: usage.unknownCalls,
+        });
+      }
+    }
     return usage;
   };
 
@@ -265,13 +280,13 @@ async function perform(
     case 'COMPILE_VERIFIER': {
       try {
         const contract = await deps.compiler.compile(command.config, command.feedback);
-        const llm = meterStep();
+        const llm = meterStep('compile');
         return {
           event: { tag: 'CONTRACT_COMPILED', contract, ...(llm !== undefined ? { llm } : {}) },
           ladder: deps.makeLadder(contract),
         };
       } catch (e) {
-        const llm = meterStep();
+        const llm = meterStep('compile');
         return {
           event: { tag: 'COMPILE_FAILED', reason: errorMessage(e), ...(llm !== undefined ? { llm } : {}) },
         };
@@ -286,6 +301,10 @@ async function perform(
     case 'RUN_AGENT': {
       try {
         const prevDiffHash = await deps.workspace.diffHash();
+        // Snapshot .gitignore around the agent run so a NEW ignore entry appearing mid-run is loud
+        // diffHash honours .gitignore, so a worker that adds one can hide changes from
+        // stuck-detection. We warn rather than block — it may be legitimate — but never go silent.
+        const prevGitignore = await deps.workspace.fileHash('.gitignore');
         // Tap the agent run's turns (phase `agent`) when a stream sink is wired. The StreamTap
         // inside the adapter guards the sink, so a throwing consumer never affects the run.
         const onEvent =
@@ -298,7 +317,18 @@ async function perform(
         const estimated =
           run.tokenSource === 'estimated' && run.tokensUsed !== undefined ? run.tokensUsed : 0;
         deps.budget.record(run.tokensUsed, estimated);
+        // Loud, not silent: a harness that surfaces no usage AND couldn't be estimated leaves
+        // the token cap blind for this iteration — wall-clock is the only backstop. Mark it.
+        if (run.tokensUsed === undefined) {
+          log.warn('harness reported no token usage — token budget is blind, wall-clock governs', {
+            status: run.status,
+          });
+        }
         const diffHash = await deps.workspace.diffHash();
+        const postGitignore = await deps.workspace.fileHash('.gitignore');
+        if (prevGitignore !== postGitignore) {
+          log.warn('.gitignore changed during the agent run — changes under new ignores are hidden from diffHash', {});
+        }
         const budget = deps.budget.snapshot();
         return { event: { tag: 'AGENT_RAN', run, prevDiffHash, diffHash, budget } };
       } catch (e) {
@@ -331,7 +361,7 @@ async function perform(
         command.contract.goal,
         command.contract.rubric,
       );
-      const llm = meterStep();
+      const llm = meterStep('verify');
       return { event: { tag: 'VERIFIED', verdict, ...(llm !== undefined ? { llm } : {}) } };
     }
 
@@ -345,11 +375,11 @@ async function perform(
           diff,
           verdicts: command.verdicts,
         });
-        const llm = meterStep();
+        const llm = meterStep('approve');
         return { event: { tag: 'GATE_B_DECIDED', approval, ...(llm !== undefined ? { llm } : {}) } };
       } catch (e) {
         // Fail-closed: an approver that errors is treated as a veto, never a green.
-        const llm = meterStep();
+        const llm = meterStep('approve');
         return {
           event: {
             tag: 'GATE_B_DECIDED',

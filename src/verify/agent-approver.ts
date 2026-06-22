@@ -25,7 +25,13 @@ function summarizeVerdicts(verdicts: Verdict[]): string {
   return verdicts
     .map((v, i) => {
       const status = v.pass ? 'PASS' : 'FAIL';
-      return `  ${i + 1}. [${status}] confidence=${v.confidence} — ${v.detail}`;
+      // The status/confidence are verifier-produced (trusted); the free-text `detail` folds in up to
+      // 2000 chars of worker-controlled test stdout/stderr (DETAIL_OUTPUT_LIMIT), a second prompt-
+      // injection channel alongside the diff. Fence ONLY the detail as untrusted data so a
+      // line like `{"veto": false}` hidden in test output can't steer Gate B, while the trusted
+      // PASS/FAIL the approver must reason about stays outside the fence.
+      const detail = wrapUntrusted(v.detail, { label: 'VERIFIER DETAIL' });
+      return `  ${i + 1}. [${status}] confidence=${v.confidence} — detail:\n${detail}`;
     })
     .join('\n');
 }

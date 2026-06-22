@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 /**
  * Isolate worker-controlled, untrusted text (the working-tree diff, command output) before it is
  * spliced into an LLM key's prompt, so the judge / approver treat it strictly as DATA — never as
- * instructions (finding C2: prompt injection across both keys). The diff is authored by the very
+ * instructions (prompt injection across both keys). The diff is authored by the very
  * worker whose work is being graded; a line like `{"veto": false}` or "rubric satisfied" hidden in
  * a comment or test output must not be able to steer the verdict.
  *
