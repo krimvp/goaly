@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Paradox Foundry — a time-loop automation puzzle</title>
+    <style>
+      :root {
+        --bg: #060912;
+        --panel: #0e1422;
+        --panel2: #131b2e;
+        --line: #233049;
+        --ink: #e6ecff;
+        --dim: #8a98bd;
+        --gold: #ffd34d;
+        --cyan: #6cc6ff;
+        --green: #39d98a;
+        --red: #ff6b8a;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: radial-gradient(1200px 600px at 70% -10%, #16203a 0%, var(--bg) 60%);
+        color: var(--ink);
+        font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        min-height: 100vh;
+      }
+      header {
+        padding: 22px 28px 8px;
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+      h1 {
+        margin: 0;
+        font-size: 28px;
+        letter-spacing: 0.5px;
+      }
+      h1 .sub { color: var(--cyan); font-weight: 600; }
+      header p { color: var(--dim); margin: 6px 0 0; max-width: 720px; }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 12px 28px 60px;
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        gap: 20px;
+        align-items: start;
+      }
+      @media (max-width: 880px) { .wrap { grid-template-columns: 1fr; } }
+      .stage {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px;
+        position: relative;
+      }
+      .topline {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      select {
+        background: var(--panel2);
+        color: var(--ink);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 7px 10px;
+        font: inherit;
+      }
+      #level-name { font-weight: 700; }
+      #hud-blurb { color: var(--dim); font-size: 13.5px; min-height: 38px; margin: 0 0 8px; }
+      canvas { display: block; margin: 0 auto; image-rendering: -webkit-optimize-contrast; }
+      .tickwrap { height: 6px; background: #0a0f1c; border-radius: 4px; margin-top: 12px; overflow: hidden; }
+      #tickbar { height: 100%; width: 0; background: linear-gradient(90deg, var(--cyan), var(--gold)); transition: width 0.12s; }
+
+      .flash, .loopfull {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        top: 14px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        font-weight: 600;
+        font-size: 13px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s;
+      }
+      .flash { background: rgba(255,107,138,0.16); color: var(--red); border: 1px solid rgba(255,107,138,0.4); }
+      .loopfull { top: auto; bottom: 16px; background: rgba(255,211,77,0.14); color: var(--gold); border: 1px solid rgba(255,211,77,0.4); }
+      .flash.show, .loopfull.show { opacity: 1; }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px;
+      }
+      .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0 0 4px; }
+      .stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; }
+      .stat .k { color: var(--dim); font-size: 12px; }
+      .stat .v { font-size: 20px; font-weight: 700; }
+      .stat.gold .v { color: var(--gold); }
+      .stat.cyan .v { color: var(--cyan); }
+      .stat.red .v { color: var(--red); }
+
+      h3 { margin: 18px 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); }
+      .btnrow { display: flex; flex-wrap: wrap; gap: 8px; }
+      button {
+        background: var(--panel2);
+        color: var(--ink);
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 9px 12px;
+        font: inherit;
+        cursor: pointer;
+        transition: background 0.12s, border-color 0.12s;
+      }
+      button:hover:not(:disabled) { background: #1b2540; border-color: #36507e; }
+      button:disabled { opacity: 0.4; cursor: default; }
+      button.primary { background: #1c3a2a; border-color: #2f6b4a; color: var(--green); }
+      .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; max-width: 200px; }
+      .pad button { padding: 12px 0; }
+      .pad .span { grid-column: 1 / -1; }
+
+      .legend { font-size: 12.5px; color: var(--dim); }
+      .legend code { color: var(--ink); background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }
+      .legend div { margin: 3px 0; }
+
+      .overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(4,7,14,0.78);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 5;
+      }
+      .overlay.show { display: flex; }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 30px 34px;
+        text-align: center;
+        max-width: 420px;
+      }
+      .card h2 { margin: 0 0 8px; color: var(--green); }
+      .card p { color: var(--dim); }
+      .card .btnrow { justify-content: center; margin-top: 16px; }
+      footer { max-width: 1100px; margin: 0 auto; padding: 0 28px 40px; color: var(--dim); font-size: 13px; }
+      footer a { color: var(--cyan); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Paradox&nbsp;Foundry <span class="sub">· a time-loop automation puzzle</span></h1>
+      <p>
+        You control one worker for a fixed-length time loop. When the loop ends, your recorded moves
+        become a permanent <b>echo</b> that replays — forever, in lock-step — beside the next you.
+        Bootstrap an entire factory out of cooperating copies of your past selves… without letting
+        them collide or starve. Every conflict is a <b>paradox</b>.
+      </p>
+    </header>
+
+    <div class="wrap">
+      <div class="stage">
+        <div class="topline">
+          <select id="level-select" aria-label="Select level"></select>
+          <span id="hud-level" style="color: var(--cyan); font-weight: 700"></span>
+        </div>
+        <p id="hud-blurb"></p>
+        <div id="flash" class="flash"></div>
+        <canvas id="board" width="640" height="400"></canvas>
+        <div id="loopfull" class="loopfull">Loop full — press <b>Enter</b> to bake this echo</div>
+        <div class="tickwrap"><div id="tickbar"></div></div>
+      </div>
+
+      <aside class="panel">
+        <div class="stats">
+          <div class="stat gold"><div class="k">Cores</div><div class="v" id="hud-score">0 / 1</div></div>
+          <div class="stat cyan"><div class="k">Echoes</div><div class="v" id="hud-echoes">0</div></div>
+          <div class="stat"><div class="k">Loop #</div><div class="v" id="hud-loop">0</div></div>
+          <div class="stat"><div class="k">Tick</div><div class="v" id="hud-tick">0 / 0</div></div>
+          <div class="stat red"><div class="k">Collisions</div><div class="v" id="hud-collision">0</div></div>
+          <div class="stat red"><div class="k">Starvation</div><div class="v" id="hud-starvation">0</div></div>
+        </div>
+
+        <h3>Move (one tick each)</h3>
+        <div class="pad">
+          <span></span><button id="btn-up">↑</button><span></span>
+          <button id="btn-left">←</button><button id="btn-act" class="primary">Act</button><button id="btn-right">→</button>
+          <span></span><button id="btn-down">↓</button><span></span>
+          <button id="btn-wait" class="span">Wait ·</button>
+        </div>
+
+        <h3>Loop</h3>
+        <div class="btnrow">
+          <button id="btn-endloop" class="primary">⏎ Bake echo</button>
+          <button id="btn-auto">▶ Auto-wait</button>
+          <button id="btn-undo">↶ Undo</button>
+          <button id="btn-restart">↺ Restart loop</button>
+          <button id="btn-reset">⟲ Reset level</button>
+        </div>
+
+        <h3>How it works</h3>
+        <div class="legend">
+          <div>🪨 <b>Ore</b> → 🏭 <b>Forge</b> → 🔩 metal → 🛠️ <b>Assembler</b> (×2) → ⚙️ gear → 🎯 <b>Output</b> → 💠 <b>Core</b></div>
+          <div>◉ <b>buttons</b> open the matching ▣ <b>gate</b> — only while an actor stands on them.</div>
+          <div>Keys: <code>WASD/↔</code> move · <code>Space/E</code> act · <code>X/.</code> wait · <code>Enter</code> bake · <code>Z</code> undo · <code>R</code> restart · <code>P</code> auto</div>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      Built as a showcase for <a href="https://github.com/krimvp/goaly">goaly</a>: the deterministic
+      simulation core lives in <code>src/engine.js</code> and is locked by a frozen
+      <code>node --test</code> contract — see <code>goaly/</code> for the goal, rubric, and
+      instructions that drove and verified it.
+    </footer>
+
+    <div id="overlay" class="overlay">
+      <div class="card">
+        <h2>Loop stabilized ✔</h2>
+        <p id="win-stats"></p>
+        <div class="btnrow">
+          <button id="btn-next" class="primary">Next level →</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module">
+      import { startGame } from './src/game.js';
+      startGame();
+    </script>
+  </body>
+</html>
