@@ -54,6 +54,8 @@ export {
   parsePriceTable,
   computeCost,
   PriceTable,
+  PriceEntry,
+  CategoryRates,
   DEFAULT_PRICE_KEY,
   type CostView,
 } from './cli/cost';

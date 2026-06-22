@@ -1,6 +1,7 @@
 import type { OrchestratorEvent } from '../domain/events';
 import type { BudgetConfig } from '../domain/config';
-import type { TokenUsage, UsageReport } from '../domain/usage';
+import type { TokenUsage, TokenBreakdown, UsageReport } from '../domain/usage';
+import { addBreakdown, isEmptyBreakdown } from '../domain/usage';
 
 /**
  * Fold the (write-ahead) event stream into a per-run spend summary (issue #17). PURE — it is a
@@ -20,7 +21,12 @@ export function summarizeUsage(events: OrchestratorEvent[], budget: BudgetConfig
   for (const event of events) {
     switch (event.tag) {
       case 'AGENT_RAN':
-        addHarnessCall(harness, event.run.tokensUsed, event.run.tokenSource === 'estimated');
+        addHarnessCall(
+          harness,
+          event.run.tokensUsed,
+          event.run.tokenSource === 'estimated',
+          event.run.tokenBreakdown,
+        );
         break;
       case 'CONTRACT_COMPILED':
       case 'COMPILE_FAILED':
@@ -54,28 +60,41 @@ export function summarizeUsage(events: OrchestratorEvent[], budget: BudgetConfig
 }
 
 /** Internal mutable accumulator (estimatedTokens always present; omitted from the output when 0). */
-type Acc = { tokens: number; calls: number; unknownCalls: number; estimatedTokens: number };
+type Acc = {
+  tokens: number;
+  calls: number;
+  unknownCalls: number;
+  estimatedTokens: number;
+  breakdown: TokenBreakdown;
+};
 
 function acc(): Acc {
-  return { tokens: 0, calls: 0, unknownCalls: 0, estimatedTokens: 0 };
+  return { tokens: 0, calls: 0, unknownCalls: 0, estimatedTokens: 0, breakdown: {} };
 }
 
-/** Finalize an accumulator into a `TokenUsage`, omitting `estimatedTokens` when nothing was estimated. */
+/** Finalize an accumulator into a `TokenUsage`, omitting empty `estimatedTokens`/`breakdown`. */
 function fin(a: Acc): TokenUsage {
   return {
     tokens: a.tokens,
     calls: a.calls,
     unknownCalls: a.unknownCalls,
     ...(a.estimatedTokens > 0 ? { estimatedTokens: a.estimatedTokens } : {}),
+    ...(isEmptyBreakdown(a.breakdown) ? {} : { breakdown: a.breakdown }),
   };
 }
 
 /** One harness run is one call; a missing `tokensUsed` means its spend is unknown. */
-function addHarnessCall(layer: Acc, tokensUsed: number | undefined, estimated: boolean): void {
+function addHarnessCall(
+  layer: Acc,
+  tokensUsed: number | undefined,
+  estimated: boolean,
+  breakdown: TokenBreakdown | undefined,
+): void {
   layer.calls += 1;
   if (tokensUsed !== undefined) {
     layer.tokens += tokensUsed;
     if (estimated) layer.estimatedTokens += tokensUsed;
+    if (breakdown !== undefined) layer.breakdown = addBreakdown(layer.breakdown, breakdown);
   } else layer.unknownCalls += 1;
 }
 
@@ -86,6 +105,7 @@ function addLlmStep(layer: Acc, usage: TokenUsage | undefined): void {
   layer.calls += usage.calls;
   layer.unknownCalls += usage.unknownCalls;
   layer.estimatedTokens += usage.estimatedTokens ?? 0;
+  if (usage.breakdown !== undefined) layer.breakdown = addBreakdown(layer.breakdown, usage.breakdown);
 }
 
 function merge(...layers: Acc[]): Acc {
@@ -94,6 +114,7 @@ function merge(...layers: Acc[]): Acc {
     sum.calls += l.calls;
     sum.unknownCalls += l.unknownCalls;
     sum.estimatedTokens += l.estimatedTokens;
+    sum.breakdown = addBreakdown(sum.breakdown, l.breakdown);
     return sum;
   }, acc());
 }

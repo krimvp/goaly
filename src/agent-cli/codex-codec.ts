@@ -27,6 +27,7 @@ import {
 } from './stream';
 import { accountTokens } from './estimate';
 import type { AgentCliCodec } from './codec';
+import { isEmptyBreakdown, type TokenBreakdown } from '../domain/usage';
 
 const UNKNOWN_SESSION = 'codex-unknown';
 
@@ -99,6 +100,29 @@ function extractTokens(obj: Record<string, unknown>): number | undefined {
   return undefined;
 }
 
+/** Read a non-negative integer field, or undefined when absent / not a number. */
+function intField(source: Record<string, unknown>, key: string): number | undefined {
+  const v = source[key];
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.trunc(v) : undefined;
+}
+
+/** Per-category split from a codex usage block (input/output + cache buckets when reported). */
+function extractBreakdown(obj: Record<string, unknown>): TokenBreakdown | undefined {
+  const usage = obj['usage'];
+  const source = isRecord(usage) ? usage : obj;
+  const breakdown: TokenBreakdown = {};
+  const input = intField(source, 'input_tokens') ?? intField(source, 'inputTokens');
+  const output = intField(source, 'output_tokens') ?? intField(source, 'outputTokens');
+  const cacheRead =
+    intField(source, 'cached_input_tokens') ?? intField(source, 'cache_read_input_tokens');
+  const cacheWrite = intField(source, 'cache_creation_input_tokens');
+  if (input !== undefined) breakdown.input = input;
+  if (output !== undefined) breakdown.output = output;
+  if (cacheRead !== undefined) breakdown.cacheRead = cacheRead;
+  if (cacheWrite !== undefined) breakdown.cacheWrite = cacheWrite;
+  return isEmptyBreakdown(breakdown) ? undefined : breakdown;
+}
+
 /**
  * Codex's field strategy: tolerant of nested message/content/delta shapes and codex's thread-id
  * session keys. The shared envelope machinery (whole-object/JSONL, latch-first-session,
@@ -112,6 +136,8 @@ export const codexExtractor: FieldExtractor = (obj) => {
   if (sid !== undefined) fields.sessionId = sid;
   const tokens = extractTokens(obj);
   if (tokens !== undefined) fields.tokens = tokens;
+  const breakdown = extractBreakdown(obj);
+  if (breakdown !== undefined) fields.breakdown = breakdown;
   return fields;
 };
 
@@ -253,11 +279,15 @@ export const codexCodec: AgentCliCodec = {
 
     // Non-zero / null exit with text present → the agent produced partial output: truncated.
     const status: HarnessRunResult['status'] = input.code === 0 ? 'completed' : 'truncated';
+    const acct = accountTokens(parsed.tokens, input.estimator);
     return HarnessRunResult.parse({
       output: parsed.text,
       sessionId: coerceSessionId(parsed.sessionId ?? fallbackSession, UNKNOWN_SESSION),
       status,
-      ...accountTokens(parsed.tokens, input.estimator),
+      ...acct,
+      ...(acct.tokenSource === 'reported' && parsed.breakdown !== undefined
+        ? { tokenBreakdown: parsed.breakdown }
+        : {}),
     });
   },
 };

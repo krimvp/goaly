@@ -25,7 +25,33 @@ describe('parseClaudeOutput', () => {
 
     const parsed = parseClaudeOutput(json);
 
-    expect(parsed).toEqual({ text: 'hello world', sessionId: 'sess-123', tokens: 15 });
+    expect(parsed).toEqual({
+      text: 'hello world',
+      sessionId: 'sess-123',
+      tokens: 15,
+      breakdown: { input: 10, output: 5 },
+    });
+  });
+
+  it('includes cache-read/cache-write tokens in the total and the breakdown', () => {
+    const json = JSON.stringify({
+      result: 'ok',
+      session_id: 'sess-1',
+      usage: {
+        input_tokens: 3,
+        output_tokens: 12,
+        cache_read_input_tokens: 17_773,
+        cache_creation_input_tokens: 3_273,
+      },
+    });
+    const parsed = parseClaudeOutput(json);
+    expect(parsed?.tokens).toBe(21_061);
+    expect(parsed?.breakdown).toEqual({
+      input: 3,
+      output: 12,
+      cacheRead: 17_773,
+      cacheWrite: 3_273,
+    });
   });
 
   it('prefers an explicit total_tokens over the input/output sum', () => {

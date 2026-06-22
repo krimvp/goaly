@@ -219,10 +219,15 @@ export function classifyFlatRun(opts: {
     });
   }
   const status: HarnessRunResult['status'] = parsed.isError === true ? 'truncated' : 'completed';
+  const acct = accountTokens(parsed.tokens, estimator);
   return HarnessRunResult.parse({
     output: parsed.text,
     sessionId: session,
     status,
-    ...accountTokens(parsed.tokens, estimator),
+    ...acct,
+    // The split belongs only to a provider-REPORTED count; a local estimate has no category split.
+    ...(acct.tokenSource === 'reported' && parsed.breakdown !== undefined
+      ? { tokenBreakdown: parsed.breakdown }
+      : {}),
   });
 }

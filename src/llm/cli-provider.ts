@@ -31,7 +31,15 @@ export function buildLlmArgs(
 }
 
 function toCompletion(parsed: AgentOutput, estimator?: StreamTokenEstimator): LlmCompletion {
-  return { text: parsed.text, ...accountTokens(parsed.tokens, estimator) };
+  const acct = accountTokens(parsed.tokens, estimator);
+  return {
+    text: parsed.text,
+    ...acct,
+    // The split belongs only to a provider-REPORTED count; a local estimate has no category split.
+    ...(acct.tokenSource === 'reported' && parsed.breakdown !== undefined
+      ? { tokenBreakdown: parsed.breakdown }
+      : {}),
+  };
 }
 
 /**

@@ -65,6 +65,47 @@ describe('summarizeUsage', () => {
     expect(report.total).toEqual({ tokens: 14_400, calls: 6, unknownCalls: 0 });
   });
 
+  it('aggregates the per-category breakdown across layers (cache included)', () => {
+    const harnessRun: OrchestratorEvent = {
+      tag: 'AGENT_RAN',
+      run: {
+        output: 'ran',
+        sessionId: SessionId.parse('s-1'),
+        status: 'completed',
+        tokensUsed: 21_061,
+        tokenSource: 'reported',
+        tokenBreakdown: { input: 3, output: 12, cacheRead: 17_773, cacheWrite: 3_273 },
+      },
+      prevDiffHash: DiffHash.parse('0000000'),
+      diffHash: DiffHash.parse('0000001'),
+      budget: { exceeded: false },
+    };
+    const approverUsage: TokenUsage = {
+      tokens: 1_498,
+      calls: 1,
+      unknownCalls: 0,
+      breakdown: { input: 1_400, output: 98 },
+    };
+
+    const report = summarizeUsage([harnessRun, gateB(approve(), approverUsage)], {});
+
+    expect(report.harness.breakdown).toEqual({
+      input: 3,
+      output: 12,
+      cacheRead: 17_773,
+      cacheWrite: 3_273,
+    });
+    expect(report.approver.breakdown).toEqual({ input: 1_400, output: 98 });
+    // The total folds every category across the harness and the LLM steps.
+    expect(report.total.breakdown).toEqual({
+      input: 1_403,
+      output: 110,
+      cacheRead: 17_773,
+      cacheWrite: 3_273,
+    });
+    expect(report.total.tokens).toBe(22_559);
+  });
+
   it('sums spend across many iterations and compile retries', () => {
     const events = [
       compiled(u(500)),

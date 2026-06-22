@@ -38,6 +38,21 @@ describe('formatUsage', () => {
     expect(text).toContain('14,400 tokens');
   });
 
+  it('surfaces the per-category split (incl. cache) under the total when reported', () => {
+    const u = usage({
+      total: {
+        tokens: 14_400,
+        calls: 6,
+        unknownCalls: 0,
+        breakdown: { input: 1_400, output: 1_000, cacheRead: 9_000, cacheWrite: 3_000 },
+      },
+    });
+    const text = formatUsage(u).join('\n');
+    expect(text).toContain('by category');
+    expect(text).toContain('cache-read 9,000');
+    expect(text).toContain('cache-write 3,000');
+  });
+
   it('renders budget consumed vs the cap with a percentage', () => {
     const text = formatUsage(usage()).join('\n');
     expect(text).toContain('budget:');

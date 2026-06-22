@@ -8,11 +8,17 @@
  * codex/droid LLM providers — share the mechanism, not the seam.
  */
 
+import type { TokenBreakdown } from '../domain/usage';
+import { breakdownTotal } from '../domain/usage';
+
 /** The minimal signal we salvage from one agent run, regardless of tool. */
 export type AgentOutput = {
   text: string;
   sessionId?: string;
+  /** All-inclusive reported total (input + output + cache), or a provider-supplied `total_tokens`. */
   tokens?: number;
+  /** Per-category split of `tokens` when the CLI reports one (input/output/cache-read/cache-write). */
+  breakdown?: TokenBreakdown;
   /** Some CLIs (droid) flag a soft failure on an otherwise-clean exit. */
   isError?: boolean;
 };
@@ -22,6 +28,7 @@ export type AgentFields = {
   text?: string;
   sessionId?: string;
   tokens?: number;
+  breakdown?: TokenBreakdown;
   isError?: boolean;
 };
 
@@ -43,13 +50,20 @@ export function tryJsonObject(raw: string): Record<string, unknown> | null {
   }
 }
 
-/** Assemble the final output, preferring the text-bearing object's own session/tokens. */
-function assemble(fields: AgentFields, session?: string, tokens?: number): AgentOutput {
+/** Assemble the final output, preferring the text-bearing object's own session/tokens/breakdown. */
+function assemble(
+  fields: AgentFields,
+  session?: string,
+  tokens?: number,
+  breakdown?: TokenBreakdown,
+): AgentOutput {
   const out: AgentOutput = { text: fields.text ?? '' };
   const sid = fields.sessionId ?? session;
   if (sid !== undefined) out.sessionId = sid;
   const tok = fields.tokens ?? tokens;
   if (tok !== undefined) out.tokens = tok;
+  const bd = fields.breakdown ?? breakdown;
+  if (bd !== undefined) out.breakdown = bd;
   if (fields.isError !== undefined) out.isError = fields.isError;
   return out;
 }
@@ -77,6 +91,7 @@ export function parseAgentOutput(stdout: string, extract: FieldExtractor): Agent
   let last: AgentFields | null = null;
   let firstSession: string | undefined;
   let latestTokens: number | undefined;
+  let latestBreakdown: TokenBreakdown | undefined;
   let sawJson = false;
   for (const line of stdout.split(/\r?\n/)) {
     const obj = tryJsonObject(line);
@@ -85,10 +100,11 @@ export function parseAgentOutput(stdout: string, extract: FieldExtractor): Agent
     const fields = extract(obj);
     if (firstSession === undefined && fields.sessionId !== undefined) firstSession = fields.sessionId;
     if (fields.tokens !== undefined) latestTokens = fields.tokens;
+    if (fields.breakdown !== undefined) latestBreakdown = fields.breakdown;
     if (fields.text !== undefined) last = fields;
   }
   if (!sawJson || last === null) return null;
-  return assemble(last, firstSession, latestTokens);
+  return assemble(last, firstSession, latestTokens, latestBreakdown);
 }
 
 /** Pull the first key whose value is a string (an empty string still counts as present). */
@@ -100,15 +116,44 @@ function pickString(obj: Record<string, unknown>, keys: string[]): string | unde
   return undefined;
 }
 
-/** Token count from a `usage` block: an explicit total, else the input+output sum (when > 0). */
-function flatTokens(usage: Record<string, unknown> | undefined): number | undefined {
-  if (usage === undefined) return undefined;
-  const total = usage['total_tokens'];
-  if (typeof total === 'number') return total;
-  const input = typeof usage['input_tokens'] === 'number' ? usage['input_tokens'] : 0;
-  const output = typeof usage['output_tokens'] === 'number' ? usage['output_tokens'] : 0;
-  const sum = input + output;
-  return sum > 0 ? sum : undefined;
+/** Read a non-negative integer field, or undefined when it is absent / not a number. */
+function intField(usage: Record<string, unknown>, key: string): number | undefined {
+  const v = usage[key];
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.trunc(v) : undefined;
+}
+
+/**
+ * Per-category split of a `usage` block. Reads input/output and BOTH cache buckets
+ * (`cache_read_input_tokens`, `cache_creation_input_tokens`, plus their camelCase aliases) — the
+ * cache tokens the old input+output math dropped. Returns the breakdown plus the all-inclusive total
+ * (a provider `total_tokens` wins; otherwise the sum of every present category). Both `undefined`
+ * when the block reports nothing.
+ */
+function flatUsage(
+  usage: Record<string, unknown> | undefined,
+): { tokens?: number; breakdown?: TokenBreakdown } {
+  if (usage === undefined) return {};
+  const breakdown: TokenBreakdown = {};
+  const input = intField(usage, 'input_tokens') ?? intField(usage, 'inputTokens');
+  const output = intField(usage, 'output_tokens') ?? intField(usage, 'outputTokens');
+  const cacheRead =
+    intField(usage, 'cache_read_input_tokens') ??
+    intField(usage, 'cached_input_tokens') ??
+    intField(usage, 'cacheReadInputTokens');
+  const cacheWrite =
+    intField(usage, 'cache_creation_input_tokens') ?? intField(usage, 'cacheCreationInputTokens');
+  if (input !== undefined) breakdown.input = input;
+  if (output !== undefined) breakdown.output = output;
+  if (cacheRead !== undefined) breakdown.cacheRead = cacheRead;
+  if (cacheWrite !== undefined) breakdown.cacheWrite = cacheWrite;
+
+  const explicitTotal = intField(usage, 'total_tokens') ?? intField(usage, 'totalTokens');
+  const summed = breakdownTotal(breakdown);
+  const tokens = explicitTotal ?? summed;
+  const result: { tokens?: number; breakdown?: TokenBreakdown } = {};
+  if (tokens !== undefined && tokens > 0) result.tokens = tokens;
+  if (summed !== undefined) result.breakdown = breakdown;
+  return result;
 }
 
 /**
@@ -125,8 +170,9 @@ export function flatExtractor(opts: { errorKey?: string } = {}): FieldExtractor 
     const session = pickString(obj, ['session_id', 'sessionId']);
     if (session !== undefined) fields.sessionId = session;
     const usage = obj['usage'];
-    const tokens = flatTokens(isRecord(usage) ? usage : undefined);
+    const { tokens, breakdown } = flatUsage(isRecord(usage) ? usage : undefined);
     if (tokens !== undefined) fields.tokens = tokens;
+    if (breakdown !== undefined) fields.breakdown = breakdown;
     if (opts.errorKey !== undefined) {
       const e = obj[opts.errorKey];
       if (typeof e === 'boolean') fields.isError = e;
