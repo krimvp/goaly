@@ -118,10 +118,12 @@ export function defaultAgentExec(
   timeoutMs: number,
   promptOnStdin: boolean,
   cwd?: string,
+  idleTimeoutMs?: number,
 ): AgentExecFn {
   return async (args, input, onStdout) => {
     const r = await runProcess(command, args, {
       timeoutMs,
+      ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
       // Run the agent IN the workspace, not goaly's own cwd. Otherwise the agent edits whatever
       // directory goaly was invoked from, and a `--workspace` that differs from that cwd (e.g. under
       // `npm run`, which resets cwd to the package root) makes every edit land outside the tree goaly

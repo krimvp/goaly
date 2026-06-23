@@ -22,6 +22,12 @@ export type RunsCommand = { readonly kind: 'list' } | { readonly kind: 'show'; r
 export type StepTimeouts = {
   /** Wall-clock cap on the harness (coding-agent) subprocess. */
   harnessMs?: number;
+  /**
+   * Idle/heartbeat cap on the harness subprocess (issue #56): kill it only after this long with no
+   * stream output, so a slow-but-progressing build turn survives while a genuine stall is reaped.
+   * The wall-clock `harnessMs` remains the absolute backstop when both are set.
+   */
+  harnessIdleMs?: number;
   /** Wall-clock cap on each LLM step (judge / approver / compiler). */
   llmMs?: number;
   /** Wall-clock cap on the verify command (a timeout is a fail-closed non-zero exit). */
@@ -75,6 +81,7 @@ export const USAGE = `goaly — run a coding agent until a frozen success contra
 
 Usage:
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
+               [--smoke "<cmd>"]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
                [--max-gate-a-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
@@ -105,6 +112,14 @@ Goal / intent / rubric input (choose ONE source per field):
 Verification:
   --verify-cmd   point at an existing command that must exit 0
   --generate     have the agent author the verification (optionally guided by --intent)
+  --smoke <cmd>  add an artifact-RUNNING smoke rung (issue #53): an extra deterministic, ungameable
+                  bar (a second --verify-cmd) that EXECUTES the built artifact and asserts on runtime
+                  behavior, instead of a judge guessing from source. It's runtime-agnostic — the cmd
+                  can be a headless-browser script, a server probe, a CLI smoke, anything that exits
+                  non-zero on failure (e.g. --smoke "node smoke.mjs"). Frozen into the contract like
+                  any rung, capped by --verify-timeout-ms, and run after --verify-cmd but before the
+                  judge, so a runtime failure is caught deterministically, not guessed. Combine with
+                  --verify-cmd or --generate to keep both the test bar and the runtime bar.
   --verify-dir <dir>  preferred directory for files the compiler authors under --generate (issue
                       #52). Authored files are written to idiomatic locations and AUTO-REGISTERED in
                       .git/info/exclude (git's per-clone, never-committed ignore) — so they never
@@ -162,7 +177,12 @@ Gate A (contract approval):
   pair it with --autonomous, or read the goal from a file (--goal-file) instead.
 
 Per-step timeouts (subprocess kill-timeouts in milliseconds; all optional, pure wiring):
-  --harness-timeout-ms N   cap the harness (coding-agent) subprocess (default 600000 = 10 min)
+  --harness-timeout-ms N      cap the harness (coding-agent) subprocess (default 600000 = 10 min)
+  --harness-idle-timeout-ms N idle/heartbeat cap on the harness: kill it only after N ms with NO
+                              stream output, so a slow-but-progressing build turn survives while a
+                              genuine stall is reaped. Recommended for build-heavy / --phased runs
+                              that legitimately exceed the wall-clock cap. The wall-clock
+                              --harness-timeout-ms stays the absolute backstop. Default: off.
   --llm-timeout-ms N       cap each LLM step: judge / approver / compiler (default 600000)
   --verify-timeout-ms N    cap the verify command (default: unbounded). A timeout is a
                            fail-closed non-zero exit, i.e. a verifier FAIL — never a green.
@@ -331,6 +351,7 @@ export async function parseArgs(
     goal: resolved.goal,
     ...(str(flags, 'verify-cmd') !== undefined ? { verifyCmd: str(flags, 'verify-cmd') } : {}),
     ...(flags['generate'] !== undefined ? { generate: true } : {}),
+    ...(str(flags, 'smoke') !== undefined ? { smoke: str(flags, 'smoke') } : {}),
     ...(resolved.intent !== undefined ? { intent: resolved.intent } : {}),
     ...(resolved.rubric !== undefined ? { rubric: resolved.rubric } : {}),
     ...(flags['autonomous'] !== undefined ? { autonomous: true } : {}),
@@ -403,10 +424,12 @@ function parseTimeouts(flags: RawFlags): StepTimeouts {
     return parsed.data;
   };
   const harnessMs = ms('harness-timeout-ms');
+  const harnessIdleMs = ms('harness-idle-timeout-ms');
   const llmMs = ms('llm-timeout-ms');
   const verifyMs = ms('verify-timeout-ms');
   return {
     ...(harnessMs !== undefined ? { harnessMs } : {}),
+    ...(harnessIdleMs !== undefined ? { harnessIdleMs } : {}),
     ...(llmMs !== undefined ? { llmMs } : {}),
     ...(verifyMs !== undefined ? { verifyMs } : {}),
   };

@@ -295,9 +295,10 @@ unsandboxed and **do nothing** for the sandbox; the launcher prefix is added (or
 identity passthrough) entirely outside the codec.
 
 Supporting `--model` is optional but cheap: thread the `model` argument into your `*Args` (before the
-prompt positional). The composition root passes the resolved harness model in for you. The wall-clock
-cap is handled the same way — `makeHarness` threads `--harness-timeout-ms` into `AgentCliHarness`, and
-you write no flag parsing for it.
+prompt positional). The composition root passes the resolved harness model in for you. The timeouts
+are handled the same way — `makeHarness` threads both the wall-clock `--harness-timeout-ms` and the
+idle/heartbeat `--harness-idle-timeout-ms` (issue #56) into `AgentCliHarness` (constructor `opts`
+already carry `{ model?, timeoutMs?, idleTimeoutMs?, cwd? }`), and you write no flag parsing for either.
 
 ## Register it (two tiny edits)
 
@@ -306,8 +307,9 @@ you write no flag parsing for it.
 export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'fake' | 'myagent';
 // ...allow it in parseHarness(...)
 
-// src/cli/compose.ts — wire your codec into makeHarness(choice, model, timeoutMs?) via the generic
-// adapter. `opts` already carries { model?, timeoutMs? }, so just pass it through:
+// src/cli/compose.ts — wire your codec into makeHarness(choice, model, timeoutMs?, idleTimeoutMs?)
+// via the generic adapter. `opts` already carries { model?, timeoutMs?, idleTimeoutMs?, cwd? }, so
+// just pass it through:
 import { myagentCodec } from '../agent-cli/myagent-codec';
 case 'myagent': return new AgentCliHarness(myagentCodec, opts);
 ```

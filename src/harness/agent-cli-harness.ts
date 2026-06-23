@@ -25,14 +25,23 @@ export class AgentCliHarness implements HarnessAdapter {
 
   constructor(
     codec: AgentCliCodec,
-    opts: { exec?: AgentExecFn; timeoutMs?: number; model?: string; cwd?: string } = {},
+    opts: {
+      exec?: AgentExecFn;
+      timeoutMs?: number;
+      idleTimeoutMs?: number;
+      model?: string;
+      cwd?: string;
+    } = {},
   ) {
     this.name = codec.name;
     this.#codec = codec;
     const timeoutMs = opts.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
     // `cwd` makes the agent run inside the workspace (seam #1). An injected `exec` (e.g. the sandbox
-    // wrapper, which sets the jail's cwd itself) takes precedence and ignores it.
-    this.#exec = opts.exec ?? defaultAgentExec(codec.command, timeoutMs, codec.promptOnStdin, opts.cwd);
+    // wrapper, which sets the jail's cwd itself) takes precedence and ignores it. An optional
+    // idle/heartbeat timeout (issue #56) kills only a stalled turn, not a slow-but-progressing one.
+    this.#exec =
+      opts.exec ??
+      defaultAgentExec(codec.command, timeoutMs, codec.promptOnStdin, opts.cwd, opts.idleTimeoutMs);
     this.#model = opts.model;
   }
 

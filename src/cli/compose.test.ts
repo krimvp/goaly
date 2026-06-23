@@ -118,6 +118,29 @@ describe('buildLadder — verify timeout threading', () => {
     expect(verdict.detail).toContain('authored.test.ts');
     expect(calls).toEqual([]);
   });
+
+  it('runs an artifact-running smoke command as a second deterministic rung, after the main one (issue #53)', async () => {
+    const contract = freezeContract({
+      goal: 'g',
+      rungs: [
+        { kind: 'deterministic', command: 'npm test' },
+        { kind: 'deterministic', command: 'node smoke.mjs', label: 'smoke' },
+      ],
+      rubric: '',
+      generatedFiles: [],
+    });
+    const ladder = buildLadder(contract, new FakeLlm([]), 30000);
+    const { workspace, calls } = spyWorkspace();
+
+    await ladder.verify(workspace, 'g', 'r');
+
+    // Both deterministic rungs run in order, each capped by the verify timeout — the smoke command
+    // is just another ungameable exit-code check (runtime-agnostic), not a browser-specific seam.
+    expect(calls).toEqual([
+      { command: 'npm test', opts: { timeoutMs: 30000 } },
+      { command: 'node smoke.mjs', opts: { timeoutMs: 30000 } },
+    ]);
+  });
 });
 
 describe('composeDeps — diagnostic logger wiring', () => {

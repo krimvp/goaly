@@ -45,6 +45,27 @@ describe('AgentCompiler — existing verifier', () => {
     });
     expect(contract.rubric).toBe('output must be clean');
   });
+
+  it('inserts the artifact-running smoke command as a deterministic rung before the judge (issue #53)', async () => {
+    const llm = new FakeLlm([]);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({
+      verifier: { kind: 'existing', ref: 'npm test' },
+      smoke: 'node smoke.mjs',
+      rubric: 'looks good',
+    });
+
+    const contract = await compiler.compile(config);
+
+    expect(contract.rungs).toHaveLength(3);
+    expect(contract.rungs[0]).toEqual({ kind: 'deterministic', command: 'npm test' });
+    expect(contract.rungs[1]).toEqual({
+      kind: 'deterministic',
+      command: 'node smoke.mjs',
+      label: 'smoke',
+    });
+    expect(contract.rungs[2]?.kind).toBe('judge');
+  });
 });
 
 describe('AgentCompiler — generate verifier', () => {

@@ -121,15 +121,22 @@ function parseGenerated(raw: string): GeneratedVerification {
 }
 
 /**
- * Build the ladder for a given command + rubric. Always a deterministic rung first;
- * a judge rung is appended only when the rubric is a non-empty string.
+ * Build the ladder for a given command + rubric. Deterministic-tier rungs first (the main verify
+ * command, then an optional artifact-running smoke command — issue #53 — both ungameable exit-code
+ * checks), then an LLM-judge rung only when the rubric is a non-empty string. The smoke rung RUNS the
+ * built artifact (`node smoke.mjs`, a headless-browser script, a server probe, …); it sits in the
+ * deterministic tier before the judge so a runtime failure is caught deterministically, not guessed.
  */
 function buildRungs(
   command: string,
   rubric: string,
   judge: RunConfig['judge'],
+  smoke: string | undefined,
 ): Rung[] {
   const rungs: Rung[] = [{ kind: 'deterministic', command }];
+  if (smoke !== undefined) {
+    rungs.push({ kind: 'deterministic', command: smoke, label: 'smoke' });
+  }
   if (rubric.length > 0) {
     rungs.push({
       kind: 'judge',
@@ -176,7 +183,7 @@ export class AgentCompiler implements VerifierCompiler {
     const rubric = config.rubric ?? '';
     const unhashed: UnhashedContract = {
       goal: config.goal,
-      rungs: buildRungs(ref, rubric, config.judge),
+      rungs: buildRungs(ref, rubric, config.judge, config.smoke),
       rubric,
       generatedFiles: [],
     };
@@ -244,7 +251,7 @@ export class AgentCompiler implements VerifierCompiler {
 
     const unhashed: UnhashedContract = {
       goal: config.goal,
-      rungs: buildRungs(generated.command, generated.rubric, config.judge),
+      rungs: buildRungs(generated.command, generated.rubric, config.judge, config.smoke),
       rubric: generated.rubric,
       generatedFiles,
     };
