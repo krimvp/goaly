@@ -1,0 +1,18 @@
+{
+  "name": "model-fusion-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenRouter-like model fusion routing proxy: an OpenAI-compatible local gateway that routes/fuses requests across multiple upstream model providers.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/main.js"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}
