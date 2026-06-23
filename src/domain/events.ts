@@ -43,6 +43,20 @@ export const BudgetSnapshot = z.object({
 export type BudgetSnapshot = z.infer<typeof BudgetSnapshot>;
 
 /**
+ * The classified outcome of the one-time prepare phase (Fix #1 setup + Fix #2 pre-flight), resolved
+ * by the Driver before the reducer decides. `proceed` means the workspace is ready (setup ran clean —
+ * or there was none — and the deterministic pre-flight either passed or failed as an HONEST red, i.e.
+ * the implementation is simply missing); the loop starts. `setup-failed` and `contract-unsound` are
+ * the two typed, fail-closed aborts that happen BEFORE any worker token is spent.
+ */
+export const PreparedOutcome = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('proceed') }),
+  z.object({ status: z.literal('setup-failed'), detail: z.string() }),
+  z.object({ status: z.literal('contract-unsound'), detail: z.string() }),
+]);
+export type PreparedOutcome = z.infer<typeof PreparedOutcome>;
+
+/**
  * EVENTS — the only things fed to the pure reducer. Each is the already-resolved result
  * of a Command's effect: every stochastic/IO operation completed in the Driver before the
  * Event was built. Events are persisted (write-ahead) and re-parsed on resume, so each has
@@ -62,6 +76,13 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     llm: TokenUsage.optional(),
   }),
   z.object({ tag: z.literal('SEAL_DECIDED'), decision: SealDecision }),
+  z.object({
+    tag: z.literal('WORKSPACE_PREPARED'),
+    /** The classified outcome of the one-time setup + deterministic pre-flight (Fix #1 / #2). */
+    prepared: PreparedOutcome,
+    /** Whether a setup command actually ran (for logs / `runs show`); false when the contract had none. */
+    setupRan: z.boolean(),
+  }),
   z.object({
     tag: z.literal('AGENT_RAN'),
     run: HarnessRunResult,
@@ -115,6 +136,7 @@ export type ApprovalInput = {
 export type Command =
   | { tag: 'COMPILE_VERIFIER'; config: RunConfig; feedback?: string }
   | { tag: 'REQUEST_SEAL'; contract: CompiledContract }
+  | { tag: 'PREPARE_WORKSPACE'; contract: CompiledContract }
   | { tag: 'RUN_AGENT'; prompt: string; sessionId: SessionId | undefined }
   | { tag: 'RUN_VERIFIER'; contract: CompiledContract }
   | { tag: 'REQUEST_SIGNOFF'; goal: string; rubric: string; verdicts: Verdict[] };

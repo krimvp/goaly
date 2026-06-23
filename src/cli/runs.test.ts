@@ -96,6 +96,7 @@ describe('renderRunDetail', () => {
       contractHash: contract.contractHash,
       compileFailures: [],
       seal: [{ kind: 'approve' }],
+      prepare: undefined,
       iterationsDetail: [
         { index: 1, runStatus: 'completed', changed: true, tokensSpent: 10, verdict: failVerdict('red'), signoff: undefined },
         { index: 2, runStatus: 'completed', changed: true, tokensSpent: 25, verdict: passVerdict('green'), signoff: approve() },

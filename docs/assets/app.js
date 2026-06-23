@@ -94,6 +94,11 @@
       d: "A human approves the frozen contract before the loop starts. With <code>--autonomous</code> it is auto-accepted — but still frozen and logged loudly. SEAL is the only gate the flag moves. <b>🔁 Retriable:</b> instead of approve/reject you can give free-text feedback to <b>revise</b> — goaly re-authors the contract and re-presents it, up to <code>--max-seal-revisions</code> (default 10).",
       pills: ['<span class="pill gate">human · once</span>', '<span class="pill neutral">or auto-accept</span>', '<span class="pill neutral">🔁 revise ≤ --max-seal-revisions</span>'],
     },
+    prepare: {
+      t: "Setup + pre-flight — once, before iteration 1",
+      d: "After SEAL and before the first agent turn, goaly runs a one-time <b>setup</b> command to prepare the tree (e.g. <code>npm ci</code> — authored by the compiler under <code>--generate</code>, overridable with <code>--setup-cmd</code>), then <b>pre-flights</b> the frozen deterministic checks once. A non-zero setup exit is a typed <code>SETUP_FAILED</code>; a check that fails inside the <b>authored verification</b> (it can't even compile) is a typed <code>CONTRACT_UNSOUND</code> — both abort <b>before any worker token is spent</b>. An honest red (implementation missing) proceeds to the loop.",
+      pills: ['<span class="pill neutral">setup, once</span>', '<span class="pill fail">SETUP_FAILED / CONTRACT_UNSOUND</span>'],
+    },
     run: {
       t: "RUN_AGENT — one headless turn",
       d: "The Driver spawns the chosen harness headlessly with the prompt, resuming the session id. Output is parsed tolerantly into a HarnessRunResult. The Workspace captures a tree hash before &amp; after for stuck-detection.",

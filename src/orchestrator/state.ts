@@ -47,6 +47,16 @@ export type OrchestratorState =
       /** How many Seal "revise" rounds have already happened (0 on the first presentation). */
       readonly reviseRound: number;
     }
+  | {
+      /**
+       * One-time prepare phase (Fix #1 setup + Fix #2 pre-flight): runs after SEAL approval and
+       * before iteration 1. Entered only when the contract has a `setup` command or authored
+       * `generatedFiles` to pre-flight; otherwise the machine goes straight to the first agent turn.
+       */
+      readonly tag: 'PREPARING';
+      readonly config: RunConfig;
+      readonly contract: CompiledContract;
+    }
   | { readonly tag: 'RUNNING_AGENT'; readonly ctx: LoopCtx }
   | { readonly tag: 'VERIFYING'; readonly ctx: LoopCtx }
   | { readonly tag: 'AWAIT_SIGNOFF'; readonly ctx: LoopCtx }
@@ -89,6 +99,7 @@ export function iterationCount(state: OrchestratorState): number {
       return state.iterations;
     case 'COMPILING':
     case 'AWAIT_SEAL':
+    case 'PREPARING':
       return 0;
   }
 }

@@ -100,6 +100,48 @@ describe('drive() — full loop with zero IO', () => {
     expect(hashes[0]).toBe(contract.contractHash);
   });
 
+  it('runs setup + pre-flight before iteration 1, then completes the loop (Fix #1/#2)', async () => {
+    const setupContract = makeFakeContract({ goal: 'make the thing work', setup: 'npm ci' });
+    // Workspace.run returns exit 0 for the setup command AND the deterministic pre-flight rung.
+    const workspace = new FakeWorkspace('0000000', 'a fake diff');
+    const { deps, harness, runlog } = wire({
+      workspace,
+      compiler: new FakeCompiler(setupContract),
+      scripts: [{ postHash: '0000001' }],
+      verdicts: [passVerdict()],
+      approvals: [approve()],
+    });
+
+    const outcome = await drive(deps, makeConfig({ goal: 'make the thing work' }), runId);
+
+    expect(outcome.status).toBe('DONE');
+    expect(harness.prompts).toHaveLength(1);
+    // The prepare phase was persisted write-ahead (so --resume reconstructs it) and proceeded.
+    const prepared = runlog.entries.find((e) => e.event.tag === 'WORKSPACE_PREPARED');
+    expect(prepared?.event).toMatchObject({ tag: 'WORKSPACE_PREPARED', setupRan: true });
+  });
+
+  it('a failing setup command → FAILED (SETUP_FAILED) before any worker turn (Fix #1)', async () => {
+    const setupContract = makeFakeContract({ goal: 'make the thing work', setup: 'npm ci' });
+    // First workspace.run (the setup command) exits non-zero → SETUP_FAILED, loop never starts.
+    const workspace = new FakeWorkspace('0000000', 'a fake diff', [
+      { exitCode: 1, stdout: '', stderr: 'could not resolve dependencies' },
+    ]);
+    const { deps, harness } = wire({
+      workspace,
+      compiler: new FakeCompiler(setupContract),
+      scripts: [],
+      verdicts: [],
+    });
+
+    const outcome = await drive(deps, makeConfig({ goal: 'make the thing work' }), runId);
+
+    expect(outcome.status).toBe('FAILED');
+    expect(outcome.reason).toContain('SETUP_FAILED');
+    expect(outcome.iterations).toBe(0);
+    expect(harness.prompts).toHaveLength(0); // never handed the worker a broken tree
+  });
+
   it('retries a COMPILE_FAILED with the error fed back, then proceeds (issue #51)', async () => {
     const compiler = new FakeCompiler([
       new Error('refusing a verification command that references an out-of-repo path /tmp/x.sh'),

@@ -103,13 +103,40 @@ export function detectStuck(ctx: LoopCtx, current?: DecisionContext): StuckReaso
     }
   }
 
-  // Repeat-failure — the same normalized verifier failure N times in a row.
+  // Repeat-failure — the same normalized verifier failure N times in a row. This is keyed PURELY on
+  // the verifier-failure signature (`verifierDetailHistory`), independent of the working-tree diff
+  // hash: a worker that churns unrelated files every turn (so the diff hash keeps moving) but never
+  // changes the verifier outcome is still caught here. The abort names the repeated signature so the
+  // failure is diagnosable and points at where the fix really is.
   const threshold = ctx.config.stuckPolicy.repeatFailureThreshold;
   if (isRepeating(ctx.verifierDetailHistory, threshold)) {
-    return `repeat-failure: identical verifier failure ${threshold} times in a row`;
+    const signature = ctx.verifierDetailHistory[ctx.verifierDetailHistory.length - 1] ?? '';
+    return repeatFailureReason(threshold, signature);
   }
 
   return null;
+}
+
+/** Cap the signature folded into the abort reason so a large verifier dump doesn't bloat the run log. */
+const SIGNATURE_REASON_LIMIT = 500;
+
+/**
+ * The repeat-failure abort reason (Fix #3 — issue: stuck on a byte-identical verifier error). Keeps the
+ * legacy `repeat-failure` marker for back-compat, adds the typed `STUCK_REPEATED_FAILURE` label, names
+ * the repeated (already-normalized) signature, and hints where the fix actually lies — so a worker that
+ * keeps editing unrelated files while the same error repeats is told to look at the file in the error,
+ * the contract, or the setup, rather than churning on.
+ */
+function repeatFailureReason(threshold: number, signature: string): StuckReason {
+  const sig =
+    signature.length > SIGNATURE_REASON_LIMIT
+      ? `${signature.slice(0, SIGNATURE_REASON_LIMIT)}…`
+      : signature;
+  return (
+    `repeat-failure (STUCK_REPEATED_FAILURE): the same verifier error has repeated ${threshold} ` +
+    'times in a row despite code changes — the fix likely lies in the file named in the error, or in ' +
+    `the contract/setup, not in churning unrelated files. Repeated failure signature: ${sig}`
+  );
 }
 
 /**

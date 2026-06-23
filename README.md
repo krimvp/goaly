@@ -34,6 +34,10 @@ PHASE 1 · SEAL the bar (once, before the loop)
                          COMPILE_VERIFIER ──► SEAL ──── reject ───► ABORTED
                                                │ approve → freeze the contract
                                                ▼
+                    SETUP + PRE-FLIGHT (once) ──┬─ SETUP_FAILED ────► FAILED
+                                                └─ CONTRACT_UNSOUND ─► FAILED
+                                               │ ready / honest red
+                                               ▼
 PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK)
                                                ▼
             RUN_AGENT ───► VERIFIER LADDER ──pass──► SIGN-OFF ──no veto──► DONE
@@ -74,6 +78,17 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   **reject** it (abort), or give **free-text feedback to revise** it — goaly re-authors the contract
   and re-presents it, bounded by `--max-seal-revisions` (default 10; `0` disables revision).
   `--autonomous` skips this pause entirely, never the freeze.
+- **One-time setup + pre-flight, before the first agent turn.** After SEAL and before iteration 1,
+  goaly runs a single **setup** command to prepare the tree (install deps, etc.) and then **pre-flights**
+  the frozen deterministic checks once. Under `--generate` the compiler *authors* the setup command for
+  you (e.g. `npm ci`) — delegated like the contract itself; `--setup-cmd` overrides it and `--no-setup`
+  disables it. A non-zero setup exit is a typed, fail-closed **`SETUP_FAILED`** — the worker never starts
+  on a broken tree (which is what drives an agent to hand-roll brittle workarounds for missing deps). The
+  pre-flight then proves the authored verification can actually *run*: if a deterministic check fails with
+  an error originating **in the authored verification files** (it can't even compile/collect), that's a
+  typed **`CONTRACT_UNSOUND`** abort **before any worker token is spent** — vs. an honest red (the
+  implementation is simply missing), which proceeds to the loop. The setup command is frozen into the
+  contract (shown at SEAL) so it can't drift. A plain `--verify-cmd` run with no setup skips this phase.
 - **Two keys for DONE:** the frozen verifier passes *and* the independent approver (Sign-off, veto-only)
   doesn't veto.
 - **Compile is resilient, not one-shot.** A `COMPILE_FAILED` (a correctable authoring mistake — bad
@@ -83,7 +98,10 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   check. (Mirrors the Seal revise loop; the reducer stays pure.)
 - **Stuck detection** bails before `maxIterations` with a reason: no-diff, repeat-failure (volatile
   tokens like timestamps / PIDs / temp paths are normalized away first, so a noisy-but-identical
-  failure still trips it), short-period oscillation (period-N, not just A,B,A,B), and budget. Tune it
+  failure still trips it — keyed on the **verifier-failure signature, independent of the diff hash**, so
+  a worker that churns unrelated files every turn while the same error repeats is still caught as a typed
+  **`STUCK_REPEATED_FAILURE`** that *names the repeated signature*), short-period oscillation (period-N,
+  not just A,B,A,B), and budget. Tune it
   with `--stuck-no-diff`, `--stuck-repeat-threshold`, `--stuck-oscillation`. Use `--diff-ignore` to
   keep verifier-produced artifacts (coverage dirs, `__pycache__`, build output) out of the tree hash
   so they can't make a no-op agent look like it changed something. A no-diff iteration is **excused
@@ -250,8 +268,14 @@ with `--llm-provider`). Pick the model per layer with `--model` / `--llm-model` 
 # Point at an existing test command; a human approves the frozen contract once:
 goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
 
-# Let the agent author the verification, and run unattended (contract still frozen + logged loudly):
+# Let the agent author the verification, and run unattended (contract still frozen + logged loudly).
+# Under --generate the compiler also AUTHORS a one-time setup command (e.g. `npm ci`) so the worker
+# starts from a populated tree; a deterministic pre-flight then catches an unsound contract before
+# spending any worker tokens:
 goaly run --goal "add a /health endpoint returning 200" --generate --autonomous
+
+# Override the authored setup (or add one on the --verify-cmd path); --no-setup disables it:
+goaly run --goal "..." --verify-cmd "npm test" --setup-cmd "npm ci" --setup-timeout-ms 120000
 
 # Provide a longer, well-specified goal from a file (or stdin), and revise the contract
 # interactively at Seal up to 3 times before it sticks:

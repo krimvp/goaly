@@ -48,6 +48,16 @@ export const CompiledContract = z.object({
   goal: z.string().min(1),
   /** The ladder, in execution order. At least one rung. */
   rungs: z.array(Rung).min(1),
+  /**
+   * Optional one-time workspace bootstrap command (Fix #1): authored by the compiler under
+   * `--generate` (or supplied via `--setup-cmd`), it runs ONCE after SEAL and before the first
+   * agent turn to prepare the tree (e.g. `npm ci`, `pip install -r requirements.txt`, `go mod
+   * download`). It is NOT a verification rung — it neither gates DONE nor is judged; it only
+   * installs/prepares so the worker starts from a populated tree (and stops the worker from
+   * hand-rolling brittle workarounds for missing deps). Frozen with the contract so it can't drift;
+   * a non-zero exit is a typed `SETUP_FAILED` that aborts before any worker tokens are spent.
+   */
+  setup: z.string().min(1).optional(),
   /** The frozen overall rubric (for audit + the approver's Sign-off input). */
   rubric: z.string(),
   /**
@@ -89,5 +99,8 @@ export function canonicalContractString(c: UnhashedContract): string {
     rubric: c.rubric,
     rungs,
     generatedFiles,
+    // The frozen setup command is part of the authored bar's identity (so the hash proves it didn't
+    // drift). `null` when absent keeps the canonical string stable for the common no-setup contract.
+    setup: c.setup ?? null,
   });
 }

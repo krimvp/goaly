@@ -28,6 +28,8 @@ export function step(state: OrchestratorState, event: OrchestratorEvent): StepRe
       return stepCompiling(state.config, state.reviseRound, state.compileRound, event);
     case 'AWAIT_SEAL':
       return stepAwaitSeal(state.config, state.contract, state.reviseRound, event);
+    case 'PREPARING':
+      return stepPreparing(state.config, state.contract, event);
     case 'RUNNING_AGENT':
       return stepRunningAgent(state.ctx, event);
     case 'VERIFYING':
@@ -94,6 +96,15 @@ function stepAwaitSeal(
 
   switch (event.decision.kind) {
     case 'approve': {
+      // One-time prepare phase (Fix #1 setup + Fix #2 pre-flight) — only when there is something to
+      // prepare/check (a setup command, or authored verification files that could be unsound). The
+      // common `--verify-cmd` contract has neither, so it goes straight to iteration 1 unchanged.
+      if (needsPreparation(contract)) {
+        return [
+          { tag: 'PREPARING', config, contract },
+          [{ tag: 'PREPARE_WORKSPACE', contract }],
+        ];
+      }
       const ctx = initialCtx(config, contract);
       return startIteration(ctx, buildInitialPrompt(contract), undefined);
     }
@@ -129,6 +140,62 @@ function stepAwaitSeal(
         [{ tag: 'COMPILE_VERIFIER', config, feedback: event.decision.feedback }],
       ];
     }
+  }
+}
+
+/**
+ * Does this frozen contract need the one-time prepare phase? Yes when it carries a setup command to
+ * run (Fix #1) or authored verification files to pre-flight (Fix #2). A plain `--verify-cmd` contract
+ * has neither, so preparation is skipped and the loop starts exactly as before — no new event, no
+ * behavior change for the common path.
+ */
+function needsPreparation(contract: CompiledContract): boolean {
+  return contract.setup !== undefined || contract.generatedFiles.length > 0;
+}
+
+/**
+ * The prepare phase resolved (Fix #1 / #2). The Driver already ran setup once and pre-flighted the
+ * deterministic rungs; the reducer only routes the typed outcome:
+ *  - `proceed`          → start iteration 1 (setup was clean / absent; pre-flight passed or failed as
+ *                         an honest red — the implementation is simply missing, which the loop fixes).
+ *  - `setup-failed`     → FAILED (typed SETUP_FAILED) — never hand the worker a broken environment.
+ *  - `contract-unsound` → FAILED (typed CONTRACT_UNSOUND) — the frozen verification can't even run, so
+ *                         no worker tokens are spent chasing a contract defect.
+ */
+function stepPreparing(
+  config: RunConfig,
+  contract: CompiledContract,
+  event: OrchestratorEvent,
+): StepResult {
+  if (event.tag !== 'WORKSPACE_PREPARED') throw invalidTransition('PREPARING', event);
+  const prepared = event.prepared;
+  switch (prepared.status) {
+    case 'proceed': {
+      const ctx = initialCtx(config, contract);
+      return startIteration(ctx, buildInitialPrompt(contract), undefined);
+    }
+    case 'setup-failed':
+      return [
+        {
+          tag: 'FAILED',
+          reason: `SETUP_FAILED: the workspace setup command failed before any agent turn — ${prepared.detail}`,
+          iterations: 0,
+          contractHash: contract.contractHash,
+        },
+        [],
+      ];
+    case 'contract-unsound':
+      return [
+        {
+          tag: 'FAILED',
+          reason:
+            'CONTRACT_UNSOUND: the frozen verification could not run against the prepared tree ' +
+            `(the error originates in the authored verification, not the implementation) — ${prepared.detail}`,
+          iterations: 0,
+          contractHash: contract.contractHash,
+        },
+        [],
+      ];
   }
 }
 

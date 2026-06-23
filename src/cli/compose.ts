@@ -249,6 +249,12 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     llmMeter,
     runlog: new FileRunLog(path.join(stateDir, options.runId)),
     logger,
+    // Per-step timeouts for the one-time prepare phase (Fix #1 setup + Fix #2 pre-flight). The setup
+    // command gets its own cap; the deterministic pre-flight reuses the verify-command cap. Pure wiring.
+    prepareTimeouts: {
+      ...(timeouts.setupMs !== undefined ? { setupMs: timeouts.setupMs } : {}),
+      ...(timeouts.verifyMs !== undefined ? { verifyMs: timeouts.verifyMs } : {}),
+    },
     ...(streamSink !== undefined ? { onStreamEvent: streamSink } : {}),
   };
 }

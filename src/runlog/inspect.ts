@@ -73,7 +73,15 @@ export type RunDetail = {
   readonly compileFailures: readonly string[];
   /** Seal decisions in order (revise rounds, then a final approve/reject). */
   readonly seal: readonly SealDecision[];
+  /** The one-time prepare phase outcome (Fix #1 setup + Fix #2 pre-flight), if it ran; else undefined. */
+  readonly prepare: PrepareDetail | undefined;
   readonly iterationsDetail: readonly IterationDetail[];
+};
+
+/** The prepare-phase projection for `runs show` (Fix #1 / #2). */
+export type PrepareDetail = {
+  readonly status: 'proceed' | 'setup-failed' | 'contract-unsound';
+  readonly setupRan: boolean;
 };
 
 /** A `runs list` row: a parsed summary, or a corrupt-log flag (fail-closed, never silent). */
@@ -125,8 +133,19 @@ export function runDetail(header: RunLogHeader, entries: readonly RunLogEntry[])
     contractHash,
     compileFailures: collectCompileFailures(entries),
     seal: collectSeal(entries),
+    prepare: collectPrepare(entries),
     iterationsDetail: collectIterations(entries),
   };
+}
+
+/** The one-time prepare-phase outcome (Fix #1 / #2), or undefined when the phase never ran. */
+function collectPrepare(entries: readonly RunLogEntry[]): PrepareDetail | undefined {
+  for (const e of entries) {
+    if (e.event.tag === 'WORKSPACE_PREPARED') {
+      return { status: e.event.prepared.status, setupRan: e.event.setupRan };
+    }
+  }
+  return undefined;
 }
 
 function statusOf(state: OrchestratorState): RunStatus {

@@ -91,6 +91,19 @@ describe('parseArgs', () => {
     expect(a.config.smoke).toBe('node smoke.mjs');
   });
 
+  it('parses --setup-cmd / --no-setup / --setup-timeout-ms (Fix #1)', async () => {
+    const a = await parseArgs([
+      'run', '--goal', 'g', '--verify-cmd', 'npm test',
+      '--setup-cmd', 'npm ci', '--setup-timeout-ms', '120000',
+    ]);
+    expect(a.config.setupCmd).toBe('npm ci');
+    expect(a.config.noSetup).toBe(false);
+    expect(a.timeouts.setupMs).toBe(120000);
+
+    const b = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--no-setup']);
+    expect(b.config.noSetup).toBe(true);
+  });
+
   it('parses the --stuck-* tuning flags fail-closed (issue #54)', async () => {
     const a = await parseArgs([
       'run', '--goal', 'g', '--verify-cmd', 'true',

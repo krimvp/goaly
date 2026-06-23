@@ -106,6 +106,7 @@ export function renderRunDetail(d: RunDetail): string {
   if (d.reason !== undefined) lines.push(`reason:      ${d.reason}`);
   lines.push(...renderContract(d.contract));
   lines.push(...renderSeal(d.seal, d.compileFailures));
+  lines.push(...renderPrepare(d.prepare));
   lines.push(...renderIterations(d.iterationsDetail));
   // The per-layer spend breakdown (issue #17), folded from the same log — tokens-only here, since
   // cost pricing is a volatile print-time overlay applied only to a live run's `--cost-table`.
@@ -116,6 +117,9 @@ export function renderRunDetail(d: RunDetail): string {
 function renderContract(contract: CompiledContract | null): string[] {
   if (contract === null) return ['', 'contract:    (none — run failed before compile)'];
   const lines = ['', `contract:    ${contract.contractHash}`, `  rubric:    ${contract.rubric}`];
+  if (contract.setup !== undefined) {
+    lines.push(`  setup:     ${contract.setup}  (one-time, before iteration 1)`);
+  }
   if (contract.generatedFiles.length > 0) {
     lines.push(`  generated: ${contract.generatedFiles.map((f) => f.path).join(', ')}`);
   }
@@ -151,6 +155,13 @@ function fmtSealDecision(d: SealDecision): string {
     case 'revise':
       return 'revise';
   }
+}
+
+/** Render the one-time prepare phase (Fix #1 setup + Fix #2 pre-flight) when it ran. */
+function renderPrepare(prepare: RunDetail['prepare']): string[] {
+  if (prepare === undefined) return [];
+  const setup = prepare.setupRan ? 'setup ran' : 'no setup';
+  return ['', `prepare:     ${prepare.status} (${setup})`];
 }
 
 function renderIterations(iterations: readonly IterationDetail[]): string[] {

@@ -9,6 +9,12 @@ import type { VerifierCompiler } from './compiler';
 const GeneratedVerification = z.object({
   command: z.string().min(1),
   rubric: z.string(),
+  /**
+   * Optional one-time workspace bootstrap command (Fix #1): if the repo needs deps installed (or any
+   * other one-time prep) before the verification can run, the authoring LLM puts that here (e.g.
+   * `npm ci`). Runs once before the first agent turn; a `--setup-cmd` flag overrides it.
+   */
+  setup: z.string().optional(),
   files: z
     .array(
       z.object({
@@ -23,7 +29,8 @@ type GeneratedVerification = z.infer<typeof GeneratedVerification>;
 const SYSTEM_PROMPT =
   'You author verification for software goals. Reply with ONLY a single JSON object, ' +
   'no prose, no markdown fences. Shape: ' +
-  '{ "command": string, "rubric": string, "files"?: Array<{ "path": string, "content": string }> }. ' +
+  '{ "command": string, "rubric": string, "setup"?: string, ' +
+  '"files"?: Array<{ "path": string, "content": string }> }. ' +
   'The command must exit 0 exactly when the goal is achieved.\n' +
   'Guardrails for a RUNNABLE bar (issue #55):\n' +
   "- Author the command over the repo's EXISTING tooling (its test / build / lint runner). Do not " +
@@ -32,7 +39,11 @@ const SYSTEM_PROMPT =
   'absolute or out-of-repo path such as /tmp.\n' +
   '- The rubric must be checkable by RUNNING that command. Do not author a rubric that judges ' +
   'runtime / visual / "is it meaningful" behavior a grader cannot execute — express those as ' +
-  'assertions inside the test suite instead.';
+  'assertions inside the test suite instead.\n' +
+  '- If the verification needs dependencies installed (or any one-time prep) before it can run, put ' +
+  'that in "setup" (e.g. "npm ci", "pip install -r requirements.txt", "go mod download") so the ' +
+  'worker starts from a populated tree. Use the lockfile-respecting install for the repo\'s manifest. ' +
+  'Omit "setup" when no preparation is needed.';
 
 /**
  * Extract the first balanced JSON object from a string. Tolerant of surrounding prose
@@ -181,11 +192,15 @@ export class AgentCompiler implements VerifierCompiler {
 
   #compileExisting(config: RunConfig, ref: string): CompiledContract {
     const rubric = config.rubric ?? '';
+    // No LLM authoring on the existing-command path, so setup comes ONLY from --setup-cmd (resolveSetup
+    // drops it under --no-setup).
+    const setup = resolveSetup(config, undefined);
     const unhashed: UnhashedContract = {
       goal: config.goal,
       rungs: buildRungs(ref, rubric, config.judge, config.smoke),
       rubric,
       generatedFiles: [],
+      ...(setup !== undefined ? { setup } : {}),
     };
     return freezeContract(unhashed);
   }
@@ -249,12 +264,27 @@ export class AgentCompiler implements VerifierCompiler {
       }
     }
 
+    // Setup precedence: --setup-cmd overrides the LLM-authored command; --no-setup drops both.
+    const setup = resolveSetup(config, generated.setup);
     const unhashed: UnhashedContract = {
       goal: config.goal,
       rungs: buildRungs(generated.command, generated.rubric, config.judge, config.smoke),
       rubric: generated.rubric,
       generatedFiles,
+      ...(setup !== undefined ? { setup } : {}),
     };
     return freezeContract(unhashed);
   }
+}
+
+/**
+ * Resolve the frozen setup command (Fix #1) from the config override and the LLM-authored value.
+ * Precedence: `--no-setup` disables it entirely; otherwise `--setup-cmd` wins over what the compiler
+ * authored. A blank authored string is treated as "no setup". Returns undefined when there is none.
+ */
+function resolveSetup(config: RunConfig, authored: string | undefined): string | undefined {
+  if (config.noSetup) return undefined;
+  if (config.setupCmd !== undefined) return config.setupCmd;
+  const trimmed = authored?.trim();
+  return trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
 }
