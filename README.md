@@ -37,6 +37,14 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
   (`--generate`), an integrity **guard rung runs first** and fails closed if any generated test file
   was changed since the contract froze — the worker can't quietly rewrite the bar the frozen command
   measures.
+- **Artifact-running smoke rung (`--smoke`).** For goals whose correctness only shows at *runtime* — a
+  web UI, a server endpoint, a CLI's actual behavior — add `--smoke "<cmd>"`: an **extra deterministic
+  rung** (a second `--verify-cmd`) that *executes* the built artifact and exits non-zero on failure.
+  It's runtime-agnostic — the command can be a headless-browser script, a server probe, a CLI smoke,
+  anything — so goaly bakes in no browser/ecosystem dependency. It runs after `--verify-cmd` but before
+  the judge, turning "it actually runs" from a diff-reading judge's guess into an ungameable key, and
+  is frozen into the contract like any rung. (Plain `--verify-cmd "npm test && node smoke.mjs"` does
+  the same; `--smoke` just gives the runtime check its own labeled rung with its own failure feedback.)
 - **Gate A is the human's say over the bar.** Before the loop you can approve the frozen contract,
   **reject** it (abort), or give **free-text feedback to revise** it — goaly re-authors the contract
   and re-presents it, bounded by `--max-gate-a-revisions` (default 10; `0` disables revision).
@@ -260,6 +268,12 @@ goaly run --goal "..." --verify-cmd "npm test" --stream-transcript
 goaly run --goal "..." --verify-cmd "npm test" \
              --harness-timeout-ms 900000 --llm-timeout-ms 120000 --verify-timeout-ms 60000
 
+# Build-heavy run: kill the agent only when it STALLS (no stream output for 3 min), not on a hard cap:
+goaly run --goal "..." --generate --harness-idle-timeout-ms 180000
+
+# Add a deterministic artifact-running smoke rung — run the built thing, fail on any runtime error:
+goaly run --goal "build a /health endpoint" --generate --smoke "node smoke.mjs"
+
 # Jail the agent AND the verifier in an OS sandbox (refuses to start if no mechanism is present):
 goaly run --goal "..." --verify-cmd "npm test" --sandbox            # auto-detect (bwrap / container)
 goaly run --goal "..." --verify-cmd "npm test" --sandbox=bwrap --sandbox-net allow   # let npm fetch
@@ -321,13 +335,22 @@ never enters the frozen contract):
 
 | Flag / config key | Step | Default |
 | --- | --- | --- |
-| `--harness-timeout-ms` | the harness (coding-agent) subprocess | `600000` (10 min) |
+| `--harness-timeout-ms` | the harness (coding-agent) subprocess — hard wall-clock cap | `600000` (10 min) |
+| `--harness-idle-timeout-ms` | the harness subprocess — **idle/heartbeat** cap | off |
 | `--llm-timeout-ms` | each LLM step — judge / approver / compiler | `600000` (10 min) |
 | `--verify-timeout-ms` | the verify command | unbounded |
 
 A verify command that exceeds its timeout is SIGKILL'd and reported as a **non-zero exit — i.e. a
 verifier FAIL, never a green** (fail-closed, invariant #4). Each value must be a positive integer
 number of milliseconds.
+
+**Idle vs wall-clock harness timeout.** The default 10-min wall-clock cap is tuned for small tasks;
+real multi-file builds routinely exceed it mid-edit, truncating progressing turns and blinding the
+token budget for that turn (it reports `tokensUnknown`). `--harness-idle-timeout-ms N` instead kills
+the agent only after **N ms with no stream output** — a turn that is actively editing keeps resetting
+the heartbeat and survives, while a genuinely stalled one is still reaped (fail-closed: the loop
+always terminates). When both are set, the wall-clock `--harness-timeout-ms` remains the absolute
+backstop. Recommended for long, build-heavy runs.
 
 ### Diff baseline (`--baseline`)
 

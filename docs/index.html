@@ -218,12 +218,14 @@
       <div class="ladder-ctrl">
         <button class="mini-btn on" data-fail="-1">All pass</button>
         <button class="mini-btn" data-fail="0">Deterministic fails</button>
-        <button class="mini-btn" data-fail="2">Judge fails</button>
+        <button class="mini-btn" data-fail="2">Smoke fails</button>
+        <button class="mini-btn" data-fail="3">Judge fails</button>
       </div>
       <div class="ladder" id="ladder">
         <div class="rung det"><span class="rk">det · 1</span><span class="rbody"><b><code>npm test</code> exits 0</b><p>tests / exit codes — ungameable, confidence = 1</p></span><span class="rstat"></span></div>
         <div class="rung det"><span class="rk">det · 2</span><span class="rbody"><b><code>npm run lint</code> exits 0</b><p>static checks before any model is consulted</p></span><span class="rstat"></span></div>
-        <div class="rung judge"><span class="rk">judge · 3</span><span class="rbody"><b>LLM quorum vs. the frozen rubric</b><p>only the fuzzy residual — best-of-N (diversity temp), confidence floor</p></span><span class="rstat"></span></div>
+        <div class="rung det"><span class="rk">smoke · 3</span><span class="rbody"><b><code>--smoke "node smoke.mjs"</code> exits 0</b><p>runs the built artifact (browser script / server probe / CLI) — a second ungameable exit-code check, runtime-agnostic (issue #53)</p></span><span class="rstat"></span></div>
+        <div class="rung judge"><span class="rk">judge · 4</span><span class="rbody"><b>LLM quorum vs. the frozen rubric</b><p>only the fuzzy residual — best-of-N (diversity temp), confidence floor</p></span><span class="rstat"></span></div>
       </div>
       <p class="ladder-note" id="ladder-note"></p>
 
@@ -348,7 +350,7 @@
         <thead><tr><th>Capability</th><th>What you get</th></tr></thead>
         <tbody>
           <tr><td class="feat">Harnesses</td><td><span class="pill pass">claude-code</span> <span class="pill pass">codex</span> <span class="pill pass">droid</span> <span class="pill neutral">fake</span> — adding one is a single file</td></tr>
-          <tr><td class="feat">Verification</td><td><code>--verify-cmd</code> (existing command) · <code>--generate</code> (the agent authors it)</td></tr>
+          <tr><td class="feat">Verification</td><td><code>--verify-cmd</code> (existing command) · <code>--generate</code> (the agent authors it) · <code>--smoke "&lt;cmd&gt;"</code> (artifact-running rung: a second deterministic check that <em>runs</em> the built artifact — browser script, server probe, CLI smoke — and exits non-zero on failure) — runtime-agnostic, ungameable, runs before the judge</td></tr>
           <tr><td class="feat">Model selection</td><td><code>--model</code> (harness + LLM steps) · <code>--llm-model</code> · per-step <code>--judge/approver/compiler-model</code> · <code>--llm-provider</code> claude/codex/droid — pure wiring, never enters the frozen contract</td></tr>
           <tr><td class="feat">Deterministic rungs</td><td><span class="yes">✓</span> exit-code / test commands, confidence = 1, ungameable</td></tr>
           <tr><td class="feat">LLM-judge rungs</td><td><span class="yes">✓</span> quorum (default 3, sampled at a diversity temperature; single-sample stays temp 0), confidence floor (default 0.66)</td></tr>
@@ -366,7 +368,7 @@
           <tr><td class="feat">Diagnostics</td><td><code>--log-level</code> debug/info/warn/error · structured JSON file at <code>.goaly/&lt;runId&gt;/goaly.log</code> (size-rotated) · <code>--log-file</code> · <code>--no-log-file</code> — human-facing, separate from the write-ahead run log, content stays at <code>debug</code></td></tr>
           <tr><td class="feat">Live streaming</td><td><code>--stream</code> — the agent run <b>and</b> the LLM steps' intermediate turns (tool uses, messages, token counts) to stderr as they happen, phase-tagged · one canonical tool-neutral <code>AgentStreamEvent</code> taxonomy · embedder hook (<code>onStreamEvent</code>) · pure observability, never in the run log</td></tr>
           <tr><td class="feat">Stream transcript</td><td><code>--stream-transcript</code> — persist that <em>same</em> canonical stream durably to a <b>separate</b> per-run file <code>.goaly/&lt;runId&gt;/stream.jsonl</code> (one <code>{ phase, …event, ts }</code> per line, <b>identical shape across every harness</b>) for offline replay · read back with the exported <code>readStreamTranscript()</code> (Zod-validates, drops corrupt lines) · uncapped (never rotated) · <code>--stream-file</code> overrides the path · <b>NOT</b> the replay log — observational, so resume stays a fold over <code>OrchestratorEvent</code>; a write failure degrades to "no transcript" (fail-closed)</td></tr>
-          <tr><td class="feat">Per-step timeouts</td><td><code>--harness-timeout-ms</code> · <code>--llm-timeout-ms</code> (judge/approver/compiler) · <code>--verify-timeout-ms</code> — subprocess kill-timeouts; a verify timeout is a fail-closed FAIL, never a green</td></tr>
+          <tr><td class="feat">Per-step timeouts</td><td><code>--harness-timeout-ms</code> (hard wall-clock) · <code>--harness-idle-timeout-ms</code> (idle/heartbeat — kill only on no stream output for N ms, so a slow-but-progressing build turn survives; wall-clock stays the backstop) · <code>--llm-timeout-ms</code> (judge/approver/compiler) · <code>--verify-timeout-ms</code> — subprocess kill-timeouts; a verify timeout is a fail-closed FAIL, never a green</td></tr>
           <tr><td class="feat">Sandboxing</td><td><span class="pill neutral">opt-in</span> <code>--sandbox</code> — OS isolation for the <b>two untrusted-code execs</b> (the coding agent <i>and</i> the verify command); off by default (behavior unchanged) · modes <code>none</code> / <code>auto</code> / <code>bwrap</code> (Linux) / <code>container</code> (<code>docker</code>/<code>podman</code>, covers macOS) · rw workspace, ro system, <code>$HOME</code> creds denied · agent keeps network + full env, verifier gets <b>no network by default</b> (<code>--sandbox-net allow</code> for full egress, or <code>--sandbox-net allow:&lt;host,…&gt;</code> for a proxy-enforced egress <b>allowlist</b> — wildcards <code>*.npmjs.org</code> + port pins <code>host:443</code> — constraining <b>both</b> seams so <code>npm test</code> reaches the registry without opening full exfiltration egress) + the scrubbed env · <code>--sandbox-image</code> / <code>--sandbox-runtime</code> for containers · a requested-but-absent mechanism makes the run <b>refuse to start</b> (fail-closed) · git plumbing never sandboxed</td></tr>
           <tr><td class="feat">Config file</td><td>repeated wiring as defaults in an implicit <code>.goalyrc</code> (workspace/cwd) plus an explicit <code>--config &lt;path&gt;</code> · keys mirror the flags in kebab-case · precedence <code>CLI &gt; --config &gt; .goalyrc &gt; default</code> · parsed with Zod, fails closed</td></tr>
         </tbody>

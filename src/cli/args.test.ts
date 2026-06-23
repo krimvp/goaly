@@ -78,6 +78,13 @@ describe('parseArgs', () => {
     expect(a.verifyDir).toBe('test');
   });
 
+  it('parses --smoke into an artifact-running command (issue #53)', async () => {
+    const a = await parseArgs([
+      'run', '--goal', 'g', '--verify-cmd', 'npm test', '--smoke', 'node smoke.mjs',
+    ]);
+    expect(a.config.smoke).toBe('node smoke.mjs');
+  });
+
   it('parses the --stuck-* tuning flags fail-closed (issue #54)', async () => {
     const a = await parseArgs([
       'run', '--goal', 'g', '--verify-cmd', 'true',
@@ -540,6 +547,25 @@ describe('parseArgs', () => {
         '45000',
       ]);
       expect(a.timeouts).toEqual({ harnessMs: 600000, llmMs: 120000, verifyMs: 45000 });
+    });
+
+    it('parses the harness idle/heartbeat timeout (issue #56)', async () => {
+      const a = await parseArgs([
+        'run',
+        '--goal',
+        'g',
+        '--verify-cmd',
+        'true',
+        '--harness-idle-timeout-ms',
+        '120000',
+      ]);
+      expect(a.timeouts).toEqual({ harnessIdleMs: 120000 });
+    });
+
+    it('rejects a non-positive harness idle timeout (fails closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--harness-idle-timeout-ms', '0']),
+      ).rejects.toThrow(UsageError);
     });
 
     it('defaults to no explicit timeouts (each step keeps its own default)', async () => {

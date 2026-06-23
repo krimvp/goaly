@@ -33,7 +33,15 @@ export function parseCodexOutput(stdout: string): AgentOutput | null {
  * The subprocess is injectable so tests never spawn a real process.
  */
 export class CodexAdapter extends AgentCliHarness {
-  constructor(opts: { exec?: ExecFn; timeoutMs?: number; model?: string; cwd?: string } = {}) {
+  constructor(
+    opts: {
+      exec?: ExecFn;
+      timeoutMs?: number;
+      idleTimeoutMs?: number;
+      model?: string;
+      cwd?: string;
+    } = {},
+  ) {
     super(codexCodec, opts);
   }
 }

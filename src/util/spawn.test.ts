@@ -65,6 +65,24 @@ describe('runProcess', () => {
     expect(r.stdout.trim()).toBe('shelled');
   });
 
+  it('idle timeout kills a silent (no-output) process and flags it timedOut (issue #56)', async () => {
+    // The process emits nothing and sleeps far past the idle window, so the heartbeat timer fires.
+    const r = await runProcess('node', ['-e', 'setTimeout(()=>{}, 10000)'], { idleTimeoutMs: 150 });
+    expect(r.timedOut).toBe(true);
+  });
+
+  it('idle timeout does NOT kill a process that keeps streaming output (issue #56)', async () => {
+    // Emits a chunk every 40ms for ~320ms total — longer than the 200ms idle window, but no single
+    // gap exceeds it, so each chunk re-arms the heartbeat and the turn runs to a clean exit. A
+    // wall-clock cap of 200ms would have killed this progressing turn; the idle cap does not.
+    const script =
+      "let n=0;const i=setInterval(()=>{process.stdout.write('.');if(++n>=8){clearInterval(i);process.exit(0);}},40);";
+    const r = await runProcess('node', ['-e', script], { idleTimeoutMs: 200 });
+    expect(r.timedOut).toBe(false);
+    expect(r.code).toBe(0);
+    expect(r.stdout.length).toBe(8);
+  });
+
   it('killGroup + timeout reaps an orphaning shell that backgrounds a child without hanging', async () => {
     // The shell backgrounds a long sleeper that inherits stdout. Without a process-GROUP kill, the
     // sleeper would keep the inherited stdout pipe open and `close` would never fire — the call would

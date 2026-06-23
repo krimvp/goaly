@@ -13,6 +13,15 @@ export type RunProcessOptions = {
   input?: string;
   cwd?: string;
   timeoutMs?: number;
+  /**
+   * Idle (heartbeat) timeout in milliseconds (issue #56): kill the process when NO stdout/stderr
+   * activity has arrived for this long, instead of (or in addition to) the hard wall-clock
+   * `timeoutMs`. A turn that is actively streaming output keeps resetting it, so a legitimately long
+   * but progressing turn survives — only a genuinely stalled one is killed (still flagged
+   * `timedOut`). When both are set, `timeoutMs` remains the absolute backstop. A killed-on-idle run
+   * is indistinguishable from a wall-clock timeout downstream: both surface as `timedOut: true`.
+   */
+  idleTimeoutMs?: number;
   env?: NodeJS.ProcessEnv;
   /** Run the command through a shell (`spawn`'s `shell` option). Used for verify-command strings. */
   shell?: boolean;
@@ -83,10 +92,28 @@ export function runProcess(
           }, options.timeoutMs)
         : null;
 
+    // Idle/heartbeat timeout (issue #56): re-armed on every output chunk, so a streaming-but-slow
+    // turn never trips it; only a genuine stall (no output for `idleTimeoutMs`) kills the process.
+    let idleTimer: NodeJS.Timeout | null = null;
+    const armIdle = (): void => {
+      if (options.idleTimeoutMs === undefined) return;
+      if (idleTimer !== null) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        timedOut = true;
+        kill();
+      }, options.idleTimeoutMs);
+    };
+    const clearTimers = (): void => {
+      if (timer !== null) clearTimeout(timer);
+      if (idleTimer !== null) clearTimeout(idleTimer);
+    };
+    armIdle();
+
     const overCap = (): boolean => stdout.length + stderr.length > maxBytes;
 
     child.stdout?.on('data', (d: Buffer) => {
       if (truncated) return;
+      armIdle();
       const chunk = d.toString();
       stdout += chunk;
       if (options.onStdout !== undefined) {
@@ -104,6 +131,7 @@ export function runProcess(
     });
     child.stderr?.on('data', (d: Buffer) => {
       if (truncated) return;
+      armIdle();
       stderr += d.toString();
       if (overCap()) {
         truncated = true;
@@ -111,11 +139,11 @@ export function runProcess(
       }
     });
     child.on('error', (e) => {
-      if (timer !== null) clearTimeout(timer);
+      clearTimers();
       resolve({ stdout, stderr: `${stderr}${String(e)}`, code: 127, timedOut, truncated });
     });
     child.on('close', (code) => {
-      if (timer !== null) clearTimeout(timer);
+      clearTimers();
       resolve({ stdout, stderr, code: code ?? 1, timedOut, truncated });
     });
 

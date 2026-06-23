@@ -235,7 +235,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     gateA: config.autonomous
       ? new AutoContractGate()
       : new HumanContractGate({ allowRevise: config.maxGateARevisions > 0 }),
-    harness: makeHarness(options.harness, models.harness, timeouts.harnessMs, {
+    harness: makeHarness(options.harness, models.harness, timeouts.harnessMs, timeouts.harnessIdleMs, {
       launcher,
       workspace: options.workspaceRoot,
       policy: options.sandbox ?? defaultPolicy(),
@@ -386,7 +386,8 @@ export function droidCompletionArgs(prompt: string, model: string | undefined): 
 
 /**
  * Turn the frozen contract's ordered rungs into a Ladder of concrete verifiers. An optional
- * `verifyTimeoutMs` caps each deterministic command (a timeout is a fail-closed FAIL); the model
+ * `verifyTimeoutMs` caps each deterministic command — including an artifact-running smoke command
+ * (issue #53), which is just another deterministic rung (a timeout is a fail-closed FAIL); the model
  * and timeout are wiring and never alter the frozen rungs themselves.
  */
 export function buildLadder(
@@ -426,15 +427,17 @@ function makeHarness(
   choice: HarnessChoice,
   model: string | undefined,
   timeoutMs: number | undefined,
+  idleTimeoutMs: number | undefined,
   sandbox: HarnessSandbox,
 ): HarnessAdapter {
-  const exec = sandboxedHarnessExec(choice, timeoutMs, sandbox);
+  const exec = sandboxedHarnessExec(choice, timeoutMs, idleTimeoutMs, sandbox);
   const opts = {
     // Run the agent IN the workspace, not goaly's invocation cwd (which `npm run` resets to the
     // package root). Only the default exec reads this; the sandbox exec sets the jail's cwd itself.
     cwd: sandbox.workspace,
     ...(model !== undefined ? { model } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
     ...(exec !== undefined ? { exec } : {}),
   };
   switch (choice) {
@@ -458,13 +461,14 @@ function makeHarness(
 function sandboxedHarnessExec(
   choice: HarnessChoice,
   timeoutMs: number | undefined,
+  idleTimeoutMs: number | undefined,
   sandbox: HarnessSandbox,
 ): ReturnType<typeof withSandboxAgent> | undefined {
   if (sandbox.launcher.identity || choice === 'fake') return undefined;
   const codec =
     choice === 'codex' ? codexCodec : choice === 'droid' ? droidCodec : claudeCodec;
   const budget = timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
-  const inner = neutralAgentExec(budget, codec.promptOnStdin);
+  const inner = neutralAgentExec(budget, codec.promptOnStdin, idleTimeoutMs);
   return withSandboxAgent(codec.command, inner, sandbox.launcher, {
     workspace: sandbox.workspace,
     network: networkForSeam(sandbox.policy, 'harness'),

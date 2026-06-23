@@ -42,6 +42,14 @@ export type StuckPolicyInput = z.input<typeof StuckPolicy>;
 export const RunConfig = z.object({
   goal: z.string().min(1),
   verifier: VerifierIntent,
+  /**
+   * Optional artifact-running smoke command (issue #53): an extra deterministic rung that RUNS the
+   * built artifact (e.g. `node smoke.mjs`, `./smoke.sh`, a headless-browser script). It is just a
+   * second deterministic rung — harness-agnostic and runtime-agnostic — placed after the main verify
+   * command and before any judge, frozen into the contract and never weakened by the loop. Authored
+   * from `--smoke`, not the LLM.
+   */
+  smoke: z.string().min(1).optional(),
   /** Frozen after compile; seeds the LLM-judge portion of the ladder when present. */
   rubric: z.string().optional(),
   /** Gates contract approval (Gate A) ONLY. Never skips the freeze. */
@@ -92,6 +100,8 @@ export const CliInput = z.object({
   goal: z.string().min(1),
   verifyCmd: z.string().min(1).optional(),
   generate: z.coerce.boolean().optional(),
+  /** Artifact-running smoke command (issue #53): an extra deterministic rung running the artifact. */
+  smoke: z.string().min(1).optional(),
   intent: z.string().optional(),
   rubric: z.string().optional(),
   autonomous: z.coerce.boolean().optional(),
@@ -140,6 +150,7 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
   return RunConfig.parse({
     goal: input.goal,
     verifier,
+    ...(input.smoke !== undefined ? { smoke: input.smoke } : {}),
     ...(input.rubric !== undefined ? { rubric: input.rubric } : {}),
     ...(input.autonomous !== undefined ? { autonomous: input.autonomous } : {}),
     ...(input.maxGateARevisions !== undefined

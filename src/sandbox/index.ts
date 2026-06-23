@@ -68,7 +68,11 @@ export function makeLauncher(policy: SandboxPolicy, opts: MakeLauncherOpts = {})
  * invocation into `[binary, ...launcherArgs]`, so this inner exec spawns `args[0]` with the rest.
  * Used only when {@link withSandboxAgent} actually rewrites; `none` keeps the codec's own exec.
  */
-export function neutralAgentExec(timeoutMs: number, promptOnStdin: boolean): AgentExecFn {
+export function neutralAgentExec(
+  timeoutMs: number,
+  promptOnStdin: boolean,
+  idleTimeoutMs?: number,
+): AgentExecFn {
   return async (args, input, onStdout) => {
     const [binary, ...rest] = args;
     if (binary === undefined) {
@@ -76,6 +80,7 @@ export function neutralAgentExec(timeoutMs: number, promptOnStdin: boolean): Age
     }
     const r = await runProcess(binary, rest, {
       timeoutMs,
+      ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
       ...(promptOnStdin ? { input: input.prompt } : {}),
       ...(onStdout !== undefined ? { onStdout } : {}),
     });
