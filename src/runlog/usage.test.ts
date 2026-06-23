@@ -40,8 +40,8 @@ const verified = (llm?: TokenUsage): OrchestratorEvent => ({
   ...(llm !== undefined ? { llm } : {}),
 });
 
-const gateB = (approval = approve(), llm?: TokenUsage): OrchestratorEvent => ({
-  tag: 'GATE_B_DECIDED',
+const signoff = (approval = approve(), llm?: TokenUsage): OrchestratorEvent => ({
+  tag: 'SIGNOFF_DECIDED',
   approval,
   ...(llm !== undefined ? { llm } : {}),
 });
@@ -52,7 +52,7 @@ describe('summarizeUsage', () => {
       compiled(u(800)),
       agentRan(12_000),
       verified(u(1_200, 3)),
-      gateB(approve(), u(400)),
+      signoff(approve(), u(400)),
     ];
 
     const report = summarizeUsage(events, {});
@@ -87,7 +87,7 @@ describe('summarizeUsage', () => {
       breakdown: { input: 1_400, output: 98 },
     };
 
-    const report = summarizeUsage([harnessRun, gateB(approve(), approverUsage)], {});
+    const report = summarizeUsage([harnessRun, signoff(approve(), approverUsage)], {});
 
     expect(report.harness.breakdown).toEqual({
       input: 3,
@@ -109,13 +109,13 @@ describe('summarizeUsage', () => {
   it('sums spend across many iterations and compile retries', () => {
     const events = [
       compiled(u(500)),
-      compiled(u(300)), // a Gate A revise re-authors the contract
+      compiled(u(300)), // a Seal revise re-authors the contract
       agentRan(1_000),
       verified(u(100, 3)),
-      gateB(veto('nope'), u(50)),
+      signoff(veto('nope'), u(50)),
       agentRan(2_000),
       verified(u(120, 3)),
-      gateB(approve(), u(60)),
+      signoff(approve(), u(60)),
     ];
 
     const report = summarizeUsage(events, {});
@@ -171,7 +171,7 @@ describe('summarizeUsage', () => {
       compiled(u(800)), // fully reported compiler
       agentRan(3_000, 'estimated'), // an estimated harness run
       verified({ tokens: 600, calls: 3, unknownCalls: 0, estimatedTokens: 600 }), // estimated judge
-      gateB(approve(), u(400)), // reported approver
+      signoff(approve(), u(400)), // reported approver
     ];
 
     const report = summarizeUsage(events, {});

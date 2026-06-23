@@ -45,8 +45,8 @@ adapter. You don't choose hooks *or* wrapper; hooks live inside one adapter.
 ## Architecture overview
 
 ```
-COMPILE_VERIFIER → [Gate A: contract approval] → loop {
-    RUN_AGENT → verifier ladder → [Gate B: result approval] → DECIDE
+COMPILE_VERIFIER → [Seal: contract approval] → loop {
+    RUN_AGENT → verifier ladder → [Sign-off: result approval] → DECIDE
 } → DONE | FAILED | ABORTED
 ```
 
@@ -124,13 +124,13 @@ stabilized:
 
 The system has **two gates**; a flag moves only one of them.
 
-- **Gate A — the contract** (frozen verifier + rubric):
+- **Seal — the contract** (frozen verifier + rubric):
   - default (`autonomous: false`): **human approves once** before the loop starts.
   - with flag (`autonomous: true`): **auto-accepted**.
-- **Gate B — the result** (per iteration): **always the independent approval agent**,
+- **Sign-off — the result** (per iteration): **always the independent approval agent**,
   in both modes.
 
-### Gate B — the final approval agent
+### Sign-off — the final approval agent
 
 Runs **only when the verifier ladder says pass**, and can **only veto, never promote**.
 
@@ -147,7 +147,7 @@ before the loop declares success.** A worker can game one; getting both is much 
 
 ### The `--autonomous` flag
 
-Moves Gate A only. Everything else identical.
+Moves Seal only. Everything else identical.
 
 ```
 false → COMPILE_VERIFIER → [human approves contract] → loop
@@ -202,7 +202,7 @@ it's talking to.
   goal,
   verifier: { kind: existing | generate, ref? },
   rubric,                  // frozen after compile (for LLM-judge portion)
-  autonomous: false,       // flag; gates contract approval (Gate A) only
+  autonomous: false,       // flag; gates contract approval (Seal) only
   maxIterations,
   budget,                  // tokens / time
   stuckPolicy              // thresholds for no-diff / repeat / oscillation

@@ -9,7 +9,7 @@ import {
   FakeVerifier,
   FakeApprover,
   FakeCompiler,
-  FakeGate,
+  FakeSealGate,
   FakeWorkspace,
   ManualClock,
   ManualBudgetMeter,
@@ -33,7 +33,7 @@ type Wiring = {
   scripts: FakeRunScript[];
   verdicts: Verdict[];
   approvals?: ApprovalVerdict[];
-  gate?: FakeGate;
+  gate?: FakeSealGate;
   budget?: ManualBudgetMeter;
   workspace?: FakeWorkspace;
   runlog?: InMemoryRunLog;
@@ -55,7 +55,7 @@ function wire(w: Wiring): {
   const approver = new FakeApprover(w.approvals ?? []);
   const deps: DriverDeps = {
     compiler: w.compiler ?? new FakeCompiler(contract),
-    gateA: w.gate ?? new FakeGate({ kind: 'approve' }),
+    seal: w.gate ?? new FakeSealGate({ kind: 'approve' }),
     harness,
     makeLadder: () => ladder,
     approver,
@@ -147,7 +147,7 @@ describe('drive() — full loop with zero IO', () => {
     expect(outcome.status).toBe('FAILED');
     expect(outcome.iterations).toBe(3);
     expect(outcome.reason).toContain('maxIterations');
-    // Two keys: Gate B is never consulted on an all-red run.
+    // Two keys: Sign-off is never consulted on an all-red run.
     expect(approver.inputs).toHaveLength(0);
   });
 
@@ -186,11 +186,11 @@ describe('drive() — full loop with zero IO', () => {
     expect(outcome.reason).toBe('budget exceeded');
   });
 
-  it('ABORTED when the contract is rejected at Gate A (and the loop never starts)', async () => {
+  it('ABORTED when the contract is rejected at Seal (and the loop never starts)', async () => {
     const { deps, harness } = wire({
       scripts: [{ postHash: '0000001' }],
       verdicts: [passVerdict()],
-      gate: new FakeGate({ kind: 'reject', reason: 'bar is wrong' }),
+      gate: new FakeSealGate({ kind: 'reject', reason: 'bar is wrong' }),
     });
     const outcome = await drive(deps, makeConfig(), runId);
     expect(outcome.status).toBe('ABORTED');
@@ -198,7 +198,7 @@ describe('drive() — full loop with zero IO', () => {
     expect(harness.prompts).toHaveLength(0);
   });
 
-  it('Gate A revise re-authors the contract, then the APPROVED contract runs the loop', async () => {
+  it('Seal revise re-authors the contract, then the APPROVED contract runs the loop', async () => {
     const draft = makeFakeContract({ goal: 'draft bar' });
     const revised = makeFakeContract({ goal: 'revised bar' });
     expect(draft.contractHash).not.toBe(revised.contractHash);
@@ -209,7 +209,7 @@ describe('drive() — full loop with zero IO', () => {
     const runlog = new InMemoryRunLog();
     const deps: DriverDeps = {
       compiler,
-      gateA: new FakeGate([
+      seal: new FakeSealGate([
         { kind: 'revise', feedback: 'make the bar stricter' },
         { kind: 'approve' },
       ]),
@@ -242,13 +242,13 @@ describe('drive() — full loop with zero IO', () => {
     expect(hashes.has(revised.contractHash)).toBe(true);
   });
 
-  it('Gate A revise past the cap → ABORTED without ever starting the loop', async () => {
+  it('Seal revise past the cap → ABORTED without ever starting the loop', async () => {
     const draft = makeFakeContract({ goal: 'draft' });
     const ws = new FakeWorkspace('0000000', 'diff');
     const harness = new FakeHarness([{ postHash: '0000001' }], ws);
     const deps: DriverDeps = {
       compiler: new FakeCompiler(draft),
-      gateA: new FakeGate([{ kind: 'revise', feedback: 'again' }]), // clamps → always revises
+      seal: new FakeSealGate([{ kind: 'revise', feedback: 'again' }]), // clamps → always revises
       harness,
       makeLadder: () => new FakeVerifier([passVerdict()]),
       approver: new FakeApprover([approve()]),
@@ -257,7 +257,7 @@ describe('drive() — full loop with zero IO', () => {
       budget: new ManualBudgetMeter(),
       runlog: new InMemoryRunLog(),
     };
-    const outcome = await drive(deps, makeConfig({ maxGateARevisions: 2 }), runId);
+    const outcome = await drive(deps, makeConfig({ maxSealRevisions: 2 }), runId);
     expect(outcome.status).toBe('ABORTED');
     expect(outcome.reason).toContain('revision cap');
     expect(harness.prompts).toHaveLength(0);
@@ -267,7 +267,7 @@ describe('drive() — full loop with zero IO', () => {
     const workspace = new FakeWorkspace();
     const deps: DriverDeps = {
       compiler: new FakeCompiler(new Error('cannot author a verifier')),
-      gateA: new FakeGate(),
+      seal: new FakeSealGate(),
       harness: new FakeHarness([], workspace),
       makeLadder: () => new FakeVerifier([passVerdict()]),
       approver: new FakeApprover([]),
@@ -314,12 +314,12 @@ function crashAfter(inner: InMemoryRunLog, failOnAppend: number): RunLog {
 describe('drive() — resume', () => {
   it('reconstructs from a mid-loop log (after a persist crash) and never repeats a completed iteration', async () => {
     const inner = new InMemoryRunLog();
-    // The 5th append never lands: seq1-4 (compile, gateA, iter1 run, iter1 verify) persist; iter2's
+    // The 5th append never lands: seq1-4 (compile, seal, iter1 run, iter1 verify) persist; iter2's
     // AGENT_RAN does not. The hardened driver fail-closes to ABORTED rather than rejecting.
     const ws1 = new FakeWorkspace('0000000', 'diff');
     const deps1: DriverDeps = {
       compiler: new FakeCompiler(contract),
-      gateA: new FakeGate(),
+      seal: new FakeSealGate(),
       harness: new FakeHarness([{ postHash: '0000001' }, { postHash: '0000002' }], ws1),
       makeLadder: () => new FakeVerifier([failVerdict('e1'), failVerdict('e2')]),
       approver: new FakeApprover([]),
@@ -337,7 +337,7 @@ describe('drive() — resume', () => {
     const freshHarness = new FakeHarness([{ postHash: '0000003' }], ws2);
     const deps2: DriverDeps = {
       compiler: new FakeCompiler(new Error('compile must not run on resume')),
-      gateA: new FakeGate({ kind: 'reject', reason: 'gate must not run on resume' }),
+      seal: new FakeSealGate({ kind: 'reject', reason: 'gate must not run on resume' }),
       harness: freshHarness,
       makeLadder: () => new FakeVerifier([passVerdict()]),
       approver: new FakeApprover([approve()]),
@@ -353,13 +353,13 @@ describe('drive() — resume', () => {
     expect(freshHarness.prompts).toHaveLength(1); // proves no completed iteration was repeated
   });
 
-  it('resumes from a log ending right after CONTRACT_COMPILED (replay into AWAIT_GATE_A)', async () => {
+  it('resumes from a log ending right after CONTRACT_COMPILED (replay into AWAIT_SEAL)', async () => {
     const inner = new InMemoryRunLog();
-    // Crash on the 2nd append: only CONTRACT_COMPILED persists; the run stalls in AWAIT_GATE_A.
+    // Crash on the 2nd append: only CONTRACT_COMPILED persists; the run stalls in AWAIT_SEAL.
     const ws1 = new FakeWorkspace('0000000', 'diff');
     const deps1: DriverDeps = {
       compiler: new FakeCompiler(contract),
-      gateA: new FakeGate(),
+      seal: new FakeSealGate(),
       harness: new FakeHarness([{ postHash: '0000001' }], ws1),
       makeLadder: () => new FakeVerifier([passVerdict()]),
       approver: new FakeApprover([approve()]),
@@ -371,11 +371,11 @@ describe('drive() — resume', () => {
     await drive(deps1, makeConfig(), runId);
     expect((await inner.read())?.entries).toHaveLength(1);
 
-    // Resume: compile must NOT run again; Gate A onward proceeds to DONE.
+    // Resume: compile must NOT run again; Seal onward proceeds to DONE.
     const ws2 = new FakeWorkspace('0000000', 'diff');
     const deps2: DriverDeps = {
       compiler: new FakeCompiler(new Error('compile must not run on resume')),
-      gateA: new FakeGate({ kind: 'approve' }),
+      seal: new FakeSealGate({ kind: 'approve' }),
       harness: new FakeHarness([{ postHash: '0000009' }], ws2),
       makeLadder: () => new FakeVerifier([passVerdict()]),
       approver: new FakeApprover([approve()]),
@@ -404,7 +404,7 @@ describe('drive() — resume', () => {
     const ws = new FakeWorkspace('0000001', 'diff');
     const resumeDeps: DriverDeps = {
       compiler: new FakeCompiler(new Error('must not run')),
-      gateA: new FakeGate({ kind: 'reject', reason: 'must not run' }),
+      seal: new FakeSealGate({ kind: 'reject', reason: 'must not run' }),
       harness: new FakeHarness([{ throwError: 'must not run' }], ws),
       makeLadder: () => new FakeVerifier([failVerdict('must not run')]),
       approver: new FakeApprover([]),
@@ -439,10 +439,10 @@ describe('drive() — diagnostic logging', () => {
     expect(msgsAt(records, 'info')).toEqual([
       'starting run',
       'contract compiled',
-      'gate A decided',
+      'seal decided',
       'agent ran',
       'verified',
-      'gate B decided',
+      'sign-off decided',
       'run finished',
     ]);
 

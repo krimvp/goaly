@@ -6,7 +6,7 @@ import { SessionId, asRunId } from '../domain/ids';
 import type { AgentEventSink, AgentStreamEvent, StreamPhase } from '../agent-cli/stream';
 import {
   FakeCompiler,
-  FakeGate,
+  FakeSealGate,
   FakeVerifier,
   FakeApprover,
   FakeWorkspace,
@@ -52,7 +52,7 @@ function makeDeps(
   const runlog = new InMemoryRunLog();
   const deps: DriverDeps = {
     compiler: new FakeCompiler(makeFakeContract()),
-    gateA: new FakeGate({ kind: 'approve' }),
+    seal: new FakeSealGate({ kind: 'approve' }),
     harness,
     makeLadder: () => new FakeVerifier([passVerdict()]),
     approver: new FakeApprover([approve()]),

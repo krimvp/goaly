@@ -86,13 +86,13 @@
   const PIPE_DETAIL = {
     compile: {
       t: "COMPILE_VERIFIER — author then freeze the contract",
-      d: "The agent finds the test/command you pointed at, or writes new verification, and emits a runnable ladder of rungs + a rubric. The contract is hashed and <b>frozen</b> — no later transition can rewrite it. This is the anti-reward-hacking core.",
-      pills: ['<span class="pill violet">fuzzy / LLM</span>', '<span class="pill pass">→ contractHash</span>'],
+      d: "The agent finds the test/command you pointed at, or writes new verification, and emits a runnable ladder of rungs + a rubric. The contract is hashed and <b>frozen</b> — no later transition can rewrite it. This is the anti-reward-hacking core. <b>🔁 Retriable:</b> a correctable authoring miss (COMPILE_FAILED) is re-authored with the error fed back, up to <code>--max-compile-retries</code> (default 2).",
+      pills: ['<span class="pill violet">fuzzy / LLM</span>', '<span class="pill pass">→ contractHash</span>', '<span class="pill neutral">🔁 retry ≤ --max-compile-retries</span>'],
     },
-    gatea: {
-      t: "Gate A — contract approval (once)",
-      d: "A human approves the frozen contract before the loop starts. With <code>--autonomous</code> it is auto-accepted — but still frozen and logged loudly. Gate A is the only gate the flag moves.",
-      pills: ['<span class="pill gate">human · once</span>', '<span class="pill neutral">or auto-accept</span>'],
+    seal: {
+      t: "SEAL — lock the bar (once, before the loop)",
+      d: "A human approves the frozen contract before the loop starts. With <code>--autonomous</code> it is auto-accepted — but still frozen and logged loudly. SEAL is the only gate the flag moves. <b>🔁 Retriable:</b> instead of approve/reject you can give free-text feedback to <b>revise</b> — goaly re-authors the contract and re-presents it, up to <code>--max-seal-revisions</code> (default 10).",
+      pills: ['<span class="pill gate">human · once</span>', '<span class="pill neutral">or auto-accept</span>', '<span class="pill neutral">🔁 revise ≤ --max-seal-revisions</span>'],
     },
     run: {
       t: "RUN_AGENT — one headless turn",
@@ -104,15 +104,15 @@
       d: "Rungs run cheapest-and-hardest-to-game first: exit codes / tests, then any LLM judge. The ladder short-circuits on the first deterministic fail (no judge call wasted) and is <b>fail-closed</b> — a grader that throws is a hard red, never a green.",
       pills: ['<span class="pill pass">exit codes</span>', '<span class="pill violet">LLM quorum</span>'],
     },
-    gateb: {
-      t: "Gate B — independent approver (veto-only)",
-      d: "Runs <b>only</b> when the ladder passes. An independent agent sees goal + frozen rubric + diff + verdicts and can only <b>veto</b>, never promote a red. It defaults to reject on uncertainty.",
+    signoff: {
+      t: "SIGN-OFF — independent approver (veto-only)",
+      d: "Runs <b>only</b> when the ladder passes. An independent agent sees goal + frozen rubric + diff + verdicts and can only <b>veto</b>, never promote a red. It defaults to reject on uncertainty. The second of the two keys for DONE.",
       pills: ['<span class="pill gate">every iteration</span>', '<span class="pill fail">veto-only</span>'],
     },
     decide: {
       t: "DECIDE — the pure truth table",
-      d: "Zero-LLM. DONE needs <b>two keys</b> (ladder passes AND no veto). Otherwise apply the backstops: stuck → ABORTED, iteration cap → FAILED, else CONTINUE with feedback threaded into the next prompt.",
-      pills: ['<span class="pill pass">two keys → DONE</span>', '<span class="pill neutral">else continue</span>'],
+      d: "Zero-LLM. DONE needs <b>two keys</b> (ladder passes AND no veto). Otherwise apply the backstops: stuck → ABORTED, iteration cap → FAILED, else CONTINUE. <b>🔁 Retriable:</b> a red iteration (ladder FAIL or SIGN-OFF veto) loops back to RUN_AGENT with the failure/veto threaded into the next prompt, up to <code>--max-iterations</code> (default 10) or until STUCK.",
+      pills: ['<span class="pill pass">two keys → DONE</span>', '<span class="pill neutral">🔁 else loop ≤ --max-iterations</span>'],
     },
   };
 
@@ -155,12 +155,12 @@
     });
     if (ladderNote) {
       if (failIndex === -1) {
-        ladderNote.innerHTML = "All rungs pass → verdict <b>pass</b>, confidence = min(rung confidences). The two keys can now be checked at Gate B.";
+        ladderNote.innerHTML = "All rungs pass → verdict <b>pass</b>, confidence = min(rung confidences). The two keys can now be checked at Sign-off.";
       } else {
         const judgeSkipped = ladderRungs.slice(failIndex + 1).some((r) => r.classList.contains("judge"));
         ladderNote.innerHTML = "First failing rung short-circuits → verdict <b>fail</b>. " +
           (judgeSkipped ? "No LLM judge call is spent. " : "") +
-          "The detail is fed back as the next prompt; Gate B never runs.";
+          "The detail is fed back as the next prompt; Sign-off never runs.";
       }
     }
     $$(".ladder-ctrl .mini-btn").forEach((b) => b.classList.toggle("on", Number(b.dataset.fail) === failIndex));

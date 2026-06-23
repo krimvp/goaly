@@ -2,7 +2,7 @@ import type { HarnessChoice, LlmProviderChoice } from './args';
 import type { ResolvedModels } from './models';
 
 /**
- * "Two independent keys" (invariant #3) is only real if the verifier's judge rung and the Gate B
+ * "Two independent keys" (invariant #3) is only real if the verifier's judge rung and the Sign-off
  * approver — and ideally the worker — do not collapse onto a single model with correlated blind
  * spots. The cascade in {@link resolveModels} makes that collapse the DEFAULT: with a
  * single `--model X` (or no overrides at all) the judge and the approver resolve to the same model.
@@ -43,7 +43,7 @@ export function independenceWarnings(
   // whenever their resolved models match — the second key then inherits the first key's blind spots.
   if (sameModel(resolved.judge, resolved.approver)) {
     warnings.push(
-      `the LLM judge rung and the Gate B approver run on the same model (${label(resolved.approver)}); ` +
+      `the LLM judge rung and the Sign-off approver run on the same model (${label(resolved.approver)}); ` +
         'pass --approver-model to keep the two keys independent',
     );
   }
@@ -52,7 +52,7 @@ export function independenceWarnings(
   // the agent grading the work is effectively the agent that wrote it.
   if (harnessFamily(harness) === llmProvider && sameModel(resolved.harness, resolved.approver)) {
     warnings.push(
-      `the coding agent and the Gate B approver share the same model (${label(resolved.approver)}); ` +
+      `the coding agent and the Sign-off approver share the same model (${label(resolved.approver)}); ` +
         'pass --approver-model (or a different --llm-provider) so the approver stays an independent skeptic',
     );
   }

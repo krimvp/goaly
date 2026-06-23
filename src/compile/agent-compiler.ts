@@ -173,7 +173,7 @@ export class AgentCompiler implements VerifierCompiler {
   async compile(config: RunConfig, feedback?: string): Promise<CompiledContract> {
     if (config.verifier.kind === 'existing') {
       // An existing-command contract has no LLM authoring step, so there is nothing for a
-      // Gate A revise note to steer — recompilation is deterministic and feedback is ignored.
+      // Seal revise note to steer — recompilation is deterministic and feedback is ignored.
       return this.#compileExisting(config, config.verifier.ref);
     }
     return this.#compileGenerate(config, config.verifier.intent, feedback);

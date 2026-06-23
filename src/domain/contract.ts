@@ -41,14 +41,14 @@ export type GeneratedFile = z.infer<typeof GeneratedFile>;
 
 /**
  * The compiled, FROZEN success contract. Authored once in the compile phase, approved
- * at Gate A, then never rewritten — the central anti-reward-hacking invariant. The
+ * at Seal, then never rewritten — the central anti-reward-hacking invariant. The
  * `contractHash` is logged every iteration to prove the bar never moved.
  */
 export const CompiledContract = z.object({
   goal: z.string().min(1),
   /** The ladder, in execution order. At least one rung. */
   rungs: z.array(Rung).min(1),
-  /** The frozen overall rubric (for audit + the approver's Gate B input). */
+  /** The frozen overall rubric (for audit + the approver's Sign-off input). */
   rubric: z.string(),
   /**
    * Files the compiler authored while writing new verification, each pinned by content hash. Part

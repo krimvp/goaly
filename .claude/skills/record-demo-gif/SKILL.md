@@ -6,7 +6,7 @@ description: >-
   demo, or screencast goaly, a CLI command, or a workflow as a GIF, or to attach a terminal demo to
   a PR. For goaly demos it knows the loop-specific recipe: a throwaway git sandbox, running from
   inside it, --autonomous so the frozen contract still shows, and decoding the run log to reveal the
-  verifier ladder + Gate-B approver (the two keys for DONE).
+  verifier ladder + Sign-off approver (the two keys for DONE).
 ---
 
 # record-demo-gif

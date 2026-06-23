@@ -21,7 +21,7 @@ export type Decision =
  *   !ladder.pass                    → CONTINUE (verifier detail as feedback)
  *   ladder.pass && veto             → CONTINUE (veto reason as feedback)
  *
- * `approval` is `null` when the ladder failed (Gate B never ran — no judge/veto wasted).
+ * `approval` is `null` when the ladder failed (Sign-off never ran — no judge/veto wasted).
  * Success (DONE) is checked first so a goal genuinely met on the last allowed iteration
  * is declared DONE, never FAILED. Stuck is preferred over the hard cap because it carries
  * an actionable reason.

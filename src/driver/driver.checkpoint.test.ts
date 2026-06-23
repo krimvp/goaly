@@ -7,7 +7,7 @@ import {
   FakeVerifier,
   FakeApprover,
   FakeCompiler,
-  FakeGate,
+  FakeSealGate,
   FakeWorkspace,
   ManualClock,
   ManualBudgetMeter,
@@ -26,7 +26,7 @@ const contract = makeFakeContract({ goal: 'checkpoint goal' });
 async function driveToDone(workspace: FakeWorkspace, runlog: InMemoryRunLog): Promise<void> {
   const deps: DriverDeps = {
     compiler: new FakeCompiler(contract),
-    gateA: new FakeGate({ kind: 'approve' }),
+    seal: new FakeSealGate({ kind: 'approve' }),
     harness: new FakeHarness([{ postHash: '0000abc' }], workspace),
     makeLadder: () => new FakeVerifier([passVerdict()]),
     approver: new FakeApprover([approve()]),
@@ -111,7 +111,7 @@ describe('drive() — resume reconstructs the diff baseline from the log', () =>
     const ws2 = new FakeWorkspace('0000abc');
     const resumeDeps: DriverDeps = {
       compiler: new FakeCompiler(new Error('must not run')),
-      gateA: new FakeGate({ kind: 'reject', reason: 'must not run' }),
+      seal: new FakeSealGate({ kind: 'reject', reason: 'must not run' }),
       harness: new FakeHarness([{ throwError: 'must not run' }], ws2),
       makeLadder: () => new FakeVerifier([passVerdict()]),
       approver: new FakeApprover([]),
@@ -136,7 +136,7 @@ describe('drive() — resume reconstructs the diff baseline from the log', () =>
     const ws2 = new FakeWorkspace('0000abc');
     const resumeDeps: DriverDeps = {
       compiler: new FakeCompiler(new Error('must not run')),
-      gateA: new FakeGate({ kind: 'reject', reason: 'must not run' }),
+      seal: new FakeSealGate({ kind: 'reject', reason: 'must not run' }),
       harness: new FakeHarness([{ throwError: 'must not run' }], ws2),
       makeLadder: () => new FakeVerifier([passVerdict()]),
       approver: new FakeApprover([]),

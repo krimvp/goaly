@@ -44,7 +44,7 @@ export type ParsedArgs = {
   llmProvider: LlmProviderChoice;
   workspace: string;
   /**
-   * Diff baseline (issue #47): the git ref/SHA `diff()`/Gate-B compare the working tree against,
+   * Diff baseline (issue #47): the git ref/SHA `diff()`/Sign-off compare the working tree against,
    * instead of `HEAD`. Pure wiring — never enters the frozen contract. Validated to resolve
    * (fail-closed) before the run starts. Precedence: CLI flag > config file.
    */
@@ -83,7 +83,7 @@ Usage:
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
                [--smoke "<cmd>"]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
-               [--max-gate-a-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
+               [--max-seal-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
                [--stuck-oscillation true|false]
@@ -129,7 +129,7 @@ Verification:
                       hash on disk (excluded ≠ unprotected). Absent ⇒ the compiler picks the dir.
 
 Diff baseline (issue #47 — keep a run's diff small without touching the user's git history):
-  --baseline <ref>  compute the worker's diff (the approver's Gate-B input) against <ref> — any git
+  --baseline <ref>  compute the worker's diff (the approver's Sign-off input) against <ref> — any git
                     ref or SHA — instead of HEAD. Validated to resolve before the run starts
                     (fail-closed on an unknown ref). Use it to chain multi-step builds: point run
                     N+1 at where run N finished, so each run reviews only its own delta — no
@@ -160,17 +160,17 @@ Model selection (all optional; default = each tool's own default):
   --model <m>           model for the harness AND the LLM steps (the global default)
   --llm-model <m>       model for all LLM steps (judge / approver / compiler)
   --judge-model <m>     model for the LLM-judge rung only
-  --approver-model <m>  model for the Gate-B approver only
+  --approver-model <m>  model for the Sign-off approver only
   --compiler-model <m>  model for the verification compiler only
   --llm-provider <p>    which CLI runs the LLM steps: claude (default) | codex | droid
   Precedence per LLM step: per-step flag → --llm-model → --model. The harness follows --model.
 
-Gate A (contract approval):
+Seal (contract approval):
   default                     print the frozen contract and prompt for one of:
                                 a / approve   accept it and start the loop
                                 f / feedback  type a note; the contract is re-authored & re-shown
                                 r / reject    abort the run (the loop never starts)
-  --max-gate-a-revisions N    cap the free-text revise rounds (default 10; 0 disables revision)
+  --max-seal-revisions N    cap the free-text revise rounds (default 10; 0 disables revision)
   --autonomous                skip the prompt: auto-accept (still frozen; logged loudly)
 
   Note: piping the goal via stdin (--goal -) leaves no stdin for the interactive prompt;
@@ -252,8 +252,8 @@ Live streaming & transcript (opt-in observability — issues #23 / #28):
 Run history & inspection (read-only — pure replay of the write-ahead run log, no re-running):
   goaly runs list           a table of past runs under <workspace>/.goaly: id, status, iterations,
                             tokens, started/ended, goal. Corrupt logs are flagged, never dropped.
-  goaly runs show <runId>   the frozen contract (+ hash), Gate A outcome, the per-iteration
-                            verifier-ladder results and Gate B verdicts, the stuck/failure reason,
+  goaly runs show <runId>   the frozen contract (+ hash), Seal outcome, the per-iteration
+                            verifier-ladder results and Sign-off verdicts, the stuck/failure reason,
                             and totals — reconstructed by the same replay-fold that --resume uses.
   --workspace <dir>         where to look for the .goaly run-log directory (default: cwd).`;
 
@@ -329,6 +329,13 @@ export async function parseArgs(
 
   const cliFlags = parseFlags(rest);
 
+  // `--max-gate-a-revisions` was renamed to `--max-seal-revisions` (no alias). The CLI otherwise
+  // ignores unknown flags, so reject the removed spelling explicitly — silently dropping a flag a
+  // user's script used to rely on would lose the setting without warning.
+  if (cliFlags['max-gate-a-revisions'] !== undefined) {
+    throw new UsageError('--max-gate-a-revisions was renamed to --max-seal-revisions');
+  }
+
   // A config file (.goalyrc in --workspace/cwd, plus an explicit --config <path>) supplies DEFAULT
   // flags so the same wiring need not be repeated every run (issue #15). Explicit CLI flags always
   // win. For goal/intent/rubric the CLI source may be a *different* key than the config's (e.g.
@@ -358,8 +365,8 @@ export async function parseArgs(
     ...(str(flags, 'max-iterations') !== undefined
       ? { maxIterations: str(flags, 'max-iterations') }
       : {}),
-    ...(str(flags, 'max-gate-a-revisions') !== undefined
-      ? { maxGateARevisions: str(flags, 'max-gate-a-revisions') }
+    ...(str(flags, 'max-seal-revisions') !== undefined
+      ? { maxSealRevisions: str(flags, 'max-seal-revisions') }
       : {}),
     ...(str(flags, 'max-compile-retries') !== undefined
       ? { maxCompileRetries: str(flags, 'max-compile-retries') }

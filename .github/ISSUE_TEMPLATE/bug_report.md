@@ -57,7 +57,7 @@ fixing — give them everything they need. Redact API keys and session ids.
 ## Invariant in question (if any)
 
 <!-- Does this look like one of the eight invariants is violated? e.g. a non-green slipping through
-     the verifier ladder, the contract changing after Gate A, DONE on a single key, an adapter
+     the verifier ladder, the contract changing after Seal, DONE on a single key, an adapter
      throwing instead of failing closed, an unparsed seam. See AGENTS.md. -->
 
 ## Additional context

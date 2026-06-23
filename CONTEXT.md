@@ -5,7 +5,7 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
 
 - **Goal** — the natural-language objective for one run. _avoid:_ a test; a prompt.
 - **Contract** (`CompiledContract`) — the **frozen** definition of "done": an ordered ladder
-  of rungs + a rubric + a `contractHash`. Authored once, approved at Gate A, never rewritten.
+  of rungs + a rubric + a `contractHash`. Authored once, approved at Seal, never rewritten.
   _avoid:_ the goal; the config; something the worker can edit mid-loop.
 - **Verifier** — anything satisfying `verify(workspace, goal, rubric) -> Verdict`. Could be an
   exit code, a test run, an LLM quorum, or the Ladder itself. _avoid:_ the approver (separate
@@ -17,10 +17,10 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
 - **Ladder** — the composite Verifier: rungs run cheapest-and-hardest-to-game first
   (deterministic before judge), short-circuiting on the first deterministic fail. A rung that
   errors is **fail-closed** (`pass:false`). _avoid:_ a list the orchestrator iterates itself.
-- **Gate A** — the contract gate: a human (default) or auto-accept (`--autonomous`) approves
+- **Seal** — the contract gate: a human (default) or auto-accept (`--autonomous`) approves
   the frozen contract **once** before the loop. _avoid:_ per-iteration approval.
-- **Gate B** — the result gate: the independent **Approver**, every iteration, **veto-only**.
-  _avoid:_ Gate A; a promoter (it can never turn a red into a green).
+- **Sign-off** — the result gate: the independent **Approver**, every iteration, **veto-only**.
+  _avoid:_ Seal; a promoter (it can never turn a red into a green).
 - **Two Keys** — DONE requires both keys to turn: the frozen verifier passes **and** the
   approver doesn't veto. _avoid:_ "tests pass ⇒ done".
 - **Harness** — a coding agent run headlessly (Claude Code, Codex, …). _avoid:_ the model; the
@@ -38,7 +38,7 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
   (not the adapter). Drives stuck detection. _avoid:_ a commit; an adapter responsibility.
 - **Stuck** — a pre-`maxIterations` bail with a reason: no-diff, repeat-failure, oscillation,
   or budget. _avoid:_ a normal failure (that's FAILED).
-- **Autonomous** — the flag that moves **Gate A only** (auto-accept). It skips the human pause,
+- **Autonomous** — the flag that moves **Seal only** (auto-accept). It skips the human pause,
   never the freeze. _avoid:_ "the agent rewrites its own test"; skipping verification.
 - **Command** — data describing an effect the Driver must perform. Never persisted.
 - **Event** — the resolved result of a Command, fed to the reducer. Persisted write-ahead.
