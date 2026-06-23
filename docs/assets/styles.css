@@ -138,6 +138,10 @@ section { padding: clamp(3.6rem, 7vw, 6.5rem) 0; position: relative; }
   padding: 1.3rem 1.4rem; transition: border-color 0.18s;
 }
 .card:hover { border-color: var(--line-2); }
+/* anchor cards (docs hub): highlight the border, keep text readable on hover */
+a.card, a.card:hover { color: var(--fg); }
+a.card:hover { border-color: var(--accent-dim); }
+a.card h3 { color: var(--fg); }
 .card h3 { font-size: 1.04rem; display: flex; align-items: center; gap: 0.55rem; margin-bottom: 0.5rem; }
 .card p { margin: 0; font-size: 0.9rem; line-height: 1.65; }
 .card .num { font-family: var(--mono); font-size: 0.8rem; color: var(--accent); }
