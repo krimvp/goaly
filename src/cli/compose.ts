@@ -17,6 +17,7 @@ import { AgentApprover } from '../verify/agent-approver';
 import { AgentCompiler } from '../compile/agent-compiler';
 import { AutoContractGate, HumanContractGate } from '../compile/gates';
 import { GitWorkspace } from '../workspace/git-workspace';
+import { excludeFromGit } from '../workspace/git-exclude';
 import { FileRunLog } from '../runlog/file-runlog';
 import { StreamTranscriptSink, STREAM_FILE } from '../runlog/stream-transcript';
 import { ClaudeCodeAdapter } from '../harness/claude-code';
@@ -84,6 +85,12 @@ export type ComposeOptions = {
    * is just adopted onto the workspace. Absent ⇒ baseline stays `HEAD` (behavior unchanged).
    */
   baseline?: string;
+  /**
+   * Preferred directory (relative to the workspace root) for compiler-authored verification files
+   * (issue #52). Threaded to the compiler as authoring guidance; absent ⇒ the compiler chooses an
+   * idiomatic location. Authored files are registered in `.git/info/exclude` either way.
+   */
+  verifyDir?: string;
   /** Where run logs live. Default `<workspaceRoot>/.goaly` (excluded from diffHash). */
   stateDir?: string;
   /** Minimum diagnostic log level. Default `info`. */
@@ -222,7 +229,8 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   return {
     compiler: new AgentCompiler({
       llm: llmFor(models.compiler, 'compile'),
-      writeFile: (rel, content) => writeWorkspaceFile(options.workspaceRoot, rel, content),
+      writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
+      ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
     }),
     gateA: config.autonomous
       ? new AutoContractGate()
@@ -481,6 +489,36 @@ export class NoopHarness implements HarnessAdapter {
       sessionId: sessionId ?? SessionIdSchema.parse('noop-session'),
       status: 'completed',
     };
+  }
+}
+
+/**
+ * Write a compiler-authored verification file and seamlessly keep it out of the user's git (issue
+ * #52): after the path-guarded write, register the exact path in `.git/info/exclude` so it never
+ * shows up in `git status` and is never accidentally committed — no `.gitignore` edit, no tracked
+ * file touched, nothing for the user to review or undo. The exclude step is best-effort and
+ * fail-closed: a failure degrades to "not excluded" (logged loudly), never a changed run outcome.
+ * One loud log line per file tells the user what was authored and how to keep it (`git add -f`).
+ */
+async function writeVerificationFile(
+  root: string,
+  rel: string,
+  content: string,
+  logger: Logger,
+): Promise<void> {
+  await writeWorkspaceFile(root, rel, content);
+  const result = await excludeFromGit(root, rel);
+  if (result.ok) {
+    logger.info('authored verification file', {
+      path: rel,
+      excludedLocally: result.excluded,
+      keep: 'git add -f to keep it as durable verification',
+    });
+  } else {
+    logger.warn('authored verification file (could not exclude from git — it may show in git status)', {
+      path: rel,
+      reason: result.reason,
+    });
   }
 }
 

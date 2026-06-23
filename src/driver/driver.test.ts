@@ -38,6 +38,8 @@ type Wiring = {
   workspace?: FakeWorkspace;
   runlog?: InMemoryRunLog;
   logger?: Logger;
+  /** Override the compiler (e.g. to script a COMPILE_FAILED then a success for the retry path). */
+  compiler?: FakeCompiler;
 };
 
 function wire(w: Wiring): {
@@ -52,7 +54,7 @@ function wire(w: Wiring): {
   const runlog = w.runlog ?? new InMemoryRunLog();
   const approver = new FakeApprover(w.approvals ?? []);
   const deps: DriverDeps = {
-    compiler: new FakeCompiler(contract),
+    compiler: w.compiler ?? new FakeCompiler(contract),
     gateA: w.gate ?? new FakeGate({ kind: 'approve' }),
     harness,
     makeLadder: () => ladder,
@@ -96,6 +98,44 @@ describe('drive() — full loop with zero IO', () => {
       .filter((h): h is NonNullable<typeof h> => h !== null);
     expect(new Set(hashes).size).toBe(1);
     expect(hashes[0]).toBe(contract.contractHash);
+  });
+
+  it('retries a COMPILE_FAILED with the error fed back, then proceeds (issue #51)', async () => {
+    const compiler = new FakeCompiler([
+      new Error('refusing a verification command that references an out-of-repo path /tmp/x.sh'),
+      contract,
+    ]);
+    const { deps } = wire({
+      compiler,
+      scripts: [{ postHash: '0000001' }],
+      verdicts: [passVerdict()],
+      approvals: [approve()],
+    });
+
+    const outcome = await drive(deps, makeConfig({ goal: 'make the thing work' }), runId);
+
+    expect(outcome.status).toBe('DONE');
+    // Two compile attempts: the first with no feedback, the retry carrying the error text.
+    expect(compiler.feedbacks).toHaveLength(2);
+    expect(compiler.feedbacks[0]).toBeUndefined();
+    expect(compiler.feedbacks[1]).toContain('out-of-repo path');
+  });
+
+  it('a typed FAILED once the compile-retry budget is exhausted (issue #51)', async () => {
+    const compiler = new FakeCompiler(new Error('still bad path /tmp/y.sh'));
+    const { deps } = wire({
+      config: makeConfig({ maxCompileRetries: 1 }),
+      compiler,
+      scripts: [],
+      verdicts: [],
+    });
+
+    const outcome = await drive(deps, makeConfig({ maxCompileRetries: 1 }), runId);
+
+    expect(outcome.status).toBe('FAILED');
+    expect(outcome.contractHash).toBeNull();
+    // maxCompileRetries: 1 ⇒ the initial attempt + one retry = 2 compile calls, then terminal.
+    expect(compiler.feedbacks).toHaveLength(2);
   });
 
   it('FAILED when maxIterations is reached without satisfying the contract', async () => {

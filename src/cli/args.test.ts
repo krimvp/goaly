@@ -63,6 +63,64 @@ describe('parseArgs', () => {
     expect(a.config.maxGateARevisions).toBe(3);
   });
 
+  it('parses --max-compile-retries (issue #51)', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--max-compile-retries', '4']);
+    expect(a.config.maxCompileRetries).toBe(4);
+  });
+
+  it('defaults maxCompileRetries to 2 when the flag is absent (issue #51)', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+    expect(a.config.maxCompileRetries).toBe(2);
+  });
+
+  it('parses --verify-dir (issue #52)', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--verify-dir', 'test']);
+    expect(a.verifyDir).toBe('test');
+  });
+
+  it('parses the --stuck-* tuning flags fail-closed (issue #54)', async () => {
+    const a = await parseArgs([
+      'run', '--goal', 'g', '--verify-cmd', 'true',
+      '--stuck-no-diff', 'false',
+      '--stuck-repeat-threshold', '5',
+      '--stuck-oscillation', 'false',
+    ]);
+    expect(a.config.stuckPolicy).toEqual({
+      noDiff: false,
+      repeatFailureThreshold: 5,
+      oscillation: false,
+    });
+  });
+
+  it('treats a bare --stuck-no-diff as true and keeps other stuck defaults (issue #54)', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--stuck-no-diff']);
+    expect(a.config.stuckPolicy.noDiff).toBe(true);
+    expect(a.config.stuckPolicy.repeatFailureThreshold).toBe(3);
+  });
+
+  it('rejects a non-boolean --stuck-no-diff value (fail-closed, issue #54)', async () => {
+    await expect(
+      parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--stuck-no-diff', 'maybe']),
+    ).rejects.toThrow(UsageError);
+  });
+
+  it('reads new tuning keys from .goalyrc (issues #51/#52/#54)', async () => {
+    const a = await parseArgs(
+      ['run', '--goal', 'g', '--verify-cmd', 'true', '--workspace', '/ws'],
+      undefined,
+      fakeConfig({
+        '/ws/.goalyrc': JSON.stringify({
+          'max-compile-retries': 4,
+          'verify-dir': 'tests',
+          'stuck-repeat-threshold': 5,
+        }),
+      }),
+    );
+    expect(a.config.maxCompileRetries).toBe(4);
+    expect(a.verifyDir).toBe('tests');
+    expect(a.config.stuckPolicy.repeatFailureThreshold).toBe(5);
+  });
+
   it('accepts the droid harness', async () => {
     const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'droid']);
     expect(a.harness).toBe('droid');

@@ -1,4 +1,16 @@
 import type { LoopCtx } from './state';
+import type { Verdict, ApprovalVerdict } from '../domain';
+
+/**
+ * The in-flight decision context (issue #54): the verdict + approval the reducer is deciding on right
+ * now. Threaded into stuck detection so a no-diff iteration whose ONLY blocker is a fresh, correctable
+ * veto isn't aborted before the agent gets one real turn to act on it. Optional so callers that only
+ * test the history-based detectors (budget / oscillation / repeat-failure) need not supply it.
+ */
+export type DecisionContext = {
+  readonly ladder: Verdict;
+  readonly approval: ApprovalVerdict | null;
+};
 
 /**
  * Stuck detection (ARCHITECTURE "Stuck detection") — pure over the histories stored in
@@ -45,14 +57,41 @@ export function normalizeDetail(detail: string): string {
   return out.trim().replace(/\s+/g, ' ');
 }
 
-export function detectStuck(ctx: LoopCtx): StuckReason | null {
+/**
+ * Issue #54 — a no-diff iteration is EXCUSED (not yet terminal) when the agent never had a fair
+ * chance to act, so we don't discard a correct, actionable signal before one real turn:
+ *  - the previous turn was killed by a harness TIMEOUT (it never got to edit), or
+ *  - the deterministic ladder is GREEN and the only blocker is a FRESH Gate-B veto the agent has not
+ *    yet seen — its reason differs from the feedback the just-run turn was given (`ctx.feedback`).
+ * A veto is the system's most valuable signal (it catches what the tests miss); aborting before the
+ * worker can respond wastes the run AND throws away a correct critique. The excuse is one-shot: a
+ * SECOND unproductive no-diff trips (the veto reason now equals the prior feedback, or the turn
+ * completed rather than timing out), and budget / maxIterations / repeat-failure remain backstops, so
+ * the loop still terminates and a red is never turned green.
+ */
+function noDiffExcused(ctx: LoopCtx, current?: DecisionContext): boolean {
+  if (ctx.lastRunStatus === 'timeout') return true;
+  if (current?.ladder.pass === true && current.approval?.veto === true) {
+    const reason = current.approval.reason ?? '';
+    return reason !== (ctx.feedback ?? '');
+  }
+  return false;
+}
+
+export function detectStuck(ctx: LoopCtx, current?: DecisionContext): StuckReason | null {
   // Budget — independent of iteration count.
   if (ctx.lastBudget?.exceeded === true) {
     return 'budget exceeded';
   }
 
-  // No-diff — the most recent iteration left the working tree unchanged.
-  if (ctx.config.stuckPolicy.noDiff && ctx.lastNoDiff && ctx.iteration >= 1) {
+  // No-diff — the most recent iteration left the working tree unchanged. Excused once (issue #54)
+  // when the agent never got a fair chance to act on a correct signal (see noDiffExcused).
+  if (
+    ctx.config.stuckPolicy.noDiff &&
+    ctx.lastNoDiff &&
+    ctx.iteration >= 1 &&
+    !noDiffExcused(ctx, current)
+  ) {
     return 'no-diff: working tree unchanged after an iteration';
   }
 

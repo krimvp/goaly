@@ -31,10 +31,45 @@ describe('step() transitions', () => {
     expect(cmds[0]).toEqual({ tag: 'REQUEST_GATE_A', contract });
   });
 
-  it('COMPILE_FAILED → FAILED with no contractHash', () => {
-    const [state] = initial(makeConfig());
+  it('COMPILE_FAILED → terminal FAILED when retries are disabled (maxCompileRetries: 0)', () => {
+    const [state] = initial(makeConfig({ maxCompileRetries: 0 }));
     const [next] = step(state, { tag: 'COMPILE_FAILED', reason: 'nope' });
     expect(next).toMatchObject({ tag: 'FAILED', reason: 'nope', contractHash: undefined });
+  });
+
+  it('COMPILE_FAILED re-authors with the error as feedback, bounded by maxCompileRetries (issue #51)', () => {
+    const config = makeConfig({ maxCompileRetries: 2 });
+    // Round 0: first failure retries (compileRound 0 → 1) carrying the error as feedback.
+    const [s1, c1] = step(initial(config)[0], { tag: 'COMPILE_FAILED', reason: 'wrote to /tmp' });
+    expect(s1).toMatchObject({ tag: 'COMPILING', compileRound: 1 });
+    expect(c1[0]).toMatchObject({ tag: 'COMPILE_VERIFIER', config });
+    if (c1[0]?.tag === 'COMPILE_VERIFIER') expect(c1[0].feedback).toContain('wrote to /tmp');
+
+    // Round 1: second failure retries again (compileRound 1 → 2).
+    const [s2, c2] = step(s1, { tag: 'COMPILE_FAILED', reason: 'still bad' });
+    expect(s2).toMatchObject({ tag: 'COMPILING', compileRound: 2 });
+    if (c2[0]?.tag === 'COMPILE_VERIFIER') expect(c2[0].feedback).toContain('still bad');
+
+    // Round 2: budget exhausted (compileRound 2 == max) → terminal FAILED, never a skipped check.
+    const [s3] = step(s2, { tag: 'COMPILE_FAILED', reason: 'final' });
+    expect(s3).toMatchObject({ tag: 'FAILED', reason: 'final', contractHash: undefined });
+  });
+
+  it('a retried compile that succeeds proceeds to Gate A (issue #51)', () => {
+    const config = makeConfig({ maxCompileRetries: 2 });
+    const [s1] = step(initial(config)[0], { tag: 'COMPILE_FAILED', reason: 'bad path' });
+    const [s2, cmds] = step(s1, { tag: 'CONTRACT_COMPILED', contract });
+    expect(s2.tag).toBe('AWAIT_GATE_A');
+    expect(cmds[0]).toEqual({ tag: 'REQUEST_GATE_A', contract });
+  });
+
+  it('Gate A revise resets the compile-retry counter (issue #51)', () => {
+    const config = makeConfig({ maxCompileRetries: 2 });
+    // Burn one compile retry, then succeed and revise — the next authoring starts at compileRound 0.
+    const [s1] = step(initial(config)[0], { tag: 'COMPILE_FAILED', reason: 'oops' });
+    const [s2] = step(s1, { tag: 'CONTRACT_COMPILED', contract });
+    const [s3] = step(s2, { tag: 'GATE_A_DECIDED', decision: { kind: 'revise', feedback: 'redo' } });
+    expect(s3).toMatchObject({ tag: 'COMPILING', reviseRound: 1, compileRound: 0 });
   });
 
   it('Gate A approval starts the first iteration with an initial prompt', () => {

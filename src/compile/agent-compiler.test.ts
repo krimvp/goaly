@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { ContractHash } from '../domain/ids';
 import { FakeLlm } from '../llm/provider';
 import { makeConfig } from '../testing/fakes';
-import { AgentCompiler, isVacuousCommand } from './agent-compiler';
+import { AgentCompiler, isVacuousCommand, referencesOutOfRepoPath } from './agent-compiler';
 
 describe('AgentCompiler — existing verifier', () => {
   it('builds one deterministic rung equal to the ref and a valid contractHash', async () => {
@@ -189,6 +189,57 @@ describe('AgentCompiler — vacuous generated command', () => {
     const contract = await compiler.compile(config);
 
     expect(contract.rungs).toEqual([{ kind: 'deterministic', command: 'true' }]);
+  });
+});
+
+describe('referencesOutOfRepoPath (issue #55)', () => {
+  it('flags commands that reach into an OS temp dir', () => {
+    for (const cmd of [
+      'bash /tmp/goaly-phase-verify.sh',
+      'sh /var/tmp/x.sh',
+      'node /var/folders/ab/script.js',
+      './run.sh && /tmp/helper',
+    ]) {
+      expect(referencesOutOfRepoPath(cmd)).toBe(true);
+    }
+  });
+
+  it('passes normal in-repo commands through', () => {
+    for (const cmd of ['npm test', 'vitest run test/wave.test.js', 'make check', './scripts/tmp.sh']) {
+      expect(referencesOutOfRepoPath(cmd)).toBe(false);
+    }
+  });
+});
+
+describe('AgentCompiler — rubric guardrails (issue #55)', () => {
+  it('carries the runnable-bar guardrails in the authoring system prompt', async () => {
+    const llm = new FakeLlm([JSON.stringify({ command: 'npm test', rubric: '' })]);
+    const compiler = new AgentCompiler({ llm });
+    await compiler.compile(makeConfig({ verifier: { kind: 'generate' } }));
+
+    const system = llm.requests[0]?.system ?? '';
+    expect(system).toContain('EXISTING tooling');
+    expect(system).toContain('/tmp');
+    expect(system).toContain('RELATIVE path');
+  });
+
+  it('refuses (fail-closed) an authored command that references an out-of-repo path', async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({ command: 'bash /tmp/goaly-phase-verify.sh', rubric: '' }),
+    ]);
+    const compiler = new AgentCompiler({ llm });
+
+    await expect(compiler.compile(makeConfig({ verifier: { kind: 'generate' } }))).rejects.toThrow(
+      /out-of-repo path/,
+    );
+  });
+
+  it('threads --verify-dir guidance into the authoring prompt (issue #52)', async () => {
+    const llm = new FakeLlm([JSON.stringify({ command: 'npm test', rubric: '' })]);
+    const compiler = new AgentCompiler({ llm, verifyDir: 'test' });
+    await compiler.compile(makeConfig({ verifier: { kind: 'generate' } }));
+
+    expect(llm.requests[0]?.prompt).toContain("'test/'");
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { detectStuck, normalizeDetail } from './stuck';
-import { makeCtx, makeConfig, dh } from '../testing/fakes';
+import { makeCtx, makeConfig, dh, passVerdict, failVerdict, veto, approve } from '../testing/fakes';
 
 describe('detectStuck', () => {
   it('returns null when nothing is wrong', () => {
@@ -23,6 +23,43 @@ describe('detectStuck', () => {
         iteration: 1,
       });
       expect(detectStuck(ctx)).toBeNull();
+    });
+  });
+
+  describe('no-diff excused once for a fresh veto / timeout (issue #54)', () => {
+    it('does NOT abort on a no-diff iteration blocked only by a fresh Gate-B veto', () => {
+      // Ladder green, a brand-new veto the agent has not yet seen (feedback still undefined).
+      const ctx = makeCtx({ lastNoDiff: true, iteration: 1, feedback: undefined });
+      const reason = detectStuck(ctx, { ladder: passVerdict(), approval: veto('inert power-ups') });
+      expect(reason).toBeNull();
+    });
+
+    it('DOES abort on a second no-diff once the agent has already seen that veto', () => {
+      // The agent was told the veto last turn (feedback === the veto reason) and still made no edits.
+      const ctx = makeCtx({ lastNoDiff: true, iteration: 2, feedback: 'inert power-ups' });
+      const reason = detectStuck(ctx, { ladder: passVerdict(), approval: veto('inert power-ups') });
+      expect(reason).toContain('no-diff');
+    });
+
+    it('does not excuse no-diff when the ladder is red (a stalled fix is genuinely stuck)', () => {
+      const ctx = makeCtx({ lastNoDiff: true, iteration: 1 });
+      expect(detectStuck(ctx, { ladder: failVerdict(), approval: null })).toContain('no-diff');
+    });
+
+    it('does not excuse no-diff when Gate B did NOT veto (a passing run is handled as DONE upstream)', () => {
+      const ctx = makeCtx({ lastNoDiff: true, iteration: 1 });
+      expect(detectStuck(ctx, { ladder: passVerdict(), approval: approve() })).toContain('no-diff');
+    });
+
+    it('does not trip no-diff when the previous turn was killed by a timeout', () => {
+      const ctx = makeCtx({ lastNoDiff: true, iteration: 1, lastRunStatus: 'timeout' });
+      // Even with no decision context, a timed-out turn never had a fair chance to edit.
+      expect(detectStuck(ctx)).toBeNull();
+    });
+
+    it('still trips no-diff when a non-timeout turn made no edits', () => {
+      const ctx = makeCtx({ lastNoDiff: true, iteration: 1, lastRunStatus: 'completed' });
+      expect(detectStuck(ctx)).toContain('no-diff');
     });
   });
 

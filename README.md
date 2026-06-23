@@ -43,11 +43,21 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
   `--autonomous` skips this pause entirely, never the freeze.
 - **Two keys for DONE:** the frozen verifier passes *and* the independent approver (Gate B, veto-only)
   doesn't veto.
+- **Compile is resilient, not one-shot.** A `COMPILE_FAILED` (a correctable authoring mistake — bad
+  path, transient parse miss) re-authors the verification with the error fed back as guidance, up to
+  `--max-compile-retries` (default 2; `0` disables), before the run fails — so one bad compile output
+  no longer discards a valid plan. Exhausting the budget is still a typed `FAILED`, never a skipped
+  check. (Mirrors the Gate A revise loop; the reducer stays pure.)
 - **Stuck detection** bails before `maxIterations` with a reason: no-diff, repeat-failure (volatile
   tokens like timestamps / PIDs / temp paths are normalized away first, so a noisy-but-identical
-  failure still trips it), short-period oscillation (period-N, not just A,B,A,B), and budget. Use
-  `--diff-ignore` to keep verifier-produced artifacts (coverage dirs, `__pycache__`, build output)
-  out of the tree hash so they can't make a no-op agent look like it changed something.
+  failure still trips it), short-period oscillation (period-N, not just A,B,A,B), and budget. Tune it
+  with `--stuck-no-diff`, `--stuck-repeat-threshold`, `--stuck-oscillation`. Use `--diff-ignore` to
+  keep verifier-produced artifacts (coverage dirs, `__pycache__`, build output) out of the tree hash
+  so they can't make a no-op agent look like it changed something. A no-diff iteration is **excused
+  once** when the agent never had a fair chance to act — the previous turn timed out, or the ladder is
+  green and a **fresh Gate-B veto** is the only blocker — so a correct, actionable critique isn't
+  thrown away before the worker gets one real turn to respond to it (a *second* unproductive no-diff
+  still aborts).
 - **Diff baseline** — the worker's diff (what the Gate-B approver reviews) is computed against `HEAD`
   by default, but `--baseline <ref>` points it at any git ref/SHA instead. Chain a multi-step build by
   pointing each run at where the last one finished, so every run reviews only its own delta —
@@ -78,9 +88,13 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
 - **The two keys ingest the diff as untrusted data.** The judge and the approver receive the
   worker-controlled diff inside a clearly-delimited, nonce-fenced envelope, and are instructed to
   never act on instructions, verdicts, or claims hidden inside it (prompt-injection defense).
-- **Vacuous authored bars are refused.** A `--generate` command that trivially passes without
-  measuring anything (`true`, `:`, `exit 0`, …) is rejected at compile (`COMPILE_FAILED`) rather than
-  frozen as a hollow contract.
+- **Vacuous and un-runnable authored bars are refused.** A `--generate` command that trivially passes
+  without measuring anything (`true`, `:`, `exit 0`, …), or one that reaches outside the repo (e.g. a
+  helper at `/tmp/…`), is rejected at compile (`COMPILE_FAILED`) rather than frozen as a hollow or
+  un-runnable contract. The compiler is also steered, at the prompt level, toward an **objective,
+  in-repo, runnable** bar — author over the repo's existing tooling, keep helpers inside the
+  workspace, and don't write rubrics that judge runtime/visual behavior a grader can't execute. A
+  rejected bar feeds the bounded compile-retry loop above, so the compiler can self-correct.
 - **Independence is checked, not assumed.** goaly warns loudly when the "two independent keys" collapse
   onto one model (e.g. a bare `--model X`, which would make the approver share the worker's/judge's
   blind spots); pass `--approver-model` (or a different `--llm-provider`) to separate them.
@@ -189,6 +203,13 @@ with `--llm-provider`). Pick the model per layer with `--model` / `--llm-model` 
 
 > Add `.goaly/` to your target repo's `.gitignore`. (goaly also excludes it from its own
 > tree-hash, so its run logs never pollute stuck-detection regardless.)
+>
+> **Authored verification files need no `.gitignore` step.** Under `--generate`, files the compiler
+> authors (tests/helpers) are written to idiomatic locations and auto-registered in
+> `.git/info/exclude` — git's *per-clone, never-committed* ignore list — so they never appear in your
+> `git status` and are never accidentally committed, with no tracked file touched. A loud log line
+> names each authored file and how to keep it (`git add -f`). The integrity guard still pins them by
+> content hash on disk (excluded ≠ unprotected). Use `--verify-dir <dir>` to steer where they land.
 
 ## Usage
 
@@ -211,6 +232,11 @@ goaly run --goal "..." --resume run-<id> --workspace ./myrepo
 
 # Diff against a baseline instead of HEAD — keep a multi-step build's diff small with no commits:
 goaly run --goal "step 2 of the build" --verify-cmd "npm test" --baseline <ref-or-sha>
+
+# Author verification into test/, give the compiler more self-correction, and loosen no-diff for an
+# exploratory build (authored files are auto git-excluded, so your `git status` stays clean):
+goaly run --goal "..." --generate --autonomous --verify-dir test \
+             --max-compile-retries 3 --stuck-no-diff false
 
 # Pick a model for the harness, and a different model for the LLM steps (judge/approver/compiler):
 goaly run --goal "..." --verify-cmd "npm test" --harness claude-code \

@@ -106,6 +106,7 @@ export async function main(argv: string[]): Promise<number> {
         workspaceRoot: parsed.workspace,
         runId,
         ...(parsed.baseline !== undefined ? { baseline: parsed.baseline } : {}),
+        ...(parsed.verifyDir !== undefined ? { verifyDir: parsed.verifyDir } : {}),
         logLevel: parsed.logLevel,
         timeouts: parsed.timeouts,
         sandbox: parsed.sandbox,

@@ -52,6 +52,14 @@ export const RunConfig = z.object({
    * revision entirely (Gate A stays binary). Ignored in `--autonomous` (auto-approve, no pause).
    */
   maxGateARevisions: z.number().int().nonnegative().default(10),
+  /**
+   * Max bounded compile-retry-with-feedback rounds (issue #51). On a `COMPILE_FAILED` the contract is
+   * re-authored with the error text as guidance, up to this many extra attempts, before the phase
+   * fails. Mirrors the Gate A revise loop: the reducer stays pure (a counter + a feedback-carrying
+   * command) and exhausting the budget is still a typed `FAILED`, never a skipped check. 0 disables
+   * retry (a single bad compile is terminal, the previous behavior).
+   */
+  maxCompileRetries: z.number().int().nonnegative().default(2),
   maxIterations: z.number().int().positive().default(10),
   budget: BudgetConfig.default({}),
   stuckPolicy: StuckPolicy.default({}),
@@ -88,11 +96,16 @@ export const CliInput = z.object({
   rubric: z.string().optional(),
   autonomous: z.coerce.boolean().optional(),
   maxGateARevisions: z.coerce.number().int().nonnegative().optional(),
+  maxCompileRetries: z.coerce.number().int().nonnegative().optional(),
   maxIterations: z.coerce.number().int().positive().optional(),
   budgetTokens: z.coerce.number().int().positive().optional(),
   budgetWallClockMs: z.coerce.number().int().positive().optional(),
   /** Comma-separated extra paths to keep out of diffHash/diff. */
   diffIgnore: z.string().optional(),
+  /** Stuck-policy tuning (issue #54); booleans are pre-parsed by the CLI, the threshold coerced. */
+  stuckNoDiff: z.boolean().optional(),
+  stuckRepeatThreshold: z.coerce.number().int().min(2).optional(),
+  stuckOscillation: z.boolean().optional(),
 });
 export type CliInput = z.infer<typeof CliInput>;
 
@@ -116,6 +129,14 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
           .filter((p) => p.length > 0)
       : [];
 
+  // Stuck-policy tuning (issue #54): only override the fields the user set; the rest keep their
+  // schema defaults. Omitted entirely when no flag was given so the StuckPolicy default applies.
+  const stuckPolicy: StuckPolicyInput = {};
+  if (input.stuckNoDiff !== undefined) stuckPolicy.noDiff = input.stuckNoDiff;
+  if (input.stuckRepeatThreshold !== undefined)
+    stuckPolicy.repeatFailureThreshold = input.stuckRepeatThreshold;
+  if (input.stuckOscillation !== undefined) stuckPolicy.oscillation = input.stuckOscillation;
+
   return RunConfig.parse({
     goal: input.goal,
     verifier,
@@ -124,8 +145,12 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     ...(input.maxGateARevisions !== undefined
       ? { maxGateARevisions: input.maxGateARevisions }
       : {}),
+    ...(input.maxCompileRetries !== undefined
+      ? { maxCompileRetries: input.maxCompileRetries }
+      : {}),
     ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
     budget,
     ...(diffIgnore.length > 0 ? { diffIgnore } : {}),
+    ...(Object.keys(stuckPolicy).length > 0 ? { stuckPolicy } : {}),
   } satisfies RunConfigInput);
 }
