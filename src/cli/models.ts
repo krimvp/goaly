@@ -11,6 +11,7 @@ export const ModelSelection = z.object({
   judgeModel: z.string().trim().min(1).optional(),
   approverModel: z.string().trim().min(1).optional(),
   compilerModel: z.string().trim().min(1).optional(),
+  plannerModel: z.string().trim().min(1).optional(),
 });
 export type ModelSelection = z.infer<typeof ModelSelection>;
 export type ModelSelectionInput = z.input<typeof ModelSelection>;
@@ -21,6 +22,8 @@ export type ResolvedModels = {
   compiler: string | undefined;
   judge: string | undefined;
   approver: string | undefined;
+  /** Model for the planner step (issue #48); follows the same LLM-step cascade. */
+  planner: string | undefined;
 };
 
 /**
@@ -35,5 +38,6 @@ export function resolveModels(sel: ModelSelection): ResolvedModels {
     compiler: sel.compilerModel ?? llm,
     judge: sel.judgeModel ?? llm,
     approver: sel.approverModel ?? llm,
+    planner: sel.plannerModel ?? llm,
   };
 }

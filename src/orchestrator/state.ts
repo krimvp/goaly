@@ -1,7 +1,26 @@
 import type { RunConfig } from '../domain/config';
 import type { CompiledContract } from '../domain/contract';
+import type { PhasePlan } from '../domain/plan';
 import type { ContractHash, SessionId, DiffHash } from '../domain/ids';
 import type { Verdict, BudgetSnapshot, HarnessRunResult } from '../domain';
+
+/**
+ * The position of one phase within a frozen plan (issue #48). Threaded through the per-phase states
+ * (COMPILING → … → the loop) so the reducer can, when a phase reaches both keys, derive the NEXT
+ * phase's config and advance — all WITHOUT the plan ever being rewritten (it is carried by reference).
+ *
+ * `index` ranges `0 .. plan.phases.length`: `index < length` is a sub-goal phase; `index === length`
+ * is the final cumulative ACCEPTANCE phase (scoped to the ORIGINAL goal/verifier — see `phaseConfigFor`).
+ * Absent on a classic single-contract run (`LoopCtx.phase === undefined`), so that path is unchanged.
+ */
+export type PhaseCtx = {
+  /** The ORIGINAL run config — the source of inherited knobs AND the acceptance phase's goal/verifier. */
+  readonly baseConfig: RunConfig;
+  /** The frozen plan (carried by reference; never reassigned — the plan-level freeze, invariant #2). */
+  readonly plan: PhasePlan;
+  /** 0-based phase index; `plan.phases.length` denotes the final cumulative acceptance phase. */
+  readonly index: number;
+};
 
 /**
  * The loop's accumulated context. Every field is reconstructable purely from the event
@@ -30,15 +49,48 @@ export type LoopCtx = {
   readonly lastVerdict: Verdict | undefined;
   /** Feedback text threaded into the next agent prompt. */
   readonly feedback: string | undefined;
+  /**
+   * The phase position within a frozen plan (issue #48), or undefined on a classic single-contract
+   * run. When set, a phase reaching both keys ADVANCES (checkpoint + next phase's compile) instead of
+   * declaring the whole run DONE — only the final acceptance phase's DONE ends the run.
+   */
+  readonly phase: PhaseCtx | undefined;
 };
 
 export type OrchestratorState =
+  | {
+      /** The PLAN phase (issue #48): author the frozen, ordered plan of sub-goals. Phased runs only. */
+      readonly tag: 'PLANNING';
+      readonly config: RunConfig;
+      /** How many plan "revise" rounds have already happened (0 on the first authoring). */
+      readonly reviseRound: number;
+    }
+  | {
+      /** The plan Seal (Gate A on the plan): approve / reject / revise the frozen plan. Phased only. */
+      readonly tag: 'AWAIT_PLAN_SEAL';
+      readonly config: RunConfig;
+      readonly plan: PhasePlan;
+      readonly reviseRound: number;
+    }
+  | {
+      /**
+       * Between phases (issue #48): a phase reached both keys; the Driver is taking an internal
+       * checkpoint (#47) before compiling the next phase. Carries the just-completed phase position;
+       * the next index is `phase.index + 1`.
+       */
+      readonly tag: 'ADVANCING_PHASE';
+      readonly phase: PhaseCtx;
+      /** Iterations the just-completed phase took (for reporting continuity; never a backstop). */
+      readonly lastIteration: number;
+    }
   | {
       readonly tag: 'COMPILING';
       readonly config: RunConfig;
       readonly reviseRound: number;
       /** How many bounded compile-retry rounds have already happened this authoring (issue #51). */
       readonly compileRound: number;
+      /** The phase position when this compile belongs to a phased run (issue #48); else undefined. */
+      readonly phase?: PhaseCtx;
     }
   | {
       readonly tag: 'AWAIT_SEAL';
@@ -46,6 +98,8 @@ export type OrchestratorState =
       readonly contract: CompiledContract;
       /** How many Seal "revise" rounds have already happened (0 on the first presentation). */
       readonly reviseRound: number;
+      /** The phase position when this contract belongs to a phased run (issue #48); else undefined. */
+      readonly phase?: PhaseCtx;
     }
   | {
       /**
@@ -56,6 +110,8 @@ export type OrchestratorState =
       readonly tag: 'PREPARING';
       readonly config: RunConfig;
       readonly contract: CompiledContract;
+      /** The phase position when this prepare belongs to a phased run (issue #48); else undefined. */
+      readonly phase?: PhaseCtx;
     }
   | { readonly tag: 'RUNNING_AGENT'; readonly ctx: LoopCtx }
   | { readonly tag: 'VERIFYING'; readonly ctx: LoopCtx }
@@ -97,15 +153,27 @@ export function iterationCount(state: OrchestratorState): number {
     case 'FAILED':
     case 'ABORTED':
       return state.iterations;
+    case 'ADVANCING_PHASE':
+      return state.lastIteration;
     case 'COMPILING':
     case 'AWAIT_SEAL':
     case 'PREPARING':
+    case 'PLANNING':
+    case 'AWAIT_PLAN_SEAL':
       return 0;
   }
 }
 
-/** Build the initial loop context once Seal approves the frozen contract. */
-export function initialCtx(config: RunConfig, contract: CompiledContract): LoopCtx {
+/**
+ * Build the initial loop context once Seal approves the frozen contract. `phase` is set for a phased
+ * run (issue #48) and undefined for a classic single-contract run; either way the per-iteration loop
+ * is identical — only the DONE transition differs (advance-vs-terminate), handled in the reducer.
+ */
+export function initialCtx(
+  config: RunConfig,
+  contract: CompiledContract,
+  phase?: PhaseCtx,
+): LoopCtx {
   return {
     config,
     contract,
@@ -118,5 +186,6 @@ export function initialCtx(config: RunConfig, contract: CompiledContract): LoopC
     lastBudget: undefined,
     lastVerdict: undefined,
     feedback: undefined,
+    phase,
   };
 }

@@ -73,7 +73,7 @@ export type AgentEventSink = (event: AgentStreamEvent) => void;
  * A Zod enum (not a bare union) so a durable transcript reader can validate the phase at the seam
  * (issue #28) — same "parse at every seam" discipline as the event taxonomy itself.
  */
-export const StreamPhase = z.enum(['agent', 'compile', 'judge', 'approve']);
+export const StreamPhase = z.enum(['agent', 'plan', 'compile', 'judge', 'approve']);
 export type StreamPhase = z.infer<typeof StreamPhase>;
 
 /** A consumer sink that also receives the originating {@link StreamPhase} (driver/compose side). */

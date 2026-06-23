@@ -107,6 +107,7 @@ export async function main(argv: string[]): Promise<number> {
         runId,
         ...(parsed.baseline !== undefined ? { baseline: parsed.baseline } : {}),
         ...(parsed.verifyDir !== undefined ? { verifyDir: parsed.verifyDir } : {}),
+        ...(parsed.planFile !== undefined ? { planFile: parsed.planFile } : {}),
         logLevel: parsed.logLevel,
         timeouts: parsed.timeouts,
         sandbox: parsed.sandbox,

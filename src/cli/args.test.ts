@@ -84,6 +84,26 @@ describe('parseArgs', () => {
     expect(a.verifyDir).toBe('test');
   });
 
+  it('parses the phased flags (issue #48)', async () => {
+    const a = await parseArgs([
+      'run', '--goal', 'big', '--generate', '--phased',
+      '--max-phases', '4', '--max-plan-revisions', '2',
+      '--plan-file', 'plan.json', '--planner-model', 'opus',
+    ]);
+    expect(a.config.phased).toBe(true);
+    expect(a.config.maxPhases).toBe(4);
+    expect(a.config.maxPlanRevisions).toBe(2);
+    expect(a.planFile).toBe('plan.json');
+    expect(a.models.plannerModel).toBe('opus');
+  });
+
+  it('defaults phased off (classic single-contract run) when --phased is absent', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+    expect(a.config.phased).toBe(false);
+    expect(a.config.maxPhases).toBe(10);
+    expect(a.planFile).toBeUndefined();
+  });
+
   it('parses --smoke into an artifact-running command (issue #53)', async () => {
     const a = await parseArgs([
       'run', '--goal', 'g', '--verify-cmd', 'npm test', '--smoke', 'node smoke.mjs',

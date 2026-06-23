@@ -56,6 +56,11 @@ export type ParsedArgs = {
    * to the compiler; the authored files are git-excluded regardless. Absent ⇒ the compiler chooses.
    */
   verifyDir: string | undefined;
+  /**
+   * Phased decomposition (issue #48): the `--plan-file <path>` that sources a structured plan instead
+   * of authoring one with the LLM. Pure wiring (selects the StaticPlanner); only used when `--phased`.
+   */
+  planFile: string | undefined;
   resumeRunId: string | undefined;
   /** Minimum diagnostic log level (default `info`). Pure wiring — never enters the contract. */
   logLevel: LogLevel;
@@ -85,6 +90,8 @@ Usage:
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
                [--smoke "<cmd>"] [--setup-cmd "<cmd>" | --no-setup] [--setup-timeout-ms N]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
+               [--phased [--max-phases N] [--max-plan-revisions N] [--plan-file <p>]
+                         [--planner-model <m>]]
                [--max-seal-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
@@ -161,6 +168,26 @@ Stuck-detection tuning:
   --stuck-repeat-threshold N      abort after N identical normalized verifier failures (default 3).
   --stuck-oscillation <bool>      toggle diff-hash oscillation detection (default true).
 
+Phased decomposition (issue #48 — split one big goal into a frozen plan of small, verified phases):
+  --phased            turn one big goal into a PLAN of ordered sub-goals, each run as its OWN frozen,
+                      two-key contract with an internal checkpoint (issue #47) between phases so each
+                      phase's diff stays small — finished by a CUMULATIVE ACCEPTANCE contract on the
+                      ORIGINAL goal (so decomposition can't green a goal whose parts pass but whole
+                      doesn't). Flow: PLAN → [plan Seal] → per phase {compile → Seal → loop → checkpoint}
+                      → ACCEPT → DONE | FAILED. The plan is frozen (hashed + logged) and no transition
+                      rewrites it; re-planning is only the bounded, human-gated plan-Seal revise path.
+                      The whole-run --budget-tokens cap is the sum across ALL phases. The acceptance
+                      contract reuses your original verification: --verify-cmd becomes the cumulative
+                      deterministic bar, or --generate authors cumulative acceptance on the original goal.
+  --plan-file <p>     source the plan from a JSON file ({ "phases": [{ "goal", "intent"?, "rubric"? }] })
+                      instead of authoring it with the LLM. Parsed fail-closed; a bad file is a typed
+                      PLAN_FAILED, never a skipped decomposition.
+  --max-phases N      cap the number of sub-goals a plan may contain (default 10); a longer plan is a
+                      fail-closed PLAN_FAILED.
+  --max-plan-revisions N  cap the free-text plan-Seal revise rounds (default 10; 0 disables revision).
+  --planner-model <m> model for the planner step only (cascades like the other LLM-step models).
+  --autonomous        also auto-accepts the plan AND each phase contract — still frozen + logged loudly.
+
 Compile resilience (issue #51):
   --max-compile-retries N    on a COMPILE_FAILED, re-author the verification with the error as
                              feedback up to N times before failing the run (default 2; 0 disables).
@@ -174,6 +201,7 @@ Model selection (all optional; default = each tool's own default):
   --judge-model <m>     model for the LLM-judge rung only
   --approver-model <m>  model for the Sign-off approver only
   --compiler-model <m>  model for the verification compiler only
+  --planner-model <m>   model for the phased planner only (issue #48)
   --llm-provider <p>    which CLI runs the LLM steps: claude (default) | codex | droid
   Precedence per LLM step: per-step flag → --llm-model → --model. The harness follows --model.
 
@@ -382,6 +410,11 @@ export async function parseArgs(
     ...(str(flags, 'max-iterations') !== undefined
       ? { maxIterations: str(flags, 'max-iterations') }
       : {}),
+    ...(flags['phased'] !== undefined ? { phased: true } : {}),
+    ...(str(flags, 'max-phases') !== undefined ? { maxPhases: str(flags, 'max-phases') } : {}),
+    ...(str(flags, 'max-plan-revisions') !== undefined
+      ? { maxPlanRevisions: str(flags, 'max-plan-revisions') }
+      : {}),
     ...(str(flags, 'max-seal-revisions') !== undefined
       ? { maxSealRevisions: str(flags, 'max-seal-revisions') }
       : {}),
@@ -418,6 +451,7 @@ export async function parseArgs(
     workspace: str(flags, 'workspace') ?? process.cwd(),
     baseline: str(flags, 'baseline'),
     verifyDir: str(flags, 'verify-dir'),
+    planFile: str(flags, 'plan-file'),
     resumeRunId: str(flags, 'resume'),
     logLevel: parseLogLevel(str(flags, 'log-level')),
     logFile: str(flags, 'log-file'),
@@ -551,6 +585,7 @@ function parseModels(flags: RawFlags): ModelSelection {
   add('judgeModel', 'judge-model');
   add('approverModel', 'approver-model');
   add('compilerModel', 'compiler-model');
+  add('plannerModel', 'planner-model');
   try {
     return ModelSelection.parse(raw);
   } catch (e) {
@@ -616,6 +651,7 @@ function baseArgs(
     workspace,
     baseline: undefined,
     verifyDir: undefined,
+    planFile: undefined,
     resumeRunId: undefined,
     logLevel: 'info',
     logFile: undefined,

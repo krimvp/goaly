@@ -72,6 +72,8 @@ export type { Verifier } from './verify/verifier';
 export type { Approver } from './verify/approver';
 export type { VerifierCompiler } from './compile/compiler';
 export type { SealGate } from './compile/seal';
+export type { Planner } from './plan/planner';
+export type { PlanGate } from './plan/plan-gate';
 export type { Workspace, CommandResult } from './workspace/workspace';
 export type { RunLog } from './runlog/runlog';
 export { RunLogHeader, RunLogEntry } from './runlog/runlog';
@@ -104,6 +106,9 @@ export { JudgeVerifier } from './verify/judge';
 export { AgentApprover } from './verify/agent-approver';
 export { AgentCompiler } from './compile/agent-compiler';
 export { AutoSealGate, HumanSealGate } from './compile/seal-gates';
+export { AgentPlanner } from './plan/agent-planner';
+export { StaticPlanner, type PlanFileReader } from './plan/static-planner';
+export { AutoPlanGate, HumanPlanGate } from './plan/plan-gates';
 export { AgentCliHarness } from './harness/agent-cli-harness';
 export { ClaudeCodeAdapter, parseClaudeOutput, claudeStreamExtractor } from './harness/claude-code';
 export { CodexAdapter, parseCodexOutput, codexExtractor, codexStreamExtractor } from './harness/codex';
@@ -208,4 +213,4 @@ export {
 export { buildLogger, type BuildLoggerOptions, type FileLogOptions } from './log/build';
 
 // Utilities.
-export { freezeContract, hashContract, sha256Hex } from './util/hash';
+export { freezeContract, hashContract, freezePlan, hashPlan, sha256Hex } from './util/hash';

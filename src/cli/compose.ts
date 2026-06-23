@@ -16,6 +16,11 @@ import { JudgeVerifier } from '../verify/judge';
 import { AgentApprover } from '../verify/agent-approver';
 import { AgentCompiler } from '../compile/agent-compiler';
 import { AutoSealGate, HumanSealGate } from '../compile/seal-gates';
+import { AgentPlanner } from '../plan/agent-planner';
+import { StaticPlanner } from '../plan/static-planner';
+import { AutoPlanGate, HumanPlanGate } from '../plan/plan-gates';
+import type { Planner } from '../plan/planner';
+import type { PlanGate } from '../plan/plan-gate';
 import { GitWorkspace } from '../workspace/git-workspace';
 import { excludeFromGit } from '../workspace/git-exclude';
 import { FileRunLog } from '../runlog/file-runlog';
@@ -91,6 +96,12 @@ export type ComposeOptions = {
    * idiomatic location. Authored files are registered in `.git/info/exclude` either way.
    */
   verifyDir?: string;
+  /**
+   * Phased decomposition (issue #48): the `--plan-file <path>` that sources a structured plan instead
+   * of authoring one with the LLM. When set (and `config.phased`), a {@link StaticPlanner} reads it;
+   * absent ⇒ the {@link AgentPlanner} authors the plan. Ignored when `config.phased` is false.
+   */
+  planFile?: string;
   /** Where run logs live. Default `<workspaceRoot>/.goaly` (excluded from diffHash). */
   stateDir?: string;
   /** Minimum diagnostic log level. Default `info`. */
@@ -226,6 +237,22 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       llmMeter,
     );
 
+  // Phased decomposition (issue #48): wire the planner + plan Seal ONLY for a phased run (a classic
+  // run never emits a PLAN command, so building them would be dead wiring + a spurious LLM provider).
+  // `--plan-file` selects the StaticPlanner; otherwise the AgentPlanner authors the plan. `--autonomous`
+  // moves the plan Seal pause too (still frozen + logged loudly).
+  const phasedSeams: { planner: Planner; planGate: PlanGate } | undefined = config.phased
+    ? {
+        planner:
+          options.planFile !== undefined
+            ? new StaticPlanner({ path: options.planFile })
+            : new AgentPlanner({ llm: llmFor(models.planner, 'plan') }),
+        planGate: config.autonomous
+          ? new AutoPlanGate()
+          : new HumanPlanGate({ allowRevise: config.maxPlanRevisions > 0 }),
+      }
+    : undefined;
+
   return {
     compiler: new AgentCompiler({
       llm: llmFor(models.compiler, 'compile'),
@@ -235,6 +262,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     seal: config.autonomous
       ? new AutoSealGate()
       : new HumanSealGate({ allowRevise: config.maxSealRevisions > 0 }),
+    ...(phasedSeams !== undefined ? phasedSeams : {}),
     harness: makeHarness(options.harness, models.harness, timeouts.harnessMs, timeouts.harnessIdleMs, {
       launcher,
       workspace: options.workspaceRoot,

@@ -2,6 +2,7 @@ import { SessionId, DiffHash } from '../domain/ids';
 import { HarnessRunResult, type BudgetSnapshot, type ApprovalInput } from '../domain/events';
 import { type Verdict, type ApprovalVerdict, type SealDecision } from '../domain/verdict';
 import type { CompiledContract, Rung, UnhashedContract } from '../domain/contract';
+import type { PhasePlan, UnhashedPlan } from '../domain/plan';
 import { RunConfig, type RunConfigInput } from '../domain/config';
 import { initialCtx, type LoopCtx } from '../orchestrator/state';
 import type { HarnessAdapter } from '../harness/adapter';
@@ -9,13 +10,15 @@ import type { Verifier } from '../verify/verifier';
 import type { Approver } from '../verify/approver';
 import type { VerifierCompiler } from '../compile/compiler';
 import type { SealGate } from '../compile/seal';
+import type { Planner } from '../plan/planner';
+import type { PlanGate } from '../plan/plan-gate';
 import type { Workspace, CommandResult } from '../workspace/workspace';
 import type { Clock } from '../driver/clock';
 import type { BudgetMeter } from '../driver/budget';
 import type { RunLog, RunLogHeader, RunLogEntry } from '../runlog/runlog';
 import { StructuredLogger, type Logger, type LogLevel, type LogRecord } from '../log/logger';
 import type { LogFs } from '../log/sinks';
-import { freezeContract } from '../util/hash';
+import { freezeContract, freezePlan } from '../util/hash';
 
 /** Build a frozen contract for tests (defaults to a single deterministic rung). */
 export function makeFakeContract(overrides: Partial<UnhashedContract> = {}): CompiledContract {
@@ -26,6 +29,14 @@ export function makeFakeContract(overrides: Partial<UnhashedContract> = {}): Com
     generatedFiles: [],
   };
   return freezeContract({ ...base, ...overrides });
+}
+
+/** Build a frozen plan for tests (issue #48); defaults to two simple ordered sub-goals. */
+export function makeFakePlan(overrides: Partial<UnhashedPlan> = {}): PhasePlan {
+  const base: UnhashedPlan = {
+    phases: [{ goal: 'phase one' }, { goal: 'phase two' }],
+  };
+  return freezePlan({ ...base, ...overrides });
 }
 
 export type FakeRunScript = {
@@ -129,6 +140,51 @@ export class FakeCompiler implements VerifierCompiler {
     const next = this.#contracts[idx];
     if (next === undefined) throw new Error('FakeCompiler: no contract scripted');
     if (next instanceof Error) throw next;
+    return next;
+  }
+}
+
+/** Scripted planner (issue #48). Clamps to the last entry; an Error entry throws (→ PLAN_FAILED). */
+export class FakePlanner implements Planner {
+  readonly #plans: (PhasePlan | Error)[];
+  #i = 0;
+  /** The `feedback` arg of each plan() call, in order (undefined when none was passed). */
+  readonly feedbacks: (string | undefined)[] = [];
+  /** The config of each plan() call, in order. */
+  readonly configs: RunConfig[] = [];
+
+  constructor(plan: PhasePlan | Error | (PhasePlan | Error)[]) {
+    this.#plans = Array.isArray(plan) ? plan : [plan];
+  }
+
+  async plan(config: RunConfig, feedback?: string): Promise<PhasePlan> {
+    this.configs.push(config);
+    this.feedbacks.push(feedback);
+    const idx = Math.min(this.#i, this.#plans.length - 1);
+    this.#i += 1;
+    const next = this.#plans[idx];
+    if (next === undefined) throw new Error('FakePlanner: no plan scripted');
+    if (next instanceof Error) throw next;
+    return next;
+  }
+}
+
+/** Scripted plan Seal gate (issue #48). Defaults to approve; clamps to the last decision. */
+export class FakePlanGate implements PlanGate {
+  readonly #decisions: SealDecision[];
+  #i = 0;
+  readonly seen: PhasePlan[] = [];
+
+  constructor(decision: SealDecision | SealDecision[] = { kind: 'approve' }) {
+    this.#decisions = Array.isArray(decision) ? decision : [decision];
+  }
+
+  async approvePlan(plan: PhasePlan): Promise<SealDecision> {
+    this.seen.push(plan);
+    const idx = Math.min(this.#i, this.#decisions.length - 1);
+    this.#i += 1;
+    const next = this.#decisions[idx];
+    if (next === undefined) throw new Error('FakePlanGate: no decision scripted');
     return next;
   }
 }

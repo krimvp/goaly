@@ -7,7 +7,7 @@ import { listRuns, readRun, runSummary, runDetail } from './inspect';
 import type { RunLogHeader, RunLogEntry } from './runlog';
 import { RunId, DiffHash, SessionId } from '../domain/ids';
 import type { OrchestratorEvent } from '../domain/events';
-import { makeConfig, makeFakeContract, passVerdict, failVerdict, approve, veto } from '../testing/fakes';
+import { makeConfig, makeFakeContract, makeFakePlan, passVerdict, failVerdict, approve, veto } from '../testing/fakes';
 
 const contract = makeFakeContract({ goal: 'build the parser' });
 
@@ -205,6 +205,58 @@ describe('listRuns / readRun (read-only filesystem layer)', () => {
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('runDetail — phased projection (issue #48)', () => {
+  it('captures the frozen plan, plan-Seal, and stamps each iteration with its phase', () => {
+    seq = 0;
+    const runId = 'run-phased';
+    const plan = makeFakePlan({ phases: [{ goal: 'phase one' }, { goal: 'phase two' }] });
+    const tree = DiffHash.parse('0000abc');
+    const h: RunLogHeader = {
+      runId: RunId.parse(runId),
+      startedAt: 1,
+      config: makeConfig({ phased: true, goal: 'the whole goal' }),
+    };
+    const entries = [
+      entry(runId, { tag: 'PLAN_COMPILED', plan }),
+      entry(runId, { tag: 'PLAN_SEAL_DECIDED', decision: { kind: 'approve' } }),
+      // phase 0
+      entry(runId, { tag: 'CONTRACT_COMPILED', contract }),
+      entry(runId, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }),
+      agentRan(runId, '0000000', '0000001'),
+      entry(runId, { tag: 'VERIFIED', verdict: passVerdict() }),
+      entry(runId, { tag: 'SIGNOFF_DECIDED', approval: approve() }),
+      entry(runId, { tag: 'PHASE_ADVANCED', tree }),
+      // phase 1
+      entry(runId, { tag: 'CONTRACT_COMPILED', contract }),
+      entry(runId, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }),
+      agentRan(runId, '0000001', '0000002'),
+      entry(runId, { tag: 'VERIFIED', verdict: passVerdict() }),
+      entry(runId, { tag: 'SIGNOFF_DECIDED', approval: approve() }),
+    ];
+    const d = runDetail(h, entries);
+    expect(d.plan?.planHash).toBe(plan.planHash);
+    expect(d.planSeal).toEqual([{ kind: 'approve' }]);
+    expect(d.planFailures).toEqual([]);
+    // Iteration 1 is in phase 0, iteration 2 (after the advance) is in phase 1.
+    expect(d.iterationsDetail.map((it) => it.phase)).toEqual([0, 1]);
+  });
+
+  it('records a PLAN_FAILED reason and leaves the plan null', () => {
+    seq = 0;
+    const runId = 'run-planfail';
+    const h: RunLogHeader = {
+      runId: RunId.parse(runId),
+      startedAt: 1,
+      config: makeConfig({ phased: true }),
+    };
+    const entries = [entry(runId, { tag: 'PLAN_FAILED', reason: 'no JSON' })];
+    const d = runDetail(h, entries);
+    expect(d.plan).toBeNull();
+    expect(d.planFailures).toEqual(['no JSON']);
+    expect(d.status).toBe('FAILED');
   });
 });
 

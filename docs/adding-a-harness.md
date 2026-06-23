@@ -316,10 +316,11 @@ case 'myagent': return new AgentCliHarness(myagentCodec, opts);
 
 Optionally export `myagentCodec` from `src/index.ts` for embedders.
 
-## Optional: also use the tool for the LLM steps (compiler / judge / approver)
+## Optional: also use the tool for the LLM steps (compiler / judge / approver / planner)
 
-A harness *drives* the agent. The three LLM workflow steps — authoring the verification (compiler),
-the LLM-judge rung, and the Sign-off approver — are a **separate** seam, `LlmProvider`:
+A harness *drives* the agent. The LLM workflow steps — authoring the verification (compiler), the
+LLM-judge rung, the Sign-off approver, and (for `--phased`) the **planner** that authors the frozen
+plan of sub-goals — are a **separate** seam, `LlmProvider`:
 
 ```ts
 // src/llm/provider.ts
