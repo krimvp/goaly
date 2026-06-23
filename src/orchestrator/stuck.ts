@@ -61,7 +61,7 @@ export function normalizeDetail(detail: string): string {
  * Issue #54 — a no-diff iteration is EXCUSED (not yet terminal) when the agent never had a fair
  * chance to act, so we don't discard a correct, actionable signal before one real turn:
  *  - the previous turn was killed by a harness TIMEOUT (it never got to edit), or
- *  - the deterministic ladder is GREEN and the only blocker is a FRESH Gate-B veto the agent has not
+ *  - the deterministic ladder is GREEN and the only blocker is a FRESH Sign-off veto the agent has not
  *    yet seen — its reason differs from the feedback the just-run turn was given (`ctx.feedback`).
  * A veto is the system's most valuable signal (it catches what the tests miss); aborting before the
  * worker can respond wastes the run AND throws away a correct critique. The excuse is one-shot: a

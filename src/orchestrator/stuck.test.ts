@@ -27,7 +27,7 @@ describe('detectStuck', () => {
   });
 
   describe('no-diff excused once for a fresh veto / timeout (issue #54)', () => {
-    it('does NOT abort on a no-diff iteration blocked only by a fresh Gate-B veto', () => {
+    it('does NOT abort on a no-diff iteration blocked only by a fresh Sign-off veto', () => {
       // Ladder green, a brand-new veto the agent has not yet seen (feedback still undefined).
       const ctx = makeCtx({ lastNoDiff: true, iteration: 1, feedback: undefined });
       const reason = detectStuck(ctx, { ladder: passVerdict(), approval: veto('inert power-ups') });
@@ -46,7 +46,7 @@ describe('detectStuck', () => {
       expect(detectStuck(ctx, { ladder: failVerdict(), approval: null })).toContain('no-diff');
     });
 
-    it('does not excuse no-diff when Gate B did NOT veto (a passing run is handled as DONE upstream)', () => {
+    it('does not excuse no-diff when Sign-off did NOT veto (a passing run is handled as DONE upstream)', () => {
       const ctx = makeCtx({ lastNoDiff: true, iteration: 1 });
       expect(detectStuck(ctx, { ladder: passVerdict(), approval: approve() })).toContain('no-diff');
     });

@@ -150,7 +150,7 @@ describe('AgentApprover', () => {
     // The detail is fenced as untrusted (its own nonce), so its embedded instruction is data.
     expect(prompt).toMatch(/<<UNTRUSTED VERIFIER DETAIL [0-9a-f]+>>/);
     expect(prompt).toMatch(/<<\/UNTRUSTED VERIFIER DETAIL [0-9a-f]+>>/);
-    // The trusted PASS/FAIL status stays outside the fence so Gate B can still reason about it.
+    // The trusted PASS/FAIL status stays outside the fence so Sign-off can still reason about it.
     expect(prompt).toContain('[FAIL]');
   });
 

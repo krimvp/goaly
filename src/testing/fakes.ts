@@ -1,6 +1,6 @@
 import { SessionId, DiffHash } from '../domain/ids';
 import { HarnessRunResult, type BudgetSnapshot, type ApprovalInput } from '../domain/events';
-import { type Verdict, type ApprovalVerdict, type GateDecision } from '../domain/verdict';
+import { type Verdict, type ApprovalVerdict, type SealDecision } from '../domain/verdict';
 import type { CompiledContract, Rung, UnhashedContract } from '../domain/contract';
 import { RunConfig, type RunConfigInput } from '../domain/config';
 import { initialCtx, type LoopCtx } from '../orchestrator/state';
@@ -8,7 +8,7 @@ import type { HarnessAdapter } from '../harness/adapter';
 import type { Verifier } from '../verify/verifier';
 import type { Approver } from '../verify/approver';
 import type { VerifierCompiler } from '../compile/compiler';
-import type { ContractGate } from '../compile/gateA';
+import type { SealGate } from '../compile/seal';
 import type { Workspace, CommandResult } from '../workspace/workspace';
 import type { Clock } from '../driver/clock';
 import type { BudgetMeter } from '../driver/budget';
@@ -133,21 +133,21 @@ export class FakeCompiler implements VerifierCompiler {
   }
 }
 
-export class FakeGate implements ContractGate {
-  readonly #decisions: GateDecision[];
+export class FakeSealGate implements SealGate {
+  readonly #decisions: SealDecision[];
   #i = 0;
   readonly seen: CompiledContract[] = [];
 
-  constructor(decision: GateDecision | GateDecision[] = { kind: 'approve' }) {
+  constructor(decision: SealDecision | SealDecision[] = { kind: 'approve' }) {
     this.#decisions = Array.isArray(decision) ? decision : [decision];
   }
 
-  async approveContract(contract: CompiledContract): Promise<GateDecision> {
+  async approveContract(contract: CompiledContract): Promise<SealDecision> {
     this.seen.push(contract);
     const idx = Math.min(this.#i, this.#decisions.length - 1);
     this.#i += 1;
     const next = this.#decisions[idx];
-    if (next === undefined) throw new Error('FakeGate: no decision scripted');
+    if (next === undefined) throw new Error('FakeSealGate: no decision scripted');
     return next;
   }
 }

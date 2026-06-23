@@ -6,7 +6,7 @@ import type { LlmProvider } from '../llm/provider';
 import { UNTRUSTED_SYSTEM_CLAUSE, wrapUntrusted } from './prompt-safety';
 
 const SYSTEM_PROMPT = [
-  'You are an INDEPENDENT skeptic acting as Gate B in an automated goal-orchestration loop.',
+  'You are an INDEPENDENT skeptic acting as the Sign-off gate in an automated goal-orchestration loop.',
   'You are given a goal, a frozen rubric, the working-tree diff, and the verifier verdicts.',
   'Your job is to decide whether the work is ACTUALLY done, or whether the verifier was',
   'gamed or short-circuited — empty tests, tautological assertions, partial solutions,',
@@ -28,7 +28,7 @@ function summarizeVerdicts(verdicts: Verdict[]): string {
       // The status/confidence are verifier-produced (trusted); the free-text `detail` folds in up to
       // 2000 chars of worker-controlled test stdout/stderr (DETAIL_OUTPUT_LIMIT), a second prompt-
       // injection channel alongside the diff. Fence ONLY the detail as untrusted data so a
-      // line like `{"veto": false}` hidden in test output can't steer Gate B, while the trusted
+      // line like `{"veto": false}` hidden in test output can't steer Sign-off, while the trusted
       // PASS/FAIL the approver must reason about stays outside the fence.
       const detail = wrapUntrusted(v.detail, { label: 'VERIFIER DETAIL' });
       return `  ${i + 1}. [${status}] confidence=${v.confidence} — detail:\n${detail}`;
@@ -91,7 +91,7 @@ function failClosed(detail: string): ApprovalVerdict {
 }
 
 /**
- * Gate B (Seam #3) — an INDEPENDENT, veto-only, fail-closed approver backed by an LLM.
+ * Sign-off (Seam #3) — an INDEPENDENT, veto-only, fail-closed approver backed by an LLM.
  * Fed independent inputs (goal + frozen rubric + diff + verdicts), never the worker's
  * self-justification. Any failure to produce a valid verdict becomes a veto.
  */

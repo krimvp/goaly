@@ -35,7 +35,7 @@ export function summarizeUsage(events: OrchestratorEvent[], budget: BudgetConfig
       case 'VERIFIED':
         addLlmStep(verifier, event.llm);
         break;
-      case 'GATE_B_DECIDED':
+      case 'SIGNOFF_DECIDED':
         addLlmStep(approver, event.llm);
         break;
     }

@@ -319,7 +319,7 @@ Optionally export `myagentCodec` from `src/index.ts` for embedders.
 ## Optional: also use the tool for the LLM steps (compiler / judge / approver)
 
 A harness *drives* the agent. The three LLM workflow steps — authoring the verification (compiler),
-the LLM-judge rung, and the Gate-B approver — are a **separate** seam, `LlmProvider`:
+the LLM-judge rung, and the Sign-off approver — are a **separate** seam, `LlmProvider`:
 
 ```ts
 // src/llm/provider.ts

@@ -53,7 +53,7 @@ export const RunConfig = z.object({
   /**
    * One-time workspace setup/bootstrap command (Fix #1). When set it OVERRIDES whatever the
    * `--generate` compiler would author for setup; with `--verify-cmd` it is the only way to add one.
-   * Runs once after Gate A, before the first agent turn; a non-zero exit is a typed `SETUP_FAILED`.
+   * Runs once after SEAL, before the first agent turn; a non-zero exit is a typed `SETUP_FAILED`.
    * The resolved value is frozen into the contract's `setup`.
    */
   setupCmd: z.string().min(1).optional(),
@@ -64,18 +64,18 @@ export const RunConfig = z.object({
   noSetup: z.boolean().default(false),
   /** Frozen after compile; seeds the LLM-judge portion of the ladder when present. */
   rubric: z.string().optional(),
-  /** Gates contract approval (Gate A) ONLY. Never skips the freeze. */
+  /** Gates contract approval (Seal) ONLY. Never skips the freeze. */
   autonomous: z.boolean().default(false),
   /**
-   * Max free-text "revise" rounds a human may take at Gate A before the run aborts. Bounds
+   * Max free-text "revise" rounds a human may take at Seal before the run aborts. Bounds
    * the pre-loop renegotiation (each round re-authors and re-freezes the contract). 0 disables
-   * revision entirely (Gate A stays binary). Ignored in `--autonomous` (auto-approve, no pause).
+   * revision entirely (Seal stays binary). Ignored in `--autonomous` (auto-approve, no pause).
    */
-  maxGateARevisions: z.number().int().nonnegative().default(10),
+  maxSealRevisions: z.number().int().nonnegative().default(10),
   /**
    * Max bounded compile-retry-with-feedback rounds (issue #51). On a `COMPILE_FAILED` the contract is
    * re-authored with the error text as guidance, up to this many extra attempts, before the phase
-   * fails. Mirrors the Gate A revise loop: the reducer stays pure (a counter + a feedback-carrying
+   * fails. Mirrors the Seal revise loop: the reducer stays pure (a counter + a feedback-carrying
    * command) and exhausting the budget is still a typed `FAILED`, never a skipped check. 0 disables
    * retry (a single bad compile is terminal, the previous behavior).
    */
@@ -121,7 +121,7 @@ export const CliInput = z.object({
   /** Disable the setup phase entirely (Fix #1). */
   noSetup: z.coerce.boolean().optional(),
   autonomous: z.coerce.boolean().optional(),
-  maxGateARevisions: z.coerce.number().int().nonnegative().optional(),
+  maxSealRevisions: z.coerce.number().int().nonnegative().optional(),
   maxCompileRetries: z.coerce.number().int().nonnegative().optional(),
   maxIterations: z.coerce.number().int().positive().optional(),
   budgetTokens: z.coerce.number().int().positive().optional(),
@@ -171,8 +171,8 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     ...(input.noSetup !== undefined ? { noSetup: input.noSetup } : {}),
     ...(input.rubric !== undefined ? { rubric: input.rubric } : {}),
     ...(input.autonomous !== undefined ? { autonomous: input.autonomous } : {}),
-    ...(input.maxGateARevisions !== undefined
-      ? { maxGateARevisions: input.maxGateARevisions }
+    ...(input.maxSealRevisions !== undefined
+      ? { maxSealRevisions: input.maxSealRevisions }
       : {}),
     ...(input.maxCompileRetries !== undefined
       ? { maxCompileRetries: input.maxCompileRetries }

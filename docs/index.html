@@ -67,10 +67,10 @@
 <pre><span class="cmt">$</span> <span class="fn">goaly</span> run --goal <span class="str">"add /health endpoint"</span> --generate --autonomous
 
 <span class="tok">✔ COMPILE</span>  contract frozen   <span class="cmt">┌ sha 9f3c…a2</span>
-<span class="str">● Gate A</span>  auto-accepted     <span class="cmt">(logged loudly)</span>
+<span class="str">● SEAL</span>  auto-accepted     <span class="cmt">(logged loudly)</span>
 <span class="cmt">↻ iter 1</span>  agent → verify <span style="color:var(--red)">✗</span>  <span class="cmt">npm test: 2 failing</span>
-<span class="cmt">↻ iter 2</span>  agent → verify <span class="tok">✓</span>  Gate B <span style="color:var(--red)">✗</span> veto: returns 500
-<span class="cmt">↻ iter 3</span>  agent → verify <span class="tok">✓</span>  Gate B <span class="tok">✓</span> no veto
+<span class="cmt">↻ iter 2</span>  agent → verify <span class="tok">✓</span>  SIGN-OFF <span style="color:var(--red)">✗</span> veto: returns 500
+<span class="cmt">↻ iter 3</span>  agent → verify <span class="tok">✓</span>  SIGN-OFF <span class="tok">✓</span> no veto
 <span class="tok">✔ DONE</span>   two keys turned · 3 iterations
 <span class="cmt"># exit 0</span></pre>
       </div>
@@ -151,7 +151,7 @@ goaly help</pre>
         <div class="rt">
           <b>Run against a check you already have</b>
           <p style="margin-bottom:0.7rem">Point at an existing test command. goaly freezes the contract,
-            asks you to approve it once at <b>Gate A</b>, then loops until <code>npm test</code> passes
+            asks you to approve it once at <b>Seal</b>, then loops until <code>npm test</code> passes
             <em>and</em> the reviewer agrees.</p>
           <div class="code">
             <button class="copy-btn">copy</button>
@@ -166,7 +166,7 @@ goaly help</pre>
         <div class="rt">
           <b>Or let the agent write the check, and run unattended</b>
           <p style="margin-bottom:0.7rem"><code>--generate</code> has the agent author the verification;
-            <code>--autonomous</code> skips the Gate A pause (the contract is still frozen and logged loudly).</p>
+            <code>--autonomous</code> skips the Seal pause (the contract is still frozen and logged loudly).</p>
           <div class="code">
             <button class="copy-btn">copy</button>
 <pre>goaly run --goal <span class="str">"add a /health endpoint returning 200"</span> \
@@ -232,19 +232,19 @@ goaly runs show run-&lt;id&gt;</pre>
 
     <div class="pipeline-wrap reveal">
       <div class="pipeline">
-        <div class="stage" data-stage="compile"><span class="st-k">COMPILE</span><span class="st-s">author + freeze</span></div>
+        <div class="stage" data-stage="compile"><span class="st-k">COMPILE</span><span class="st-s">author + freeze · 🔁 retry</span></div>
         <span class="arrow">→</span>
-        <div class="stage gate" data-stage="gatea"><span class="st-k">Gate A</span><span class="st-s">approve the bar</span></div>
+        <div class="stage gate" data-stage="seal"><span class="st-k">SEAL</span><span class="st-s">lock the bar · 🔁 revise</span></div>
         <span class="arrow">→</span>
         <div class="stage" data-stage="prepare"><span class="st-k">setup + pre-flight</span><span class="st-s">prep, once</span></div>
         <span class="arrow">→</span>
         <div class="loop-band">
-          <span class="loop-tag">loop ↻ until DONE / FAILED / ABORTED</span>
+          <span class="loop-tag">loop 🔁 ≤ --max-iterations (bails early on STUCK)</span>
           <div class="stage" data-stage="run"><span class="st-k">RUN_AGENT</span><span class="st-s">one headless turn</span></div>
           <span class="arrow">→</span>
           <div class="stage" data-stage="ladder"><span class="st-k">verify</span><span class="st-s">tests → judge</span></div>
           <span class="arrow">→</span>
-          <div class="stage gate" data-stage="gateb"><span class="st-k">Gate B</span><span class="st-s">veto-only review</span></div>
+          <div class="stage gate" data-stage="signoff"><span class="st-k">SIGN-OFF</span><span class="st-s">veto-only review</span></div>
           <span class="arrow">→</span>
           <div class="stage" data-stage="decide"><span class="st-k">DECIDE</span><span class="st-s">pure truth table</span></div>
         </div>
@@ -256,6 +256,12 @@ goaly runs show run-&lt;id&gt;</pre>
       </div>
       <div class="detail" id="pipeline-detail"></div>
     </div>
+    <p class="lede reveal" style="margin-top:1rem;font-size:.92rem">
+      <b>🔁 marks the only three places goaly loops back</b>, each explicitly bounded:
+      <b>COMPILE</b> re-authors on a correctable miss (<code>--max-compile-retries</code>),
+      <b>SEAL</b> re-authors from your feedback on “revise” (<code>--max-seal-revisions</code>), and a
+      red iteration re-runs the agent with the FAIL/veto fed back (<code>--max-iterations</code>, or until STUCK).
+      Everything else runs once per pass — and the bar sealed at SEAL is never rewritten.</p>
 
     <!-- Verify ladder — kept because it makes "verifiable" concrete -->
     <h3 class="reveal" style="margin-top:3rem">Verify cheap-and-ungameable first</h3>
@@ -281,9 +287,9 @@ goaly runs show run-&lt;id&gt;</pre>
     <!-- Two keys + autonomous, condensed to three cards -->
     <h3 class="reveal" style="margin-top:3rem">Two gates, and the one flag that moves only one</h3>
     <div class="grid grid-3 reveal">
-      <div class="card"><h3><span class="pill gate">Gate A</span> The bar</h3><p>Your say over the success check, <b>before</b> the loop: approve it, give feedback to revise it, or reject. <code>--autonomous</code> skips this pause — the contract is still frozen and logged.</p></div>
-      <div class="card"><h3><span class="pill fail">Gate B</span> The result</h3><p>Every iteration, but only when the check passes. An independent reviewer is <b>veto-only</b> — it can stop a green from becoming DONE, never promote a red.</p></div>
-      <div class="card"><h3><code>--autonomous</code></h3><p>Moves Gate A <b>only</b>. It skips the human pause, never the freeze and never verification. The two-key contract is identical either way.</p></div>
+      <div class="card"><h3><span class="pill gate">Seal</span> The bar</h3><p>Your say over the success check, <b>before</b> the loop: approve it, give feedback to revise it, or reject. <code>--autonomous</code> skips this pause — the contract is still frozen and logged.</p></div>
+      <div class="card"><h3><span class="pill fail">Sign-off</span> The result</h3><p>Every iteration, but only when the check passes. An independent reviewer is <b>veto-only</b> — it can stop a green from becoming DONE, never promote a red.</p></div>
+      <div class="card"><h3><code>--autonomous</code></h3><p>Moves Seal <b>only</b>. It skips the human pause, never the freeze and never verification. The two-key contract is identical either way.</p></div>
     </div>
 
     <p class="lede reveal" style="margin-top:1.6rem">

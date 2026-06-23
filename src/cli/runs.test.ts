@@ -95,27 +95,27 @@ describe('renderRunDetail', () => {
       contract,
       contractHash: contract.contractHash,
       compileFailures: [],
-      gateA: [{ kind: 'approve' }],
+      seal: [{ kind: 'approve' }],
       prepare: undefined,
       iterationsDetail: [
-        { index: 1, runStatus: 'completed', changed: true, tokensSpent: 10, verdict: failVerdict('red'), gateB: undefined },
-        { index: 2, runStatus: 'completed', changed: true, tokensSpent: 25, verdict: passVerdict('green'), gateB: approve() },
+        { index: 1, runStatus: 'completed', changed: true, tokensSpent: 10, verdict: failVerdict('red'), signoff: undefined },
+        { index: 2, runStatus: 'completed', changed: true, tokensSpent: 25, verdict: passVerdict('green'), signoff: approve() },
       ],
       ...over,
     };
   }
 
-  it('shows status, the frozen contract hash, Gate A, and per-iteration ladder + Gate B', () => {
+  it('shows status, the frozen contract hash, Seal, and per-iteration ladder + Sign-off', () => {
     const text = renderRunDetail(detail());
     expect(text).toContain('run-aaa');
     expect(text).toContain('status:      DONE');
     expect(text).toContain(contract.contractHash);
-    expect(text).toContain('gate A:      approve');
+    expect(text).toContain('seal:        approve');
     expect(text).toContain('#1');
     expect(text).toContain('FAIL');
     expect(text).toContain('#2');
     expect(text).toContain('PASS');
-    expect(text).toContain('gate B=approved');
+    expect(text).toContain('sign-off=approved');
   });
 
   it('renders the per-layer spend breakdown (harness vs the LLM steps)', () => {
@@ -177,7 +177,7 @@ async function writeDoneRun(stateDir: string, runId: string): Promise<void> {
   seq = 0;
   const entries: RunLogEntry[] = [
     e(runId, { tag: 'CONTRACT_COMPILED', contract }),
-    e(runId, { tag: 'GATE_A_DECIDED', decision: { kind: 'approve' } }),
+    e(runId, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }),
     e(runId, {
       tag: 'AGENT_RAN',
       run: { output: '', sessionId: SessionId.parse('s1'), status: 'completed' },
@@ -186,7 +186,7 @@ async function writeDoneRun(stateDir: string, runId: string): Promise<void> {
       budget: { exceeded: false, tokensSpent: 42 },
     }),
     e(runId, { tag: 'VERIFIED', verdict: passVerdict() }),
-    e(runId, { tag: 'GATE_B_DECIDED', approval: approve() }),
+    e(runId, { tag: 'SIGNOFF_DECIDED', approval: approve() }),
   ];
   const log = new FileRunLog(join(stateDir, runId));
   await log.writeHeader(h(runId));

@@ -14,7 +14,7 @@ contract is content-hashed (`contractHash`) and never rewritten mid-loop. The fr
 is carried by reference through `LoopCtx`; the reducer has no transition that mutates it. The
 `contractHash` is logged on every iteration, so an auditor can prove the bar never moved.
 
-`--autonomous` skips the human *pause* at Gate A, never the *freeze*. Autonomous mode still
+`--autonomous` skips the human *pause* at Seal, never the *freeze*. Autonomous mode still
 compiles-then-freezes and logs the full contract loudly.
 
 ## Consequences

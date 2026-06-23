@@ -26,16 +26,16 @@ export function step(state: OrchestratorState, event: OrchestratorEvent): StepRe
   switch (state.tag) {
     case 'COMPILING':
       return stepCompiling(state.config, state.reviseRound, state.compileRound, event);
-    case 'AWAIT_GATE_A':
-      return stepAwaitGateA(state.config, state.contract, state.reviseRound, event);
+    case 'AWAIT_SEAL':
+      return stepAwaitSeal(state.config, state.contract, state.reviseRound, event);
     case 'PREPARING':
       return stepPreparing(state.config, state.contract, event);
     case 'RUNNING_AGENT':
       return stepRunningAgent(state.ctx, event);
     case 'VERIFYING':
       return stepVerifying(state.ctx, event);
-    case 'AWAIT_GATE_B':
-      return stepAwaitGateB(state.ctx, event);
+    case 'AWAIT_SIGNOFF':
+      return stepAwaitSignoff(state.ctx, event);
     case 'DONE':
     case 'FAILED':
     case 'ABORTED':
@@ -52,8 +52,8 @@ function stepCompiling(
   switch (event.tag) {
     case 'CONTRACT_COMPILED':
       return [
-        { tag: 'AWAIT_GATE_A', config, contract: event.contract, reviseRound },
-        [{ tag: 'REQUEST_GATE_A', contract: event.contract }],
+        { tag: 'AWAIT_SEAL', config, contract: event.contract, reviseRound },
+        [{ tag: 'REQUEST_SEAL', contract: event.contract }],
       ];
     case 'COMPILE_FAILED': {
       // Bounded compile-retry-with-feedback (issue #51): a correctable authoring mistake (bad path,
@@ -86,13 +86,13 @@ function compileRetryFeedback(reason: string): string {
   );
 }
 
-function stepAwaitGateA(
+function stepAwaitSeal(
   config: RunConfig,
   contract: CompiledContract,
   reviseRound: number,
   event: OrchestratorEvent,
 ): StepResult {
-  if (event.tag !== 'GATE_A_DECIDED') throw invalidTransition('AWAIT_GATE_A', event);
+  if (event.tag !== 'SEAL_DECIDED') throw invalidTransition('AWAIT_SEAL', event);
 
   switch (event.decision.kind) {
     case 'approve': {
@@ -119,14 +119,14 @@ function stepAwaitGateA(
         [],
       ];
     case 'revise': {
-      // Pre-approval renegotiation: bounded by maxGateARevisions so the loop always terminates.
+      // Pre-approval renegotiation: bounded by maxSealRevisions so the loop always terminates.
       // The reducer stays pure — it only emits a re-compile command carrying the human's
       // feedback; the Driver performs the recompile and a fresh CONTRACT_COMPILED returns here.
-      if (reviseRound + 1 > config.maxGateARevisions) {
+      if (reviseRound + 1 > config.maxSealRevisions) {
         return [
           {
             tag: 'ABORTED',
-            reason: `Gate A revision cap (${config.maxGateARevisions}) reached without approval`,
+            reason: `Seal revision cap (${config.maxSealRevisions}) reached without approval`,
             iterations: 0,
             contractHash: contract.contractHash,
           },
@@ -223,10 +223,10 @@ function stepVerifying(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
     // (e.g. pass→veto→fail) can't be mistaken for "N identical failures in a row".
     const next: LoopCtx = { ...ctx, lastVerdict: verdict, verifierDetailHistory: [] };
     return [
-      { tag: 'AWAIT_GATE_B', ctx: next },
+      { tag: 'AWAIT_SIGNOFF', ctx: next },
       [
         {
-          tag: 'REQUEST_GATE_B',
+          tag: 'REQUEST_SIGNOFF',
           goal: next.contract.goal,
           rubric: next.contract.rubric,
           verdicts: [verdict],
@@ -235,7 +235,7 @@ function stepVerifying(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
     ];
   }
 
-  // Failed ladder: record the normalized failure, then DECIDE (Gate B never runs).
+  // Failed ladder: record the normalized failure, then DECIDE (Sign-off never runs).
   const next: LoopCtx = {
     ...ctx,
     lastVerdict: verdict,
@@ -244,11 +244,11 @@ function stepVerifying(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
   return applyDecision(next, decide(next, verdict, null));
 }
 
-function stepAwaitGateB(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
-  if (event.tag !== 'GATE_B_DECIDED') throw invalidTransition('AWAIT_GATE_B', event);
+function stepAwaitSignoff(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
+  if (event.tag !== 'SIGNOFF_DECIDED') throw invalidTransition('AWAIT_SIGNOFF', event);
   const verdict = ctx.lastVerdict;
   if (verdict === undefined) {
-    throw new Error('AWAIT_GATE_B reached without a ladder verdict (corrupt state)');
+    throw new Error('AWAIT_SIGNOFF reached without a ladder verdict (corrupt state)');
   }
   return applyDecision(ctx, decide(ctx, verdict, event.approval));
 }

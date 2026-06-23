@@ -38,7 +38,7 @@ Two helpers ship next to this doc:
 3. **codex needs a writable, trusted path.** The `codex` harness runs `codex exec --full-auto`
    (workspace-write). Put the sandbox under a codex-trusted root (your usual workspace dir), not a
    random `/tmp` path, or codex's sandbox may block writes.
-4. **Use `--autonomous`.** A recording can't answer the interactive Gate-A prompt. `--autonomous`
+4. **Use `--autonomous`.** A recording can't answer the interactive Seal prompt. `--autonomous`
    auto-approves but **still freezes the contract and logs it loudly** (`AUTONOMOUS: auto-approving
    frozen success contract …`), so the headline feature is still on screen.
 
@@ -79,7 +79,7 @@ done
 
 `--generate` + `--rubric`: goaly's **compiler LLM** authors and freezes the contract, the verifier
 ladder adds an **LLM judge** rung (quorum, runs after the deterministic rung passes), and the
-**independent Gate-B approver** (LLM, veto-only) holds the second key. Steer the compiler so it stays
+**independent Sign-off approver** (LLM, veto-only) holds the second key. Steer the compiler so it stays
 reproducible:
 
 ```bash

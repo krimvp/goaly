@@ -213,7 +213,7 @@ describe('AgentCompiler — generate verifier', () => {
     await expect(compiler.compile(config)).rejects.toThrow();
   });
 
-  it('threads Gate A revise feedback into the authoring prompt', async () => {
+  it('threads Seal revise feedback into the authoring prompt', async () => {
     // Arrange
     const llm = new FakeLlm([JSON.stringify({ command: 'npm run check', rubric: '' })]);
     const compiler = new AgentCompiler({ llm });
@@ -315,7 +315,7 @@ describe('AgentCompiler — rubric guardrails (issue #55)', () => {
 });
 
 describe('AgentCompiler — feedback on an existing verifier', () => {
-  it('ignores Gate A feedback (no LLM call, deterministic recompile)', async () => {
+  it('ignores Seal feedback (no LLM call, deterministic recompile)', async () => {
     // Arrange
     const llm = new FakeLlm([]);
     const compiler = new AgentCompiler({ llm });

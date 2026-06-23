@@ -10,7 +10,7 @@ import { isTerminal, iterationCount, type OrchestratorState } from '../orchestra
 import { initial, step } from '../orchestrator/step';
 import { replay } from '../runlog/replay';
 import type { VerifierCompiler } from '../compile/compiler';
-import type { ContractGate } from '../compile/gateA';
+import type { SealGate } from '../compile/seal';
 import type { HarnessAdapter } from '../harness/adapter';
 import type { Verifier } from '../verify/verifier';
 import type { Approver } from '../verify/approver';
@@ -37,7 +37,7 @@ const SENTINEL_POST_HASH: DiffHash = DiffHash.parse('0000001');
  */
 export type DriverDeps = {
   compiler: VerifierCompiler;
-  gateA: ContractGate;
+  seal: SealGate;
   harness: HarnessAdapter;
   makeLadder: (contract: CompiledContract) => Verifier;
   approver: Approver;
@@ -195,8 +195,8 @@ export type CheckpointDeps = Pick<DriverDeps, 'workspace' | 'runlog' | 'clock'> 
  * to the run log so `--resume` reconstructs the advanced baseline by replaying the log.
  *
  * This is the PRIMITIVE; the *policy* of when to checkpoint (e.g. between phases of a large build) is
- * deliberately a separate concern (issue #46) — so this is not wired into the standard verify/Gate-B
- * loop, where advancing the baseline mid-run would shrink what Gate B's approver reviews. The reducer
+ * deliberately a separate concern (issue #46) — so this is not wired into the standard verify/Sign-off
+ * loop, where advancing the baseline mid-run would shrink what Sign-off's approver reviews. The reducer
  * is untouched: a `CHECKPOINTED` event is a baseline marker, never fed to `step()`. Returns the next
  * `seq` and the snapshotted tree SHA. Fail-closed: a checkpoint snapshot that throws propagates to the
  * caller's loop, which resolves to a crashed/ABORTED run — never a silently empty baseline.
@@ -257,8 +257,8 @@ function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void
     case 'COMPILE_FAILED':
       log.error('compile failed', { reason: event.reason });
       return;
-    case 'GATE_A_DECIDED':
-      log.info('gate A decided', { decision: event.decision.kind });
+    case 'SEAL_DECIDED':
+      log.info('seal decided', { decision: event.decision.kind });
       return;
     case 'WORKSPACE_PREPARED':
       log.info('workspace prepared', { status: event.prepared.status, setupRan: event.setupRan });
@@ -291,8 +291,8 @@ function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void
       });
       log.debug('verdict detail', { detail: event.verdict.detail });
       return;
-    case 'GATE_B_DECIDED':
-      log.info('gate B decided', {
+    case 'SIGNOFF_DECIDED':
+      log.info('sign-off decided', {
         veto: event.approval.veto,
         ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
         ...(event.approval.reason !== undefined ? { reason: event.approval.reason } : {}),
@@ -349,14 +349,14 @@ async function perform(
       }
     }
 
-    case 'REQUEST_GATE_A': {
-      const decision = await deps.gateA.approveContract(command.contract);
-      return { event: { tag: 'GATE_A_DECIDED', decision } };
+    case 'REQUEST_SEAL': {
+      const decision = await deps.seal.approveContract(command.contract);
+      return { event: { tag: 'SEAL_DECIDED', decision } };
     }
 
     case 'PREPARE_WORKSPACE': {
       // One-time setup (Fix #1) + deterministic pre-flight (Fix #2), both fail-closed inside
-      // prepareWorkspace. Runs once after Gate A and before iteration 1; the reducer routes the
+      // prepareWorkspace. Runs once after SEAL and before iteration 1; the reducer routes the
       // typed outcome (proceed / setup-failed / contract-unsound).
       const result = await prepareWorkspace(
         {
@@ -442,7 +442,7 @@ async function perform(
       return { event: { tag: 'VERIFIED', verdict, ...(llm !== undefined ? { llm } : {}) } };
     }
 
-    case 'REQUEST_GATE_B': {
+    case 'REQUEST_SIGNOFF': {
       let diff = '';
       try {
         diff = await deps.workspace.diff();
@@ -453,13 +453,13 @@ async function perform(
           verdicts: command.verdicts,
         });
         const llm = meterStep('approve');
-        return { event: { tag: 'GATE_B_DECIDED', approval, ...(llm !== undefined ? { llm } : {}) } };
+        return { event: { tag: 'SIGNOFF_DECIDED', approval, ...(llm !== undefined ? { llm } : {}) } };
       } catch (e) {
         // Fail-closed: an approver that errors is treated as a veto, never a green.
         const llm = meterStep('approve');
         return {
           event: {
-            tag: 'GATE_B_DECIDED',
+            tag: 'SIGNOFF_DECIDED',
             approval: { veto: true, reason: `approver error: ${errorMessage(e)}` },
             ...(llm !== undefined ? { llm } : {}),
           },

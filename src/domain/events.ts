@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { DiffHash, SessionId, ContractHash, RunId } from './ids';
 import { CompiledContract } from './contract';
-import { Verdict, ApprovalVerdict, GateDecision } from './verdict';
+import { Verdict, ApprovalVerdict, SealDecision } from './verdict';
 import { RunConfig } from './config';
 import { TokenUsage, TokenBreakdown, UsageReport } from './usage';
 
@@ -75,7 +75,7 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     /** LLM spend before the compile failed (tokens can be spent on a draft that then fails to parse). */
     llm: TokenUsage.optional(),
   }),
-  z.object({ tag: z.literal('GATE_A_DECIDED'), decision: GateDecision }),
+  z.object({ tag: z.literal('SEAL_DECIDED'), decision: SealDecision }),
   z.object({
     tag: z.literal('WORKSPACE_PREPARED'),
     /** The classified outcome of the one-time setup + deterministic pre-flight (Fix #1 / #2). */
@@ -99,7 +99,7 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     llm: TokenUsage.optional(),
   }),
   z.object({
-    tag: z.literal('GATE_B_DECIDED'),
+    tag: z.literal('SIGNOFF_DECIDED'),
     approval: ApprovalVerdict,
     /** LLM spend by the approver (absent only if the call never reached the model). */
     llm: TokenUsage.optional(),
@@ -135,11 +135,11 @@ export type ApprovalInput = {
  */
 export type Command =
   | { tag: 'COMPILE_VERIFIER'; config: RunConfig; feedback?: string }
-  | { tag: 'REQUEST_GATE_A'; contract: CompiledContract }
+  | { tag: 'REQUEST_SEAL'; contract: CompiledContract }
   | { tag: 'PREPARE_WORKSPACE'; contract: CompiledContract }
   | { tag: 'RUN_AGENT'; prompt: string; sessionId: SessionId | undefined }
   | { tag: 'RUN_VERIFIER'; contract: CompiledContract }
-  | { tag: 'REQUEST_GATE_B'; goal: string; rubric: string; verdicts: Verdict[] };
+  | { tag: 'REQUEST_SIGNOFF'; goal: string; rubric: string; verdicts: Verdict[] };
 
 /** Terminal result of a whole run. */
 export const RunOutcome = z.object({

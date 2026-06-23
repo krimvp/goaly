@@ -11,7 +11,7 @@ partial solution that technically makes a command exit 0.
 DONE requires **two independent keys** to turn:
 
 1. The **frozen verifier ladder** passes (deterministic checks first, then any LLM judge).
-2. The independent **Approver** (Gate B) does **not** veto.
+2. The independent **Approver** (Sign-off) does **not** veto.
 
 The Approver is a separate seam, not another verifier. It runs **only when the ladder passes**,
 can **only veto** (never promote), and is fed independent inputs — goal, frozen rubric, full

@@ -1,6 +1,6 @@
 import type { RunsCommand } from './args';
 import type { CompiledContract, Rung } from '../domain/contract';
-import type { GateDecision } from '../domain/verdict';
+import type { SealDecision } from '../domain/verdict';
 import {
   listRuns,
   readRun,
@@ -105,7 +105,7 @@ export function renderRunDetail(d: RunDetail): string {
   ];
   if (d.reason !== undefined) lines.push(`reason:      ${d.reason}`);
   lines.push(...renderContract(d.contract));
-  lines.push(...renderGateA(d.gateA, d.compileFailures));
+  lines.push(...renderSeal(d.seal, d.compileFailures));
   lines.push(...renderPrepare(d.prepare));
   lines.push(...renderIterations(d.iterationsDetail));
   // The per-layer spend breakdown (issue #17), folded from the same log — tokens-only here, since
@@ -135,18 +135,18 @@ function fmtRung(rung: Rung): string {
     : `[judge] quorum ${rung.quorum}, floor ${rung.confidenceFloor}${label}`;
 }
 
-function renderGateA(gateA: readonly GateDecision[], compileFailures: readonly string[]): string[] {
+function renderSeal(seal: readonly SealDecision[], compileFailures: readonly string[]): string[] {
   const lines: string[] = [''];
   for (const reason of compileFailures) lines.push(`compile:     FAILED — ${reason}`);
-  if (gateA.length === 0) {
-    lines.push('gate A:      (not reached)');
+  if (seal.length === 0) {
+    lines.push('seal:        (not reached)');
     return lines;
   }
-  lines.push(`gate A:      ${gateA.map(fmtGateDecision).join(' → ')}`);
+  lines.push(`seal:        ${seal.map(fmtSealDecision).join(' → ')}`);
   return lines;
 }
 
-function fmtGateDecision(d: GateDecision): string {
+function fmtSealDecision(d: SealDecision): string {
   switch (d.kind) {
     case 'approve':
       return 'approve';
@@ -172,8 +172,8 @@ function renderIterations(iterations: readonly IterationDetail[]): string[] {
       it.tokensSpent === undefined ? '' : `  tokens=${it.tokensSpent}`
     }`);
     lines.push(`      ladder=${fmtVerdict(it)}`);
-    if (it.gateB !== undefined) {
-      lines.push(`      gate B=${it.gateB.veto ? `VETO (${it.gateB.reason ?? ''})` : 'approved'}`);
+    if (it.signoff !== undefined) {
+      lines.push(`      sign-off=${it.signoff.veto ? `VETO (${it.signoff.reason ?? ''})` : 'approved'}`);
     }
   }
   return lines;

@@ -33,7 +33,7 @@ may be intentionally declined. Make the case.
      - Compile once, then freeze (no transition rewrites the contract)
      - Two keys for DONE (frozen verifier ladder passes AND approver doesn't veto)
      - Fail-closed everywhere (errors → FAIL/VETO/crashed, never a green, never an unhandled throw)
-     - --autonomous moves Gate A only
+     - --autonomous moves Seal only
      - Parse at every seam (Zod), branded ids
      - Write-ahead + resume
      - Stuck detection stays pure

@@ -6,7 +6,7 @@ describe('RunConfig', () => {
     const c = RunConfig.parse({ goal: 'g', verifier: { kind: 'existing', ref: 'npm test' } });
     expect(c.autonomous).toBe(false);
     expect(c.maxIterations).toBe(10);
-    expect(c.maxGateARevisions).toBe(10);
+    expect(c.maxSealRevisions).toBe(10);
     expect(c.stuckPolicy).toEqual({ noDiff: true, repeatFailureThreshold: 3, oscillation: true });
     expect(c.judge).toEqual({ quorum: 3, confidenceFloor: 0.66 });
     expect(c.diffIgnore).toEqual([]);
@@ -22,15 +22,15 @@ describe('RunConfig', () => {
     ).toThrow();
   });
 
-  it('accepts maxGateARevisions: 0 (revision disabled) but rejects negatives', () => {
+  it('accepts maxSealRevisions: 0 (revision disabled) but rejects negatives', () => {
     const c = RunConfig.parse({
       goal: 'g',
       verifier: { kind: 'generate' },
-      maxGateARevisions: 0,
+      maxSealRevisions: 0,
     });
-    expect(c.maxGateARevisions).toBe(0);
+    expect(c.maxSealRevisions).toBe(0);
     expect(() =>
-      RunConfig.parse({ goal: 'g', verifier: { kind: 'generate' }, maxGateARevisions: -1 }),
+      RunConfig.parse({ goal: 'g', verifier: { kind: 'generate' }, maxSealRevisions: -1 }),
     ).toThrow();
   });
 });
@@ -54,13 +54,13 @@ describe('cliInputToRunConfig', () => {
       verifyCmd: 'true',
       autonomous: 'true',
       maxIterations: '5',
-      maxGateARevisions: '3',
+      maxSealRevisions: '3',
       budgetTokens: '1000',
     });
     const c = cliInputToRunConfig(input);
     expect(c.autonomous).toBe(true);
     expect(c.maxIterations).toBe(5);
-    expect(c.maxGateARevisions).toBe(3);
+    expect(c.maxSealRevisions).toBe(3);
     expect(c.budget.tokens).toBe(1000);
   });
 

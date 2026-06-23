@@ -15,7 +15,7 @@ import { GeneratedFilesGuard } from '../verify/generated-guard';
 import { JudgeVerifier } from '../verify/judge';
 import { AgentApprover } from '../verify/agent-approver';
 import { AgentCompiler } from '../compile/agent-compiler';
-import { AutoContractGate, HumanContractGate } from '../compile/gates';
+import { AutoSealGate, HumanSealGate } from '../compile/seal-gates';
 import { GitWorkspace } from '../workspace/git-workspace';
 import { excludeFromGit } from '../workspace/git-exclude';
 import { FileRunLog } from '../runlog/file-runlog';
@@ -80,7 +80,7 @@ export type ComposeOptions = {
    */
   egressProxy?: SandboxProxy;
   /**
-   * Diff baseline (issue #47): the git ref/SHA `diff()` (and thus Gate B) compares the working tree
+   * Diff baseline (issue #47): the git ref/SHA `diff()` (and thus Sign-off) compares the working tree
    * against, instead of `HEAD`. The CLI validates it resolves fail-closed BEFORE composing; here it
    * is just adopted onto the workspace. Absent ⇒ baseline stays `HEAD` (behavior unchanged).
    */
@@ -195,7 +195,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
           options.egressProxy,
         );
   const workspace = new GitWorkspace(options.workspaceRoot, undefined, excludes, true, runLauncher);
-  // Adopt an explicit `--baseline` (issue #47) so `diff()`/Gate B compare against it instead of HEAD.
+  // Adopt an explicit `--baseline` (issue #47) so `diff()`/Sign-off compare against it instead of HEAD.
   // The CLI already validated it resolves (fail-closed); a resumed run re-points it from the log.
   if (options.baseline !== undefined) workspace.setBaseline(options.baseline);
   const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
@@ -232,9 +232,9 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
       ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
     }),
-    gateA: config.autonomous
-      ? new AutoContractGate()
-      : new HumanContractGate({ allowRevise: config.maxGateARevisions > 0 }),
+    seal: config.autonomous
+      ? new AutoSealGate()
+      : new HumanSealGate({ allowRevise: config.maxSealRevisions > 0 }),
     harness: makeHarness(options.harness, models.harness, timeouts.harnessMs, timeouts.harnessIdleMs, {
       launcher,
       workspace: options.workspaceRoot,

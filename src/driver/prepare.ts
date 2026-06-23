@@ -23,7 +23,7 @@ export type PrepareDeps = {
 export type PrepareResult = { prepared: PreparedOutcome; setupRan: boolean };
 
 /**
- * The one-time prepare phase the Driver performs between Gate A approval and the first agent turn
+ * The one-time prepare phase the Driver performs between SEAL approval and the first agent turn
  * (Fix #1 setup + Fix #2 pre-flight). Two sequential effects, each fail-closed:
  *
  *  1. SETUP (Fix #1): run the contract's one-time bootstrap command (e.g. `npm ci`) once. A non-zero

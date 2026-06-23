@@ -4,7 +4,7 @@ import type { CompiledContract } from '../domain/contract';
 import type { ContractHash, RunId } from '../domain/ids';
 import type { HarnessRunResult } from '../domain/events';
 import type { UsageReport } from '../domain/usage';
-import type { Verdict, ApprovalVerdict, GateDecision } from '../domain/verdict';
+import type { Verdict, ApprovalVerdict, SealDecision } from '../domain/verdict';
 import { iterationCount, type OrchestratorState } from '../orchestrator/state';
 import { errorMessage } from '../util/errors';
 import { FileRunLog } from './file-runlog';
@@ -48,8 +48,8 @@ export type IterationDetail = {
   readonly tokensSpent: number | undefined;
   /** The frozen verifier-ladder verdict for this iteration (undefined if not reached). */
   verdict: Verdict | undefined;
-  /** The Gate-B approver verdict (present only when the ladder passed). */
-  gateB: ApprovalVerdict | undefined;
+  /** The Sign-off approver verdict (present only when the ladder passed). */
+  signoff: ApprovalVerdict | undefined;
 };
 
 /** The full `goaly runs show <id>` report. */
@@ -71,8 +71,8 @@ export type RunDetail = {
   readonly contractHash: ContractHash | null;
   /** Any failed compile attempts (reasons), in order. */
   readonly compileFailures: readonly string[];
-  /** Gate A decisions in order (revise rounds, then a final approve/reject). */
-  readonly gateA: readonly GateDecision[];
+  /** Seal decisions in order (revise rounds, then a final approve/reject). */
+  readonly seal: readonly SealDecision[];
   /** The one-time prepare phase outcome (Fix #1 setup + Fix #2 pre-flight), if it ran; else undefined. */
   readonly prepare: PrepareDetail | undefined;
   readonly iterationsDetail: readonly IterationDetail[];
@@ -132,7 +132,7 @@ export function runDetail(header: RunLogHeader, entries: readonly RunLogEntry[])
     contract,
     contractHash,
     compileFailures: collectCompileFailures(entries),
-    gateA: collectGateA(entries),
+    seal: collectSeal(entries),
     prepare: collectPrepare(entries),
     iterationsDetail: collectIterations(entries),
   };
@@ -174,15 +174,15 @@ function collectCompileFailures(entries: readonly RunLogEntry[]): string[] {
   return out;
 }
 
-function collectGateA(entries: readonly RunLogEntry[]): GateDecision[] {
-  const out: GateDecision[] = [];
-  for (const e of entries) if (e.event.tag === 'GATE_A_DECIDED') out.push(e.event.decision);
+function collectSeal(entries: readonly RunLogEntry[]): SealDecision[] {
+  const out: SealDecision[] = [];
+  for (const e of entries) if (e.event.tag === 'SEAL_DECIDED') out.push(e.event.decision);
   return out;
 }
 
 /**
  * Group the loop events into per-iteration records. Each AGENT_RAN opens an iteration; the
- * following VERIFIED is its ladder verdict and the following GATE_B_DECIDED its approver verdict.
+ * following VERIFIED is its ladder verdict and the following SIGNOFF_DECIDED its approver verdict.
  */
 function collectIterations(entries: readonly RunLogEntry[]): IterationDetail[] {
   const out: IterationDetail[] = [];
@@ -195,14 +195,14 @@ function collectIterations(entries: readonly RunLogEntry[]): IterationDetail[] {
         changed: ev.prevDiffHash !== ev.diffHash,
         tokensSpent: ev.budget.tokensSpent,
         verdict: undefined,
-        gateB: undefined,
+        signoff: undefined,
       });
     } else if (ev.tag === 'VERIFIED') {
       const cur = out[out.length - 1];
       if (cur !== undefined) cur.verdict = ev.verdict;
-    } else if (ev.tag === 'GATE_B_DECIDED') {
+    } else if (ev.tag === 'SIGNOFF_DECIDED') {
       const cur = out[out.length - 1];
-      if (cur !== undefined) cur.gateB = ev.approval;
+      if (cur !== undefined) cur.signoff = ev.approval;
     }
   }
   return out;

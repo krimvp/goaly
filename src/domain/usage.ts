@@ -86,7 +86,7 @@ export type TokenUsage = z.infer<typeof TokenUsage>;
  * Per-run spend summary, derived by folding the (write-ahead) event log — so it is identical on a
  * fresh run and after `--resume`, and a future `runs show` can rebuild it from the log alone. The
  * breakdown is by layer: the **harness** (the coding agent) vs. the **LLM steps** (compiler, the
- * judge rung of the verifier, and the Gate-B approver). Cost is deliberately NOT stored here —
+ * judge rung of the verifier, and the Sign-off approver). Cost is deliberately NOT stored here —
  * pricing is volatile and applied as a print-time overlay (see the `--cost-table` flag).
  */
 export const UsageReport = z.object({
@@ -96,7 +96,7 @@ export const UsageReport = z.object({
   compiler: TokenUsage,
   /** The LLM-judge rung of the verifier ladder (deterministic rungs spend nothing). */
   verifier: TokenUsage,
-  /** The Gate-B approver. */
+  /** The Sign-off approver. */
   approver: TokenUsage,
   /** compiler + verifier + approver. */
   llm: TokenUsage,

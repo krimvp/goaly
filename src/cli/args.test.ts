@@ -58,9 +58,15 @@ describe('parseArgs', () => {
     expect(a.workspace).toBe('/tmp/x');
   });
 
-  it('parses --max-gate-a-revisions', async () => {
-    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--max-gate-a-revisions', '3']);
-    expect(a.config.maxGateARevisions).toBe(3);
+  it('parses --max-seal-revisions', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--max-seal-revisions', '3']);
+    expect(a.config.maxSealRevisions).toBe(3);
+  });
+
+  it('rejects the removed --max-gate-a-revisions spelling (renamed to --max-seal-revisions)', async () => {
+    await expect(
+      parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--max-gate-a-revisions', '3']),
+    ).rejects.toThrow(/renamed to --max-seal-revisions/);
   });
 
   it('parses --max-compile-retries (issue #51)', async () => {

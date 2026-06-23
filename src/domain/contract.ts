@@ -41,7 +41,7 @@ export type GeneratedFile = z.infer<typeof GeneratedFile>;
 
 /**
  * The compiled, FROZEN success contract. Authored once in the compile phase, approved
- * at Gate A, then never rewritten — the central anti-reward-hacking invariant. The
+ * at Seal, then never rewritten — the central anti-reward-hacking invariant. The
  * `contractHash` is logged every iteration to prove the bar never moved.
  */
 export const CompiledContract = z.object({
@@ -50,7 +50,7 @@ export const CompiledContract = z.object({
   rungs: z.array(Rung).min(1),
   /**
    * Optional one-time workspace bootstrap command (Fix #1): authored by the compiler under
-   * `--generate` (or supplied via `--setup-cmd`), it runs ONCE after Gate A and before the first
+   * `--generate` (or supplied via `--setup-cmd`), it runs ONCE after SEAL and before the first
    * agent turn to prepare the tree (e.g. `npm ci`, `pip install -r requirements.txt`, `go mod
    * download`). It is NOT a verification rung — it neither gates DONE nor is judged; it only
    * installs/prepares so the worker starts from a populated tree (and stops the worker from
@@ -58,7 +58,7 @@ export const CompiledContract = z.object({
    * a non-zero exit is a typed `SETUP_FAILED` that aborts before any worker tokens are spent.
    */
   setup: z.string().min(1).optional(),
-  /** The frozen overall rubric (for audit + the approver's Gate B input). */
+  /** The frozen overall rubric (for audit + the approver's Sign-off input). */
   rubric: z.string(),
   /**
    * Files the compiler authored while writing new verification, each pinned by content hash. Part
