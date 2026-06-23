@@ -43,6 +43,11 @@ export type ParsedArgs = {
    * (fail-closed) before the run starts. Precedence: CLI flag > config file.
    */
   baseline: string | undefined;
+  /**
+   * Preferred directory for compiler-authored verification files (issue #52). Pure wiring — guidance
+   * to the compiler; the authored files are git-excluded regardless. Absent ⇒ the compiler chooses.
+   */
+  verifyDir: string | undefined;
   resumeRunId: string | undefined;
   /** Minimum diagnostic log level (default `info`). Pure wiring — never enters the contract. */
   logLevel: LogLevel;
@@ -71,8 +76,10 @@ export const USAGE = `goaly — run a coding agent until a frozen success contra
 Usage:
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
-               [--max-gate-a-revisions N] [--budget-tokens N] [--budget-wall-ms N]
-               [--diff-ignore "<p1,p2,…>"]
+               [--max-gate-a-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
+               [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
+               [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
+               [--stuck-oscillation true|false]
                [--harness claude-code|codex|droid] [--model <m>] [--llm-model <m>]
                [--llm-provider claude|codex|droid] [--harness-timeout-ms N]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
@@ -98,6 +105,13 @@ Goal / intent / rubric input (choose ONE source per field):
 Verification:
   --verify-cmd   point at an existing command that must exit 0
   --generate     have the agent author the verification (optionally guided by --intent)
+  --verify-dir <dir>  preferred directory for files the compiler authors under --generate (issue
+                      #52). Authored files are written to idiomatic locations and AUTO-REGISTERED in
+                      .git/info/exclude (git's per-clone, never-committed ignore) — so they never
+                      show in 'git status' and are never accidentally committed, with no .gitignore
+                      edit and no tracked file touched. A loud log line names each authored file and
+                      how to keep it ('git add -f'). The integrity guard still pins them by content
+                      hash on disk (excluded ≠ unprotected). Absent ⇒ the compiler picks the dir.
 
 Diff baseline (issue #47 — keep a run's diff small without touching the user's git history):
   --baseline <ref>  compute the worker's diff (the approver's Gate-B input) against <ref> — any git
@@ -113,6 +127,19 @@ Stuck-detection tuning:
                              .goaly state dir. List verifier-produced artifacts (e.g.
                              "coverage,__pycache__,dist") so a verifier's side effects between
                              iterations don't make a no-op agent look like it changed something.
+  --stuck-no-diff <bool>          toggle the no-diff abort (default true). Even when on, a no-diff
+                                  iteration is NOT terminal if the previous turn timed out, or if the
+                                  ladder is green and a FRESH veto is the only blocker — the agent
+                                  gets one real turn to act on a correct critique first (issue #54).
+  --stuck-repeat-threshold N      abort after N identical normalized verifier failures (default 3).
+  --stuck-oscillation <bool>      toggle diff-hash oscillation detection (default true).
+
+Compile resilience (issue #51):
+  --max-compile-retries N    on a COMPILE_FAILED, re-author the verification with the error as
+                             feedback up to N times before failing the run (default 2; 0 disables).
+                             A correctable authoring mistake (bad path, transient parse miss) no
+                             longer discards a valid plan. Exhausting the budget is still a typed
+                             FAILED — never a skipped check.
 
 Model selection (all optional; default = each tool's own default):
   --model <m>           model for the harness AND the LLM steps (the global default)
@@ -243,6 +270,22 @@ function str(flags: RawFlags, key: string): string | undefined {
   return v;
 }
 
+/**
+ * Parse a tri-state boolean flag (issue #54): a bare `--flag` ⇒ true, `--flag true|1|yes` ⇒ true,
+ * `--flag false|0|no` ⇒ false. Returns undefined when absent so the schema default applies; fails
+ * closed (invariant #6) on any other value. Used for the stuck-policy toggles, which must be
+ * DISABLE-able (so a plain coerced boolean — where any non-empty string is truthy — won't do).
+ */
+function boolFlag(flags: RawFlags, key: string): boolean | undefined {
+  const v = flags[key];
+  if (v === undefined) return undefined;
+  // A bare CLI flag is `true`; a config-file JSON boolean may be either literal.
+  if (typeof v === 'boolean') return v;
+  if (v === 'true' || v === '1' || v === 'yes') return true;
+  if (v === 'false' || v === '0' || v === 'no') return false;
+  throw new UsageError(`--${key}: expected true or false, got '${String(v)}'`);
+}
+
 /** Fields that may be sourced inline / from a file / from stdin; a CLI source overrides config. */
 const MULTI_SOURCE_FIELDS = ['goal', 'intent', 'rubric'] as const;
 
@@ -297,6 +340,18 @@ export async function parseArgs(
     ...(str(flags, 'max-gate-a-revisions') !== undefined
       ? { maxGateARevisions: str(flags, 'max-gate-a-revisions') }
       : {}),
+    ...(str(flags, 'max-compile-retries') !== undefined
+      ? { maxCompileRetries: str(flags, 'max-compile-retries') }
+      : {}),
+    ...(boolFlag(flags, 'stuck-no-diff') !== undefined
+      ? { stuckNoDiff: boolFlag(flags, 'stuck-no-diff') }
+      : {}),
+    ...(str(flags, 'stuck-repeat-threshold') !== undefined
+      ? { stuckRepeatThreshold: str(flags, 'stuck-repeat-threshold') }
+      : {}),
+    ...(boolFlag(flags, 'stuck-oscillation') !== undefined
+      ? { stuckOscillation: boolFlag(flags, 'stuck-oscillation') }
+      : {}),
     ...(str(flags, 'budget-tokens') !== undefined
       ? { budgetTokens: str(flags, 'budget-tokens') }
       : {}),
@@ -317,6 +372,7 @@ export async function parseArgs(
     llmProvider: parseLlmProvider(str(flags, 'llm-provider')),
     workspace: str(flags, 'workspace') ?? process.cwd(),
     baseline: str(flags, 'baseline'),
+    verifyDir: str(flags, 'verify-dir'),
     resumeRunId: str(flags, 'resume'),
     logLevel: parseLogLevel(str(flags, 'log-level')),
     logFile: str(flags, 'log-file'),
@@ -510,6 +566,7 @@ function baseArgs(
     llmProvider: 'claude',
     workspace,
     baseline: undefined,
+    verifyDir: undefined,
     resumeRunId: undefined,
     logLevel: 'info',
     logFile: undefined,

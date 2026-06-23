@@ -17,7 +17,7 @@ export type StepResult = readonly [OrchestratorState, Command[]];
 /** Seed the machine: COMPILING + a single COMPILE_VERIFIER command. */
 export function initial(config: RunConfig): StepResult {
   return [
-    { tag: 'COMPILING', config, reviseRound: 0 },
+    { tag: 'COMPILING', config, reviseRound: 0, compileRound: 0 },
     [{ tag: 'COMPILE_VERIFIER', config }],
   ];
 }
@@ -25,7 +25,7 @@ export function initial(config: RunConfig): StepResult {
 export function step(state: OrchestratorState, event: OrchestratorEvent): StepResult {
   switch (state.tag) {
     case 'COMPILING':
-      return stepCompiling(state.config, state.reviseRound, event);
+      return stepCompiling(state.config, state.reviseRound, state.compileRound, event);
     case 'AWAIT_GATE_A':
       return stepAwaitGateA(state.config, state.contract, state.reviseRound, event);
     case 'RUNNING_AGENT':
@@ -44,6 +44,7 @@ export function step(state: OrchestratorState, event: OrchestratorEvent): StepRe
 function stepCompiling(
   config: RunConfig,
   reviseRound: number,
+  compileRound: number,
   event: OrchestratorEvent,
 ): StepResult {
   switch (event.tag) {
@@ -52,14 +53,35 @@ function stepCompiling(
         { tag: 'AWAIT_GATE_A', config, contract: event.contract, reviseRound },
         [{ tag: 'REQUEST_GATE_A', contract: event.contract }],
       ];
-    case 'COMPILE_FAILED':
+    case 'COMPILE_FAILED': {
+      // Bounded compile-retry-with-feedback (issue #51): a correctable authoring mistake (bad path,
+      // transient parse miss) shouldn't discard a valid plan. Re-author with the error as guidance,
+      // up to maxCompileRetries, before failing. The reducer stays pure — it only emits a
+      // feedback-carrying re-compile command; the Driver performs the recompile. Exhausting the
+      // budget is still a typed FAILED (fail-closed), never a skipped check.
+      if (compileRound < config.maxCompileRetries) {
+        return [
+          { tag: 'COMPILING', config, reviseRound, compileRound: compileRound + 1 },
+          [{ tag: 'COMPILE_VERIFIER', config, feedback: compileRetryFeedback(event.reason) }],
+        ];
+      }
       return [
         { tag: 'FAILED', reason: event.reason, iterations: 0, contractHash: undefined },
         [],
       ];
+    }
     default:
       throw invalidTransition('COMPILING', event);
   }
+}
+
+/** Turn a COMPILE_FAILED reason into actionable re-authoring guidance for the next compile attempt. */
+function compileRetryFeedback(reason: string): string {
+  return (
+    `The previous attempt to author the verification failed: ${reason}. ` +
+    "Author verification that runs over the repo's existing tooling, and write any helper files " +
+    'inside the workspace using relative paths only.'
+  );
 }
 
 function stepAwaitGateA(
@@ -100,8 +122,10 @@ function stepAwaitGateA(
           [],
         ];
       }
+      // A fresh human-driven authoring round resets the compile-retry counter (issue #51): the
+      // per-attempt error budget is independent of the pre-approval revise budget.
       return [
-        { tag: 'COMPILING', config, reviseRound: reviseRound + 1 },
+        { tag: 'COMPILING', config, reviseRound: reviseRound + 1, compileRound: 0 },
         [{ tag: 'COMPILE_VERIFIER', config, feedback: event.decision.feedback }],
       ];
     }

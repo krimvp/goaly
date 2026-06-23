@@ -59,6 +59,28 @@ describe('DECIDE truth table', () => {
     if (d.kind === 'ABORTED') expect(d.reason).toContain('no-diff');
   });
 
+  it('ladder-green + fresh veto + one no-diff iteration → CONTINUE, not ABORTED (issue #54)', () => {
+    // The agent made no edits for one iteration, but the only blocker is a brand-new Gate-B veto it
+    // has not yet seen — it must get one real turn to act on the (correct) critique first.
+    const ctx = makeCtx({ iteration: 1, lastNoDiff: true, feedback: undefined });
+    const d = decide(ctx, passVerdict(), veto('power-ups are inert'));
+    expect(d).toEqual({ kind: 'CONTINUE', feedback: 'power-ups are inert' });
+  });
+
+  it('a SECOND unproductive no-diff on the same veto → ABORTED (issue #54)', () => {
+    // The agent was already told this veto last turn (feedback === reason) and still made no edits.
+    const ctx = makeCtx({ iteration: 2, lastNoDiff: true, feedback: 'power-ups are inert' });
+    const d = decide(ctx, passVerdict(), veto('power-ups are inert'));
+    expect(d.kind).toBe('ABORTED');
+    if (d.kind === 'ABORTED') expect(d.reason).toContain('no-diff');
+  });
+
+  it('a turn killed by timeout does not immediately trip no-diff (issue #54)', () => {
+    const ctx = makeCtx({ iteration: 1, lastNoDiff: true, lastRunStatus: 'timeout' });
+    const d = decide(ctx, failVerdict('still red'), null);
+    expect(d).toEqual({ kind: 'CONTINUE', feedback: 'still red' });
+  });
+
   it('stuck (oscillation) → ABORTED', () => {
     const ctx = makeCtx({ diffHashHistory: dh('a', 'b', 'a', 'b'), lastNoDiff: false });
     const d = decide(ctx, failVerdict(), null);

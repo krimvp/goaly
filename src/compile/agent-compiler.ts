@@ -24,7 +24,15 @@ const SYSTEM_PROMPT =
   'You author verification for software goals. Reply with ONLY a single JSON object, ' +
   'no prose, no markdown fences. Shape: ' +
   '{ "command": string, "rubric": string, "files"?: Array<{ "path": string, "content": string }> }. ' +
-  'The command must exit 0 exactly when the goal is achieved.';
+  'The command must exit 0 exactly when the goal is achieved.\n' +
+  'Guardrails for a RUNNABLE bar (issue #55):\n' +
+  "- Author the command over the repo's EXISTING tooling (its test / build / lint runner). Do not " +
+  'require ad-hoc shell scripts, nor `grep`/structural source checks as the bar.\n' +
+  '- Write any helper or test file INSIDE the workspace using a RELATIVE path; never reference an ' +
+  'absolute or out-of-repo path such as /tmp.\n' +
+  '- The rubric must be checkable by RUNNING that command. Do not author a rubric that judges ' +
+  'runtime / visual / "is it meaningful" behavior a grader cannot execute — express those as ' +
+  'assertions inside the test suite instead.';
 
 /**
  * Extract the first balanced JSON object from a string. Tolerant of surrounding prose
@@ -83,6 +91,20 @@ export function isVacuousCommand(command: string): boolean {
   return segments.every((s) => NOOP.test(s));
 }
 
+/**
+ * Reject a generated verification command that reaches OUTSIDE the repo (issue #55). The #48 dogfood
+ * saw the compiler author a helper at `/tmp/goaly-phase-verify.sh` and invoke it — a bar that depends
+ * on an out-of-workspace path is un-runnable by the grader (and the workspace write guard refuses the
+ * file anyway → a raw throw). Catching it here turns it into a typed COMPILE_FAILED carrying an
+ * actionable message, which the bounded compile-retry-with-feedback loop (issue #51) can self-correct.
+ * Conservative: only flags an OS temp dir (`/tmp`, `/var/tmp`, `/var/folders`) appearing at the start
+ * of a path token, so a normal command (`npm test`, `vitest run test/x.test.ts`) passes untouched.
+ * Applied to LLM-authored `--generate` commands only.
+ */
+export function referencesOutOfRepoPath(command: string): boolean {
+  return /(?:^|[\s='"(`])(?:\/tmp|\/var\/tmp|\/var\/folders)(?:\/|\b)/.test(command);
+}
+
 function parseGenerated(raw: string): GeneratedVerification {
   const json = extractBalancedJson(raw);
   if (json === undefined) {
@@ -128,13 +150,17 @@ function buildRungs(
 export class AgentCompiler implements VerifierCompiler {
   readonly #llm: LlmProvider;
   readonly #writeFile: ((relPath: string, content: string) => Promise<void>) | undefined;
+  readonly #verifyDir: string | undefined;
 
   constructor(opts: {
     llm: LlmProvider;
     writeFile?: (relPath: string, content: string) => Promise<void>;
+    /** Preferred directory (relative to the repo root) for authored verification files (issue #52). */
+    verifyDir?: string;
   }) {
     this.#llm = opts.llm;
     this.#writeFile = opts.writeFile;
+    this.#verifyDir = opts.verifyDir;
   }
 
   async compile(config: RunConfig, feedback?: string): Promise<CompiledContract> {
@@ -169,6 +195,12 @@ export class AgentCompiler implements VerifierCompiler {
     if (config.rubric !== undefined && config.rubric.length > 0) {
       guidanceParts.push(`Rubric guidance: ${config.rubric}`);
     }
+    if (this.#verifyDir !== undefined && this.#verifyDir.length > 0) {
+      guidanceParts.push(
+        `Write any authored verification files under the '${this.#verifyDir}/' directory ` +
+          '(a relative path inside the repo).',
+      );
+    }
     if (feedback !== undefined && feedback.length > 0) {
       guidanceParts.push(
         `Reviewer feedback on the previous contract attempt (revise accordingly): ${feedback}`,
@@ -188,6 +220,14 @@ export class AgentCompiler implements VerifierCompiler {
       throw new Error(
         `AgentCompiler: refusing to freeze a vacuous verification command ('${generated.command}') ` +
           'that passes without measuring the goal — author a command that fails until the goal is met',
+      );
+    }
+
+    if (referencesOutOfRepoPath(generated.command)) {
+      throw new Error(
+        `AgentCompiler: refusing a verification command that references an out-of-repo path ` +
+          `('${generated.command}') — author the bar over the repo's existing tooling and keep any ` +
+          'helper file inside the workspace (a relative path)',
       );
     }
 

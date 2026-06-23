@@ -36,8 +36,10 @@ export function decide(
     return { kind: 'DONE' };
   }
 
-  // We would otherwise CONTINUE — apply the terminal backstops first.
-  const stuck = detectStuck(ctx);
+  // We would otherwise CONTINUE — apply the terminal backstops first. The in-flight verdict +
+  // approval are threaded in (issue #54) so a no-diff iteration blocked only by a fresh, correctable
+  // veto isn't aborted before the agent gets one real turn to act on it.
+  const stuck = detectStuck(ctx, { ladder, approval });
   if (stuck !== null) {
     return { kind: 'ABORTED', reason: stuck };
   }

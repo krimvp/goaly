@@ -33,7 +33,13 @@ export type LoopCtx = {
 };
 
 export type OrchestratorState =
-  | { readonly tag: 'COMPILING'; readonly config: RunConfig; readonly reviseRound: number }
+  | {
+      readonly tag: 'COMPILING';
+      readonly config: RunConfig;
+      readonly reviseRound: number;
+      /** How many bounded compile-retry rounds have already happened this authoring (issue #51). */
+      readonly compileRound: number;
+    }
   | {
       readonly tag: 'AWAIT_GATE_A';
       readonly config: RunConfig;
