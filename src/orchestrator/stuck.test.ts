@@ -137,6 +137,26 @@ describe('detectStuck', () => {
       expect(detectStuck(ctx)).toContain('repeat-failure');
     });
 
+    it('fires even when the worker changes files every iteration (Fix #3: diff churn must not mask a repeated failure)', () => {
+      // The incident: the worker edited src/ every turn so the diff hash kept moving, yet the verifier
+      // produced a byte-identical failure. Repeat-failure is keyed on the verifier signature, NOT the
+      // diff hash, so monotonic churn (no no-diff, no oscillation) must NOT hide the repeat.
+      const ctx = makeCtx({
+        lastNoDiff: false,
+        diffHashHistory: dh('a', 'b', 'c'),
+        verifierDetailHistory: [
+          "TS2339: Property 'not' does not exist on type 'Matchers'",
+          "TS2339: Property 'not' does not exist on type 'Matchers'",
+          "TS2339: Property 'not' does not exist on type 'Matchers'",
+        ],
+      });
+      const reason = detectStuck(ctx);
+      expect(reason).toContain('repeat-failure');
+      // The abort is typed and names the repeated signature so it's diagnosable.
+      expect(reason).toContain('STUCK_REPEATED_FAILURE');
+      expect(reason).toContain('TS2339');
+    });
+
     it('fires when failures differ only by volatile tokens once normalized', () => {
       // The same failure carrying a changing timestamp / temp path / PID must still repeat-match.
       const ctx = makeCtx({

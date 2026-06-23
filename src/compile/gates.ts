@@ -23,6 +23,9 @@ function renderContract(contract: CompiledContract): string {
   lines.push('==================== SUCCESS CONTRACT ====================');
   lines.push(`goal: ${contract.goal}`);
   lines.push(`contractHash: ${contract.contractHash}`);
+  if (contract.setup !== undefined) {
+    lines.push(`setup (one-time, before iteration 1): ${contract.setup}`);
+  }
   lines.push('rungs:');
   contract.rungs.forEach((rung, i) => {
     lines.push(describeRung(rung, i));

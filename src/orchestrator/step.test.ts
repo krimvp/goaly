@@ -81,6 +81,70 @@ describe('step() transitions', () => {
     if (cmds[0]?.tag === 'RUN_AGENT') expect(cmds[0].prompt).toContain(contract.goal);
   });
 
+  describe('prepare phase (Fix #1 setup + Fix #2 pre-flight)', () => {
+    const setupContract = makeFakeContract({ setup: 'npm ci' });
+
+    it('Gate A approval with a setup command → PREPARING + PREPARE_WORKSPACE (not the loop yet)', () => {
+      const [s1] = step(initial(makeConfig())[0], { tag: 'CONTRACT_COMPILED', contract: setupContract });
+      const [s2, cmds] = step(s1, { tag: 'GATE_A_DECIDED', decision: { kind: 'approve' } });
+      expect(s2.tag).toBe('PREPARING');
+      expect(cmds[0]).toMatchObject({ tag: 'PREPARE_WORKSPACE' });
+    });
+
+    it('Gate A approval with authored generatedFiles also pre-flights (PREPARING)', () => {
+      const withFiles = makeFakeContract({
+        generatedFiles: [{ path: 'verify/x.test.ts', sha256: 'a'.repeat(64) }],
+      });
+      const [s1] = step(initial(makeConfig())[0], { tag: 'CONTRACT_COMPILED', contract: withFiles });
+      const [s2] = step(s1, { tag: 'GATE_A_DECIDED', decision: { kind: 'approve' } });
+      expect(s2.tag).toBe('PREPARING');
+    });
+
+    it('a plain --verify-cmd contract (no setup, no generated files) skips prepare → straight to the loop', () => {
+      const [s1] = step(initial(makeConfig())[0], { tag: 'CONTRACT_COMPILED', contract });
+      const [s2] = step(s1, { tag: 'GATE_A_DECIDED', decision: { kind: 'approve' } });
+      expect(s2.tag).toBe('RUNNING_AGENT');
+    });
+
+    function preparing(): ReturnType<typeof step>[0] {
+      const [s1] = step(initial(makeConfig())[0], { tag: 'CONTRACT_COMPILED', contract: setupContract });
+      return step(s1, { tag: 'GATE_A_DECIDED', decision: { kind: 'approve' } })[0];
+    }
+
+    it('proceed → starts iteration 1 with the initial prompt', () => {
+      const [s, cmds] = step(preparing(), {
+        tag: 'WORKSPACE_PREPARED',
+        prepared: { status: 'proceed' },
+        setupRan: true,
+      });
+      expect(s.tag).toBe('RUNNING_AGENT');
+      expect(cmds[0]).toMatchObject({ tag: 'RUN_AGENT', sessionId: undefined });
+    });
+
+    it('setup-failed → FAILED (SETUP_FAILED) before any worker turn', () => {
+      const [s] = step(preparing(), {
+        tag: 'WORKSPACE_PREPARED',
+        prepared: { status: 'setup-failed', detail: 'npm ci exited 1' },
+        setupRan: true,
+      });
+      expect(s).toMatchObject({ tag: 'FAILED', iterations: 0 });
+      if (s.tag === 'FAILED') {
+        expect(s.reason).toContain('SETUP_FAILED');
+        expect(s.reason).toContain('npm ci exited 1');
+      }
+    });
+
+    it('contract-unsound → FAILED (CONTRACT_UNSOUND) before any worker turn', () => {
+      const [s] = step(preparing(), {
+        tag: 'WORKSPACE_PREPARED',
+        prepared: { status: 'contract-unsound', detail: "TS2339 in verify/x.test.ts" },
+        setupRan: true,
+      });
+      expect(s).toMatchObject({ tag: 'FAILED', iterations: 0 });
+      if (s.tag === 'FAILED') expect(s.reason).toContain('CONTRACT_UNSOUND');
+    });
+  });
+
   it('Gate A rejection → ABORTED before the loop starts', () => {
     const [s0] = initial(makeConfig());
     const [s1] = step(s0, { tag: 'CONTRACT_COMPILED', contract });

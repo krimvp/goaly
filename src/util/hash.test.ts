@@ -50,6 +50,13 @@ describe('contract hashing', () => {
     expect(hashContract(weakened)).not.toBe(hashContract(base));
   });
 
+  it('changes when the frozen setup command changes (Fix #1: setup is part of the bar identity)', () => {
+    const withSetup: UnhashedContract = { ...base, setup: 'npm ci' };
+    const otherSetup: UnhashedContract = { ...base, setup: 'pnpm install' };
+    expect(hashContract(withSetup)).not.toBe(hashContract(base));
+    expect(hashContract(withSetup)).not.toBe(hashContract(otherSetup));
+  });
+
   it('freezeContract attaches a valid hash and parses', () => {
     const frozen = freezeContract(base);
     expect(frozen.contractHash).toBe(hashContract(base));

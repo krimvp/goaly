@@ -21,6 +21,18 @@ describe('AgentCompiler — existing verifier', () => {
     expect(llm.requests).toHaveLength(0); // no LLM call for existing
   });
 
+  it('carries --setup-cmd into the contract on the existing-command path (no LLM call)', async () => {
+    const llm = new FakeLlm([]);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({
+      verifier: { kind: 'existing', ref: 'npm test' },
+      setupCmd: 'npm ci',
+    });
+    const contract = await compiler.compile(config);
+    expect(contract.setup).toBe('npm ci');
+    expect(llm.requests).toHaveLength(0);
+  });
+
   it('adds a judge rung when a non-empty rubric is present', async () => {
     // Arrange
     const llm = new FakeLlm([]);
@@ -100,6 +112,44 @@ describe('AgentCompiler — generate verifier', () => {
     ]);
     expect(llm.requests).toHaveLength(1);
     expect(llm.requests[0]?.temperature).toBe(0);
+  });
+
+  it('freezes the LLM-authored setup command into the contract (Fix #1)', async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({ command: 'npm test', rubric: '', setup: 'npm ci' }),
+    ]);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({ verifier: { kind: 'generate' } });
+    const contract = await compiler.compile(config);
+    expect(contract.setup).toBe('npm ci');
+  });
+
+  it('--setup-cmd overrides the LLM-authored setup command', async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({ command: 'npm test', rubric: '', setup: 'npm ci' }),
+    ]);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({ verifier: { kind: 'generate' }, setupCmd: 'pnpm install --frozen-lockfile' });
+    const contract = await compiler.compile(config);
+    expect(contract.setup).toBe('pnpm install --frozen-lockfile');
+  });
+
+  it('--no-setup drops the authored setup command entirely', async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({ command: 'npm test', rubric: '', setup: 'npm ci' }),
+    ]);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({ verifier: { kind: 'generate' }, noSetup: true });
+    const contract = await compiler.compile(config);
+    expect(contract.setup).toBeUndefined();
+  });
+
+  it('treats a blank authored setup as no setup', async () => {
+    const llm = new FakeLlm([JSON.stringify({ command: 'npm test', rubric: '', setup: '   ' })]);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({ verifier: { kind: 'generate' } });
+    const contract = await compiler.compile(config);
+    expect(contract.setup).toBeUndefined();
   });
 
   it('appends a judge rung when the generated rubric is non-empty', async () => {

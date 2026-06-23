@@ -23,6 +23,7 @@ import type { RunLog } from '../runlog/runlog';
 import { noopLogger, type Logger } from '../log/logger';
 import type { PhasedStreamSink } from '../agent-cli/stream';
 import { errorMessage } from '../util/errors';
+import { prepareWorkspace, type PrepareTimeouts } from './prepare';
 
 /** Distinct sentinel tree hashes used when the workspace cannot be hashed (kept != each other
  * so a workspace-error iteration never spuriously trips the no-diff detector). */
@@ -50,6 +51,11 @@ export type DriverDeps = {
    */
   llmMeter?: LlmTokenMeter;
   runlog: RunLog;
+  /**
+   * Per-step kill-timeouts for the one-time prepare phase (Fix #1 setup + Fix #2 pre-flight). Pure
+   * wiring — never enters the frozen contract; absent fields fall back to defaults/unbounded.
+   */
+  prepareTimeouts?: PrepareTimeouts;
   /**
    * Diagnostic logger (the Driver is the orchestration choke-point: it sees every Command, Event,
    * verdict and decision). Optional and defaults to a no-op so logging never affects control flow,
@@ -254,6 +260,13 @@ function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void
     case 'GATE_A_DECIDED':
       log.info('gate A decided', { decision: event.decision.kind });
       return;
+    case 'WORKSPACE_PREPARED':
+      log.info('workspace prepared', { status: event.prepared.status, setupRan: event.setupRan });
+      // The detail of a fail-closed outcome may carry repo text / tool output — keep it at debug.
+      if (event.prepared.status !== 'proceed') {
+        log.debug('prepare detail', { detail: event.prepared.detail });
+      }
+      return;
     case 'AGENT_RAN':
       log.info('agent ran', {
         status: event.run.status,
@@ -339,6 +352,27 @@ async function perform(
     case 'REQUEST_GATE_A': {
       const decision = await deps.gateA.approveContract(command.contract);
       return { event: { tag: 'GATE_A_DECIDED', decision } };
+    }
+
+    case 'PREPARE_WORKSPACE': {
+      // One-time setup (Fix #1) + deterministic pre-flight (Fix #2), both fail-closed inside
+      // prepareWorkspace. Runs once after Gate A and before iteration 1; the reducer routes the
+      // typed outcome (proceed / setup-failed / contract-unsound).
+      const result = await prepareWorkspace(
+        {
+          workspace: deps.workspace,
+          ...(deps.logger !== undefined ? { logger: deps.logger } : {}),
+          ...(deps.prepareTimeouts !== undefined ? { timeouts: deps.prepareTimeouts } : {}),
+        },
+        command.contract,
+      );
+      return {
+        event: {
+          tag: 'WORKSPACE_PREPARED',
+          prepared: result.prepared,
+          setupRan: result.setupRan,
+        },
+      };
     }
 
     case 'RUN_AGENT': {

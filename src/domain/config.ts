@@ -50,6 +50,18 @@ export const RunConfig = z.object({
    * from `--smoke`, not the LLM.
    */
   smoke: z.string().min(1).optional(),
+  /**
+   * One-time workspace setup/bootstrap command (Fix #1). When set it OVERRIDES whatever the
+   * `--generate` compiler would author for setup; with `--verify-cmd` it is the only way to add one.
+   * Runs once after Gate A, before the first agent turn; a non-zero exit is a typed `SETUP_FAILED`.
+   * The resolved value is frozen into the contract's `setup`.
+   */
+  setupCmd: z.string().min(1).optional(),
+  /**
+   * Disable the setup phase entirely (Fix #1 escape hatch): drop any compiler-authored or
+   * `--setup-cmd` bootstrap so the worker starts on the tree as-is. Default false.
+   */
+  noSetup: z.boolean().default(false),
   /** Frozen after compile; seeds the LLM-judge portion of the ladder when present. */
   rubric: z.string().optional(),
   /** Gates contract approval (Gate A) ONLY. Never skips the freeze. */
@@ -104,6 +116,10 @@ export const CliInput = z.object({
   smoke: z.string().min(1).optional(),
   intent: z.string().optional(),
   rubric: z.string().optional(),
+  /** One-time setup/bootstrap command override (Fix #1). */
+  setupCmd: z.string().min(1).optional(),
+  /** Disable the setup phase entirely (Fix #1). */
+  noSetup: z.coerce.boolean().optional(),
   autonomous: z.coerce.boolean().optional(),
   maxGateARevisions: z.coerce.number().int().nonnegative().optional(),
   maxCompileRetries: z.coerce.number().int().nonnegative().optional(),
@@ -151,6 +167,8 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     goal: input.goal,
     verifier,
     ...(input.smoke !== undefined ? { smoke: input.smoke } : {}),
+    ...(input.setupCmd !== undefined ? { setupCmd: input.setupCmd } : {}),
+    ...(input.noSetup !== undefined ? { noSetup: input.noSetup } : {}),
     ...(input.rubric !== undefined ? { rubric: input.rubric } : {}),
     ...(input.autonomous !== undefined ? { autonomous: input.autonomous } : {}),
     ...(input.maxGateARevisions !== undefined

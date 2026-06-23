@@ -32,6 +32,8 @@ export type StepTimeouts = {
   llmMs?: number;
   /** Wall-clock cap on the verify command (a timeout is a fail-closed non-zero exit). */
   verifyMs?: number;
+  /** Wall-clock cap on the one-time setup command (Fix #1; a timeout is a fail-closed SETUP_FAILED). */
+  setupMs?: number;
 };
 
 export type ParsedArgs = {
@@ -81,7 +83,7 @@ export const USAGE = `goaly — run a coding agent until a frozen success contra
 
 Usage:
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
-               [--smoke "<cmd>"]
+               [--smoke "<cmd>"] [--setup-cmd "<cmd>" | --no-setup] [--setup-timeout-ms N]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
                [--max-gate-a-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
@@ -120,6 +122,16 @@ Verification:
                   any rung, capped by --verify-timeout-ms, and run after --verify-cmd but before the
                   judge, so a runtime failure is caught deterministically, not guessed. Combine with
                   --verify-cmd or --generate to keep both the test bar and the runtime bar.
+  --setup-cmd <cmd>  one-time workspace bootstrap run ONCE after Gate A and BEFORE the first agent
+                      turn (e.g. "npm ci", "pip install -r requirements.txt", "go mod download"), so
+                      the worker starts from a populated tree instead of improvising around missing
+                      deps. It is NOT a verification rung — it never gates DONE and is never judged.
+                      With --generate the compiler AUTHORS a setup command for you (delegated like the
+                      contract); --setup-cmd OVERRIDES it. A non-zero exit is a typed, fail-closed
+                      SETUP_FAILED that aborts before any worker tokens are spent. Frozen into the
+                      contract (shown at Gate A) so it can't drift. Capped by --setup-timeout-ms.
+  --no-setup         disable the setup phase entirely — drop any authored/--setup-cmd bootstrap and
+                      start the worker on the tree as-is.
   --verify-dir <dir>  preferred directory for files the compiler authors under --generate (issue
                       #52). Authored files are written to idiomatic locations and AUTO-REGISTERED in
                       .git/info/exclude (git's per-clone, never-committed ignore) — so they never
@@ -185,7 +197,10 @@ Per-step timeouts (subprocess kill-timeouts in milliseconds; all optional, pure 
                               --harness-timeout-ms stays the absolute backstop. Default: off.
   --llm-timeout-ms N       cap each LLM step: judge / approver / compiler (default 600000)
   --verify-timeout-ms N    cap the verify command (default: unbounded). A timeout is a
-                           fail-closed non-zero exit, i.e. a verifier FAIL — never a green.
+                           fail-closed non-zero exit, i.e. a verifier FAIL — never a green. Also caps
+                           each deterministic rung run during the Fix #2 pre-flight.
+  --setup-timeout-ms N     cap the one-time --setup-cmd bootstrap (default 600000 = 10 min). A
+                           timeout is a fail-closed SETUP_FAILED.
 
 Sandboxing (opt-in OS isolation — issue #9; default OFF, behavior unchanged without it):
   --sandbox[=<mode>]  jail the two untrusted-code execs — the coding agent AND the verify command —
@@ -352,6 +367,8 @@ export async function parseArgs(
     ...(str(flags, 'verify-cmd') !== undefined ? { verifyCmd: str(flags, 'verify-cmd') } : {}),
     ...(flags['generate'] !== undefined ? { generate: true } : {}),
     ...(str(flags, 'smoke') !== undefined ? { smoke: str(flags, 'smoke') } : {}),
+    ...(str(flags, 'setup-cmd') !== undefined ? { setupCmd: str(flags, 'setup-cmd') } : {}),
+    ...(flags['no-setup'] !== undefined ? { noSetup: true } : {}),
     ...(resolved.intent !== undefined ? { intent: resolved.intent } : {}),
     ...(resolved.rubric !== undefined ? { rubric: resolved.rubric } : {}),
     ...(flags['autonomous'] !== undefined ? { autonomous: true } : {}),
@@ -427,11 +444,13 @@ function parseTimeouts(flags: RawFlags): StepTimeouts {
   const harnessIdleMs = ms('harness-idle-timeout-ms');
   const llmMs = ms('llm-timeout-ms');
   const verifyMs = ms('verify-timeout-ms');
+  const setupMs = ms('setup-timeout-ms');
   return {
     ...(harnessMs !== undefined ? { harnessMs } : {}),
     ...(harnessIdleMs !== undefined ? { harnessIdleMs } : {}),
     ...(llmMs !== undefined ? { llmMs } : {}),
     ...(verifyMs !== undefined ? { verifyMs } : {}),
+    ...(setupMs !== undefined ? { setupMs } : {}),
   };
 }
 
