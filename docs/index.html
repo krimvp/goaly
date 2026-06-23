@@ -4,13 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>goaly — run a coding agent until the goal is verifiably met</title>
-  <meta name="description" content="goaly is a harness-agnostic goal-orchestration layer: it runs a coding agent in a loop until a goal is verifiably achieved, against a frozen success contract the agent can't weaken. Zero-LLM control flow, two keys for DONE, replayable & resumable." />
+  <meta name="description" content="goaly runs any coding agent (Claude Code, Codex, Droid, or your own) in a loop until your goal is verifiably done — checked against a frozen success contract the agent can't weaken to pass. Get started in minutes." />
   <meta name="color-scheme" content="dark" />
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
 
   <meta property="og:type" content="website" />
   <meta property="og:title" content="goaly — verifiable goal orchestration for coding agents" />
-  <meta property="og:description" content="Run a coding agent until the goal is verifiably met — against a frozen contract it can't weaken. Harness-agnostic, zero-LLM control flow, two keys for DONE." />
+  <meta property="og:description" content="Run a coding agent until the goal is verifiably met — against a contract it can't weaken. Harness-agnostic, easy to start, simple to extend." />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -25,11 +25,10 @@
     <a class="brand" href="#top"><img src="assets/favicon.svg" alt="" />goaly</a>
     <nav class="nav-links" id="navLinks">
       <a href="#what">What</a>
-      <a href="#how">How</a>
-      <a href="#internals">Internals</a>
-      <a href="#architecture">Architecture</a>
+      <a href="#start">Get started</a>
+      <a href="#how">How it works</a>
       <a href="#harnesses">Add a harness</a>
-      <a href="#agentic">Agentic</a>
+      <a href="#docs">Docs</a>
     </nav>
     <a class="nav-cta" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">GitHub ↗</a>
     <button class="nav-toggle" aria-label="Toggle navigation">☰</button>
@@ -38,26 +37,27 @@
 
 <!-- ============================== HERO ============================== -->
 <a id="top"></a>
-<section class="hero" id="what">
+<section class="hero">
   <div class="wrap hero-grid">
     <div class="hero-copy">
-      <div class="eyebrow">Goal orchestration</div>
+      <div class="eyebrow">Goal orchestration for coding agents</div>
       <h1>Loop a coding agent until the goal is verifiably met.</h1>
       <p class="hero-lede">
-        goaly runs any coding agent — Claude Code, Codex, Droid, your own — until a goal is actually
-        done, against a <em>frozen</em> success contract it can't weaken mid-loop.
+        goaly runs <b>Claude Code, Codex, Droid</b> — or your own agent — in a loop until your goal is
+        <em>actually done</em>, checked against a success contract the agent can't weaken to pass.
       </p>
 
       <div class="spec-strip">
-        <span><b>harness-agnostic</b></span><span class="sep">/</span>
-        <span><b>zero-LLM</b> control flow</span><span class="sep">/</span>
+        <span><b>any harness</b></span><span class="sep">/</span>
+        <span><b>one command</b> to start</span><span class="sep">/</span>
         <span><b>two keys</b> for DONE</span><span class="sep">/</span>
-        <span>replayable &amp; <b>resumable</b></span>
+        <span>resumable</span>
       </div>
 
       <div class="btn-row">
-        <a class="btn btn-primary" href="#how">How it works</a>
-        <a class="btn btn-ghost" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">Read the code ↗</a>
+        <a class="btn btn-primary" href="#start">Get started →</a>
+        <a class="btn btn-ghost" href="#how">How it works</a>
+        <a class="btn btn-ghost" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">GitHub ↗</a>
       </div>
     </div>
 
@@ -66,12 +66,12 @@
         <button class="copy-btn" data-clip='goaly run --goal "add /health endpoint" --generate --autonomous'>copy</button>
 <pre><span class="cmt">$</span> <span class="fn">goaly</span> run --goal <span class="str">"add /health endpoint"</span> --generate --autonomous
 
-<span class="tok">✔ COMPILE_VERIFIER</span>  contract frozen   <span class="cmt">┌ sha 9f3c…a2</span>
-<span class="str">● Gate A</span>           auto-accepted     <span class="cmt">(logged loudly)</span>
-<span class="cmt">↻ iter 1</span>  RUN_AGENT → ladder <span style="color:var(--red)">✗</span>  <span class="cmt">npm test: 2 failing</span>   continue
-<span class="cmt">↻ iter 2</span>  RUN_AGENT → ladder <span class="tok">✓</span>  Gate B <span style="color:var(--red)">✗</span> veto: returns 500
-<span class="cmt">↻ iter 3</span>  RUN_AGENT → ladder <span class="tok">✓</span>  Gate B <span class="tok">✓</span> no veto
-<span class="tok">✔ DONE</span>   two keys turned · 3 iterations · contract unchanged
+<span class="tok">✔ COMPILE</span>  contract frozen   <span class="cmt">┌ sha 9f3c…a2</span>
+<span class="str">● Gate A</span>  auto-accepted     <span class="cmt">(logged loudly)</span>
+<span class="cmt">↻ iter 1</span>  agent → verify <span style="color:var(--red)">✗</span>  <span class="cmt">npm test: 2 failing</span>
+<span class="cmt">↻ iter 2</span>  agent → verify <span class="tok">✓</span>  Gate B <span style="color:var(--red)">✗</span> veto: returns 500
+<span class="cmt">↻ iter 3</span>  agent → verify <span class="tok">✓</span>  Gate B <span class="tok">✓</span> no veto
+<span class="tok">✔ DONE</span>   two keys turned · 3 iterations
 <span class="cmt"># exit 0</span></pre>
       </div>
     </div>
@@ -80,21 +80,143 @@
 
 <hr class="section-line" />
 
-<!-- ============================== THE PROBLEM ============================== -->
-<section id="problem">
+<!-- ============================== WHAT / WHY ============================== -->
+<section id="what">
   <div class="wrap">
-    <div class="eyebrow reveal">The core problem</div>
-    <h2 class="reveal">“Until the goal is achieved” must not collapse into<br />“until the agent weakens its own test.”</h2>
-    <p class="lede reveal">If an agent can regenerate its own success criterion each iteration, an
-      autonomous loop degenerates into reward hacking. goaly's whole design exists to prevent that.</p>
+    <div class="eyebrow reveal">What it is</div>
+    <h2 class="reveal">Tell it the goal. It runs the agent until the goal is really met.</h2>
+    <p class="lede reveal">You point goaly at a goal and a way to check it. It runs your coding agent over and
+      over — feeding back what's still wrong each time — and only stops when the work passes a fixed bar.
+      The trick is that <em>bar can't move</em>: the agent can't quietly weaken its own test to "finish".</p>
+
+    <div class="grid grid-3 reveal" style="margin-top:1.8rem; align-items:start">
+      <div class="card">
+        <h3><span class="pill pass">1</span> Freeze the bar</h3>
+        <p>The success check is written once, hashed, and <b>frozen</b> before the loop starts. No later
+          step can rewrite it — so "until it's done" can't collapse into "until the agent lowers the bar".</p>
+      </div>
+      <div class="card">
+        <h3><span class="pill gate">2</span> Two keys for DONE</h3>
+        <p>A run is done only when <b>both</b> turn: the frozen check passes <em>and</em> an independent
+          reviewer doesn't veto. Gaming one is possible; getting both is much harder.</p>
+      </div>
+      <div class="card">
+        <h3><span class="pill fail">3</span> Fail closed</h3>
+        <p>Anything that errors, crashes, or returns garbage becomes a <b>fail</b> — never a false green.
+          A broken check can never accidentally mark the run complete.</p>
+      </div>
+    </div>
+
+    <p class="lede reveal" style="margin-top:1.6rem">
+      That's the whole point: <b>correctness you can trust when the agent runs unattended.</b> The control
+      loop itself makes <em>zero</em> LLM calls — it's a small, deterministic state machine — so every run
+      is replayable and resumable from a log. <a href="#how" style="color:var(--accent)">See how the loop works ↓</a>
+    </p>
+  </div>
+</section>
+
+<hr class="section-line" />
+
+<!-- ============================== GET STARTED ============================== -->
+<section id="start">
+  <div class="wrap">
+    <div class="eyebrow reveal">Get started</div>
+    <h2 class="reveal">From install to your first verified run in a few minutes.</h2>
+
+    <div class="panel reveal" style="padding:1rem 1.3rem; margin:1.4rem 0 1.8rem">
+      <p style="margin:0; font-family:var(--mono); font-size:0.84rem; line-height:1.7; color:var(--fg-dim)">
+        <b style="color:var(--fg)">Before you start:</b> Node ≥ 20 and <code>git</code>, plus at least one agent
+        CLI on your <code>PATH</code> — <code>claude</code>, <code>codex</code>, or <code>droid</code>.
+        (No CLI yet? Use <code>--harness fake</code> to try the loop with zero network.)
+      </p>
+    </div>
 
     <div class="rows reveal">
-      <div class="row"><span class="rn">01</span><div class="rt"><b>Compile once, then freeze</b><p>The success contract — an ordered ladder of checks + a rubric — is authored once, hashed, and frozen. No transition rewrites it; the contractHash is logged every iteration to prove the bar never moved. Files goaly authors for <code>--generate</code> are pinned by content hash, and a guard rung fails closed if the worker rewrites the tests the frozen command runs.</p></div></div>
-      <div class="row"><span class="rn">02</span><div class="rt"><b>Two independent keys</b><p>A run is DONE only when both keys turn: the frozen verifier passes and an independent approver doesn't veto. A worker can game one; getting both is much harder. The worker's diff reaches both keys inside an untrusted, nonce-fenced envelope (prompt-injection defense), and goaly warns when the keys collapse onto one model.</p></div></div>
-      <div class="row"><span class="rn">03</span><div class="rt"><b>Fail closed, always</b><p>Any verifier, grader, approver, or adapter that errors or returns garbage becomes a FAIL / VETO — never a false green, never an unhandled throw.</p></div></div>
-      <div class="row"><span class="rn">04</span><div class="rt"><b>Deny the bar a free lunch</b><p>Vacuously-passing authored commands (<code>true</code>, <code>:</code>, <code>exit 0</code>) are refused at compile, and the verify command runs with a credential-scrubbed environment so worker-authored checks can't exfiltrate host secrets.</p></div></div>
-      <div class="row"><span class="rn">05</span><div class="rt"><b>Opt-in OS sandbox</b><p>Off by default; <code>--sandbox</code> jails the <b>two untrusted-code execs</b> — the coding agent <i>and</i> the verify command — via <code>bwrap</code> (Linux) or a <code>docker</code>/<code>podman</code> container (portable, covers macOS). rw workspace, ro system, <code>$HOME</code> credentials (<code>~/.ssh</code>, <code>~/.aws</code>, …) denied; the verifier gets no network by default (<code>--sandbox-net allow</code> opens it, or <code>--sandbox-net allow:&lt;host,…&gt;</code> pins a proxy-enforced egress <b>allowlist</b> across both seams). If the requested mechanism is absent the run <b>refuses to start</b> — never a silent unsandboxed downgrade.</p></div></div>
+      <div class="row">
+        <span class="rn">01</span>
+        <div class="rt">
+          <b>Install it</b>
+          <p style="margin-bottom:0.7rem">Builds <code>dist/</code> and puts <code>goaly</code> on your PATH.</p>
+          <div class="code">
+            <button class="copy-btn">copy</button>
+<pre><span class="cmt"># clone, then from the repo root:</span>
+make install        <span class="cmt"># == npm install -g .</span>
+goaly help</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <span class="rn">02</span>
+        <div class="rt">
+          <b>Run against a check you already have</b>
+          <p style="margin-bottom:0.7rem">Point at an existing test command. goaly freezes the contract,
+            asks you to approve it once at <b>Gate A</b>, then loops until <code>npm test</code> passes
+            <em>and</em> the reviewer agrees.</p>
+          <div class="code">
+            <button class="copy-btn">copy</button>
+<pre>goaly run --goal <span class="str">"make the parser handle empty input"</span> \
+  --verify-cmd <span class="str">"npm test"</span></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <span class="rn">03</span>
+        <div class="rt">
+          <b>Or let the agent write the check, and run unattended</b>
+          <p style="margin-bottom:0.7rem"><code>--generate</code> has the agent author the verification;
+            <code>--autonomous</code> skips the Gate A pause (the contract is still frozen and logged loudly).</p>
+          <div class="code">
+            <button class="copy-btn">copy</button>
+<pre>goaly run --goal <span class="str">"add a /health endpoint returning 200"</span> \
+  --generate --autonomous</pre>
+          </div>
+        </div>
+      </div>
     </div>
+
+    <h3 class="reveal" style="margin-top:2.6rem">A few more things you'll reach for</h3>
+    <div class="grid grid-2 reveal" style="align-items:start">
+      <div class="code">
+        <button class="copy-btn">copy</button>
+<pre><span class="cmt"># pick a harness, cap iterations, set a token budget</span>
+goaly run --goal <span class="str">"…"</span> --harness codex \
+  --max-iterations 8 --budget-tokens 500000
+
+<span class="cmt"># a long goal from a file (or stdin)</span>
+goaly run --goal-file <span class="str">./GOAL.md</span> --generate
+cat GOAL.md | goaly run --goal <span class="str">-</span> --generate
+
+<span class="cmt"># resume a crashed run from its log</span>
+goaly run --goal <span class="str">"…"</span> --resume run-&lt;id&gt;</pre>
+      </div>
+      <div class="code">
+        <button class="copy-btn">copy</button>
+<pre><span class="cmt"># watch the agent's turns live as they happen</span>
+goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --stream
+
+<span class="cmt"># jail the agent + verifier in an OS sandbox (opt-in)</span>
+goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --sandbox
+
+<span class="cmt"># inspect past runs (read-only, re-runs nothing)</span>
+goaly runs list
+goaly runs show run-&lt;id&gt;</pre>
+      </div>
+    </div>
+
+    <div class="panel reveal" style="padding:1rem 1.3rem; margin-top:1.6rem">
+      <p style="margin:0; font-family:var(--mono); font-size:0.82rem; line-height:1.7; color:var(--fg-dim)">
+        <b style="color:var(--fg)">Tip:</b> add <code>.goaly/</code> to your repo's <code>.gitignore</code> (it holds run logs).
+        Put repeated flags in a <code>.goalyrc</code> file once, then just pass the goal. Exit codes:
+        <span class="pill pass">0 DONE</span> <span class="pill fail">1 FAILED / ABORTED</span> <span class="pill neutral">2 usage error</span>
+      </p>
+    </div>
+
+    <p class="lede reveal" style="margin-top:1.4rem">
+      Full install options, every flag, the config file, sandboxing, budgets and the spend report are in the
+      <a href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener" style="color:var(--accent)">README →</a>
+    </p>
   </div>
 </section>
 
@@ -105,22 +227,22 @@
   <div class="wrap">
     <div class="eyebrow reveal">How it works</div>
     <h2 class="reveal">One compile, then a verified loop.</h2>
-    <p class="lede reveal">A single pure reducer owns all policy; a thin driver performs the effects it
-      requests. Click any stage to inspect it.</p>
+    <p class="lede reveal">A single pure, zero-LLM reducer owns all the policy; a thin driver does the actual
+      work it asks for. Click any stage to see what it does.</p>
 
     <div class="pipeline-wrap reveal">
       <div class="pipeline">
-        <div class="stage" data-stage="compile"><span class="st-k">COMPILE_VERIFIER</span><span class="st-s">author + freeze</span></div>
+        <div class="stage" data-stage="compile"><span class="st-k">COMPILE</span><span class="st-s">author + freeze</span></div>
         <span class="arrow">→</span>
-        <div class="stage gate" data-stage="gatea"><span class="st-k">Gate A</span><span class="st-s">contract approval</span></div>
+        <div class="stage gate" data-stage="gatea"><span class="st-k">Gate A</span><span class="st-s">approve the bar</span></div>
         <span class="arrow">→</span>
         <div class="loop-band">
           <span class="loop-tag">loop ↻ until DONE / FAILED / ABORTED</span>
           <div class="stage" data-stage="run"><span class="st-k">RUN_AGENT</span><span class="st-s">one headless turn</span></div>
           <span class="arrow">→</span>
-          <div class="stage" data-stage="ladder"><span class="st-k">verifier ladder</span><span class="st-s">det → judge</span></div>
+          <div class="stage" data-stage="ladder"><span class="st-k">verify</span><span class="st-s">tests → judge</span></div>
           <span class="arrow">→</span>
-          <div class="stage gate" data-stage="gateb"><span class="st-k">Gate B</span><span class="st-s">veto-only</span></div>
+          <div class="stage gate" data-stage="gateb"><span class="st-k">Gate B</span><span class="st-s">veto-only review</span></div>
           <span class="arrow">→</span>
           <div class="stage" data-stage="decide"><span class="st-k">DECIDE</span><span class="st-s">pure truth table</span></div>
         </div>
@@ -132,310 +254,41 @@
       </div>
       <div class="detail" id="pipeline-detail"></div>
     </div>
-  </div>
-</section>
 
-<hr class="section-line" />
-
-<!-- ============================== INTERNALS ============================== -->
-<section id="internals">
-  <div class="wrap">
-    <div class="eyebrow reveal">Internal functionality</div>
-    <h2 class="reveal">Deterministic stages, decision points, budgets.</h2>
-    <p class="lede reveal">Everything stochastic — running the agent, judging, approving — already
-      happened before the control flow sees it. What's left is a pure, replayable state machine.</p>
-
-    <!-- State machine -->
-    <h3 class="reveal" style="margin-top:2.6rem">The state machine</h3>
-    <p class="lede reveal" style="margin-bottom:1.2rem">Pure, synchronous, zero-LLM. Click a state to see the command it emits and the event that advances it.</p>
-    <div class="fsm-layout reveal">
-      <div class="fsm-svg-wrap">
-        <svg class="fsm-svg" viewBox="0 0 580 392" role="img" aria-label="goaly state machine">
-          <defs>
-            <marker id="arrowhead" markerWidth="9" markerHeight="9" refX="6.2" refY="3" orient="auto">
-              <path d="M0,0 L6.4,3 L0,6 Z" fill="rgba(255,255,255,0.3)" />
-            </marker>
-          </defs>
-          <path class="fsm-edge" d="M145,58 L145,89" />
-          <path class="fsm-edge" d="M145,132 L145,173" />
-          <text class="fsm-elabel" x="151" y="156">approved</text>
-          <path class="fsm-edge" d="M220,108 C 300,108 300,38 382,38" />
-          <text class="fsm-elabel" x="262" y="66">reject → ABORTED</text>
-          <path class="fsm-edge" d="M70,116 C 42,102 42,48 70,34" />
-          <text class="fsm-elabel" x="18" y="78">revise</text>
-          <path class="fsm-edge" d="M145,216 L145,247" />
-          <path class="fsm-edge" d="M145,290 L145,321" />
-          <text class="fsm-elabel" x="151" y="312">ladder pass</text>
-          <path class="fsm-edge dim" d="M220,262 C 305,262 305,196 382,196" />
-          <text class="fsm-elabel" x="246" y="224">max iters → FAILED</text>
-          <path class="fsm-edge" d="M220,344 L382,344" />
-          <text class="fsm-elabel" x="250" y="337">two keys</text>
-          <path class="fsm-edge" d="M70,336 C 24,308 24,216 70,192" />
-          <text class="fsm-elabel" x="2" y="270" transform="rotate(-90 14,270)">continue (fail / veto)</text>
-          <text class="fsm-elabel" x="402" y="74">↑ or a stuck detector</text>
-
-          <g class="fsm-node" data-state="COMPILING"><rect x="70" y="18" width="150" height="40" rx="9" /><text x="145" y="43" text-anchor="middle">COMPILING</text></g>
-          <g class="fsm-node" data-state="AWAIT_GATE_A"><rect x="70" y="92" width="150" height="40" rx="9" /><text x="145" y="117" text-anchor="middle">AWAIT_GATE_A</text></g>
-          <g class="fsm-node" data-state="RUNNING_AGENT"><rect x="70" y="176" width="150" height="40" rx="9" /><text x="145" y="201" text-anchor="middle">RUNNING_AGENT</text></g>
-          <g class="fsm-node" data-state="VERIFYING"><rect x="70" y="250" width="150" height="40" rx="9" /><text x="145" y="275" text-anchor="middle">VERIFYING</text></g>
-          <g class="fsm-node" data-state="AWAIT_GATE_B"><rect x="70" y="324" width="150" height="40" rx="9" /><text x="145" y="349" text-anchor="middle">AWAIT_GATE_B</text></g>
-          <g class="fsm-node term-aborted" data-state="ABORTED"><rect x="385" y="18" width="150" height="40" rx="9" /><text x="460" y="43" text-anchor="middle">ABORTED</text></g>
-          <g class="fsm-node term-failed" data-state="FAILED"><rect x="385" y="176" width="150" height="40" rx="9" /><text x="460" y="201" text-anchor="middle">FAILED</text></g>
-          <g class="fsm-node term-done" data-state="DONE"><rect x="385" y="324" width="150" height="40" rx="9" /><text x="460" y="349" text-anchor="middle">DONE</text></g>
-        </svg>
-      </div>
-      <div class="detail" id="fsm-detail" style="min-height:156px"></div>
-    </div>
-
-    <!-- DECIDE -->
-    <h3 class="reveal" style="margin-top:3rem">DECIDE — the truth table, made interactive</h3>
-    <p class="lede reveal" style="margin-bottom:1.2rem">Flip the inputs. The outcome follows the exact precedence of <code>decide.ts</code> — success is checked first, so a goal met on the last allowed iteration is DONE, never FAILED.</p>
-    <div class="decide-layout reveal">
-      <div class="toggles">
-        <label class="toggle"><span class="lab"><code>ladder.pass</code><small>frozen verifier passed</small></span><span class="switch"><input type="checkbox" id="tg-pass" checked /><span class="slider"></span></span></label>
-        <label class="toggle"><span class="lab"><code>approver.veto</code><small>Gate B runs only on a passing ladder</small></span><span class="switch"><input type="checkbox" id="tg-veto" /><span class="slider"></span></span></label>
-        <label class="toggle"><span class="lab"><code>stuck</code><small>no-diff · repeat-failure · oscillation · budget</small></span><span class="switch"><input type="checkbox" id="tg-stuck" /><span class="slider"></span></span></label>
-        <label class="toggle"><span class="lab"><code>iteration ≥ maxIterations</code><small>the blunt backstop</small></span><span class="switch"><input type="checkbox" id="tg-cap" /><span class="slider"></span></span></label>
-      </div>
-      <div class="decide-out">
-        <div class="decide-screen">
-          <div class="outcome" id="decide-outcome"><div class="big">DONE</div><div class="why"></div></div>
-          <ol class="precedence">
-            <li><code>ladder.pass &amp;&amp; !veto</code> → DONE</li>
-            <li><code>stuck</code> → ABORTED</li>
-            <li><code>iteration ≥ max</code> → FAILED</li>
-            <li><code>!ladder.pass</code> → CONTINUE</li>
-            <li><code>ladder.pass &amp;&amp; veto</code> → CONTINUE</li>
-          </ol>
-        </div>
-      </div>
-    </div>
-
-    <!-- Verifier ladder -->
-    <h3 class="reveal" style="margin-top:3rem">The verifier ladder</h3>
-    <p class="lede reveal" style="margin-bottom:1.2rem">Cheapest &amp; hardest-to-game first. Rungs run top → bottom and short-circuit on the first deterministic fail, so a red exit code never wastes an LLM judge call. Try failing a rung:</p>
+    <!-- Verify ladder — kept because it makes "verifiable" concrete -->
+    <h3 class="reveal" style="margin-top:3rem">Verify cheap-and-ungameable first</h3>
+    <p class="lede reveal" style="margin-bottom:1.2rem">The check is a <b>ladder</b> of rungs run top → bottom.
+      Deterministic rungs (exit codes, tests) come before any LLM judge, and the ladder short-circuits on the
+      first hard fail — so a red test never wastes a judge call. Try failing a rung:</p>
     <div class="reveal">
       <div class="ladder-ctrl">
         <button class="mini-btn on" data-fail="-1">All pass</button>
-        <button class="mini-btn" data-fail="0">Deterministic fails</button>
+        <button class="mini-btn" data-fail="0">Tests fail</button>
         <button class="mini-btn" data-fail="2">Smoke fails</button>
         <button class="mini-btn" data-fail="3">Judge fails</button>
       </div>
       <div class="ladder" id="ladder">
-        <div class="rung det"><span class="rk">det · 1</span><span class="rbody"><b><code>npm test</code> exits 0</b><p>tests / exit codes — ungameable, confidence = 1</p></span><span class="rstat"></span></div>
+        <div class="rung det"><span class="rk">det · 1</span><span class="rbody"><b><code>npm test</code> exits 0</b><p>tests / exit codes — ungameable, hardest to fake</p></span><span class="rstat"></span></div>
         <div class="rung det"><span class="rk">det · 2</span><span class="rbody"><b><code>npm run lint</code> exits 0</b><p>static checks before any model is consulted</p></span><span class="rstat"></span></div>
-        <div class="rung det"><span class="rk">smoke · 3</span><span class="rbody"><b><code>--smoke "node smoke.mjs"</code> exits 0</b><p>runs the built artifact (browser script / server probe / CLI) — a second ungameable exit-code check, runtime-agnostic (issue #53)</p></span><span class="rstat"></span></div>
-        <div class="rung judge"><span class="rk">judge · 4</span><span class="rbody"><b>LLM quorum vs. the frozen rubric</b><p>only the fuzzy residual — best-of-N (diversity temp), confidence floor</p></span><span class="rstat"></span></div>
+        <div class="rung det"><span class="rk">smoke · 3</span><span class="rbody"><b><code>--smoke "node smoke.mjs"</code> exits 0</b><p>actually <em>runs</em> the built artifact — a second ungameable check</p></span><span class="rstat"></span></div>
+        <div class="rung judge"><span class="rk">judge · 4</span><span class="rbody"><b>LLM quorum vs. the frozen rubric</b><p>only the fuzzy residual — best-of-N, with a confidence floor</p></span><span class="rstat"></span></div>
       </div>
       <p class="ladder-note" id="ladder-note"></p>
-
-      <details class="disc">
-        <summary>How the LLM judge is made “deterministic enough”<span class="s-sub">4 techniques</span></summary>
-        <div class="disc-body">
-          <ul>
-            <li><b>Frozen rubric</b> — criteria authored once; the bar can't drift to meet the work.</li>
-            <li><b>Structured output</b> — a Zod schema <code>{pass, confidence, failing_criteria[]}</code>, no free-form “looks good”.</li>
-            <li><b>Quorum, not one call</b> — best-of-N majority (default 3) + a confidence floor (default 0.66). A multi-sample quorum samples at a small <b>diversity temperature</b> (not 0) so the N samples actually differ; a single-sample judge stays at temperature 0.</li>
-            <li><b>Independent grader</b> — fed goal + rubric + diff + verdicts, not the worker's self-justification.</li>
-          </ul>
-        </div>
-      </details>
     </div>
 
-    <!-- Gates -->
-    <h3 class="reveal" style="margin-top:3rem">Two gates, and one flag that moves only one</h3>
+    <!-- Two keys + autonomous, condensed to three cards -->
+    <h3 class="reveal" style="margin-top:3rem">Two gates, and the one flag that moves only one</h3>
     <div class="grid grid-3 reveal">
-      <div class="card"><h3><span class="pill gate">Gate A</span> Contract</h3><p>The human's say over the bar, before the loop. goaly prints the frozen contract and prompts <code>[a]pprove / [f]eedback / [r]eject</code>: <b>approve</b> starts the loop, <b>feedback</b> re-authors the contract from your free-text note and re-prompts (bounded by <code>--max-gate-a-revisions</code>, default 10), <b>reject</b> aborts. <code>--autonomous</code> skips the prompt: auto-accepted, but still frozen and logged loudly.</p></div>
-      <div class="card"><h3><span class="pill fail">Gate B</span> Result</h3><p>Every iteration, but only when the ladder passes. The independent approver is veto-only — it can stop a green from becoming DONE, never promote a red. Defaults to reject on uncertainty.</p></div>
-      <div class="card"><h3><code>--autonomous</code></h3><p>Moves Gate A only. It skips the human pause, never the freeze and never verification. The two-key contract is identical in both modes.</p></div>
+      <div class="card"><h3><span class="pill gate">Gate A</span> The bar</h3><p>Your say over the success check, <b>before</b> the loop: approve it, give feedback to revise it, or reject. <code>--autonomous</code> skips this pause — the contract is still frozen and logged.</p></div>
+      <div class="card"><h3><span class="pill fail">Gate B</span> The result</h3><p>Every iteration, but only when the check passes. An independent reviewer is <b>veto-only</b> — it can stop a green from becoming DONE, never promote a red.</p></div>
+      <div class="card"><h3><code>--autonomous</code></h3><p>Moves Gate A <b>only</b>. It skips the human pause, never the freeze and never verification. The two-key contract is identical either way.</p></div>
     </div>
 
-    <!-- Stuck + budget -->
-    <h3 class="reveal" style="margin-top:3rem">Stuck detection &amp; budget</h3>
-    <p class="lede reveal">Bail <em>before</em> the iteration cap with an actionable reason. Pure over the histories stored in loop state.</p>
-    <div class="rows reveal">
-      <div class="row"><span class="rn">01</span><div class="rt"><b>No-diff</b><p>The working tree is unchanged after a whole iteration → the agent is spinning. <b>Excused once</b> when the agent had no fair chance to act — the previous turn timed out, or the ladder is green and a <b>fresh Gate-B veto</b> is the only blocker — so a correct, actionable critique isn't thrown away before one real turn (a <em>second</em> unproductive no-diff still aborts). Toggle with <code>--stuck-no-diff</code>.</p></div></div>
-      <div class="row"><span class="rn">02</span><div class="rt"><b>Repeat-failure</b><p>The same normalized verifier failure N times in a row (default 3, tune with <code>--stuck-repeat-threshold</code>) → same wall. Volatile tokens (timestamps, PIDs, hex ids, temp paths) are scrubbed first, so a noisy-but-identical failure still matches.</p></div></div>
-      <div class="row"><span class="rn">03</span><div class="rt"><b>Oscillation</b><p>The diff hash cycles with a short period (A,B,A,B; A,B,C,A,B,C; …, period-N up to 4) → flip-flopping (toggle with <code>--stuck-oscillation</code>). Verifier artifacts can be kept out of the hash with <code>--diff-ignore</code>.</p></div></div>
-      <div class="row"><span class="rn">04</span><div class="rt"><b>Budget</b><p>Token / wall-clock caps, metered by the driver — independent of iteration count. Unreported usage is marked <code>unknown</code> loudly (never a silent zero); wall-clock stays the backstop.</p></div></div>
-    </div>
-  </div>
-</section>
-
-<hr class="section-line" />
-
-<!-- ============================== ARCHITECTURE ============================== -->
-<section id="architecture">
-  <div class="wrap">
-    <div class="eyebrow reveal">Internal software architecture</div>
-    <h2 class="reveal">One deep module. Four real seams.</h2>
-    <p class="lede reveal">The orchestrator (a pure reducer) owns all policy. A thin driver performs
-      effects. Everything stochastic hides behind a value interface at four seams — each with a real
-      and a fake implementation, so the orchestrator can't tell which it called.</p>
-
-    <div class="arch-stack reveal" style="margin-top:1.6rem">
-      <div class="arch-layer arch-driver">
-        <span class="alabel">imperative · the only thing that touches the world</span>
-        <h3>Driver</h3>
-        <p>Performs commands, feeds events back, persists write-ahead. Clock, budget, processes, disk — all live here.</p>
-      </div>
-      <div class="arch-conn"></div>
-      <div class="arch-layer arch-orch">
-        <span class="alabel">pure · synchronous · zero-LLM by construction</span>
-        <h3>Orchestrator — <code>step(state, event) → [state, Command[]]</code></h3>
-        <p>The whole COMPILE → Gate A → loop → DECIDE graph, iteration count, stuck bookkeeping. Returns no Promise, holds no adapters: it cannot perform an effect. That is what makes the run replayable from the log.</p>
-      </div>
-      <div class="arch-conn"></div>
-      <div class="seams">
-        <div class="seam"><span class="sn">seam #1</span><h4>Harness Adapter</h4><p>run(prompt, sessionId?) → result. Spawn headless, parse, thread the session.</p><div class="impls"><span class="real">claude-code</span><span class="real">codex</span><span class="real">droid</span><span class="fake">fake</span></div></div>
-        <div class="seam"><span class="sn">seam #2</span><h4>Verifier / Ladder</h4><p>verify(ws, goal, rubric) → Verdict. Exit codes, tests, LLM quorum.</p><div class="impls"><span class="real">deterministic</span><span class="real">judge</span><span class="fake">fake</span></div></div>
-        <div class="seam"><span class="sn">seam #3</span><h4>Approver (Gate B)</h4><p>review(input) → veto? Independent, veto-only, reject-on-uncertainty.</p><div class="impls"><span class="real">agent</span><span class="fake">fake</span></div></div>
-        <div class="seam"><span class="sn">seam #4</span><h4>Clock + Budget</h4><p>now(), spent()/remaining(). Time &amp; token metering, injected into the driver.</p><div class="impls"><span class="real">system</span><span class="fake">manual</span></div></div>
-      </div>
-    </div>
-
-    <details class="disc reveal" style="margin-top:1.6rem">
-      <summary>Parse at every seam (Zod, parse-don't-validate)<span class="s-sub">validation</span></summary>
-      <div class="disc-body">
-        <p>No path from the outside world into the reducer skips a <code>parse</code>. Branded ids are nominal (<code>SessionId</code>, <code>DiffHash</code>, <code>RunId</code>, <code>ContractHash</code>).</p>
-        <ul>
-          <li>CLI args &amp; run config → reject with a usage error</li>
-          <li>Harness stdout (hostile/partial) → never throw; map to <code>truncated</code>/<code>crashed</code></li>
-          <li>Judge / approver output → drop unparseable (judge) / fail-closed (approver)</li>
-          <li>Run log on resume → reject a corrupt entry</li>
-        </ul>
-      </div>
-    </details>
-
-    <details class="disc reveal">
-      <summary>Write-ahead log → replay &amp; resume<span class="s-sub">durability</span></summary>
-      <div class="disc-body">
-        <p>Each event is persisted before the state advances. Because the reducer is pure:</p>
-        <ul>
-          <li><b>replay</b> = fold the reducer over the event stream</li>
-          <li><b>resume</b> = parse header + entries, replay-fold to reconstruct state (session id, iteration, stuck histories), then continue</li>
-          <li><b>inspect</b> = <code>goaly runs list</code> / <code>runs show &lt;id&gt;</code> reuse the <em>same</em> replay-fold (read-only, re-runs nothing) so the rendered status/iterations match exactly what the Driver computed</li>
-          <li>no completed iteration is repeated; durability is at-least-once by design</li>
-          <li>logs live under <code>.goaly/&lt;runId&gt;/</code>, excluded from the tree hash</li>
-        </ul>
-      </div>
-    </details>
-
-    <details class="disc reveal">
-      <summary>The source map<span class="s-sub">src/</span></summary>
-      <div class="disc-body">
-        <div class="code" style="margin-top:0.9rem">
-          <button class="copy-btn">copy</button>
-<pre class="tree"><span class="d">src/</span>
-  <span class="d">domain/</span>       ids, config, contract, verdict, events        <span class="cmt"># types + Zod schemas</span>
-  <span class="pure">orchestrator/</span> state, step, decide, stuck                    <span class="cmt"># PURE reducer (the spine)</span>
-  <span class="d">driver/</span>       driver, clock, budget                         <span class="cmt"># effects + seam #4</span>
-  <span class="d">verify/</span>       verifier, ladder, deterministic, judge, …     <span class="cmt"># seam #2 / #3</span>
-  <span class="d">compile/</span>      compiler, agent-compiler, gateA, gates        <span class="cmt"># Phase 1 + freeze + Gate A</span>
-  <span class="d">agent-cli/</span>     codec, &lt;tool&gt;-codec, output, stream, estimate <span class="cmt"># one deep codec per CLI</span>
-  <span class="d">harness/</span>      adapter, agent-cli-harness, claude-code, …    <span class="cmt"># seam #1</span>
-  <span class="d">workspace/</span>    workspace, git-workspace                      <span class="cmt"># harness-independent diff/run</span>
-  <span class="d">runlog/</span>       runlog, file-runlog                           <span class="cmt"># write-ahead persistence + replay</span>
-  <span class="d">llm/</span>          provider, cli-provider                        <span class="cmt"># INTERNAL seam</span>
-  <span class="d">cli/</span>          args, compose, main                           <span class="cmt"># composition root + CLI</span>
-  <span class="d">testing/</span>      fakes                                         <span class="cmt"># fakes for every seam</span></pre>
-        </div>
-      </div>
-    </details>
-
-    <!-- support matrix -->
-    <h3 class="reveal" style="margin-top:3rem">What's supported</h3>
-    <div class="panel reveal" style="padding:0.3rem 1rem; overflow:auto">
-      <table class="matrix">
-        <thead><tr><th>Capability</th><th>What you get</th></tr></thead>
-        <tbody>
-          <tr><td class="feat">Harnesses</td><td><span class="pill pass">claude-code</span> <span class="pill pass">codex</span> <span class="pill pass">droid</span> <span class="pill neutral">fake</span> — adding one is a single file</td></tr>
-          <tr><td class="feat">Verification</td><td><code>--verify-cmd</code> (existing command) · <code>--generate</code> (the agent authors it) · <code>--smoke "&lt;cmd&gt;"</code> (artifact-running rung: a second deterministic check that <em>runs</em> the built artifact — browser script, server probe, CLI smoke — and exits non-zero on failure) — runtime-agnostic, ungameable, runs before the judge</td></tr>
-          <tr><td class="feat">Model selection</td><td><code>--model</code> (harness + LLM steps) · <code>--llm-model</code> · per-step <code>--judge/approver/compiler-model</code> · <code>--llm-provider</code> claude/codex/droid — pure wiring, never enters the frozen contract</td></tr>
-          <tr><td class="feat">Deterministic rungs</td><td><span class="yes">✓</span> exit-code / test commands, confidence = 1, ungameable</td></tr>
-          <tr><td class="feat">LLM-judge rungs</td><td><span class="yes">✓</span> quorum (default 3, sampled at a diversity temperature; single-sample stays temp 0), confidence floor (default 0.66)</td></tr>
-          <tr><td class="feat">Gate A</td><td>human approve / revise (feedback) / reject · <code>--autonomous</code> auto-accept (still frozen + logged)</td></tr>
-          <tr><td class="feat">Gate B</td><td><span class="yes">✓</span> independent approver, veto-only, every iteration</td></tr>
-          <tr><td class="feat">Compile retry</td><td><span class="yes">✓</span> bounded compile-retry-with-feedback — a <code>COMPILE_FAILED</code> re-authors with the error as guidance up to <code>--max-compile-retries</code> (default 2; 0 disables) before a typed <code>FAILED</code> · pure reducer counter, mirrors the Gate A revise loop · so one correctable authoring mistake no longer discards a valid plan</td></tr>
-          <tr><td class="feat">Authored-bar guardrails</td><td><span class="yes">✓</span> the <code>--generate</code> compiler is steered toward an <b>objective, in-repo, runnable</b> bar (author over existing tooling, helpers inside the workspace, no rubrics judging runtime/visual behavior a grader can't execute) · vacuous (<code>true</code>/<code>:</code>/<code>exit 0</code>) and out-of-repo (<code>/tmp/…</code>) commands are refused fail-closed → feed the compile-retry loop</td></tr>
-          <tr><td class="feat">Verification hygiene</td><td><span class="yes">✓</span> compiler-authored files land in idiomatic locations and are auto-registered in <code>.git/info/exclude</code> (git's per-clone, never-committed ignore) — never in your <code>git status</code>, never accidentally committed, no tracked file touched, best-effort/fail-closed · <code>--verify-dir &lt;dir&gt;</code> steers the location · the integrity guard still pins them by content hash on disk (excluded ≠ unprotected)</td></tr>
-          <tr><td class="feat">Stuck detection</td><td>no-diff (excused once for a timed-out turn or a fresh Gate-B veto) · repeat-failure · oscillation · budget · tunable via <code>--stuck-no-diff</code> / <code>--stuck-repeat-threshold</code> / <code>--stuck-oscillation</code></td></tr>
-          <tr><td class="feat">Diff baseline</td><td><code>--baseline &lt;ref&gt;</code> — compute the worker's diff (the Gate-B approver's input) against any git ref/SHA instead of <code>HEAD</code> · chain a multi-step build with no commits onto the user's branch (each run reviews only its delta) · validated to resolve <b>before the run starts</b> (fail-closed on an unknown ref) · precedence <code>CLI &gt; config</code> · changes only what <code>diff()</code> is computed <i>against</i> — the working-tree hash driving stuck-detection is unaffected · goaly can also advance it <b>internally</b> via a private <code>git write-tree</code> snapshot (<b>no commit, no <code>HEAD</code>/branch/index move</b>; objects dangle, gc-collectable) recorded so <code>--resume</code> reconstructs it</td></tr>
-          <tr><td class="feat">Budget</td><td><code>--budget-tokens</code> · <code>--budget-wall-ms</code>, independent of iteration count · the token cap governs <b>total</b> spend (harness + LLM steps)</td></tr>
-          <tr><td class="feat">Spend report</td><td><span class="yes">✓</span> per-run token breakdown by layer — harness vs. the LLM steps (compiler / judge / approver) — vs. the budget cap, folded from the log so <code>--resume</code> and <code>goaly runs show</code> rebuild it · totals count <b>every category incl. cache</b> (input + output + cache-read + cache-write), surfaced as a per-category split — so cache-heavy providers aren't undercounted · missing usage degrades to <code>unknown</code> · when a step <b>streams</b> but reports no usage, spend is <b>estimated</b> locally from the turns (~4 chars/token) and marked estimated-vs-reported (still counts against the cap) · optional USD cost via <code>--cost-table</code> (model → flat $/1M <b>or per-category</b> rates), tokens-only by default</td></tr>
-          <tr><td class="feat">Resume</td><td><span class="yes">✓</span> <code>--resume run-&lt;id&gt;</code> — replay-fold from the write-ahead log</td></tr>
-          <tr><td class="feat">Run history</td><td><span class="yes">✓</span> <code>goaly runs list</code> · <code>goaly runs show run-&lt;id&gt;</code> — read-only inspection of past runs (frozen contract + hash, Gate A, per-iteration ladder + Gate B, stuck reason, totals) via the <em>same</em> replay-fold as <code>--resume</code>; parses with Zod, flags corrupt logs (fail-closed)</td></tr>
-          <tr><td class="feat">Diagnostics</td><td><code>--log-level</code> debug/info/warn/error · structured JSON file at <code>.goaly/&lt;runId&gt;/goaly.log</code> (size-rotated) · <code>--log-file</code> · <code>--no-log-file</code> — human-facing, separate from the write-ahead run log, content stays at <code>debug</code></td></tr>
-          <tr><td class="feat">Live streaming</td><td><code>--stream</code> — the agent run <b>and</b> the LLM steps' intermediate turns (tool uses, messages, token counts) to stderr as they happen, phase-tagged · one canonical tool-neutral <code>AgentStreamEvent</code> taxonomy · embedder hook (<code>onStreamEvent</code>) · pure observability, never in the run log</td></tr>
-          <tr><td class="feat">Stream transcript</td><td><code>--stream-transcript</code> — persist that <em>same</em> canonical stream durably to a <b>separate</b> per-run file <code>.goaly/&lt;runId&gt;/stream.jsonl</code> (one <code>{ phase, …event, ts }</code> per line, <b>identical shape across every harness</b>) for offline replay · read back with the exported <code>readStreamTranscript()</code> (Zod-validates, drops corrupt lines) · uncapped (never rotated) · <code>--stream-file</code> overrides the path · <b>NOT</b> the replay log — observational, so resume stays a fold over <code>OrchestratorEvent</code>; a write failure degrades to "no transcript" (fail-closed)</td></tr>
-          <tr><td class="feat">Per-step timeouts</td><td><code>--harness-timeout-ms</code> (hard wall-clock) · <code>--harness-idle-timeout-ms</code> (idle/heartbeat — kill only on no stream output for N ms, so a slow-but-progressing build turn survives; wall-clock stays the backstop) · <code>--llm-timeout-ms</code> (judge/approver/compiler) · <code>--verify-timeout-ms</code> — subprocess kill-timeouts; a verify timeout is a fail-closed FAIL, never a green</td></tr>
-          <tr><td class="feat">Sandboxing</td><td><span class="pill neutral">opt-in</span> <code>--sandbox</code> — OS isolation for the <b>two untrusted-code execs</b> (the coding agent <i>and</i> the verify command); off by default (behavior unchanged) · modes <code>none</code> / <code>auto</code> / <code>bwrap</code> (Linux) / <code>container</code> (<code>docker</code>/<code>podman</code>, covers macOS) · rw workspace, ro system, <code>$HOME</code> creds denied · agent keeps network + full env, verifier gets <b>no network by default</b> (<code>--sandbox-net allow</code> for full egress, or <code>--sandbox-net allow:&lt;host,…&gt;</code> for a proxy-enforced egress <b>allowlist</b> — wildcards <code>*.npmjs.org</code> + port pins <code>host:443</code> — constraining <b>both</b> seams so <code>npm test</code> reaches the registry without opening full exfiltration egress) + the scrubbed env · <code>--sandbox-image</code> / <code>--sandbox-runtime</code> for containers · a requested-but-absent mechanism makes the run <b>refuse to start</b> (fail-closed) · git plumbing never sandboxed</td></tr>
-          <tr><td class="feat">Config file</td><td>repeated wiring as defaults in an implicit <code>.goalyrc</code> (workspace/cwd) plus an explicit <code>--config &lt;path&gt;</code> · keys mirror the flags in kebab-case · precedence <code>CLI &gt; --config &gt; .goalyrc &gt; default</code> · parsed with Zod, fails closed</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- quickstart -->
-    <h3 class="reveal" style="margin-top:3rem">Quickstart</h3>
-    <div class="grid grid-2 reveal" style="align-items:start">
-      <div class="code">
-        <button class="copy-btn">copy</button>
-<pre><span class="cmt"># install (puts goaly on your PATH)</span>
-make install
-goaly help
-
-<span class="cmt"># point at an existing test; approve the contract once</span>
-goaly run --goal <span class="str">"handle empty input"</span> \
-  --verify-cmd <span class="str">"npm test"</span>
-
-<span class="cmt"># longer goal from a file (or stdin); revise the contract at Gate A up to 3×</span>
-goaly run --goal-file <span class="str">./GOAL.md</span> \
-  --generate --max-gate-a-revisions 3
-cat GOAL.md | goaly run --goal <span class="str">-</span> --generate</pre>
-      </div>
-      <div class="code">
-        <button class="copy-btn">copy</button>
-<pre><span class="cmt"># let the agent author verification, run unattended</span>
-goaly run --goal <span class="str">"add a /health endpoint"</span> \
-  --generate --autonomous
-
-<span class="cmt"># choose a harness, cap iters, set a budget, resume</span>
-goaly run --goal <span class="str">"…"</span> --harness codex \
-  --max-iterations 8 --budget-tokens 500000
-goaly run --goal <span class="str">"…"</span> --resume run-&lt;id&gt;
-
-<span class="cmt"># diff against a baseline instead of HEAD — small diffs across a multi-step build, no commits</span>
-goaly run --goal <span class="str">"step 2"</span> --baseline <span class="str">&lt;ref-or-sha&gt;</span>
-
-<span class="cmt"># model for the harness + a different model (and CLI) for the LLM steps</span>
-goaly run --goal <span class="str">"…"</span> --model <span class="str">claude-opus-4-8</span> \
-  --llm-model <span class="str">claude-sonnet-4-6</span> --llm-provider claude
-
-<span class="cmt"># follow the loop step-by-step; structured rotated file at .goaly/&lt;runId&gt;/goaly.log</span>
-goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --log-level debug
-
-<span class="cmt"># watch the agent's turns live — run AND LLM steps — tool calls, messages, tokens</span>
-goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --stream
-
-<span class="cmt"># persist that same stream durably for offline replay — .goaly/&lt;runId&gt;/stream.jsonl, any harness</span>
-goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --stream-transcript
-
-<span class="cmt"># cap each step's subprocess (ms); a verify timeout fails closed (FAIL, never green)</span>
-goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> \
-  --harness-timeout-ms 900000 --verify-timeout-ms 60000
-
-<span class="cmt"># put repeated wiring in .goalyrc once, then just pass the goal</span>
-<span class="cmt"># { "harness": "codex", "verify-cmd": "npm test", "autonomous": true, "max-iterations": 8 }</span>
-goaly run --goal <span class="str">"add a /health endpoint"</span>
-<span class="cmt"># …or point at an explicit profile that overrides .goalyrc</span>
-goaly run --goal <span class="str">"…"</span> --config ./ci/goaly.ci.json
-
-<span class="cmt"># inspect past runs (read-only — replays the run log, re-runs nothing)</span>
-goaly runs list
-goaly runs show run-&lt;id&gt;</pre>
-      </div>
-    </div>
-    <p class="lede reveal" style="margin-top:0.9rem; font-size:0.82rem">Exit codes — <span class="pill pass">0 DONE</span> <span class="pill fail">1 FAILED / ABORTED</span> <span class="pill neutral">2 usage error</span></p>
+    <p class="lede reveal" style="margin-top:1.6rem">
+      The full picture — the state machine, the DECIDE truth table, stuck-detection, the four seams, the
+      write-ahead log and resume — is in the architecture docs.
+      <a href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener" style="color:var(--accent)">Read ARCHITECTURE.md →</a>
+    </p>
   </div>
 </section>
 
@@ -445,46 +298,43 @@ goaly runs show run-&lt;id&gt;</pre>
 <section id="harnesses">
   <div class="wrap">
     <div class="eyebrow reveal">Extending it</div>
-    <h2 class="reveal">Adding a harness is one deep codec.</h2>
-    <p class="lede reveal">A “harness” is any coding agent you can drive headlessly. The orchestrator
-      can't tell which one it called — so wrapping a new one changes nothing else in the system. The
-      seam stays this one method; the per-CLI substance is a single <code>AgentCliCodec</code>.</p>
+    <h2 class="reveal">Adding a harness is one small module.</h2>
+    <p class="lede reveal">A "harness" is any coding agent you can drive headlessly. The orchestrator can't tell
+      which one it called — so wrapping a new one changes nothing else in the system. You write one
+      <code>AgentCliCodec</code> that holds everything goaly needs to know about that CLI, and register it
+      with one line.</p>
 
-    <div class="code reveal" style="margin-top:1.4rem">
-      <button class="copy-btn">copy</button>
-<pre><span class="kw">interface</span> <span class="fn">HarnessAdapter</span> {
-  <span class="kw">readonly</span> name: <span class="tok">string</span>;
-  <span class="fn">run</span>(prompt: <span class="tok">string</span>, sessionId?: SessionId, onEvent?: AgentEventSink): <span class="tok">Promise</span>&lt;HarnessRunResult&gt;;
-}  <span class="cmt">// onEvent: optional, opt-in streaming tap (issue #23)</span>
-
-<span class="kw">type</span> <span class="fn">HarnessRunResult</span> = {
-  output: <span class="tok">string</span>;
-  sessionId: SessionId;
-  status: <span class="str">'completed'</span> | <span class="str">'crashed'</span> | <span class="str">'truncated'</span> | <span class="str">'timeout'</span>;
-  tokensUsed?: <span class="tok">number</span>;
-};  <span class="cmt">// diffHash is computed by the shared Workspace — NOT the adapter</span></pre>
-    </div>
-
-    <p class="reveal" style="margin-top:1.2rem">Behind that one method sits the real unit of work — an
-      <code>AgentCliCodec</code> that holds <b>all</b> of one CLI's quirks in one place: its two argv
-      dialects (<code>harnessArgs</code> for the write-mode agent, <code>readonlyArgs</code> for the
-      judge/approver), its <code>fieldExtractor</code> + <code>streamExtractor</code>, and its
-      <code>classify</code> status mapping. The generic <code>AgentCliHarness</code> consumes it for
-      seam #1, and the read-only <code>AgentCliLlmProvider</code> consumes the <i>same</i> codec for
-      the LLM steps — so there's no <code>llm → harness</code> coupling and a CLI's knowledge never
-      scatters. Registering one is a codec module + one line in <code>makeHarness</code>.</p>
-
-    <!-- three things to discover -->
-    <h3 class="reveal" style="margin-top:2.4rem">The three things to figure out</h3>
+    <!-- The three (four) things to figure out -->
+    <h3 class="reveal" style="margin-top:2rem">What you need to figure out about a CLI</h3>
     <div class="rows reveal">
-      <div class="row"><span class="rn">01</span><div class="rt"><b>Headless / print invocation</b><p>How do you run one non-interactive turn? Look for a print/exec/headless flag (<code>-p</code>, <code>exec</code>, <code>--print</code>). The prompt is usually an argv value or read from stdin.</p></div></div>
-      <div class="row"><span class="rn">02</span><div class="rt"><b>Structured output</b><p>Find a machine-readable result (<code>--output-format json</code>, <code>--json</code>). Note the shape — a whole-stdout JSON object, a JSONL stream, or text-only — and capture a real sample.</p></div></div>
-      <div class="row"><span class="rn">03</span><div class="rt"><b>Session resume</b><p>Where does the session id appear in a fresh run's output, and which flag replays it next turn (<code>--resume</code>, <code>--session-id</code>, <code>exec resume &lt;id&gt;</code>)? No resume → return a stable id and accept cold turns.</p></div></div>
-      <div class="row"><span class="rn">04</span><div class="rt"><b>Per-turn streaming <span style="opacity:0.6">(optional — issue #23)</span></b><p>Is there a streaming output mode (<code>--output-format stream-json</code>, an always-JSONL <code>--json</code>)? If so, note which line carries each turn — message, tool call + result, usage — and map them onto the canonical <code>AgentStreamEvent</code> taxonomy. No streaming mode → skip it; the run is unaffected.</p></div></div>
+      <div class="row"><span class="rn">01</span><div class="rt"><b>How to run one headless turn</b><p>The non-interactive / print flag (<code>-p</code>, <code>exec</code>, <code>--print</code>). The prompt is usually an argv value or read from stdin.</p></div></div>
+      <div class="row"><span class="rn">02</span><div class="rt"><b>How to read the result</b><p>The machine-readable output (<code>--output-format json</code>, <code>--json</code>). Note the shape — a whole-stdout JSON object, a JSONL stream, or text-only — and which field carries the answer.</p></div></div>
+      <div class="row"><span class="rn">03</span><div class="rt"><b>How to resume the session</b><p>Where the session id appears in a fresh run, and which flag replays it next turn (<code>--resume</code>, <code>--session-id</code>, <code>exec resume &lt;id&gt;</code>). No resume → return a stable id and accept cold turns.</p></div></div>
+      <div class="row"><span class="rn">04</span><div class="rt"><b>Per-turn streaming <span style="opacity:0.6">(optional)</span></b><p>If the CLI has a streaming mode, map each line onto the canonical <code>AgentStreamEvent</code> taxonomy so the live view works. No streaming → skip it; the run is unaffected.</p></div></div>
     </div>
 
-    <!-- comparison tabs -->
-    <h3 class="reveal" style="margin-top:2.4rem">…solved for the three bundled adapters</h3>
+    <!-- The codec interface -->
+    <h3 class="reveal" style="margin-top:2.4rem">The one interface you implement</h3>
+    <div class="code reveal" style="margin-top:1rem">
+      <button class="copy-btn">copy</button>
+<pre><span class="kw">interface</span> <span class="fn">AgentCliCodec</span> {
+  <span class="kw">readonly</span> name: <span class="tok">string</span>;
+  <span class="kw">readonly</span> command: <span class="tok">string</span>;                 <span class="cmt">// the binary to spawn</span>
+  <span class="kw">readonly</span> fieldExtractor: FieldExtractor;     <span class="cmt">// where result / session / tokens live</span>
+  <span class="kw">readonly</span> streamExtractor: StreamEventExtractor; <span class="cmt">// per-turn → AgentStreamEvent (optional)</span>
+  <span class="fn">harnessArgs</span>(opts): <span class="tok">string</span>[];               <span class="cmt">// write-mode argv (drives edits)</span>
+  <span class="fn">readonlyArgs</span>(opts): <span class="tok">string</span>[];              <span class="cmt">// read-only argv (judge / approver)</span>
+  <span class="fn">parse</span>(stdout): AgentOutput | <span class="kw">null</span>;          <span class="cmt">// tolerant, never throws</span>
+  <span class="fn">classify</span>(input): HarnessRunResult;          <span class="cmt">// process outcome → status</span>
+}</pre>
+    </div>
+    <p class="reveal" style="margin-top:1rem">The shared core does the heavy lifting — the tolerant JSON/JSONL
+      parse, the subprocess dance (timeouts, output caps, process-group kill), the diff hashing, and verifier
+      execution all live <b>outside</b> the codec. So your module is just this CLI's quirks, in one place.
+      The same codec also powers the read-only LLM steps (judge / approver / compiler) for free.</p>
+
+    <!-- three bundled adapters -->
+    <h3 class="reveal" style="margin-top:2.4rem">…already solved for the three bundled adapters</h3>
     <div class="reveal">
       <div class="tabs">
         <button class="tab active" data-tab="cc">claude-code</button>
@@ -494,195 +344,108 @@ goaly runs show run-&lt;id&gt;</pre>
       <div class="tabpane active" id="tab-cc">
         <dl class="kv">
           <dt>fresh</dt><dd><code>claude -p "&lt;prompt&gt;" --output-format json --permission-mode acceptEdits</code></dd>
-          <dt>resume</dt><dd><code>claude -p "&lt;prompt&gt;" --output-format json --permission-mode acceptEdits --resume &lt;id&gt;</code></dd>
-          <dt>writes ←</dt><dd><code>--permission-mode acceptEdits</code> — harness role needs to apply edits; headless <code>-p</code> auto-DENIES the edit prompt by default (read role omits it)</dd>
-          <dt>prompt</dt><dd>argv (with a stdin fallback)</dd>
+          <dt>resume</dt><dd><code>claude -p … --resume &lt;id&gt;</code></dd>
           <dt>output</dt><dd>json-object, or stream-json (one JSON object per line)</dd>
           <dt>result ←</dt><dd><code>.result</code> ?? <code>.text</code> ?? <code>.response</code></dd>
           <dt>session ←</dt><dd><code>.session_id</code> — latch the first seen across the stream</dd>
-          <dt>tokens ←</dt><dd><code>.usage.total_tokens</code>, else <code>input + output + cache-read + cache-write</code> (cache kept as a per-category split)</dd>
-          <dt>stream →</dt><dd><code>--output-format stream-json --verbose</code> → <code>sdkStreamExtractor</code> (Anthropic SDK envelope)</dd>
         </dl>
       </div>
       <div class="tabpane" id="tab-cx">
         <dl class="kv">
           <dt>fresh</dt><dd><code>codex exec --full-auto "&lt;prompt&gt;" --json</code></dd>
           <dt>resume</dt><dd><code>codex exec resume &lt;id&gt; --full-auto "&lt;prompt&gt;" --json</code></dd>
-          <dt>writes ←</dt><dd><code>--full-auto</code> — harness role needs a writable sandbox (<code>exec</code> is read-only by default)</dd>
-          <dt>prompt</dt><dd>argv</dd>
           <dt>output</dt><dd>jsonl-stream — the last result-bearing line carries the answer</dd>
-          <dt>result ←</dt><dd>last <code>agent_message</code>'s <code>item.text</code> (or a flat <code>result</code>/<code>message</code>)</dd>
+          <dt>result ←</dt><dd>last <code>agent_message</code>'s <code>item.text</code></dd>
           <dt>session ←</dt><dd><code>thread_id</code> — latch the first established at stream start</dd>
-          <dt>tokens ←</dt><dd><code>turn.completed.usage</code> (input+output) if present (optional)</dd>
-          <dt>stream →</dt><dd><code>--json</code> is already a stream → custom <code>codexStreamExtractor</code> (thread.started · agent_message · command_execution · turn.completed)</dd>
         </dl>
       </div>
       <div class="tabpane" id="tab-dr">
         <dl class="kv">
           <dt>fresh</dt><dd><code>droid exec --output-format json --auto &lt;level&gt; "&lt;prompt&gt;"</code></dd>
           <dt>resume</dt><dd><code>droid exec … --session-id &lt;id&gt; "&lt;prompt&gt;"</code></dd>
-          <dt>prompt</dt><dd>argv</dd>
           <dt>output</dt><dd>json-object (agent-SDK result envelope), tolerant to JSONL</dd>
           <dt>result ←</dt><dd><code>.result</code> (with aliases)</dd>
           <dt>session ←</dt><dd><code>.session_id</code> — latch the first</dd>
-          <dt>stream →</dt><dd><code>--output-format stream-json</code> → shared <code>sdkStreamExtractor</code> (same Anthropic-SDK envelope as claude-code)</dd>
-          <dt>caveat</dt><dd>defaults to <code>--auto low</code> (edit files only) so <code>git diff HEAD</code> stays honest; never <code>--skip-permissions-unsafe</code></dd>
         </dl>
       </div>
     </div>
 
-    <!-- progressive disclosure: rules, mappings, registration -->
-    <details class="disc reveal" style="margin-top:2rem">
-      <summary>What <code>run()</code> must &amp; must not do<span class="s-sub">contract</span></summary>
-      <div class="disc-body">
-        <div class="mustcols" style="margin-top:0.9rem">
-          <div class="mustcol must">
-            <h4><span class="pill pass">MUST</span></h4>
-            <ul>
-              <li>Spawn headlessly with the prompt, resuming <code>sessionId</code> when provided.</li>
-              <li>Parse stdout tolerantly — partial output, crashes, and non-JSON are normal.</li>
-              <li>Thread the session id out so the next iteration resumes the same conversation.</li>
-              <li>Map the outcome to a status and return a Zod-parsed <code>HarnessRunResult</code>.</li>
-              <li>Never throw. Any failure becomes a non-<code>completed</code> status.</li>
-            </ul>
-          </div>
-          <div class="mustcol mustnot">
-            <h4><span class="pill fail">MUST NOT</span></h4>
-            <ul>
-              <li>Compute <code>diffHash</code> — the shared Workspace does, so stuck-detection works on any harness for free.</li>
-              <li>Run the verifier — verification is “run this command in the workspace,” identical everywhere.</li>
-              <li>Leak harness specifics — flag dialects, hook tricks stay inside <code>run()</code>.</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    </details>
-
-    <details class="disc reveal">
-      <summary>The mappings: stdout → fields, outcome → status, turns → events<span class="s-sub">field · status · stream</span></summary>
-      <div class="disc-body">
-        <div class="grid grid-2" style="align-items:start; margin-top:0.9rem">
-          <div>
-            <p style="font-family:var(--mono); font-size:0.85rem; color:var(--fg)">1 · Field mapping</p>
-            <p>A small <code>FieldExtractor</code> — <code>(obj) =&gt; { text?, sessionId?, tokens? }</code> — by your CLI's key names. The shared <code>parseAgentOutput</code> core owns the envelope walk (whole-object / amid-noise / JSONL), latches the <b>first</b> session id, keeps the <b>last</b> text-bearing line, and returns <code>null</code> on no text. Flat envelope? Reuse the shared <code>flatExtractor</code> and write nothing.</p>
-          </div>
-          <div>
-            <p style="font-family:var(--mono); font-size:0.85rem; color:var(--fg)">2 · Status mapping</p>
-            <table class="matrix" style="font-size:0.82rem">
-              <tbody>
-                <tr><td>killed for exceeding wall-clock</td><td><span class="pill fail">timeout</span></td></tr>
-                <tr><td>exited non-zero</td><td><span class="pill fail">crashed</span></td></tr>
-                <tr><td>exit 0, parseable, non-empty</td><td><span class="pill pass">completed</span></td></tr>
-                <tr><td>exit 0 but empty / unparseable</td><td><span class="pill gate">truncated</span></td></tr>
-                <tr><td>the exec seam itself threw</td><td><span class="pill fail">crashed</span></td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <div style="margin-top:1.1rem">
-          <p style="font-family:var(--mono); font-size:0.85rem; color:var(--fg)">3 · Stream mapping <span style="opacity:0.6">(optional — issue #23)</span></p>
-          <p>The streaming sibling of the field mapping. A <code>StreamEventExtractor</code> — <code>(obj) =&gt; AgentStreamEvent[]</code> — maps one JSONL line of your CLI's per-turn output onto the <b>canonical, tool-neutral</b> <code>AgentStreamEvent</code> taxonomy (<code>session · message · reasoning · tool_use · tool_result · usage · done</code>). The shared <code>StreamTap</code> buffers partial lines across chunks, Zod-validates every event at the seam, and forwards survivors to the live view / logger / embedder — fail-closed, so a throwing sink never touches the run. Emit the Anthropic agent-SDK envelope (claude-code, droid)? Reuse <code>sdkStreamExtractor</code>. Final-envelope only? <code>flatStreamExtractor</code>. The same mapping serves the read-only LLM steps too — write it once, both seams stream.</p>
-        </div>
-      </div>
-    </details>
-
-    <details class="disc reveal">
+    <!-- registration -->
+    <details class="disc reveal" style="margin-top:1.6rem">
       <summary>Register it — two tiny edits<span class="s-sub">args.ts · compose.ts</span></summary>
       <div class="disc-body">
         <div class="code" style="margin-top:0.9rem">
           <button class="copy-btn">copy</button>
-<pre><span class="cmt">// src/cli/args.ts — add the literal to the choice union + parser</span>
+<pre><span class="cmt">// src/cli/args.ts — add the literal to the choice union</span>
 <span class="kw">export type</span> HarnessChoice = <span class="str">'claude-code'</span> | <span class="str">'codex'</span> | <span class="str">'droid'</span> | <span class="str">'fake'</span> | <span class="str">'myagent'</span>;
 
-<span class="cmt">// src/cli/compose.ts — wire your codec into makeHarness() via the generic adapter</span>
+<span class="cmt">// src/cli/compose.ts — wire your codec into makeHarness()</span>
 <span class="kw">case</span> <span class="str">'myagent'</span>: <span class="kw">return</span> <span class="kw">new</span> <span class="fn">AgentCliHarness</span>(myagentCodec, opts);</pre>
         </div>
-        <p style="margin-top:0.9rem">Then add your codec to the shared <code>adapter.contract.test.ts</code> matrix — it runs every adapter through the same scenarios (success / non-zero / garbage / timeout / exec-throws) to prove it never throws and always returns a valid <code>HarnessRunResult</code>.</p>
+        <p style="margin-top:0.9rem">Then add your codec to the shared <code>adapter.contract.test.ts</code> matrix —
+          it runs every adapter through the same scenarios (success / non-zero / garbage / timeout / exec-throws)
+          to prove it never throws and always returns a valid <code>HarnessRunResult</code>.</p>
       </div>
     </details>
 
-    <details class="disc reveal">
-      <summary>Optional: also run the LLM steps on it<span class="s-sub">read-only provider</span></summary>
-      <div class="disc-body">
-        <p style="margin-top:0.9rem">A harness <i>drives</i> the agent. The compiler / judge / approver are a <b>separate, read-only</b> seam — <code>LlmProvider.complete(prompt) → {text, tokensUsed?}</code> (the optional token count feeds the per-run spend report). Different interface on purpose: a judge must never edit the tree it's judging (Interface Segregation). But it <b>reuses the codec you already wrote</b> — its <code>fieldExtractor</code> and its <code>readonlyArgs</code> dialect (codex <code>--sandbox read-only</code>; droid omits <code>--auto</code>) — so wiring it is a <code>makeLlmProvider()</code> case + an <code>LlmProviderChoice</code> literal, the model cascade (<code>--llm-model</code>, per-step flags) threaded in for you. No read-only mode on your CLI → don't wire it as a provider.</p>
-        <p style="margin-top:0.7rem"><b>The LLM steps stream too</b> (issue #23): under <code>--stream</code> the compile / judge / approve turns surface in the live view just like the agent run, phase-tagged. They <b>reuse the same <code>StreamEventExtractor</code></b> — the sink is wired into the provider at construction (so the Verifier / Approver seams stay clean), and the same canonical events flow out. One stream mapping, both seams.</p>
+    <div class="panel reveal" style="padding:1.4rem 1.5rem; margin-top:1.6rem">
+      <div class="skill-card">
+        <div class="skill-badge">🛠️</div>
+        <div>
+          <h3 style="margin-bottom:0.4rem">Let an agent do the probing</h3>
+          <p style="margin:0; font-family:var(--mono); font-size:0.85rem; line-height:1.65; color:var(--fg-dim)">
+            The repo ships an <code>investigate-harness</code> skill that probes an unfamiliar CLI safely
+            (read-only first, the agent only runs in a throwaway git repo) and emits the filled-in codec,
+            the two registration edits, and tests. The full walkthrough — interface signatures, a copy-paste
+            skeleton, and field/status-mapping recipes — lives in
+            <a href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener" style="color:var(--accent)">docs/adding-a-harness.md →</a>
+          </p>
+        </div>
       </div>
-    </details>
+    </div>
   </div>
 </section>
 
 <hr class="section-line" />
 
-<!-- ============================== AGENTIC ============================== -->
-<section id="agentic">
+<!-- ============================== DOCS HUB ============================== -->
+<section id="docs">
   <div class="wrap">
-    <div class="eyebrow reveal">Built for agents, by agents</div>
-    <h2 class="reveal">goaly drives coding agents — and is built to be worked on by them.</h2>
-    <p class="lede reveal">The repo ships its own agent tooling: a skill that teaches an agent to
-      onboard a new harness, and a hard set of invariants any contributor — human or model — must preserve.</p>
+    <div class="eyebrow reveal">Learn more</div>
+    <h2 class="reveal">Go as deep as you want.</h2>
+    <p class="lede reveal">Everything beyond this page lives in the repo. Start with the README to use it, or the
+      design docs to understand why it's built the way it is.</p>
 
-    <div class="panel reveal" style="padding:1.5rem; margin-top:1.6rem">
-      <div class="skill-card">
-        <div class="skill-badge">🛠️</div>
-        <div>
-          <h3 style="margin-bottom:0.4rem"><code>investigate-harness</code> skill</h3>
-          <p style="margin:0; font-family:var(--mono); font-size:0.85rem; line-height:1.65">A bundled agent skill that probes an unfamiliar CLI and emits a filled adapter. Read-only first (<code>--help</code>, <code>--version</code>), runs the agent only in a throwaway git repo, redacts session ids, and produces the field/flag/status mapping plus the adapter, the two registration edits, and tests.</p>
-        </div>
-      </div>
-      <details class="disc" style="margin-top:1.2rem">
-        <summary>The discovery worksheet it fills in<span class="s-sub">📋</span></summary>
-        <div class="disc-body">
-          <div class="worksheet" style="margin-top:0.9rem">
-            <div class="ws-head">worksheet</div>
-<pre>Harness name (kebab):   &lt;name&gt;
-Binary + version:       &lt;bin&gt; &lt;version&gt;        # flags drift between versions
-Fresh invocation:       &lt;bin&gt; -p "&lt;prompt&gt;" --output-format json
-Resume invocation:      &lt;bin&gt; … --resume &lt;id&gt;
-Prompt delivery:        argv | stdin
-Output shape:           json-object | jsonl-stream | text-only
-Field mapping:
-  result text   &lt;-  .result            # or: last line's .text
-  session id    &lt;-  .session_id        # latch the FIRST seen in a stream
-  token usage   &lt;-  .usage.total_tokens, else input+output+cache-read+cache-write | (none)
-Streaming mode:         none | stream-json | always-jsonl | other
-Stream mapping:         reuse sdkStreamExtractor | flatStreamExtractor | custom
-  per line type -&gt; session | message | tool_use/result | usage | done
-Status mapping:
-  timeout    &lt;= wall-clock kill
-  crashed    &lt;= exit != 0 | unparseable | exec throws
-  truncated  &lt;= exit 0 but empty / partial result
-  completed  &lt;= exit 0 + parseable non-empty result
-Notes / caveats:        &lt;e.g. no resume -> cold each turn&gt;</pre>
-          </div>
-        </div>
-      </details>
+    <div class="grid grid-2 reveal" style="margin-top:1.8rem; align-items:start">
+      <a class="card" href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener">
+        <h3>README <span class="pill pass">start here</span></h3>
+        <p>Install, every CLI flag, the config file, sandboxing, budgets and the per-run spend report. The practical reference.</p>
+      </a>
+      <a class="card" href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener">
+        <h3>Adding a harness</h3>
+        <p>The full authoring guide — real interface signatures, a copy-paste codec skeleton, and the field / status / stream mapping recipes.</p>
+      </a>
+      <a class="card" href="https://github.com/krimvp/goaly/blob/main/DESIGN.md" target="_blank" rel="noopener">
+        <h3>DESIGN.md — what &amp; why</h3>
+        <p>The anti-reward-hacking thesis and the product decisions behind the frozen contract and the two keys.</p>
+      </a>
+      <a class="card" href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">
+        <h3>ARCHITECTURE.md — how</h3>
+        <p>The pure reducer, the state machine, the DECIDE truth table, the four seams, and the write-ahead log.</p>
+      </a>
+      <a class="card" href="https://github.com/krimvp/goaly/blob/main/AGENTS.md" target="_blank" rel="noopener">
+        <h3>AGENTS.md — contributing</h3>
+        <p>The eight invariants any contributor (human or agent) must preserve, conventions, and the directory map.</p>
+      </a>
+      <a class="card" href="https://github.com/krimvp/goaly/tree/main/docs/adr" target="_blank" rel="noopener">
+        <h3>ADRs &amp; glossary</h3>
+        <p>Architecture decision records (e.g. the sandboxing model) and <code>CONTEXT.md</code>, the term-by-term glossary.</p>
+      </a>
     </div>
 
-    <details class="disc reveal" style="margin-top:1.6rem">
-      <summary>The eight invariants every agent must preserve<span class="s-sub">AGENTS.md</span></summary>
-      <div class="disc-body">
-        <div class="invariants" style="margin-top:0.9rem">
-          <div class="inv"><span class="i-n">1</span><span class="t"><b>Zero-LLM reducer.</b> step/decide/stuck are pure &amp; synchronous — no Promise, clock, IO, or adapter imports.</span></div>
-          <div class="inv"><span class="i-n">2</span><span class="t"><b>Compile once, then freeze.</b> The contract is authored once; no transition rewrites it.</span></div>
-          <div class="inv"><span class="i-n">3</span><span class="t"><b>Two keys for DONE.</b> Frozen verifier passes and the approver doesn't veto. Gate B runs only on a green ladder.</span></div>
-          <div class="inv"><span class="i-n">4</span><span class="t"><b>Fail-closed everywhere.</b> Any error or unparseable output → FAIL / VETO / crashed-run, never a green.</span></div>
-          <div class="inv"><span class="i-n">5</span><span class="t"><b><code>--autonomous</code> moves Gate A only.</b> It auto-accepts but still freezes and logs the contract.</span></div>
-          <div class="inv"><span class="i-n">6</span><span class="t"><b>Parse at every seam (Zod).</b> Nothing reaches the reducer without a parse; ids are branded.</span></div>
-          <div class="inv"><span class="i-n">7</span><span class="t"><b>Write-ahead + resume.</b> Events append before state advances; resume is a replay-fold over the log.</span></div>
-          <div class="inv"><span class="i-n">8</span><span class="t"><b>Stuck detection stays pure</b> over loop histories: no-diff, repeat-failure, oscillation, budget.</span></div>
-        </div>
-      </div>
-    </details>
-
-    <div class="grid grid-2 reveal" style="margin-top:1.6rem; align-items:start">
-      <div class="card">
-        <h3>Fakes-first, zero-IO TDD</h3>
-        <p>The walking skeleton — domain → pure reducer → fakes → driver — is proven end-to-end with zero IO before any subprocess exists. Every seam has a fake, so the whole policy is table-testable.</p>
-      </div>
-      <div class="card">
-        <h3>Docs are part of “done” <span class="pill pass">explicit check</span></h3>
-        <p>Any change to the architecture, the public API, or functionality must update the README and this landing page in the same change — a definition-of-done gate, not optional. This page cites real states, commands, events, and defaults.</p>
-      </div>
+    <div class="btn-row reveal" style="margin-top:1.8rem">
+      <a class="btn btn-primary" href="#start">Get started →</a>
+      <a class="btn btn-ghost" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">View the repository ↗</a>
     </div>
   </div>
 </section>
@@ -696,23 +459,22 @@ Notes / caveats:        &lt;e.g. no resume -> cold each turn&gt;</pre>
         <p style="font-family:var(--mono); font-size:0.82rem; max-width:34ch">Run a coding agent until the goal is verifiably met — against a contract it can't weaken.</p>
       </div>
       <div>
-        <h5>Design docs</h5>
+        <h5>Use it</h5>
+        <a href="#start">Get started</a>
+        <a href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener">README &amp; flags</a>
+        <a href="https://github.com/krimvp/goaly#install" target="_blank" rel="noopener">Install</a>
+      </div>
+      <div>
+        <h5>Understand it</h5>
         <a href="https://github.com/krimvp/goaly/blob/main/DESIGN.md" target="_blank" rel="noopener">DESIGN.md — what &amp; why</a>
         <a href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">ARCHITECTURE.md — how</a>
-        <a href="https://github.com/krimvp/goaly/blob/main/CONTEXT.md" target="_blank" rel="noopener">CONTEXT.md — glossary</a>
-        <a href="https://github.com/krimvp/goaly/tree/main/docs/adr" target="_blank" rel="noopener">docs/adr — decisions</a>
+        <a href="https://github.com/krimvp/goaly/tree/main/docs/adr" target="_blank" rel="noopener">ADRs — decisions</a>
       </div>
       <div>
-        <h5>Extend</h5>
+        <h5>Extend it</h5>
         <a href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener">Adding a harness</a>
         <a href="https://github.com/krimvp/goaly/blob/main/AGENTS.md" target="_blank" rel="noopener">AGENTS.md — invariants</a>
-        <a href="https://github.com/krimvp/goaly/tree/main/.claude/skills/investigate-harness" target="_blank" rel="noopener">investigate-harness skill</a>
-      </div>
-      <div>
-        <h5>Project</h5>
         <a href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">Repository</a>
-        <a href="https://github.com/krimvp/goaly/blob/main/README.md" target="_blank" rel="noopener">README</a>
-        <a href="https://github.com/krimvp/goaly#install" target="_blank" rel="noopener">Install</a>
       </div>
     </div>
     <div class="legal">
