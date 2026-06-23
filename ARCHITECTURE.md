@@ -42,8 +42,8 @@ makes the whole run replayable from the log.
    Orchestrator  ── pure step(state,event) → [state, Command[]] ──  ZERO LLM, ZERO IO
      │ Commands ↓
    ┌──────────┬──────────┬──────────┬───────────┐
-   Harness    Verifier   Approver   Compiler+GateA
-   Adapter    Ladder     (Gate B)
+   Harness    Verifier   Approver   Compiler+Seal
+   Adapter    Ladder     (Sign-off)
    (seam#1)   (seam#2)   (seam#3)
    CC/Codex   det/judge  agent      + Clock/Budget (seam#4, injected into Driver)
    /Fake      /Fake      /Fake
@@ -53,13 +53,13 @@ makes the whole run replayable from the log.
 
 | Module | Small interface | Large implementation hidden | Seam? |
 |---|---|---|---|
-| **Orchestrator** | `step(state,event)->[state,Command[]]`, `initial(config)` — *pure, sync* | whole COMPILE→GateA→loop→DECIDE graph, iteration count, stuck bookkeeping | the spine |
+| **Orchestrator** | `step(state,event)->[state,Command[]]`, `initial(config)` — *pure, sync* | whole COMPILE→Seal→loop→DECIDE graph, iteration count, stuck bookkeeping | the spine |
 | **Driver** | `drive(deps,config)->RunOutcome` | command interpreter, write-ahead persist, crash→Event, budget polling | — |
 | **HarnessAdapter** | `run(prompt, sessionId?)->RunResult` | flag dialects, JSON parsing, session resume, CC's optional Stop-hook fast-path | **#1 REAL** (CC, Codex, Fake) |
 | **Verifier / Ladder** | `verify(ws,goal,rubric)->Verdict` | shell/exit-code, test runs, LLM quorum judge; ladder *is* a Verifier (composite) | **#2 REAL** (det, judge, Fake) |
-| **Approver (Gate B)** | `review(input)->ApprovalVerdict` (veto-only) | independent approval agent, reject-on-uncertainty bias, ideally different model | **#3 REAL** (agent, Fake) |
+| **Approver (Sign-off)** | `review(input)->ApprovalVerdict` (veto-only) | independent approval agent, reject-on-uncertainty bias, ideally different model | **#3 REAL** (agent, Fake) |
 | **VerifierCompiler** | `compile(goal,intent)->CompiledContract` | finds/writes tests, authors rubric, emits runnable spec; **freezes once** | (agent, Fake) |
-| **ContractGate (Gate A)** | `approveContract(c)->GateDecision` | human CLI prompt vs auto-accept + loud audit log | (Human/Auto/Fake) |
+| **SealGate (Seal)** | `approveContract(c)->SealDecision` | human CLI prompt vs auto-accept + loud audit log | (Human/Auto/Fake) |
 | **Clock / BudgetMeter** | `now()`, `spent()/remaining()` | system time/token metering | **#4 REAL** (System, Manual) |
 | **Workspace** | `diffHash()`, `run(cmd)` | git tree hash, command exec — *harness-independent* | (Git, Fake) |
 | **RunLog** | `append(entry)`, `replay()->state` | write-ahead persist + pure replay-fold | (File, InMemory) |
@@ -109,7 +109,7 @@ behaviours the state machine can't distinguish:
    **short-circuits** on the first deterministic fail (no judge call wasted). A rung that
    errors is **fail-closed** (`pass:false`) — a malformed grader is never a green.
 
-The **Approver (Gate B)** is verdict-shaped but a *separate seam*: veto-only, fed
+The **Approver (Sign-off)** is verdict-shaped but a *separate seam*: veto-only, fed
 independent inputs (goal + frozen rubric + diff + verdicts, **not** the worker's
 self-justification). DONE requires **two keys**: the frozen verifier passes *and* the
 independent approver doesn't veto.
@@ -120,9 +120,9 @@ Discriminated-union state, pure synchronous reducer, effects requested as data `
 
 ```ts
 type OrchestratorState =
-  | { tag: 'COMPILING'; config } | { tag: 'AWAIT_GATE_A'; contract }
+  | { tag: 'COMPILING'; config } | { tag: 'AWAIT_SEAL'; contract }
   | { tag: 'RUNNING_AGENT'; ctx } | { tag: 'VERIFYING'; ctx; lastRun }
-  | { tag: 'AWAIT_GATE_B'; ctx; ladder } | { tag: 'DECIDING'; ctx; signals }
+  | { tag: 'AWAIT_SIGNOFF'; ctx; ladder } | { tag: 'DECIDING'; ctx; signals }
   | { tag: 'DONE' } | { tag: 'FAILED'; reason } | { tag: 'ABORTED'; reason };
 
 // LoopCtx carries the FROZEN contract by reference + diffHash/failure histories
@@ -133,8 +133,8 @@ type OrchestratorState =
 
 ```
 if !ladderPass                      → continue (feed verifier detail back)
-if ladderPass && gateB.veto         → continue (feed veto reason back)
-if ladderPass && gateB.approve      → DONE          (two keys turned)
+if ladderPass && signoff.veto         → continue (feed veto reason back)
+if ladderPass && signoff.approve      → DONE          (two keys turned)
 if iteration >= maxIterations       → FAILED
 if detectStuck(ctx) !== null        → ABORTED (no-diff | repeat-failure | oscillation | budget)
 else                                → continue
@@ -183,7 +183,7 @@ packages/core/src/
   orchestrator/  state.ts step.ts decide.ts stuck.ts             (PURE — the spine)
   driver/    driver.ts clock.ts budget.ts                        (effects, seam #4)
   verify/    verifier.ts deterministic.ts judge.ts approver.ts   (seam #2, #3)
-  compile/   compiler.ts gateA.ts                                (Phase 1 + freeze)
+  compile/   compiler.ts seal.ts seal-gates.ts                                (Phase 1 + freeze)
   harness/   adapter.ts claude-code.ts codex.ts fake.ts          (seam #1)
   workspace/ workspace.ts        runlog/ runlog.ts
 packages/cli/src/main.ts         CONTEXT.md  docs/adr/
@@ -200,7 +200,7 @@ all-tests-first):**
 
 1. Domain + Zod schemas (ids, config, verdict, events) — establishes the ubiquitous language.
 2. **Pure reducer + DECIDE + stuck** — table-tested with hand-built events, no adapters.
-3. Fakes (FakeHarness/Verifier/Approver/Gate, ManualClock, InMemoryRunLog, FakeWorkspace).
+3. Fakes (FakeHarness/Verifier/Approver/SealGate, ManualClock, InMemoryRunLog, FakeWorkspace).
 4. **Driver** wiring fakes → first full end-to-end loop test with **zero IO** ("scripted
    pass on iter 3, one veto → DONE on iter 4"). **Walking skeleton complete — whole policy
    proven before any subprocess.**
@@ -208,7 +208,7 @@ all-tests-first):**
 6. DeterministicVerifier + GitWorkspace (first real IO: exit codes, real diffHash).
 7. **ClaudeCodeAdapter** (reference adapter; internal Stop-hook path behind the same interface).
 8. JudgeVerifier + AgentApprover (quorum, temp 0, Zod-parsed output).
-9. VerifierCompiler + Gate A (authoring + freeze + loud logging).
+9. VerifierCompiler + Seal (authoring + freeze + loud logging).
 10. **CodexAdapter** — proves the seam is real, flushes out any leaked Claude-isms.
 11. `goaly` CLI — thin caller; the library already works headless.
 
@@ -219,7 +219,7 @@ DESIGN's "Suggested first build" calls for.
 ## Domain language & ADRs to record
 
 Create `CONTEXT.md` (glossary only) with the ubiquitous terms: **Goal, Contract, Verifier,
-Rubric, Verdict, Ladder, Gate A / Gate B, Two Keys, Harness, Adapter, Driver, Orchestrator,
+Rubric, Verdict, Ladder, Seal / Sign-off, Two Keys, Harness, Adapter, Driver, Orchestrator,
 DECIDE, diffHash, Stuck, Autonomous** (each with an "avoid:" list, e.g. Harness ≠
 model/agent).
 

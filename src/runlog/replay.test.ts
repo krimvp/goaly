@@ -7,7 +7,7 @@ import {
   FakeVerifier,
   FakeApprover,
   FakeCompiler,
-  FakeGate,
+  FakeSealGate,
   FakeWorkspace,
   ManualClock,
   ManualBudgetMeter,
@@ -28,7 +28,7 @@ async function driveAndStore(): Promise<InMemoryRunLog> {
   const runlog = new InMemoryRunLog();
   const deps: DriverDeps = {
     compiler: new FakeCompiler(contract),
-    gateA: new FakeGate({ kind: 'approve' }),
+    seal: new FakeSealGate({ kind: 'approve' }),
     harness: new FakeHarness([{ postHash: '0000001' }, { postHash: '0000002' }], workspace),
     makeLadder: () => new FakeVerifier([failVerdict('red'), passVerdict('green')]),
     approver: new FakeApprover([approve()]),

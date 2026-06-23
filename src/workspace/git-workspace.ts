@@ -199,7 +199,7 @@ export class GitWorkspace implements Workspace {
     // (commonly an unborn branch with no HEAD, or a baseline ref that no longer resolves). Fall back
     // to diffing against the empty tree so staged/tracked content still appears — and surface a loud
     // marker rather than a silent empty diff if even that fails (a silent empty diff would mislead
-    // Gate B and the judge verifier).
+    // Sign-off and the judge verifier).
     if (tracked.code !== 0) {
       const fallback = await this.#exec('git', ['-C', this.#root, 'diff', EMPTY_TREE, ...ps], {
         cwd: this.#root,
@@ -234,7 +234,7 @@ export class GitWorkspace implements Workspace {
 
   /**
    * Render a single untracked (agent-created) file as an added-file diff, so the two LLM keys
-   * (judge + Gate B approver) see its CONTENT — not just its name. `git diff HEAD` omits untracked
+   * (judge + Sign-off approver) see its CONTENT — not just its name. `git diff HEAD` omits untracked
    * files entirely, so a from-scratch build (every file untracked) would otherwise reach both keys
    * as a bare filename list, leaving them unable to inspect what the worker actually wrote — the very
    * thing the "two keys ingest the diff" guarantee depends on. `--no-index` against `/dev/null` is

@@ -18,7 +18,7 @@ import type { LogFs } from '../log/sinks';
 import type { AgentEventSink, AgentStreamEvent, StreamPhase } from '../agent-cli/stream';
 import {
   FakeCompiler,
-  FakeGate,
+  FakeSealGate,
   FakeVerifier,
   FakeApprover,
   FakeWorkspace,
@@ -248,7 +248,7 @@ describe('stream transcript end-to-end (issue #28)', () => {
       const transcript = new StreamTranscriptSink({ path: join(runDir, STREAM_FILE), now: fixedNow });
       const deps: DriverDeps = {
         compiler: new FakeCompiler(makeFakeContract()),
-        gateA: new FakeGate({ kind: 'approve' }),
+        seal: new FakeSealGate({ kind: 'approve' }),
         harness: new StreamingHarness(ws, canned),
         makeLadder: () => new FakeVerifier([passVerdict()]),
         approver: new FakeApprover([approve()]),

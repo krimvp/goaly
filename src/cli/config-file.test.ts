@@ -49,8 +49,8 @@ describe('overlayFromConfig', () => {
   });
 
   it('stringifies numbers so they flow through the CLI coercion seam', () => {
-    const overlay = overlayFromConfig({ 'budget-tokens': 500000, 'max-gate-a-revisions': 0 }, '.goalyrc');
-    expect(overlay).toEqual({ 'budget-tokens': '500000', 'max-gate-a-revisions': '0' });
+    const overlay = overlayFromConfig({ 'budget-tokens': 500000, 'max-seal-revisions': 0 }, '.goalyrc');
+    expect(overlay).toEqual({ 'budget-tokens': '500000', 'max-seal-revisions': '0' });
   });
 
   it('rejects an unknown key (fails closed)', () => {

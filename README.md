@@ -22,11 +22,36 @@ See [`DESIGN.md`](DESIGN.md) (what & why), [`ARCHITECTURE.md`](ARCHITECTURE.md) 
 
 ## How it works
 
+The loop has exactly **two named gates** and **three bounded retry edges** — nothing else loops:
+
 ```
-COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
-    RUN_AGENT → verifier ladder → [Gate B: result approval] → DECIDE
-} → DONE | FAILED | ABORTED
+PHASE 1 · SEAL the bar (once, before the loop)
+
+   🔁 COMPILE_FAILED → re-author with the error            🔁 "revise" → re-author
+      (≤ --max-compile-retries, default 2)                    from the human's note
+                   └──────────────┐            ┌───────────── (≤ --max-seal-revisions, default 10)
+                                  ▼            ▼
+                         COMPILE_VERIFIER ──► SEAL ──── reject ───► ABORTED
+                                               │ approve → freeze the contract
+                                               ▼
+PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK)
+                                               ▼
+            RUN_AGENT ───► VERIFIER LADDER ──pass──► SIGN-OFF ──no veto──► DONE
+                ▲                │ fail                  │ veto
+                └─── feedback ── DECIDE ◄────────────────┘
+                                   │ stuck / budget / out of iterations
+                                   ▼
+                                 FAILED
+
+🔁 = the ONLY places goaly loops back, each explicitly bounded:
+   COMPILE_FAILED   re-author the verification, the error fed back   ≤ --max-compile-retries (2)
+   SEAL "revise"    re-author the contract from a human note         ≤ --max-seal-revisions (10)
+   red iteration    re-run the agent with the FAIL / veto as feedback ≤ --max-iterations (10), or STUCK
 ```
+
+- **SEAL** locks the bar in once and freezes it (the `contractHash` never changes again).
+- **SIGN-OFF** runs *only* on a green ladder and is **veto-only** — it can block a green from becoming
+  DONE, never promote a red. It is the second of the **two keys** for DONE.
 
 - The **control flow has zero LLM calls.** A pure reducer `step(state, event) -> [state, Command[]]`
   owns all policy; an imperative Driver performs the effects it requests. Everything stochastic
@@ -45,17 +70,17 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
   the judge, turning "it actually runs" from a diff-reading judge's guess into an ungameable key, and
   is frozen into the contract like any rung. (Plain `--verify-cmd "npm test && node smoke.mjs"` does
   the same; `--smoke` just gives the runtime check its own labeled rung with its own failure feedback.)
-- **Gate A is the human's say over the bar.** Before the loop you can approve the frozen contract,
+- **Seal is the human's say over the bar.** Before the loop you can approve the frozen contract,
   **reject** it (abort), or give **free-text feedback to revise** it — goaly re-authors the contract
-  and re-presents it, bounded by `--max-gate-a-revisions` (default 10; `0` disables revision).
+  and re-presents it, bounded by `--max-seal-revisions` (default 10; `0` disables revision).
   `--autonomous` skips this pause entirely, never the freeze.
-- **Two keys for DONE:** the frozen verifier passes *and* the independent approver (Gate B, veto-only)
+- **Two keys for DONE:** the frozen verifier passes *and* the independent approver (Sign-off, veto-only)
   doesn't veto.
 - **Compile is resilient, not one-shot.** A `COMPILE_FAILED` (a correctable authoring mistake — bad
   path, transient parse miss) re-authors the verification with the error fed back as guidance, up to
   `--max-compile-retries` (default 2; `0` disables), before the run fails — so one bad compile output
   no longer discards a valid plan. Exhausting the budget is still a typed `FAILED`, never a skipped
-  check. (Mirrors the Gate A revise loop; the reducer stays pure.)
+  check. (Mirrors the Seal revise loop; the reducer stays pure.)
 - **Stuck detection** bails before `maxIterations` with a reason: no-diff, repeat-failure (volatile
   tokens like timestamps / PIDs / temp paths are normalized away first, so a noisy-but-identical
   failure still trips it), short-period oscillation (period-N, not just A,B,A,B), and budget. Tune it
@@ -63,10 +88,10 @@ COMPILE_VERIFIER → [Gate A: approve / revise / reject] → loop {
   keep verifier-produced artifacts (coverage dirs, `__pycache__`, build output) out of the tree hash
   so they can't make a no-op agent look like it changed something. A no-diff iteration is **excused
   once** when the agent never had a fair chance to act — the previous turn timed out, or the ladder is
-  green and a **fresh Gate-B veto** is the only blocker — so a correct, actionable critique isn't
+  green and a **fresh Sign-off veto** is the only blocker — so a correct, actionable critique isn't
   thrown away before the worker gets one real turn to respond to it (a *second* unproductive no-diff
   still aborts).
-- **Diff baseline** — the worker's diff (what the Gate-B approver reviews) is computed against `HEAD`
+- **Diff baseline** — the worker's diff (what the Sign-off approver reviews) is computed against `HEAD`
   by default, but `--baseline <ref>` points it at any git ref/SHA instead. Chain a multi-step build by
   pointing each run at where the last one finished, so every run reviews only its own delta —
   **without `git commit`-ing onto the user's branch**. The baseline only changes what `diff()` is
@@ -229,8 +254,8 @@ goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
 goaly run --goal "add a /health endpoint returning 200" --generate --autonomous
 
 # Provide a longer, well-specified goal from a file (or stdin), and revise the contract
-# interactively at Gate A up to 3 times before it sticks:
-goaly run --goal-file ./GOAL.md --generate --max-gate-a-revisions 3
+# interactively at Seal up to 3 times before it sticks:
+goaly run --goal-file ./GOAL.md --generate --max-seal-revisions 3
 cat ./GOAL.md | goaly run --goal - --generate
 
 # Choose a harness, cap iterations, set a budget, resume a crashed run:
@@ -354,7 +379,7 @@ backstop. Recommended for long, build-heavy runs.
 
 ### Diff baseline (`--baseline`)
 
-The worker's diff — the text the **Gate-B approver** reviews — is computed against `HEAD` by default.
+The worker's diff — the text the **Sign-off approver** reviews — is computed against `HEAD` by default.
 `--baseline <ref>` makes `goaly` diff against any git ref or SHA instead. This lets you chain a
 multi-step build **without committing onto the user's branch**: point run *N+1* at the tree run *N*
 finished on, and each run reviews only its own delta.
@@ -374,7 +399,7 @@ finished on, and each run reviews only its own delta.
 
 Every run prints a **spend summary** and stores the data in the run log. Token usage is aggregated
 **at the Driver** (never the pure reducer) and broken down by layer — the **harness** vs. the **LLM
-steps** (compiler, the judge rung, the Gate-B approver) — plus consumption against any
+steps** (compiler, the judge rung, the Sign-off approver) — plus consumption against any
 `--budget-tokens` cap. Because it's folded from the write-ahead event log, `--resume` and
 `goaly runs show <id>` reconstruct the identical report from the log alone. The `--budget-tokens`
 cap governs **total** spend (harness + LLM steps), not just the harness.
@@ -442,7 +467,7 @@ step: per-step flag → `--llm-model` → `--model` → the tool's own default. 
 (`claude` default, or `codex` / `droid`) picks which CLI runs those steps — handy when the harness
 and the LLM steps should share a model namespace. Omit them all and every tool uses its own default.
 
-At **Gate A** (unless `--autonomous`), goaly prints the frozen contract and prompts:
+At **Seal** (unless `--autonomous`), goaly prints the frozen contract and prompts:
 
 ```
 Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject:
@@ -450,7 +475,7 @@ Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject:
 
 - `a` / `approve` (or `y`/`yes`) — accept the contract and start the loop.
 - `f` / `feedback` — type a free-text note; goaly re-authors the contract from it and re-prompts,
-  up to `--max-gate-a-revisions` times. Empty feedback is treated as a reject.
+  up to `--max-seal-revisions` times. Empty feedback is treated as a reject.
 - `r` / `reject` (anything else) — abort; the loop never starts.
 
 > Piping the goal via stdin (`--goal -`) consumes stdin, so there's nothing left for the interactive
@@ -515,8 +540,8 @@ goaly runs list --workspace ./myrepo   # look elsewhere for the .goaly directory
 - **`goaly runs list`** — one row per run: id, status (`DONE` / `FAILED` / `ABORTED`, or
   `INCOMPLETE` for a run that never finished), iterations, tokens, started/ended, and the goal.
   Most-recent first.
-- **`goaly runs show <runId>`** — the **frozen contract** (and its hash), the **Gate A** outcome,
-  every iteration's **verifier-ladder verdict** and **Gate B** approver decision, the
+- **`goaly runs show <runId>`** — the **frozen contract** (and its hash), the **Seal** outcome,
+  every iteration's **verifier-ladder verdict** and **Sign-off** approver decision, the
   stuck/failure **reason**, and the totals.
 
 Both parse the log with **Zod on read** and **fail closed**: a corrupt run is *flagged* (`CORRUPT`

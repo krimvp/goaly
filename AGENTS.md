@@ -36,11 +36,11 @@ These are the product. A change that violates one is wrong even if tests pass �
 2. **Compile once, then freeze.** The contract is authored once and frozen (`contractHash`); no
    transition rewrites it. It must be identical on every loop iteration (it's logged each time).
 3. **Two keys for DONE.** A run is DONE only when the frozen verifier ladder passes **and** the
-   approver does not veto. Gate B runs **only** when the ladder passes. The approver is veto-only.
+   approver does not veto. Sign-off runs **only** when the ladder passes. The approver is veto-only.
 4. **Fail-closed everywhere.** Any verifier/rung/approver/adapter/workspace that errors or returns
    unparseable output becomes a FAIL / VETO / crashed-run — never a green, never an unhandled
    throw. Adapters and `drive()` must never reject.
-5. **`--autonomous` moves Gate A only.** It auto-accepts the contract but still freezes it and logs
+5. **`--autonomous` moves Seal only.** It auto-accepts the contract but still freezes it and logs
    it loudly. It never skips verification or the freeze.
 6. **Parse at every seam (Zod).** CLI args, config, harness stdout (tolerant), judge/approver output
    (drop/fail-closed), and the run log on read (reject corrupt) all parse with Zod. Ids are branded.
@@ -57,7 +57,7 @@ Driver (effects: clock, budget, IO, persistence, processes)
   │ performs Commands, feeds Events back, persists write-ahead
 Orchestrator  ──  pure step(state,event) → [state, Command[]]  ──  ZERO LLM, ZERO IO
   │ Commands ↓
-HarnessAdapter(#1)   Verifier/Ladder(#2)   Approver/Gate B(#3)   Clock+Budget(#4)
+HarnessAdapter(#1)   Verifier/Ladder(#2)   Approver/Sign-off(#3)   Clock+Budget(#4)
 ```
 
 Each seam has ≥2 implementations (real + fake), so the orchestrator can't tell which it called.
@@ -87,7 +87,7 @@ src/
   orchestrator/ state, step, decide, stuck              — PURE reducer (the spine)
   driver/      driver, clock, budget                    — effects + seam #4
   verify/      verifier, ladder, deterministic, judge, approver, agent-approver   — seam #2/#3
-  compile/     compiler, agent-compiler, gateA, gates   — Phase 1 + freeze + Gate A
+  compile/     compiler, agent-compiler, seal, seal-gates   — Phase 1 + freeze + Seal
   agent-cli/   codec, <tool>-codec, output, stream, estimate — one deep codec per CLI (seam-shared)
   harness/     adapter, agent-cli-harness, claude-code, codex, droid — seam #1
   workspace/   workspace, git-workspace                 — harness-independent diff/run
@@ -155,8 +155,8 @@ stay accurate. When in doubt whether a change is "meaningful", assume it is.
 ## Anti-patterns (rejected on sight)
 
 - Importing an adapter/LLM/clock into the reducer, or making `step` async.
-- Letting the compiled contract change after Gate A.
-- Declaring DONE on a single key (verifier OR approver), or running Gate B on a red ladder.
+- Letting the compiled contract change after Seal.
+- Declaring DONE on a single key (verifier OR approver), or running Sign-off on a red ladder.
 - An adapter or `verify`/`review` that throws instead of failing closed.
 - A seam that reads external data without a Zod `parse`.
 - Swallowing an error silently (log it, fail closed, or propagate as a typed result).
@@ -190,6 +190,6 @@ preserved.
 When a change alters user-facing CLI output or behavior, consider attaching a short terminal-demo
 GIF to the PR. The **`record-demo-gif`** skill (`.claude/skills/record-demo-gif/`) records one;
 `references/goaly-demo-recipe.md` has the loop-specific recipe (throwaway git sandbox, run from
-inside it, `--autonomous`, and decoding the run log to reveal the verifier ladder + Gate-B approver).
+inside it, `--autonomous`, and decoding the run log to reveal the verifier ladder + Sign-off approver).
 GIFs are demo artifacts — host them (e.g. catbox) and embed the URL in the PR body; never commit the
 GIF/cast into the repo.

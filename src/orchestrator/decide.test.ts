@@ -60,7 +60,7 @@ describe('DECIDE truth table', () => {
   });
 
   it('ladder-green + fresh veto + one no-diff iteration → CONTINUE, not ABORTED (issue #54)', () => {
-    // The agent made no edits for one iteration, but the only blocker is a brand-new Gate-B veto it
+    // The agent made no edits for one iteration, but the only blocker is a brand-new Sign-off veto it
     // has not yet seen — it must get one real turn to act on the (correct) critique first.
     const ctx = makeCtx({ iteration: 1, lastNoDiff: true, feedback: undefined });
     const d = decide(ctx, passVerdict(), veto('power-ups are inert'));

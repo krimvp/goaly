@@ -15,7 +15,7 @@ export type CommandResult = {
 export interface Workspace {
   /** Non-mutating content hash of the working tree (tracked changes + untracked files). */
   diffHash(): Promise<DiffHash>;
-  /** The working-tree diff as text, for the approver's Gate B input. */
+  /** The working-tree diff as text, for the approver's Sign-off input. */
   diff(): Promise<string>;
   /**
    * Snapshot the current working tree into a baseline handle (a git tree object) WITHOUT writing a

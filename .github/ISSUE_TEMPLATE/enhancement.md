@@ -14,7 +14,7 @@ capability). Point at the current behavior precisely so the improvement is unamb
 
 <!-- What exists today, with file/flag references where possible
      (e.g. "the verifier ladder in src/verify/ladder.ts short-circuits on the first deterministic
-     fail" or "--max-gate-a-revisions defaults to 10"). -->
+     fail" or "--max-seal-revisions defaults to 10"). -->
 
 ## Desired behavior
 

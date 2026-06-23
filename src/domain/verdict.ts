@@ -32,7 +32,7 @@ export const JudgeOutput = z
 export type JudgeOutput = z.infer<typeof JudgeOutput>;
 
 /**
- * Gate B verdict. Veto-only: the approver can stop a green from becoming DONE, but
+ * Sign-off verdict. Veto-only: the approver can stop a green from becoming DONE, but
  * can never promote a red. `reason` is required exactly when vetoing (feedback for
  * the next iteration). Fail-closed: an unparseable approver response becomes a veto.
  */
@@ -48,18 +48,18 @@ export const ApprovalVerdict = z
 export type ApprovalVerdict = z.infer<typeof ApprovalVerdict>;
 
 /**
- * Gate A decision over the freshly compiled (and about-to-be-frozen) contract. Three
+ * Seal decision over the freshly compiled (and about-to-be-frozen) contract. Three
  * mutually exclusive outcomes:
  *  - `approve`: the freeze stands and the loop starts.
  *  - `reject`: abort the run (the loop never starts).
  *  - `revise`: re-author the contract with the human's free-text feedback, then re-present
- *    at Gate A. This is *pre-approval* renegotiation only — the contract that finally enters
+ *    at Seal. This is *pre-approval* renegotiation only — the contract that finally enters
  *    the loop is still frozen and never rewritten mid-loop (invariant #2). Each revise round
  *    produces its own logged `contractHash`; only the approved one is ever verified against.
  */
-export const GateDecision = z.discriminatedUnion('kind', [
+export const SealDecision = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('approve') }),
   z.object({ kind: z.literal('reject'), reason: z.string().min(1) }),
   z.object({ kind: z.literal('revise'), feedback: z.string().min(1) }),
 ]);
-export type GateDecision = z.infer<typeof GateDecision>;
+export type SealDecision = z.infer<typeof SealDecision>;

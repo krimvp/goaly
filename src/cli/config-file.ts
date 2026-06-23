@@ -40,7 +40,7 @@ const ConfigFileSchema = z
     rubric: FlagValue.optional(),
     autonomous: FlagValue.optional(),
     'max-iterations': FlagValue.optional(),
-    'max-gate-a-revisions': FlagValue.optional(),
+    'max-seal-revisions': FlagValue.optional(),
     'max-compile-retries': FlagValue.optional(),
     'verify-dir': FlagValue.optional(),
     smoke: FlagValue.optional(),

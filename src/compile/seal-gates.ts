@@ -1,8 +1,8 @@
 import type { CompiledContract, Rung } from '../domain/contract';
-import type { GateDecision } from '../domain/verdict';
-import type { ContractGate } from './gateA';
+import type { SealDecision } from '../domain/verdict';
+import type { SealGate } from './seal';
 
-const HUMAN_REJECT_REASON = 'rejected by human at Gate A';
+const HUMAN_REJECT_REASON = 'rejected by human at Seal';
 
 /** Render a rung as a single human-readable line for the contract banner. */
 function describeRung(rung: Rung, index: number): string {
@@ -36,19 +36,19 @@ function renderContract(contract: CompiledContract): string {
 }
 
 /**
- * Gate A in autonomous mode: auto-accept, but log the full frozen contract LOUDLY so the
+ * Seal in autonomous mode: auto-accept, but log the full frozen contract LOUDLY so the
  * skipped human pause is always auditable. Never skips the freeze — only the pause.
  */
-export class AutoContractGate implements ContractGate {
+export class AutoSealGate implements SealGate {
   readonly #log: (msg: string) => void;
 
   constructor(opts?: { log?: (msg: string) => void }) {
     this.#log = opts?.log ?? ((msg) => console.error(msg));
   }
 
-  async approveContract(contract: CompiledContract): Promise<GateDecision> {
+  async approveContract(contract: CompiledContract): Promise<SealDecision> {
     this.#log(
-      `AUTONOMOUS: auto-approving frozen success contract (Gate A skipped).\n${renderContract(
+      `AUTONOMOUS: auto-approving frozen success contract (Seal skipped).\n${renderContract(
         contract,
       )}`,
     );
@@ -57,16 +57,16 @@ export class AutoContractGate implements ContractGate {
 }
 
 /**
- * Gate A in default mode: print the full contract and let a human approve, reject, or
+ * Seal in default mode: print the full contract and let a human approve, reject, or
  * revise it before the loop starts.
  *  - approve ('a'/'y'/'yes'): freeze stands, the loop starts.
  *  - revise  ('f'/'feedback'): collect a free-text note; the contract is re-authored with it
- *    and re-presented (bounded by maxGateARevisions in the reducer). Empty feedback can't
+ *    and re-presented (bounded by maxSealRevisions in the reducer). Empty feedback can't
  *    steer a recompile, so it fails closed to reject.
  *  - anything else: reject (abort).
- * When `allowRevise` is false (maxGateARevisions === 0) the prompt is the plain binary [y/N].
+ * When `allowRevise` is false (maxSealRevisions === 0) the prompt is the plain binary [y/N].
  */
-export class HumanContractGate implements ContractGate {
+export class HumanSealGate implements SealGate {
   readonly #ask: (question: string) => Promise<string>;
   readonly #out: (msg: string) => void;
   readonly #allowRevise: boolean;
@@ -82,7 +82,7 @@ export class HumanContractGate implements ContractGate {
     this.#allowRevise = opts?.allowRevise ?? true;
   }
 
-  async approveContract(contract: CompiledContract): Promise<GateDecision> {
+  async approveContract(contract: CompiledContract): Promise<SealDecision> {
     this.#out(renderContract(contract));
     if (!this.#allowRevise) {
       return approveOrReject(await this.#ask('Approve this success contract? [y/N] '));
@@ -103,7 +103,7 @@ export class HumanContractGate implements ContractGate {
 }
 
 /** Map a yes/approve answer to approve; everything else (incl. empty) to reject. */
-function approveOrReject(answer: string): GateDecision {
+function approveOrReject(answer: string): SealDecision {
   const normalized = answer.trim().toLowerCase();
   if (normalized === 'y' || normalized === 'yes' || normalized === 'a' || normalized === 'approve') {
     return { kind: 'approve' };

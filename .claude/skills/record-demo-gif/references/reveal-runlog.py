@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Decode a goaly run log into a compact, readable "what the loop actually did" reveal —
-the verifier ladder (deterministic rung + optional LLM judge) and the independent Gate-B
+the verifier ladder (deterministic rung + optional LLM judge) and the independent Sign-off
 approver: the two keys for DONE. Use it as the *verify beat* of a goaly demo so the LLM
 side (which goaly writes to the run log, not the terminal) becomes visible in the GIF.
 
@@ -76,13 +76,13 @@ def main() -> int:
             f"(confidence {v.get('confidence', 0):.2f}){D}   ← key 1: frozen verifier{R}"
         )
 
-    decided = tagged("GATE_B_DECIDED")
+    decided = tagged("SIGNOFF_DECIDED")
     if decided:
         veto = decided[-1]["approval"].get("veto")
         verdict = f"{Rd}VETO{R}" if veto else f"{G}no veto{R}"
         print(
             f"  {C}approve{R}  → {verdict}   independent LLM approver "
-            f"(fed goal+rubric+diff+verdicts){D}   ← key 2: Gate B{R}"
+            f"(fed goal+rubric+diff+verdicts){D}   ← key 2: Sign-off{R}"
         )
 
     final = events[-1].get("stateTagAfter") if events else None

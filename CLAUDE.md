@@ -8,7 +8,7 @@ Quick reference:
 
 - `npm run typecheck` and `npm test` must both be clean/green before any change is done.
 - The reducer (`src/orchestrator/`) is pure and synchronous — never add IO/LLM/`Promise` there.
-- The success contract is frozen after Gate A; DONE needs two keys (verifier + approver).
+- The success contract is frozen after Seal; DONE needs two keys (verifier + approver).
 - Every external seam parses with Zod and fails closed.
 - Adding a harness: read [`docs/adding-a-harness.md`](docs/adding-a-harness.md) and use the
   `investigate-harness` skill. A harness can optionally also back the LLM steps (read-only

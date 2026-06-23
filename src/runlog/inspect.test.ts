@@ -48,12 +48,12 @@ function doneRun(runId = 'run-done'): { header: RunLogHeader; entries: RunLogEnt
     header: header(runId, 1_700_000_000_000),
     entries: [
       entry(runId, { tag: 'CONTRACT_COMPILED', contract }),
-      entry(runId, { tag: 'GATE_A_DECIDED', decision: { kind: 'approve' } }),
+      entry(runId, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }),
       agentRan(runId, '0000000', '0000001', 10),
       entry(runId, { tag: 'VERIFIED', verdict: failVerdict('red') }),
       agentRan(runId, '0000001', '0000002', 25),
       entry(runId, { tag: 'VERIFIED', verdict: passVerdict('green') }),
-      entry(runId, { tag: 'GATE_B_DECIDED', approval: approve() }, 1_700_000_009_999),
+      entry(runId, { tag: 'SIGNOFF_DECIDED', approval: approve() }, 1_700_000_009_999),
     ],
   };
 }
@@ -77,7 +77,7 @@ describe('runSummary (pure projection)', () => {
     const h = header('run-mid', 1);
     const entries = [
       entry('run-mid', { tag: 'CONTRACT_COMPILED', contract }),
-      entry('run-mid', { tag: 'GATE_A_DECIDED', decision: { kind: 'approve' } }),
+      entry('run-mid', { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }),
       agentRan('run-mid', '0000000', '0000001'), // stops in VERIFYING (no VERIFIED yet)
     ];
     const s = runSummary(h, entries);
@@ -89,41 +89,41 @@ describe('runSummary (pure projection)', () => {
 });
 
 describe('runDetail (pure projection)', () => {
-  it('reconstructs the frozen contract, Gate A, and per-iteration ladder + Gate B', () => {
+  it('reconstructs the frozen contract, Seal, and per-iteration ladder + Sign-off', () => {
     const { header: h, entries } = doneRun();
     const d = runDetail(h, entries);
 
     expect(d.status).toBe('DONE');
     expect(d.contract).toEqual(contract);
     expect(d.contractHash).toBe(contract.contractHash);
-    expect(d.gateA).toEqual([{ kind: 'approve' }]);
+    expect(d.seal).toEqual([{ kind: 'approve' }]);
     expect(d.compileFailures).toEqual([]);
 
     expect(d.iterationsDetail).toHaveLength(2);
     const [i1, i2] = d.iterationsDetail;
     expect(i1).toMatchObject({ index: 1, changed: true, tokensSpent: 10 });
     expect(i1!.verdict?.pass).toBe(false);
-    expect(i1!.gateB).toBeUndefined(); // ladder failed → Gate B never ran
+    expect(i1!.signoff).toBeUndefined(); // ladder failed → Sign-off never ran
     expect(i2).toMatchObject({ index: 2, changed: true, tokensSpent: 25 });
     expect(i2!.verdict?.pass).toBe(true);
-    expect(i2!.gateB).toEqual({ veto: false });
+    expect(i2!.signoff).toEqual({ veto: false });
   });
 
-  it('surfaces a Gate B veto on the iteration it belongs to', () => {
+  it('surfaces a Sign-off veto on the iteration it belongs to', () => {
     seq = 0;
     const h = header('run-veto', 5);
     const entries = [
       entry('run-veto', { tag: 'CONTRACT_COMPILED', contract }),
-      entry('run-veto', { tag: 'GATE_A_DECIDED', decision: { kind: 'approve' } }),
+      entry('run-veto', { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }),
       agentRan('run-veto', '0000000', '0000001'),
       entry('run-veto', { tag: 'VERIFIED', verdict: passVerdict() }),
-      entry('run-veto', { tag: 'GATE_B_DECIDED', approval: veto('looks empty') }),
+      entry('run-veto', { tag: 'SIGNOFF_DECIDED', approval: veto('looks empty') }),
     ];
     const d = runDetail(h, entries);
-    expect(d.iterationsDetail[0]!.gateB).toEqual({ veto: true, reason: 'looks empty' });
+    expect(d.iterationsDetail[0]!.signoff).toEqual({ veto: true, reason: 'looks empty' });
   });
 
-  it('records compile failures and an empty Gate A when compile never succeeded', () => {
+  it('records compile failures and an empty Seal when compile never succeeded', () => {
     seq = 0;
     const h = header('run-compilefail', 9);
     const entries = [entry('run-compilefail', { tag: 'COMPILE_FAILED', reason: 'bad rubric' })];
@@ -131,7 +131,7 @@ describe('runDetail (pure projection)', () => {
     expect(d.contract).toBeNull();
     expect(d.contractHash).toBeNull();
     expect(d.compileFailures).toEqual(['bad rubric']);
-    expect(d.gateA).toEqual([]);
+    expect(d.seal).toEqual([]);
   });
 });
 

@@ -26,7 +26,7 @@ export type LoopCtx = {
   /** Status of the most recent agent run (surfaced as feedback when not 'completed'). */
   readonly lastRunStatus: HarnessRunResult['status'] | undefined;
   readonly lastBudget: BudgetSnapshot | undefined;
-  /** The ladder verdict of the current iteration (set in VERIFYING, read at Gate B). */
+  /** The ladder verdict of the current iteration (set in VERIFYING, read at Sign-off). */
   readonly lastVerdict: Verdict | undefined;
   /** Feedback text threaded into the next agent prompt. */
   readonly feedback: string | undefined;
@@ -41,15 +41,15 @@ export type OrchestratorState =
       readonly compileRound: number;
     }
   | {
-      readonly tag: 'AWAIT_GATE_A';
+      readonly tag: 'AWAIT_SEAL';
       readonly config: RunConfig;
       readonly contract: CompiledContract;
-      /** How many Gate A "revise" rounds have already happened (0 on the first presentation). */
+      /** How many Seal "revise" rounds have already happened (0 on the first presentation). */
       readonly reviseRound: number;
     }
   | { readonly tag: 'RUNNING_AGENT'; readonly ctx: LoopCtx }
   | { readonly tag: 'VERIFYING'; readonly ctx: LoopCtx }
-  | { readonly tag: 'AWAIT_GATE_B'; readonly ctx: LoopCtx }
+  | { readonly tag: 'AWAIT_SIGNOFF'; readonly ctx: LoopCtx }
   | { readonly tag: 'DONE'; readonly iterations: number; readonly contractHash: ContractHash }
   | {
       readonly tag: 'FAILED';
@@ -81,19 +81,19 @@ export function iterationCount(state: OrchestratorState): number {
   switch (state.tag) {
     case 'RUNNING_AGENT':
     case 'VERIFYING':
-    case 'AWAIT_GATE_B':
+    case 'AWAIT_SIGNOFF':
       return state.ctx.iteration;
     case 'DONE':
     case 'FAILED':
     case 'ABORTED':
       return state.iterations;
     case 'COMPILING':
-    case 'AWAIT_GATE_A':
+    case 'AWAIT_SEAL':
       return 0;
   }
 }
 
-/** Build the initial loop context once Gate A approves the frozen contract. */
+/** Build the initial loop context once Seal approves the frozen contract. */
 export function initialCtx(config: RunConfig, contract: CompiledContract): LoopCtx {
   return {
     config,

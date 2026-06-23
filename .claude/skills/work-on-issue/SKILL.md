@@ -41,7 +41,7 @@ Do not start coding until the issue is verified. This gate can legitimately **en
     to a `discussion`) with a clear reason. We do not build for the sake of building.
 
 - **Invariant check up-front.** If the issue *as written* would weaken an invariant (e.g. a green
-  slipping past the verifier ladder, the contract changing after Gate A, DONE on one key, an adapter
+  slipping past the verifier ladder, the contract changing after Seal, DONE on one key, an adapter
   that throws, an unparsed seam), surface it now and reshape the scope so the invariant holds. The
   fix is "add a test / change the design", never "relax the invariant".
 
