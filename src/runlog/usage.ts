@@ -35,6 +35,11 @@ export function summarizeUsage(events: OrchestratorEvent[], budget: BudgetConfig
       case 'VERIFIED':
         addLlmStep(verifier, event.llm);
         break;
+      case 'WORKSPACE_PREPARED':
+        // The pre-flight soundness classification is a verification judgment; bucket its spend with the
+        // verifier layer so the per-run report stays coherent (it has no separate column).
+        addLlmStep(verifier, event.llm);
+        break;
       case 'SIGNOFF_DECIDED':
         addLlmStep(approver, event.llm);
         break;

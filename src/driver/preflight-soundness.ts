@@ -1,0 +1,100 @@
+import { z } from 'zod';
+import type { CompiledContract } from '../domain/contract';
+import type { LlmProvider } from '../llm/provider';
+import { extractJson } from '../verify/judge';
+import { UNTRUSTED_SYSTEM_CLAUSE, wrapUntrusted } from '../verify/prompt-safety';
+import { errorMessage } from '../util/errors';
+import { noopLogger, type Logger } from '../log/logger';
+
+/**
+ * Language-agnostic pre-flight soundness classifier (replaces the old text/exit-code heuristic).
+ *
+ * The pre-flight runs the frozen deterministic verifier ONCE against the STARTING tree (before any
+ * implementation exists), so it is red either because (a) the authored verification itself cannot run
+ * — a syntax/compile/collection/import defect the agent can NEVER fix, since the verification files are
+ * frozen — or (b) the implementation is simply missing, the expected HONEST red the loop fixes.
+ *
+ * Telling those apart from the failure text is inherently language-specific (pytest exit 1 vs 2-5, but
+ * `cargo` exits 101 for both a compile error AND a failing test; `go test` uses 1 vs 2; tsc 2 vs …) — a
+ * regex/exit-code rule cannot be both correct and generic. So we ask the model that just authored the
+ * verification, which reads the output the way a human would, regardless of language or runner.
+ *
+ * Fail-OPEN to "sound" (proceed): a wrong "broken" aborts a legitimate run at zero iterations (the very
+ * bug this replaces), whereas a wrong "sound" only proceeds — the real verifier ladder still runs
+ * fail-closed every iteration and a genuinely broken frozen verifier is caught generically by
+ * repeat-failure stuck detection (STUCK_REPEATED_FAILURE). So only a confident `brokenVerification: true`
+ * aborts; an LLM error, an unparseable response, or any uncertainty proceeds.
+ */
+const SYSTEM_PROMPT = [
+  'You are a pre-flight soundness checker in an automated goal-orchestration loop.',
+  'A frozen, auto-authored VERIFICATION (test files / a check command) was just run ONCE against the',
+  'STARTING codebase — before the implementation has been written. It failed (a red). Your ONLY job is',
+  'to decide WHY it is red, choosing exactly one:',
+  ' - brokenVerification=true: the VERIFICATION ITSELF cannot run — a syntax error, a compile/type',
+  '   error, a collection/import error, a usage error, or a missing tool/dependency that prevents the',
+  '   checks from ever executing. These originate in the authored verification, which is frozen and',
+  '   cannot be fixed by writing implementation code.',
+  ' - brokenVerification=false: the verification RAN correctly and is failing only because the',
+  '   implementation does not exist yet (missing files/functions, assertion failures, expected red).',
+  '   This is the normal starting state and the loop will fix it.',
+  'When in doubt, answer false — a verifier that merely names a not-yet-created file in its output is',
+  'almost always a healthy red, not a broken verifier.',
+  'Respond with ONLY a single JSON object of the form {"brokenVerification": boolean, "reason": string}.',
+  'No prose, no markdown, no code fences — JSON only.',
+  UNTRUSTED_SYSTEM_CLAUSE,
+].join(' ');
+
+const PreflightClassification = z.object({
+  brokenVerification: z.boolean(),
+  reason: z.string().optional(),
+});
+
+/** The classifier's verdict. `broken: true` aborts (CONTRACT_UNSOUND); `false` proceeds to the loop. */
+export type SoundnessVerdict = { broken: boolean; reason: string };
+
+export type ClassifyDeps = { llm: LlmProvider; logger?: Logger };
+
+function buildPrompt(contract: CompiledContract, detail: string): string {
+  const authored = contract.generatedFiles.map((f) => `  - ${f.path}`).join('\n');
+  return [
+    `GOAL:\n${contract.goal}`,
+    `AUTHORED VERIFICATION FILES (frozen — the agent cannot change these):\n${authored}`,
+    `VERIFICATION OUTPUT ON THE STARTING TREE (it failed):\n${wrapUntrusted(detail, { label: 'OUTPUT' })}`,
+    'Is the verification itself broken (cannot run), or is this an expected red because the implementation is missing?',
+    'Reply with ONLY the JSON {"brokenVerification": boolean, "reason": string}.',
+  ].join('\n\n');
+}
+
+/**
+ * Ask the model whether a failing pre-flight deterministic rung means the FROZEN verification is broken
+ * (→ CONTRACT_UNSOUND) or is an honest red (→ proceed). Fail-open to NOT broken on any LLM error or
+ * unparseable response (see the module doc): the runtime ladder + repeat-failure detection are the real
+ * fail-closed backstop, and a false abort is the worse outcome.
+ */
+export async function classifyPreflightSoundness(
+  deps: ClassifyDeps,
+  contract: CompiledContract,
+  detail: string,
+): Promise<SoundnessVerdict> {
+  const log = deps.logger ?? noopLogger;
+  let raw: string;
+  try {
+    raw = (
+      await deps.llm.complete({ system: SYSTEM_PROMPT, prompt: buildPrompt(contract, detail), temperature: 0 })
+    ).text;
+  } catch (e) {
+    log.warn('pre-flight soundness check: LLM call failed — proceeding (honest red assumed)', {
+      reason: errorMessage(e),
+    });
+    return { broken: false, reason: `soundness check could not run: ${errorMessage(e)}` };
+  }
+
+  const extracted = extractJson(raw);
+  const parsed = extracted === null ? null : PreflightClassification.safeParse(extracted);
+  if (parsed === null || !parsed.success) {
+    log.warn('pre-flight soundness check: unparseable response — proceeding (honest red assumed)', {});
+    return { broken: false, reason: 'soundness check produced no parseable verdict' };
+  }
+
+  return { broken: parsed.data.brokenVerification, reason: parsed.data.reason ?? '' };
+}

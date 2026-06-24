@@ -16,6 +16,7 @@ import type { PlanGate } from '../plan/plan-gate';
 import type { HarnessAdapter } from '../harness/adapter';
 import type { Verifier } from '../verify/verifier';
 import type { Approver } from '../verify/approver';
+import type { LlmProvider } from '../llm/provider';
 import type { Workspace } from '../workspace/workspace';
 import type { Clock } from './clock';
 import type { BudgetMeter } from './budget';
@@ -66,6 +67,13 @@ export type DriverDeps = {
    * wiring — never enters the frozen contract; absent fields fall back to defaults/unbounded.
    */
   prepareTimeouts?: PrepareTimeouts;
+  /**
+   * The (read-only) LLM provider the pre-flight uses to classify a failing deterministic rung as a
+   * broken frozen verifier (→ CONTRACT_UNSOUND) vs. an honest red (→ proceed). Metered like the other
+   * LLM steps. Optional: when absent, pre-flight never aborts on a red — it proceeds and lets the
+   * runtime ladder + stuck detection govern (see `prepare.ts`).
+   */
+  prepareLlm?: LlmProvider;
   /**
    * Diagnostic logger (the Driver is the orchestration choke-point: it sees every Command, Event,
    * verdict and decision). Optional and defaults to a no-op so logging never affects control flow,
@@ -364,7 +372,11 @@ function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void
       log.info('seal decided', { decision: event.decision.kind });
       return;
     case 'WORKSPACE_PREPARED':
-      log.info('workspace prepared', { status: event.prepared.status, setupRan: event.setupRan });
+      log.info('workspace prepared', {
+        status: event.prepared.status,
+        setupRan: event.setupRan,
+        ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
+      });
       // The detail of a fail-closed outcome may carry repo text / tool output — keep it at debug.
       if (event.prepared.status !== 'proceed') {
         log.debug('prepare detail', { detail: event.prepared.detail });
@@ -515,20 +527,24 @@ async function perform(
     case 'PREPARE_WORKSPACE': {
       // One-time setup (Fix #1) + deterministic pre-flight (Fix #2), both fail-closed inside
       // prepareWorkspace. Runs once after SEAL and before iteration 1; the reducer routes the
-      // typed outcome (proceed / setup-failed / contract-unsound).
+      // typed outcome (proceed / setup-failed / contract-unsound). The pre-flight may make ONE
+      // read-only LLM call to classify a red as broken-verifier vs honest-red — metered below.
       const result = await prepareWorkspace(
         {
           workspace: deps.workspace,
           ...(deps.logger !== undefined ? { logger: deps.logger } : {}),
           ...(deps.prepareTimeouts !== undefined ? { timeouts: deps.prepareTimeouts } : {}),
+          ...(deps.prepareLlm !== undefined ? { llm: deps.prepareLlm } : {}),
         },
         command.contract,
       );
+      const llm = meterStep('preflight');
       return {
         event: {
           tag: 'WORKSPACE_PREPARED',
           prepared: result.prepared,
           setupRan: result.setupRan,
+          ...(llm !== undefined ? { llm } : {}),
         },
       };
     }
