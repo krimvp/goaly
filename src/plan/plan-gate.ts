@@ -2,7 +2,7 @@ import type { PhasePlan } from '../domain/plan';
 import type { SealDecision } from '../domain/verdict';
 
 /**
- * The plan Seal gate (Gate A on the plan, issue #48) — the plan-level analogue of the {@link SealGate}.
+ * The plan Seal gate (issue #48) — the plan-level analogue of the {@link SealGate}.
  * `--autonomous` moves ONLY this pause:
  *  - default: a human approves / rejects / revises the frozen plan once before the phase loop starts.
  *  - autonomous: auto-accept, but persist the full plan to the run log LOUDLY.

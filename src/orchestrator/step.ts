@@ -82,7 +82,7 @@ function stepPlanning(config: RunConfig, reviseRound: number, event: Orchestrato
 }
 
 /**
- * Plan Seal (Gate A on the plan). `--autonomous` moves only the PAUSE, not the freeze (invariant #5);
+ * Plan Seal. `--autonomous` moves only the PAUSE, not the freeze (invariant #5);
  * the gate still froze + logged the plan upstream.
  *  - approve → start phase 0: compile its contract (a normal frozen-contract run scoped to the sub-goal).
  *  - reject  → ABORTED (the loop never starts).
