@@ -41,6 +41,42 @@ describe('makeLlmProvider', () => {
   });
 });
 
+describe('composeDeps — phased wiring (issue #48)', () => {
+  const opts = (over: Record<string, unknown> = {}) => ({
+    harness: 'fake' as const,
+    workspaceRoot: '/tmp/x',
+    runId: asRunId('run-1'),
+    llm: new FakeLlm(['{}']),
+    noLogConsole: true,
+    logFs: new InMemoryLogFs(),
+    ...over,
+  });
+
+  it('wires a planner + plan Seal only when config.phased is true', () => {
+    const phased = composeDeps(makeConfig({ phased: true }), opts());
+    expect(phased.planner).toBeDefined();
+    expect(phased.planGate).toBeDefined();
+
+    const classic = composeDeps(makeConfig(), opts());
+    expect(classic.planner).toBeUndefined();
+    expect(classic.planGate).toBeUndefined();
+  });
+
+  it('--autonomous selects the auto plan Seal; default selects the human gate', () => {
+    const auto = composeDeps(makeConfig({ phased: true, autonomous: true }), opts());
+    expect(auto.planGate?.constructor.name).toBe('AutoPlanGate');
+    const human = composeDeps(makeConfig({ phased: true }), opts());
+    expect(human.planGate?.constructor.name).toBe('HumanPlanGate');
+  });
+
+  it('--plan-file selects the StaticPlanner; otherwise the AgentPlanner authors the plan', () => {
+    const staticP = composeDeps(makeConfig({ phased: true }), opts({ planFile: 'plan.json' }));
+    expect(staticP.planner?.constructor.name).toBe('StaticPlanner');
+    const agentP = composeDeps(makeConfig({ phased: true }), opts());
+    expect(agentP.planner?.constructor.name).toBe('AgentPlanner');
+  });
+});
+
 describe('buildLadder — verify timeout threading', () => {
   /** A workspace that records the opts passed to `run`. */
   function spyWorkspace(): {

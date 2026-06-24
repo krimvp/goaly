@@ -1,5 +1,6 @@
 import type { RunsCommand } from './args';
 import type { CompiledContract, Rung } from '../domain/contract';
+import type { PhasePlan } from '../domain/plan';
 import type { SealDecision } from '../domain/verdict';
 import {
   listRuns,
@@ -104,6 +105,7 @@ export function renderRunDetail(d: RunDetail): string {
     `tokens:      ${d.tokensSpent === undefined ? '-' : d.tokensSpent}`,
   ];
   if (d.reason !== undefined) lines.push(`reason:      ${d.reason}`);
+  lines.push(...renderPlan(d.plan, d.planSeal, d.planFailures));
   lines.push(...renderContract(d.contract));
   lines.push(...renderSeal(d.seal, d.compileFailures));
   lines.push(...renderPrepare(d.prepare));
@@ -112,6 +114,25 @@ export function renderRunDetail(d: RunDetail): string {
   // cost pricing is a volatile print-time overlay applied only to a live run's `--cost-table`.
   lines.push('', ...formatUsage(d.usage));
   return lines.join('\n');
+}
+
+/** Render the frozen decomposition plan (issue #48) when the run was phased; nothing otherwise. */
+function renderPlan(
+  plan: PhasePlan | null,
+  planSeal: readonly SealDecision[],
+  planFailures: readonly string[],
+): string[] {
+  if (plan === null && planFailures.length === 0) return [];
+  const lines: string[] = [''];
+  for (const reason of planFailures) lines.push(`plan:        FAILED — ${reason}`);
+  if (plan !== null) {
+    lines.push(`plan:        ${plan.planHash}  (${plan.phases.length} phases + acceptance)`);
+    plan.phases.forEach((p, i) => lines.push(`  [${i + 1}] ${p.goal}`));
+    if (planSeal.length > 0) {
+      lines.push(`  plan-seal: ${planSeal.map(fmtSealDecision).join(' → ')}`);
+    }
+  }
+  return lines;
 }
 
 function renderContract(contract: CompiledContract | null): string[] {
@@ -168,7 +189,8 @@ function renderIterations(iterations: readonly IterationDetail[]): string[] {
   if (iterations.length === 0) return ['', 'iterations:  (none ran)'];
   const lines = ['', 'iterations:'];
   for (const it of iterations) {
-    lines.push(`  #${it.index}  agent=${it.runStatus}  changed=${it.changed ? 'yes' : 'no'}${
+    const phase = it.phase === undefined ? '' : `  phase=${it.phase + 1}`;
+    lines.push(`  #${it.index}${phase}  agent=${it.runStatus}  changed=${it.changed ? 'yes' : 'no'}${
       it.tokensSpent === undefined ? '' : `  tokens=${it.tokensSpent}`
     }`);
     lines.push(`      ladder=${fmtVerdict(it)}`);

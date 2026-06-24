@@ -11,6 +11,8 @@ import { initial, step } from '../orchestrator/step';
 import { replay } from '../runlog/replay';
 import type { VerifierCompiler } from '../compile/compiler';
 import type { SealGate } from '../compile/seal';
+import type { Planner } from '../plan/planner';
+import type { PlanGate } from '../plan/plan-gate';
 import type { HarnessAdapter } from '../harness/adapter';
 import type { Verifier } from '../verify/verifier';
 import type { Approver } from '../verify/approver';
@@ -38,6 +40,14 @@ const SENTINEL_POST_HASH: DiffHash = DiffHash.parse('0000001');
 export type DriverDeps = {
   compiler: VerifierCompiler;
   seal: SealGate;
+  /**
+   * The planner seam (issue #48), used ONLY by a phased run's PLAN phase. Optional: a classic
+   * single-contract run never emits COMPILE_PLAN, so it needs no planner. When a phased run somehow
+   * has none, the PLAN command fails closed (a typed PLAN_FAILED).
+   */
+  planner?: Planner;
+  /** The plan Seal gate (issue #48); like {@link planner}, used only by a phased run. */
+  planGate?: PlanGate;
   harness: HarnessAdapter;
   makeLadder: (contract: CompiledContract) => Verifier;
   approver: Approver;
@@ -247,6 +257,25 @@ async function buildUsageReport(deps: DriverDeps): Promise<UsageReport | undefin
  */
 function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void {
   switch (event.tag) {
+    case 'PLAN_COMPILED':
+      // Log the frozen plan LOUDLY so the decomposition is auditable (the plan-level analogue of the
+      // CONTRACT_COMPILED audit line). Phase goals may carry repo text — keep them at debug.
+      log.info('plan compiled', {
+        planHash: event.plan.planHash,
+        phases: event.plan.phases.length,
+        ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
+      });
+      log.debug('plan phases', { goals: event.plan.phases.map((p) => p.goal) });
+      return;
+    case 'PLAN_FAILED':
+      log.error('plan failed', { reason: event.reason });
+      return;
+    case 'PLAN_SEAL_DECIDED':
+      log.info('plan seal decided', { decision: event.decision.kind });
+      return;
+    case 'PHASE_ADVANCED':
+      log.info('phase advanced (checkpoint taken)', { tree: event.tree });
+      return;
     case 'CONTRACT_COMPILED':
       log.info('contract compiled', {
         contractHash: event.contract.contractHash,
@@ -333,6 +362,53 @@ async function perform(
   };
 
   switch (command.tag) {
+    case 'COMPILE_PLAN': {
+      // Author the frozen plan (issue #48). A planner error / unparseable / over-`--max-phases` plan
+      // is a typed, fail-closed PLAN_FAILED — never a skipped decomposition. The plan is FROZEN by the
+      // planner (its `planHash` set), mirroring how the compiler freezes the contract.
+      try {
+        if (deps.planner === undefined) {
+          throw new Error('phased run requires a planner, but none was configured');
+        }
+        const plan = await deps.planner.plan(command.config, command.feedback);
+        if (plan.phases.length > command.config.maxPhases) {
+          throw new Error(
+            `plan has ${plan.phases.length} phases, exceeding --max-phases ${command.config.maxPhases}`,
+          );
+        }
+        const llm = meterStep('plan');
+        return { event: { tag: 'PLAN_COMPILED', plan, ...(llm !== undefined ? { llm } : {}) } };
+      } catch (e) {
+        const llm = meterStep('plan');
+        return {
+          event: { tag: 'PLAN_FAILED', reason: errorMessage(e), ...(llm !== undefined ? { llm } : {}) },
+        };
+      }
+    }
+
+    case 'REQUEST_PLAN_SEAL': {
+      // No plan gate ⇒ fail closed to a reject (the run never silently auto-approves an unsealed plan).
+      if (deps.planGate === undefined) {
+        return {
+          event: {
+            tag: 'PLAN_SEAL_DECIDED',
+            decision: { kind: 'reject', reason: 'no plan Seal gate configured for a phased run' },
+          },
+        };
+      }
+      const decision = await deps.planGate.approvePlan(command.plan);
+      return { event: { tag: 'PLAN_SEAL_DECIDED', decision } };
+    }
+
+    case 'CHECKPOINT_AND_ADVANCE': {
+      // Between-phase checkpoint (issue #47): snapshot the tree (advancing the diff baseline so the
+      // next phase diffs only its own delta) and return the tree on PHASE_ADVANCED — which both drives
+      // the reducer's advance AND lets resume reconstruct the baseline (see replay). Fail-closed: a
+      // failed snapshot throws to the outer loop, resolving to a crashed/ABORTED run.
+      const tree = await deps.workspace.checkpoint();
+      return { event: { tag: 'PHASE_ADVANCED', tree } };
+    }
+
     case 'COMPILE_VERIFIER': {
       try {
         const contract = await deps.compiler.compile(command.config, command.feedback);

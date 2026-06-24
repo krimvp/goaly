@@ -127,6 +127,43 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   so the token cap is never silently read as zero — wall-clock stays the backstop. Optional USD cost
   via `--cost-table` (flat **or per-category** rates); **tokens-only by default**.
 
+## Phased goals (`--phased`)
+
+A big goal produces a big diff — costly to judge every iteration, and easy to half-finish. `--phased`
+turns one goal into a **frozen, ordered plan of small sub-goals**, runs each as its *own* frozen,
+two-key contract, and finishes with a **cumulative acceptance** contract on the **original** goal — so
+decomposition can't green a goal whose parts pass but whole doesn't. It's "a frozen plan of frozen
+contracts": the same freeze + two-key guarantees, one level up.
+
+```
+PLAN ──► plan SEAL ──reject──► ABORTED        🔁 "revise" → re-plan from the human's note
+   │ approve → freeze the plan (planHash)         (≤ --max-plan-revisions, default 10)
+   ▼
+for each sub-goal phase:  COMPILE_VERIFIER ─► SEAL ─► 🔁 loop (RUN_AGENT ▸ ladder ▸ SIGN-OFF ▸ DECIDE)
+   │ both keys → internal CHECKPOINT (scopes the next phase's diff) ──► next phase
+   ▼
+ACCEPT  (a cumulative contract on the ORIGINAL goal) ──both keys──► DONE   ──else──► FAILED
+```
+
+- **Planner seam (read-only, like the compiler).** An LLM authors the ordered `phases: SubGoal[]`
+  (`--planner-model` picks its model), or `--plan-file <p>` supplies a structured plan
+  (`{ "phases": [{ "goal", "intent"?, "rubric"? }] }`). The output is parsed fail-closed and **frozen**
+  (`planHash`, logged loudly); a planner error / bad plan / a plan longer than `--max-phases` (default
+  10) is a typed **`PLAN_FAILED`**, never a skipped decomposition.
+- **The plan is frozen too.** No transition rewrites it. Re-planning is *only* the bounded, human-gated
+  **plan Seal** revise path (mirrors `--max-seal-revisions`) — never an automatic "make phase 3 easier".
+- **Each phase is a normal run.** It reuses the compiler, ladder, Sign-off and DECIDE unchanged, scoped
+  to its sub-goal (authored with `--generate`). Between phases goaly takes an **internal checkpoint**
+  (the same private tree-snapshot as `--baseline`, no commit) so each phase's diff stays small.
+- **Acceptance is the whole-run key.** The final phase verifies the **original** goal end-to-end —
+  reusing your original verification (`--verify-cmd` becomes the cumulative deterministic bar, or
+  `--generate` authors cumulative acceptance). The whole run is **DONE only when acceptance passes both
+  keys**; a phase that can't reach DONE within its budget fails the whole run (no silent skip).
+- **`--autonomous` moves the pauses, never the freezes** — it auto-accepts the plan **and** each phase
+  contract, but still freezes + logs both. **`--budget-tokens` is the whole-run total** (summed across
+  every phase). `--resume` re-enters mid-plan without repeating completed phases. `goaly runs show`
+  prints the frozen plan and stamps each iteration with its phase.
+
 ## Hardening against reward-hacking
 
 The point of goaly is correctness under adversarial self-interest, so the loop is hardened against
@@ -322,6 +359,12 @@ goaly run --goal "..." --generate --harness-idle-timeout-ms 180000
 
 # Add a deterministic artifact-running smoke rung — run the built thing, fail on any runtime error:
 goaly run --goal "build a /health endpoint" --generate --smoke "node smoke.mjs"
+
+# Phased: decompose a big goal into a frozen plan of small, individually-verified sub-goals, then
+# accept cumulatively on the original goal (--verify-cmd npm test is the cumulative acceptance bar):
+goaly run --goal-file ./BIG_GOAL.md --verify-cmd "npm test" --phased --autonomous --max-phases 6
+# Or supply the plan yourself instead of having the LLM author it:
+goaly run --goal-file ./BIG_GOAL.md --generate --phased --plan-file ./plan.json
 
 # Jail the agent AND the verifier in an OS sandbox (refuses to start if no mechanism is present):
 goaly run --goal "..." --verify-cmd "npm test" --sandbox            # auto-detect (bwrap / container)

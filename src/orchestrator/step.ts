@@ -1,7 +1,8 @@
 import type { OrchestratorEvent, Command, HarnessRunResult } from '../domain/events';
-import type { RunConfig } from '../domain/config';
+import type { RunConfig, VerifierIntent } from '../domain/config';
 import type { CompiledContract, Rung } from '../domain/contract';
-import type { OrchestratorState, LoopCtx } from './state';
+import type { PhasePlan } from '../domain/plan';
+import type { OrchestratorState, LoopCtx, PhaseCtx } from './state';
 import { initialCtx } from './state';
 import { decide, type Decision } from './decide';
 import { normalizeDetail } from './stuck';
@@ -14,8 +15,18 @@ import { normalizeDetail } from './stuck';
  */
 export type StepResult = readonly [OrchestratorState, Command[]];
 
-/** Seed the machine: COMPILING + a single COMPILE_VERIFIER command. */
+/**
+ * Seed the machine. A classic run starts at COMPILING; a phased run (issue #48) starts at PLANNING so
+ * the goal is decomposed into a frozen plan BEFORE any contract is compiled. Exactly one command either
+ * way (driver invariant).
+ */
 export function initial(config: RunConfig): StepResult {
+  if (config.phased) {
+    return [
+      { tag: 'PLANNING', config, reviseRound: 0 },
+      [{ tag: 'COMPILE_PLAN', config }],
+    ];
+  }
   return [
     { tag: 'COMPILING', config, reviseRound: 0, compileRound: 0 },
     [{ tag: 'COMPILE_VERIFIER', config }],
@@ -24,12 +35,18 @@ export function initial(config: RunConfig): StepResult {
 
 export function step(state: OrchestratorState, event: OrchestratorEvent): StepResult {
   switch (state.tag) {
+    case 'PLANNING':
+      return stepPlanning(state.config, state.reviseRound, event);
+    case 'AWAIT_PLAN_SEAL':
+      return stepAwaitPlanSeal(state.config, state.plan, state.reviseRound, event);
+    case 'ADVANCING_PHASE':
+      return stepAdvancingPhase(state.phase, event);
     case 'COMPILING':
-      return stepCompiling(state.config, state.reviseRound, state.compileRound, event);
+      return stepCompiling(state.config, state.reviseRound, state.compileRound, state.phase, event);
     case 'AWAIT_SEAL':
-      return stepAwaitSeal(state.config, state.contract, state.reviseRound, event);
+      return stepAwaitSeal(state.config, state.contract, state.reviseRound, state.phase, event);
     case 'PREPARING':
-      return stepPreparing(state.config, state.contract, event);
+      return stepPreparing(state.config, state.contract, state.phase, event);
     case 'RUNNING_AGENT':
       return stepRunningAgent(state.ctx, event);
     case 'VERIFYING':
@@ -43,16 +60,146 @@ export function step(state: OrchestratorState, event: OrchestratorEvent): StepRe
   }
 }
 
+// ---- phased: PLAN → plan Seal → phase loop → ACCEPT (issue #48) ------------
+
+/**
+ * PLAN — author the frozen plan. A `PLAN_COMPILED` advances to the plan Seal; a `PLAN_FAILED` is a
+ * typed, fail-closed terminal FAILED (a planner error / unparseable / over-long plan is never a
+ * skipped check). Re-planning is the bounded, gated revise path at the plan Seal, not an auto-retry.
+ */
+function stepPlanning(config: RunConfig, reviseRound: number, event: OrchestratorEvent): StepResult {
+  switch (event.tag) {
+    case 'PLAN_COMPILED':
+      return [
+        { tag: 'AWAIT_PLAN_SEAL', config, plan: event.plan, reviseRound },
+        [{ tag: 'REQUEST_PLAN_SEAL', plan: event.plan }],
+      ];
+    case 'PLAN_FAILED':
+      return [{ tag: 'FAILED', reason: event.reason, iterations: 0, contractHash: undefined }, []];
+    default:
+      throw invalidTransition('PLANNING', event);
+  }
+}
+
+/**
+ * Plan Seal (Gate A on the plan). `--autonomous` moves only the PAUSE, not the freeze (invariant #5);
+ * the gate still froze + logged the plan upstream.
+ *  - approve → start phase 0: compile its contract (a normal frozen-contract run scoped to the sub-goal).
+ *  - reject  → ABORTED (the loop never starts).
+ *  - revise  → re-plan with the human's feedback, bounded by `maxPlanRevisions` (mirrors Seal revise).
+ */
+function stepAwaitPlanSeal(
+  config: RunConfig,
+  plan: PhasePlan,
+  reviseRound: number,
+  event: OrchestratorEvent,
+): StepResult {
+  if (event.tag !== 'PLAN_SEAL_DECIDED') throw invalidTransition('AWAIT_PLAN_SEAL', event);
+  switch (event.decision.kind) {
+    case 'approve': {
+      const phase: PhaseCtx = { baseConfig: config, plan, index: 0 };
+      return startPhaseCompile(phase);
+    }
+    case 'reject':
+      return [
+        { tag: 'ABORTED', reason: event.decision.reason, iterations: 0, contractHash: undefined },
+        [],
+      ];
+    case 'revise': {
+      if (reviseRound + 1 > config.maxPlanRevisions) {
+        return [
+          {
+            tag: 'ABORTED',
+            reason: `plan Seal revision cap (${config.maxPlanRevisions}) reached without approval`,
+            iterations: 0,
+            contractHash: undefined,
+          },
+          [],
+        ];
+      }
+      return [
+        { tag: 'PLANNING', config, reviseRound: reviseRound + 1 },
+        [{ tag: 'COMPILE_PLAN', config, feedback: event.decision.feedback }],
+      ];
+    }
+  }
+}
+
+/**
+ * Between phases: the Driver checkpointed (issue #47) and returns the tree; advance to the next phase
+ * and compile its contract. The next phase may be a sub-goal or, when the sub-goals are exhausted, the
+ * final cumulative ACCEPTANCE phase (`index === plan.phases.length`) — `phaseConfigFor` derives either.
+ */
+function stepAdvancingPhase(phase: PhaseCtx, event: OrchestratorEvent): StepResult {
+  if (event.tag !== 'PHASE_ADVANCED') throw invalidTransition('ADVANCING_PHASE', event);
+  const next: PhaseCtx = { ...phase, index: phase.index + 1 };
+  return startPhaseCompile(next);
+}
+
+/** Begin a phase: COMPILING its derived config, carrying the phase position for the eventual advance. */
+function startPhaseCompile(phase: PhaseCtx): StepResult {
+  const config = phaseConfigFor(phase);
+  return [
+    { tag: 'COMPILING', config, reviseRound: 0, compileRound: 0, phase },
+    [{ tag: 'COMPILE_VERIFIER', config }],
+  ];
+}
+
+/**
+ * Derive the RunConfig for a phase from the frozen plan + the original config. A sub-goal phase
+ * (`index < phases.length`) inherits the operational knobs (iterations, budget, stuck policy,
+ * autonomy, judge quorum, …) but takes its goal/intent/rubric from the sub-goal and always authors
+ * its own verification (`--generate`). The acceptance phase (`index === phases.length`) IS the
+ * original goal + the user's original verifier intent (so `--verify-cmd "npm test"` becomes the
+ * cumulative deterministic bar, or `--generate` authors cumulative acceptance on the original goal).
+ * Pure and total; `phased` is cleared so the inner run is a normal single-contract run.
+ */
+function phaseConfigFor(phase: PhaseCtx): RunConfig {
+  const base = phase.baseConfig;
+  if (phase.index >= phase.plan.phases.length) {
+    return { ...base, phased: false };
+  }
+  const sub = phase.plan.phases[phase.index]!;
+  const verifier: VerifierIntent = {
+    kind: 'generate',
+    ...(sub.intent !== undefined ? { intent: sub.intent } : {}),
+  };
+  return {
+    goal: sub.goal,
+    verifier,
+    noSetup: base.noSetup,
+    autonomous: base.autonomous,
+    maxSealRevisions: base.maxSealRevisions,
+    maxCompileRetries: base.maxCompileRetries,
+    maxIterations: base.maxIterations,
+    phased: false,
+    maxPhases: base.maxPhases,
+    maxPlanRevisions: base.maxPlanRevisions,
+    budget: base.budget,
+    stuckPolicy: base.stuckPolicy,
+    diffIgnore: base.diffIgnore,
+    judge: base.judge,
+    ...(sub.rubric !== undefined ? { rubric: sub.rubric } : {}),
+  };
+}
+
 function stepCompiling(
   config: RunConfig,
   reviseRound: number,
   compileRound: number,
+  phase: PhaseCtx | undefined,
   event: OrchestratorEvent,
 ): StepResult {
   switch (event.tag) {
     case 'CONTRACT_COMPILED':
       return [
-        { tag: 'AWAIT_SEAL', config, contract: event.contract, reviseRound },
+        {
+          tag: 'AWAIT_SEAL',
+          config,
+          contract: event.contract,
+          reviseRound,
+          ...(phase !== undefined ? { phase } : {}),
+        },
         [{ tag: 'REQUEST_SEAL', contract: event.contract }],
       ];
     case 'COMPILE_FAILED': {
@@ -63,12 +210,19 @@ function stepCompiling(
       // budget is still a typed FAILED (fail-closed), never a skipped check.
       if (compileRound < config.maxCompileRetries) {
         return [
-          { tag: 'COMPILING', config, reviseRound, compileRound: compileRound + 1 },
+          {
+            tag: 'COMPILING',
+            config,
+            reviseRound,
+            compileRound: compileRound + 1,
+            ...(phase !== undefined ? { phase } : {}),
+          },
           [{ tag: 'COMPILE_VERIFIER', config, feedback: compileRetryFeedback(event.reason) }],
         ];
       }
+      // In a phased run a phase's compile failure fails the WHOLE run (no silent skip), named by phase.
       return [
-        { tag: 'FAILED', reason: event.reason, iterations: 0, contractHash: undefined },
+        { tag: 'FAILED', reason: phaseReason(phase, event.reason), iterations: 0, contractHash: undefined },
         [],
       ];
     }
@@ -90,6 +244,7 @@ function stepAwaitSeal(
   config: RunConfig,
   contract: CompiledContract,
   reviseRound: number,
+  phase: PhaseCtx | undefined,
   event: OrchestratorEvent,
 ): StepResult {
   if (event.tag !== 'SEAL_DECIDED') throw invalidTransition('AWAIT_SEAL', event);
@@ -101,18 +256,18 @@ function stepAwaitSeal(
       // common `--verify-cmd` contract has neither, so it goes straight to iteration 1 unchanged.
       if (needsPreparation(contract)) {
         return [
-          { tag: 'PREPARING', config, contract },
+          { tag: 'PREPARING', config, contract, ...(phase !== undefined ? { phase } : {}) },
           [{ tag: 'PREPARE_WORKSPACE', contract }],
         ];
       }
-      const ctx = initialCtx(config, contract);
+      const ctx = initialCtx(config, contract, phase);
       return startIteration(ctx, buildInitialPrompt(contract), undefined);
     }
     case 'reject':
       return [
         {
           tag: 'ABORTED',
-          reason: event.decision.reason,
+          reason: phaseReason(phase, event.decision.reason),
           iterations: 0,
           contractHash: contract.contractHash,
         },
@@ -126,7 +281,10 @@ function stepAwaitSeal(
         return [
           {
             tag: 'ABORTED',
-            reason: `Seal revision cap (${config.maxSealRevisions}) reached without approval`,
+            reason: phaseReason(
+              phase,
+              `Seal revision cap (${config.maxSealRevisions}) reached without approval`,
+            ),
             iterations: 0,
             contractHash: contract.contractHash,
           },
@@ -136,7 +294,13 @@ function stepAwaitSeal(
       // A fresh human-driven authoring round resets the compile-retry counter (issue #51): the
       // per-attempt error budget is independent of the pre-approval revise budget.
       return [
-        { tag: 'COMPILING', config, reviseRound: reviseRound + 1, compileRound: 0 },
+        {
+          tag: 'COMPILING',
+          config,
+          reviseRound: reviseRound + 1,
+          compileRound: 0,
+          ...(phase !== undefined ? { phase } : {}),
+        },
         [{ tag: 'COMPILE_VERIFIER', config, feedback: event.decision.feedback }],
       ];
     }
@@ -165,20 +329,24 @@ function needsPreparation(contract: CompiledContract): boolean {
 function stepPreparing(
   config: RunConfig,
   contract: CompiledContract,
+  phase: PhaseCtx | undefined,
   event: OrchestratorEvent,
 ): StepResult {
   if (event.tag !== 'WORKSPACE_PREPARED') throw invalidTransition('PREPARING', event);
   const prepared = event.prepared;
   switch (prepared.status) {
     case 'proceed': {
-      const ctx = initialCtx(config, contract);
+      const ctx = initialCtx(config, contract, phase);
       return startIteration(ctx, buildInitialPrompt(contract), undefined);
     }
     case 'setup-failed':
       return [
         {
           tag: 'FAILED',
-          reason: `SETUP_FAILED: the workspace setup command failed before any agent turn — ${prepared.detail}`,
+          reason: phaseReason(
+            phase,
+            `SETUP_FAILED: the workspace setup command failed before any agent turn — ${prepared.detail}`,
+          ),
           iterations: 0,
           contractHash: contract.contractHash,
         },
@@ -188,9 +356,11 @@ function stepPreparing(
       return [
         {
           tag: 'FAILED',
-          reason:
+          reason: phaseReason(
+            phase,
             'CONTRACT_UNSOUND: the frozen verification could not run against the prepared tree ' +
-            `(the error originates in the authored verification, not the implementation) — ${prepared.detail}`,
+              `(the error originates in the authored verification, not the implementation) — ${prepared.detail}`,
+          ),
           iterations: 0,
           contractHash: contract.contractHash,
         },
@@ -262,15 +432,13 @@ function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
       return startIteration(next, prompt, ctx.sessionId);
     }
     case 'DONE':
-      return [
-        { tag: 'DONE', iterations: ctx.iteration, contractHash: ctx.contract.contractHash },
-        [],
-      ];
+      return phaseDone(ctx);
     case 'FAILED':
+      // A phase's failure fails the WHOLE run (decomposition can't skip a phase), named by phase.
       return [
         {
           tag: 'FAILED',
-          reason: decision.reason,
+          reason: phaseReason(ctx.phase, decision.reason),
           iterations: ctx.iteration,
           contractHash: ctx.contract.contractHash,
         },
@@ -280,13 +448,45 @@ function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
       return [
         {
           tag: 'ABORTED',
-          reason: decision.reason,
+          reason: phaseReason(ctx.phase, decision.reason),
           iterations: ctx.iteration,
           contractHash: ctx.contract.contractHash,
         },
         [],
       ];
   }
+}
+
+/**
+ * A phase reached BOTH keys (issue #48). On a classic run this is the whole-run DONE. On a phased run:
+ *  - a sub-goal or earlier phase (`index < phases.length`) → ADVANCE: checkpoint (#47) then compile the
+ *    next phase. The whole run is NOT yet done — the cumulative acceptance still has to pass.
+ *  - the final acceptance phase (`index === phases.length`) → whole-run DONE (both keys on the ORIGINAL
+ *    goal). This is what stops decomposition greening a goal whose parts pass but whole doesn't.
+ */
+function phaseDone(ctx: LoopCtx): StepResult {
+  const phase = ctx.phase;
+  if (phase !== undefined && phase.index < phase.plan.phases.length) {
+    return [
+      { tag: 'ADVANCING_PHASE', phase, lastIteration: ctx.iteration },
+      [{ tag: 'CHECKPOINT_AND_ADVANCE' }],
+    ];
+  }
+  return [{ tag: 'DONE', iterations: ctx.iteration, contractHash: ctx.contract.contractHash }, []];
+}
+
+/**
+ * Prefix a terminal reason with the phase position so a phased run's failures point at WHICH phase
+ * (1-based, with the goal). The acceptance phase is named explicitly. A classic run (no phase) is
+ * returned unchanged, so existing reasons/tests are byte-for-byte the same.
+ */
+function phaseReason(phase: PhaseCtx | undefined, reason: string): string {
+  if (phase === undefined) return reason;
+  const total = phase.plan.phases.length;
+  if (phase.index >= total) return `acceptance phase (cumulative contract): ${reason}`;
+  const sub = phase.plan.phases[phase.index];
+  const goal = sub !== undefined ? ` (${sub.goal})` : '';
+  return `phase ${phase.index + 1}/${total}${goal}: ${reason}`;
 }
 
 function startIteration(

@@ -81,6 +81,22 @@ export const RunConfig = z.object({
    */
   maxCompileRetries: z.number().int().nonnegative().default(2),
   maxIterations: z.number().int().positive().default(10),
+  /**
+   * Phased decomposition (issue #48). When true the run starts with a PLAN phase that turns the goal
+   * into a frozen, ordered plan of sub-goals; each sub-goal runs as its own frozen, two-key contract
+   * (with a checkpoint between phases), finished by a cumulative ACCEPT contract on the ORIGINAL goal.
+   * Default false ⇒ the classic single-contract run, behavior byte-for-byte unchanged. The reducer
+   * reads this in `initial()` to seed PLANNING instead of COMPILING.
+   */
+  phased: z.boolean().default(false),
+  /** Max sub-goals a phased plan may contain; a planner that exceeds it is a fail-closed PLAN_FAILED. */
+  maxPhases: z.number().int().positive().default(10),
+  /**
+   * Max free-text "revise" rounds a human may take at the plan Seal before the run aborts — the plan
+   * analogue of `maxSealRevisions`. Bounds re-planning (each round re-authors and re-freezes the plan).
+   * 0 disables plan revision (the plan Seal stays binary). Ignored in `--autonomous` (auto-approve).
+   */
+  maxPlanRevisions: z.number().int().nonnegative().default(10),
   budget: BudgetConfig.default({}),
   stuckPolicy: StuckPolicy.default({}),
   /**
@@ -124,6 +140,10 @@ export const CliInput = z.object({
   maxSealRevisions: z.coerce.number().int().nonnegative().optional(),
   maxCompileRetries: z.coerce.number().int().nonnegative().optional(),
   maxIterations: z.coerce.number().int().positive().optional(),
+  /** Phased decomposition (issue #48). */
+  phased: z.coerce.boolean().optional(),
+  maxPhases: z.coerce.number().int().positive().optional(),
+  maxPlanRevisions: z.coerce.number().int().nonnegative().optional(),
   budgetTokens: z.coerce.number().int().positive().optional(),
   budgetWallClockMs: z.coerce.number().int().positive().optional(),
   /** Comma-separated extra paths to keep out of diffHash/diff. */
@@ -178,6 +198,11 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
       ? { maxCompileRetries: input.maxCompileRetries }
       : {}),
     ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
+    ...(input.phased !== undefined ? { phased: input.phased } : {}),
+    ...(input.maxPhases !== undefined ? { maxPhases: input.maxPhases } : {}),
+    ...(input.maxPlanRevisions !== undefined
+      ? { maxPlanRevisions: input.maxPlanRevisions }
+      : {}),
     budget,
     ...(diffIgnore.length > 0 ? { diffIgnore } : {}),
     ...(Object.keys(stuckPolicy).length > 0 ? { stuckPolicy } : {}),

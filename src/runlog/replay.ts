@@ -1,5 +1,6 @@
 import type { RunConfig } from '../domain/config';
 import type { CompiledContract } from '../domain/contract';
+import type { PhasePlan } from '../domain/plan';
 import type { Command } from '../domain/events';
 import type { ContractHash, DiffHash } from '../domain/ids';
 import type { OrchestratorState } from '../orchestrator/state';
@@ -19,9 +20,12 @@ export type ReplayResult = {
   /**
    * The tree SHA of the most recent internal checkpoint (issue #47), or null if none was taken. The
    * Driver re-points the workspace's diff baseline at this on `--resume` so the resumed run keeps the
-   * same small-diff baseline it had advanced to. A baseline marker, never part of the reducer fold.
+   * same small-diff baseline it had advanced to. Updated by BOTH the standalone CHECKPOINTED marker
+   * and a phased run's PHASE_ADVANCED (which also checkpoints between phases — issue #48).
    */
   readonly baseline: DiffHash | null;
+  /** The frozen plan a phased run authored (issue #48), or null on a classic single-contract run. */
+  readonly plan: PhasePlan | null;
 };
 
 /**
@@ -35,6 +39,7 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
   let contract: CompiledContract | null = null;
   let contractHash: ContractHash | null = null;
   let baseline: DiffHash | null = null;
+  let plan: PhasePlan | null = null;
 
   for (const entry of entries) {
     // A CHECKPOINTED entry is a diff-baseline marker, NOT a reducer transition: it is never fed to
@@ -48,8 +53,17 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
       contract = entry.event.contract;
       contractHash = entry.event.contract.contractHash;
     }
+    if (entry.event.tag === 'PLAN_COMPILED') {
+      plan = entry.event.plan;
+    }
+    // A phased run's PHASE_ADVANCED both DRIVES the reducer (advance to the next phase) AND records
+    // the checkpoint tree for baseline reconstruction on resume (issue #48) — so it is fed to step()
+    // *and* updates `baseline`, unlike the pure CHECKPOINTED marker.
+    if (entry.event.tag === 'PHASE_ADVANCED') {
+      baseline = entry.event.tree;
+    }
     [state, commands] = step(state, entry.event);
   }
 
-  return { state, commands, contract, contractHash, baseline };
+  return { state, commands, contract, contractHash, baseline, plan };
 }

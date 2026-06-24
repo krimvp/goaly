@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DiffHash, SessionId, ContractHash, RunId } from './ids';
 import { CompiledContract } from './contract';
+import { PhasePlan } from './plan';
 import { Verdict, ApprovalVerdict, SealDecision } from './verdict';
 import { RunConfig } from './config';
 import { TokenUsage, TokenBreakdown, UsageReport } from './usage';
@@ -63,6 +64,30 @@ export type PreparedOutcome = z.infer<typeof PreparedOutcome>;
  * a Zod schema.
  */
 export const OrchestratorEvent = z.discriminatedUnion('tag', [
+  /**
+   * The PLAN phase authored a FROZEN, ordered plan of sub-goals (issue #48). Logged loudly so the
+   * decomposition is auditable; carries the plan (with its `planHash`) so resume reconstructs it.
+   */
+  z.object({
+    tag: z.literal('PLAN_COMPILED'),
+    plan: PhasePlan,
+    /** LLM spend authoring the plan (absent for a `--plan-file` plan — no LLM call). */
+    llm: TokenUsage.optional(),
+  }),
+  /** The planner errored / produced an unparseable or over-long plan — a typed, fail-closed FAILED. */
+  z.object({
+    tag: z.literal('PLAN_FAILED'),
+    reason: z.string(),
+    llm: TokenUsage.optional(),
+  }),
+  /** The plan Seal (Gate A on the plan): approve starts phase 0, reject aborts, revise re-plans. */
+  z.object({ tag: z.literal('PLAN_SEAL_DECIDED'), decision: SealDecision }),
+  /**
+   * A phase completed (both keys) and the Driver took an internal checkpoint (issue #47) before
+   * starting the next phase. Carries the snapshotted tree SHA so resume re-points the diff baseline
+   * (like CHECKPOINTED) AND drives the reducer's advance to the next phase's contract compile.
+   */
+  z.object({ tag: z.literal('PHASE_ADVANCED'), tree: DiffHash }),
   z.object({
     tag: z.literal('CONTRACT_COMPILED'),
     contract: CompiledContract,
@@ -134,6 +159,9 @@ export type ApprovalInput = {
  * a structural guarantee rather than a discipline.
  */
 export type Command =
+  | { tag: 'COMPILE_PLAN'; config: RunConfig; feedback?: string }
+  | { tag: 'REQUEST_PLAN_SEAL'; plan: PhasePlan }
+  | { tag: 'CHECKPOINT_AND_ADVANCE' }
   | { tag: 'COMPILE_VERIFIER'; config: RunConfig; feedback?: string }
   | { tag: 'REQUEST_SEAL'; contract: CompiledContract }
   | { tag: 'PREPARE_WORKSPACE'; contract: CompiledContract }

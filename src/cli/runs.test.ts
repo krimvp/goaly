@@ -8,7 +8,7 @@ import { FileRunLog } from '../runlog/file-runlog';
 import type { RunLogHeader, RunLogEntry } from '../runlog/runlog';
 import type { OrchestratorEvent } from '../domain/events';
 import { RunId, DiffHash, SessionId } from '../domain/ids';
-import { makeConfig, makeFakeContract, passVerdict, failVerdict, approve } from '../testing/fakes';
+import { makeConfig, makeFakeContract, makeFakePlan, passVerdict, failVerdict, approve } from '../testing/fakes';
 
 const contract = makeFakeContract({ goal: 'build the parser' });
 
@@ -94,16 +94,38 @@ describe('renderRunDetail', () => {
       },
       contract,
       contractHash: contract.contractHash,
+      plan: null,
+      planSeal: [],
+      planFailures: [],
       compileFailures: [],
       seal: [{ kind: 'approve' }],
       prepare: undefined,
       iterationsDetail: [
-        { index: 1, runStatus: 'completed', changed: true, tokensSpent: 10, verdict: failVerdict('red'), signoff: undefined },
-        { index: 2, runStatus: 'completed', changed: true, tokensSpent: 25, verdict: passVerdict('green'), signoff: approve() },
+        { index: 1, runStatus: 'completed', changed: true, tokensSpent: 10, verdict: failVerdict('red'), signoff: undefined, phase: undefined },
+        { index: 2, runStatus: 'completed', changed: true, tokensSpent: 25, verdict: passVerdict('green'), signoff: approve(), phase: undefined },
       ],
       ...over,
     };
   }
+
+  it('renders the decomposition plan + per-iteration phase for a phased run (issue #48)', () => {
+    const plan = makeFakePlan({ phases: [{ goal: 'scaffold the app' }, { goal: 'add the parser' }] });
+    const text = renderRunDetail(
+      detail({
+        plan,
+        planSeal: [{ kind: 'approve' }],
+        iterationsDetail: [
+          { index: 1, runStatus: 'completed', changed: true, tokensSpent: 10, verdict: passVerdict('g'), signoff: approve(), phase: 0 },
+          { index: 2, runStatus: 'completed', changed: true, tokensSpent: 20, verdict: passVerdict('g'), signoff: approve(), phase: 2 },
+        ],
+      }),
+    );
+    expect(text).toContain(plan.planHash);
+    expect(text).toContain('scaffold the app');
+    expect(text).toContain('plan-seal: approve');
+    expect(text).toContain('phase=1'); // iteration 1 → phase 0 (1-based render)
+    expect(text).toContain('phase=3'); // iteration 2 → acceptance phase (index 2, 1-based 3)
+  });
 
   it('shows status, the frozen contract hash, Seal, and per-iteration ladder + Sign-off', () => {
     const text = renderRunDetail(detail());

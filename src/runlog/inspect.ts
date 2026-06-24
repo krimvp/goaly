@@ -1,6 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CompiledContract } from '../domain/contract';
+import type { PhasePlan } from '../domain/plan';
 import type { ContractHash, RunId } from '../domain/ids';
 import type { HarnessRunResult } from '../domain/events';
 import type { UsageReport } from '../domain/usage';
@@ -50,6 +51,11 @@ export type IterationDetail = {
   verdict: Verdict | undefined;
   /** The Sign-off approver verdict (present only when the ladder passed). */
   signoff: ApprovalVerdict | undefined;
+  /**
+   * 0-based phase index for a phased run (issue #48): the number of PHASE_ADVANCED events before this
+   * iteration; `plan.phases.length` is the cumulative acceptance phase. Undefined on a classic run.
+   */
+  phase: number | undefined;
 };
 
 /** The full `goaly runs show <id>` report. */
@@ -69,6 +75,12 @@ export type RunDetail = {
   /** The frozen success contract (its hash is `contract.contractHash`); null before compile. */
   readonly contract: CompiledContract | null;
   readonly contractHash: ContractHash | null;
+  /** The frozen decomposition plan a phased run authored (issue #48); null on a classic run. */
+  readonly plan: PhasePlan | null;
+  /** Plan-Seal decisions in order (revise rounds, then a final approve/reject); empty if not phased. */
+  readonly planSeal: readonly SealDecision[];
+  /** Any failed plan-authoring attempts (PLAN_FAILED reasons), in order. */
+  readonly planFailures: readonly string[];
   /** Any failed compile attempts (reasons), in order. */
   readonly compileFailures: readonly string[];
   /** Seal decisions in order (revise rounds, then a final approve/reject). */
@@ -113,7 +125,7 @@ export function runSummary(header: RunLogHeader, entries: readonly RunLogEntry[]
 }
 
 export function runDetail(header: RunLogHeader, entries: readonly RunLogEntry[]): RunDetail {
-  const { state, contract, contractHash } = replay(header.config, entries);
+  const { state, contract, contractHash, plan } = replay(header.config, entries);
   const last = entries.length > 0 ? entries[entries.length - 1] : undefined;
   return {
     runId: header.runId,
@@ -131,11 +143,26 @@ export function runDetail(header: RunLogHeader, entries: readonly RunLogEntry[])
     ),
     contract,
     contractHash,
+    plan,
+    planSeal: collectPlanSeal(entries),
+    planFailures: collectPlanFailures(entries),
     compileFailures: collectCompileFailures(entries),
     seal: collectSeal(entries),
     prepare: collectPrepare(entries),
     iterationsDetail: collectIterations(entries),
   };
+}
+
+function collectPlanSeal(entries: readonly RunLogEntry[]): SealDecision[] {
+  const out: SealDecision[] = [];
+  for (const e of entries) if (e.event.tag === 'PLAN_SEAL_DECIDED') out.push(e.event.decision);
+  return out;
+}
+
+function collectPlanFailures(entries: readonly RunLogEntry[]): string[] {
+  const out: string[] = [];
+  for (const e of entries) if (e.event.tag === 'PLAN_FAILED') out.push(e.event.reason);
+  return out;
 }
 
 /** The one-time prepare-phase outcome (Fix #1 / #2), or undefined when the phase never ran. */
@@ -186,9 +213,18 @@ function collectSeal(entries: readonly RunLogEntry[]): SealDecision[] {
  */
 function collectIterations(entries: readonly RunLogEntry[]): IterationDetail[] {
   const out: IterationDetail[] = [];
+  // Stamp each iteration with its phase for a phased run (issue #48): PHASE_ADVANCED marks each
+  // between-phase boundary, so the count of advances seen so far IS the current 0-based phase index.
+  // `phased` stays false (→ `phase: undefined`) for a classic run, so its output is unchanged.
+  let phaseIndex = 0;
+  let phased = false;
   for (const e of entries) {
     const ev = e.event;
-    if (ev.tag === 'AGENT_RAN') {
+    if (ev.tag === 'PLAN_COMPILED') {
+      phased = true;
+    } else if (ev.tag === 'PHASE_ADVANCED') {
+      phaseIndex += 1;
+    } else if (ev.tag === 'AGENT_RAN') {
       out.push({
         index: out.length + 1,
         runStatus: ev.run.status,
@@ -196,6 +232,7 @@ function collectIterations(entries: readonly RunLogEntry[]): IterationDetail[] {
         tokensSpent: ev.budget.tokensSpent,
         verdict: undefined,
         signoff: undefined,
+        phase: phased ? phaseIndex : undefined,
       });
     } else if (ev.tag === 'VERIFIED') {
       const cur = out[out.length - 1];

@@ -292,6 +292,40 @@ goaly runs show run-&lt;id&gt;</pre>
       <div class="card"><h3><code>--autonomous</code></h3><p>Moves Seal <b>only</b>. It skips the human pause, never the freeze and never verification. The two-key contract is identical either way.</p></div>
     </div>
 
+    <!-- Phased goals — a frozen plan of frozen contracts -->
+    <h3 class="reveal" style="margin-top:3rem">Phased: a frozen plan of frozen contracts</h3>
+    <p class="lede reveal" style="margin-bottom:1.2rem"><code>--phased</code> decomposes one big goal into an
+      ordered plan of small sub-goals, runs each as its own frozen, two-key contract (with an internal
+      checkpoint between phases so each diff stays small), and finishes with a <b>cumulative acceptance</b>
+      contract on the <b>original</b> goal — so decomposition can't green a goal whose parts pass but whole
+      doesn't. The plan is frozen + hashed + logged; re-planning is only the bounded, human-gated plan-Seal
+      revise path.</p>
+    <div class="pipeline-wrap reveal">
+      <div class="pipeline">
+        <div class="stage"><span class="st-k">PLAN</span><span class="st-s">author + freeze · 🔁 revise</span></div>
+        <span class="arrow">→</span>
+        <div class="stage gate"><span class="st-k">plan SEAL</span><span class="st-s">approve the plan</span></div>
+        <span class="arrow">→</span>
+        <div class="loop-band">
+          <span class="loop-tag">for each phase 🔁 (compile → SEAL → loop → CHECKPOINT)</span>
+          <div class="stage"><span class="st-k">phase contract</span><span class="st-s">a normal frozen run</span></div>
+          <span class="arrow">→</span>
+          <div class="stage"><span class="st-k">CHECKPOINT</span><span class="st-s">scope the next diff</span></div>
+        </div>
+        <span class="arrow">→</span>
+        <div class="stage gate"><span class="st-k">ACCEPT</span><span class="st-s">cumulative, original goal</span></div>
+        <div class="term-row">
+          <div class="term done">DONE ✔</div>
+          <div class="term failed">FAILED</div>
+        </div>
+      </div>
+    </div>
+    <p class="lede reveal" style="margin-top:1rem;font-size:.92rem">
+      The planner is a read-only LLM seam (like the compiler) — or supply the plan yourself with
+      <code>--plan-file</code>. <code>--max-phases</code> caps the plan; <code>--budget-tokens</code> is the
+      whole-run total; <code>--autonomous</code> auto-accepts the plan <b>and</b> each phase (still frozen +
+      logged); <code>--resume</code> re-enters mid-plan without repeating completed phases.</p>
+
     <p class="lede reveal" style="margin-top:1.6rem">
       The full picture — the state machine, the DECIDE truth table, stuck-detection, the four seams, the
       write-ahead log and resume — is in the architecture docs.
