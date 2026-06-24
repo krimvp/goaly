@@ -80,7 +80,7 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     reason: z.string(),
     llm: TokenUsage.optional(),
   }),
-  /** The plan Seal (Gate A on the plan): approve starts phase 0, reject aborts, revise re-plans. */
+  /** The plan Seal: approve starts phase 0, reject aborts, revise re-plans. */
   z.object({ tag: z.literal('PLAN_SEAL_DECIDED'), decision: SealDecision }),
   /**
    * A phase completed (both keys) and the Driver took an internal checkpoint (issue #47) before

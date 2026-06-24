@@ -66,7 +66,7 @@ export type OrchestratorState =
       readonly reviseRound: number;
     }
   | {
-      /** The plan Seal (Gate A on the plan): approve / reject / revise the frozen plan. Phased only. */
+      /** The plan Seal: approve / reject / revise the frozen plan. Phased only. */
       readonly tag: 'AWAIT_PLAN_SEAL';
       readonly config: RunConfig;
       readonly plan: PhasePlan;
