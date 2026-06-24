@@ -102,8 +102,9 @@ async function preflightDeterministic(
     }
     if (verdict.pass) continue;
 
-    // First failing deterministic rung: is the error in the AUTHORED verification, or the implementation?
-    if (referencesAuthoredFile(verdict.detail, contract)) {
+    // First failing deterministic rung: is the AUTHORED verification broken (it could not even run its
+    // checks), or is this an honest red because the implementation is simply missing?
+    if (verificationCannotRun(verdict.detail, contract)) {
       log.error('pre-flight: frozen verification cannot run (fail-closed → CONTRACT_UNSOUND)', {});
       return { status: 'contract-unsound', detail: verdict.detail.slice(0, DETAIL_LIMIT) };
     }
@@ -116,12 +117,41 @@ async function preflightDeterministic(
 }
 
 /**
- * Attribute a deterministic failure to the authored verification (Fix #2 heuristic): the failure
- * output names one of the compiler-authored, content-pinned files. goaly already tracks those paths
- * (`generatedFiles`), so an error originating there (e.g. a `tsc` error in an authored `.test.ts`, or
- * a "failed to collect" import error) marks the contract unsound — vs. a failure rooted in `src/`,
- * which is the expected honest red.
+ * Markers that a deterministic check FAILED TO RUN its assertions at all — a defect in the authored
+ * verification (compile / syntax / collection / import error), as opposed to a verifier that ran fine
+ * and reported an honest red. These are the only signals that justify a `CONTRACT_UNSOUND` abort.
+ *
+ * Why a bare path match is NOT enough: most test runners (pytest in particular) echo the test file's
+ * own path on EVERY run — the session header (`test_x.py FFFFF`) and every traceback frame
+ * (`test_x.py:18:`) — so a perfectly healthy honest red (the implementation files don't exist yet)
+ * names the authored file too. Keying off path-mention alone wrongly rejected those as unsound,
+ * making `--verifier generate` + pytest unusable (it aborted at pre-flight with 0 iterations).
  */
+const CANNOT_RUN_SIGNALS: readonly RegExp[] = [
+  /\berror TS\d+\b/, // tsc compile error (e.g. an authored `.test.ts` that doesn't typecheck)
+  /\bSyntaxError\b/, // python (or JS) parse failure in the authored file
+  /\bIndentationError\b/,
+  /\bTabError\b/,
+  /errors? during collection/i, // pytest could not import/collect the authored test module (exit 2)
+  /\bERROR collecting\b/, // pytest per-file collection error
+  /\bINTERNALERROR\b/, // pytest crashed internally
+  /no tests ran/i, // pytest collected nothing to verify (exit 5)
+];
+
+/** Does the failure output name one of the compiler-authored, content-pinned verification files? */
 function referencesAuthoredFile(detail: string, contract: CompiledContract): boolean {
   return contract.generatedFiles.some((f) => detail.includes(f.path));
+}
+
+/**
+ * Classify a failing deterministic pre-flight rung (Fix #2 heuristic). The contract is `CONTRACT_UNSOUND`
+ * only when the failure both (a) originates in an authored verification file AND (b) looks like the
+ * verifier could not RUN its checks (a compile/syntax/collection error — see {@link CANNOT_RUN_SIGNALS}).
+ * An honest assertion red — even one whose traceback names the authored test file because the
+ * implementation isn't there yet — has no such signal and proceeds to the loop. Fail-closed is preserved:
+ * a genuinely broken verifier (it can't compile/collect) is still rejected before a worker token is spent.
+ */
+function verificationCannotRun(detail: string, contract: CompiledContract): boolean {
+  if (!referencesAuthoredFile(detail, contract)) return false;
+  return CANNOT_RUN_SIGNALS.some((re) => re.test(detail));
 }

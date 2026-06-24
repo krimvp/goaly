@@ -87,6 +87,82 @@ describe('prepareWorkspace — pre-flight (Fix #2)', () => {
     if (result.prepared.status === 'contract-unsound') expect(result.prepared.detail).toContain('verify/x.test.ts');
   });
 
+  // Regression (issue: `--verifier generate` + pytest aborts at pre-flight with 0 iterations). pytest
+  // echoes the authored test file's path on EVERY run — the session header and each traceback frame —
+  // so a healthy honest red (the implementation files don't exist yet) names the authored file too. A
+  // bare path-substring match wrongly rejected that as CONTRACT_UNSOUND. An honest assertion red must
+  // proceed: only a verification that could not RUN (compile/syntax/collection error) is unsound.
+  it('a pytest honest red that NAMES the authored test file is still proceed (issue regression)', async () => {
+    const honestRed = [
+      'python3 -m pytest test_pi_verification.py: exit 1',
+      '============================= test session starts =============================',
+      'collected 5 items',
+      '',
+      'test_pi_verification.py FFFFF                                            [100%]',
+      '',
+      '=================================== FAILURES ===================================',
+      '_________________________________ test_pi_1 ___________________________________',
+      'test_pi_verification.py:8: in test_pi_1',
+      '    pytest.fail("pi_1.py not found")',
+      'E   Failed: pi_1.py not found',
+      '=========================== short test summary info ===========================',
+      'FAILED test_pi_verification.py::test_pi_1 - Failed: pi_1.py not found',
+      '============================== 5 failed in 0.04s ==============================',
+    ].join('\n');
+    const ws = new ScriptedWorkspace([{ exitCode: 1, stdout: honestRed, stderr: '' }]);
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'python3 -m pytest test_pi_verification.py' }],
+      generatedFiles: [{ path: 'test_pi_verification.py', sha256: 'a'.repeat(64) }],
+    });
+    const result = await prepareWorkspace({ workspace: ws }, contract);
+    expect(result.prepared.status).toBe('proceed');
+  });
+
+  it('a pytest collection error in the authored test IS contract-unsound (fail-closed preserved)', async () => {
+    const collectionError = [
+      'python3 -m pytest test_pi_verification.py: exit 2',
+      '============================= test session starts =============================',
+      'collected 0 items / 1 error',
+      '',
+      '=================================== ERRORS ====================================',
+      '_____________________ ERROR collecting test_pi_verification.py ________________',
+      'test_pi_verification.py:3: in <module>',
+      '    import not_a_real_helper',
+      "E   ModuleNotFoundError: No module named 'not_a_real_helper'",
+      '=========================== short test summary info ===========================',
+      'ERROR test_pi_verification.py',
+      '!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!',
+    ].join('\n');
+    const ws = new ScriptedWorkspace([{ exitCode: 2, stdout: collectionError, stderr: '' }]);
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'python3 -m pytest test_pi_verification.py' }],
+      generatedFiles: [{ path: 'test_pi_verification.py', sha256: 'a'.repeat(64) }],
+    });
+    const result = await prepareWorkspace({ workspace: ws }, contract);
+    expect(result.prepared.status).toBe('contract-unsound');
+    if (result.prepared.status === 'contract-unsound')
+      expect(result.prepared.detail).toContain('test_pi_verification.py');
+  });
+
+  it('a pytest SyntaxError in the authored test IS contract-unsound', async () => {
+    const syntaxError = [
+      'python3 -m pytest test_pi_verification.py: exit 2',
+      '_____________________ ERROR collecting test_pi_verification.py ________________',
+      'test_pi_verification.py:5: in <module>',
+      '    def test_pi_1(:',
+      'E     def test_pi_1(:',
+      'E                  ^',
+      'E   SyntaxError: invalid syntax',
+    ].join('\n');
+    const ws = new ScriptedWorkspace([{ exitCode: 2, stdout: syntaxError, stderr: '' }]);
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'python3 -m pytest test_pi_verification.py' }],
+      generatedFiles: [{ path: 'test_pi_verification.py', sha256: 'a'.repeat(64) }],
+    });
+    const result = await prepareWorkspace({ workspace: ws }, contract);
+    expect(result.prepared.status).toBe('contract-unsound');
+  });
+
   it('all deterministic rungs already passing ⇒ proceed', async () => {
     const ws = new ScriptedWorkspace([ok]);
     const contract = makeFakeContract({ rungs: [{ kind: 'deterministic', command: 'true' }] });
