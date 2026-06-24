@@ -86,7 +86,14 @@ export type ParsedArgs = {
 
 export const USAGE = `goaly — run a coding agent until a frozen success contract is met.
 
+Quick start (the LLM authors & checks everything, with Claude — just give it a goal):
+  goaly "<goal>"            run with all defaults; approve the contract interactively at Seal
+  goaly -d "<goal>"         hands-off: -d / --defaults also auto-accepts the (still-frozen) contract
+  Put your personal defaults in ~/.goalyrc once (e.g. { "autonomous": true }) and only the goal
+  need ever be typed. The goal is a positional (sugar for --goal); 'run' is optional.
+
 Usage:
+  goaly [run] "<goal>" [flags]   (or --goal "<goal>"; see "Goal / intent / rubric input" below)
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
                [--smoke "<cmd>"] [--setup-cmd "<cmd>" | --no-setup] [--setup-timeout-ms N]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
@@ -222,6 +229,9 @@ Seal (contract approval):
                                 r / reject    abort the run (the loop never starts)
   --max-seal-revisions N    cap the free-text revise rounds (default 10; 0 disables revision)
   --autonomous                skip the prompt: auto-accept (still frozen; logged loudly)
+  -d, --defaults              hands-off sugar for --autonomous. The other easy-mode defaults
+                              (--generate, the claude LLM provider, the claude-code harness) already
+                              apply with no flag, so -d's only effect is auto-accepting the contract.
 
   Note: piping the goal via stdin (--goal -) leaves no stdin for the interactive prompt;
   pair it with --autonomous, or read the goal from a file (--goal-file) instead.
@@ -259,15 +269,18 @@ Sandboxing (opt-in OS isolation — issue #9; default OFF, behavior unchanged wi
   --sandbox-runtime <r>      docker | podman (container mode only; default docker)
 
 Config file (so the same wiring need not be repeated every run):
-  Defaults are read from a JSON config in two layers (later overrides earlier):
-    1. an implicit .goalyrc found in --workspace (or the cwd) — optional,
-    2. an explicit --config <path> JSON file — when given it must exist.
+  Defaults are read from a JSON config in three layers (later overrides earlier):
+    1. a home-level ~/.goalyrc — your personal defaults across every project — optional,
+    2. an implicit .goalyrc found in --workspace (or the cwd) — project defaults — optional,
+    3. an explicit --config <path> JSON file — when given it must exist.
   Keys mirror the flag names in kebab-case (e.g. "verify-cmd", "max-iterations",
   "harness-timeout-ms"); booleans like "autonomous" take true/false. Any flag passed on the
-  command line overrides the file. Example .goalyrc:
-    { "harness": "codex", "autonomous": true, "max-iterations": 8, "verify-cmd": "npm test" }
-  Precedence: CLI flag > --config file > .goalyrc > tool default. Per-invocation flags
-  (--workspace, --resume, --config) are never read from a file.
+  command line overrides the file. Example ~/.goalyrc for a hands-off, just-give-the-goal setup:
+    { "autonomous": true }
+  Example project .goalyrc:
+    { "harness": "codex", "max-iterations": 8, "verify-cmd": "npm test" }
+  Precedence: CLI flag > --config file > <workspace>/.goalyrc > ~/.goalyrc > tool default.
+  Per-invocation flags (--workspace, --resume, --config) are never read from a file.
 
 Per-run spend report (printed at the end of every run; stored in the run log):
   Tokens are summarized by layer — harness vs. the LLM steps (compiler / judge / approver) —
@@ -312,26 +325,80 @@ Run history & inspection (read-only — pure replay of the write-ahead run log, 
 
 export type RawFlags = Record<string, string | boolean>;
 
-function parseFlags(tokens: string[]): RawFlags {
+/** Tokenized argv for a `run`: the `--flag` overlay plus any bare positionals (the goal). */
+type ParsedTokens = { flags: RawFlags; positionals: string[] };
+
+/** Single-dash short flags, mapped to their canonical long (boolean) name. */
+const SHORT_FLAGS: Record<string, string> = { d: 'defaults' };
+
+/**
+ * Long flags that never take a value (pure booleans). A bare `--flag` is `true` and the NEXT token
+ * is left for a positional — without this set the value heuristic below would wrongly swallow the
+ * goal in `goaly --generate "my goal"`. (Tri-state toggles like `--stuck-no-diff` deliberately stay
+ * out: they may take an explicit true/false; put the goal first to keep them unambiguous.)
+ */
+const VALUELESS_FLAGS = new Set([
+  'generate',
+  'no-setup',
+  'autonomous',
+  'phased',
+  'delta-verify',
+  'no-log-file',
+  'stream',
+  'stream-transcript',
+  'defaults',
+]);
+
+/**
+ * `--defaults` / `-d` is hands-off sugar for `--autonomous`: the other easy-mode defaults
+ * (generate, the claude LLM provider, the claude-code harness) already apply with no flag, so the
+ * only thing it adds is auto-accepting the (still-frozen, still-logged) contract at Seal.
+ */
+function canonicalFlag(name: string): string {
+  return name === 'defaults' ? 'autonomous' : name;
+}
+
+/**
+ * Tokenize a `run`'s argv into a flag overlay plus positionals. A token that doesn't start with `-`
+ * is a positional (the goal); `--flag`/`--flag=value`/`-d` are flags. Fails closed on an unknown
+ * single-dash flag (invariant #6) rather than silently treating it as a value or positional.
+ */
+function parseFlags(tokens: string[]): ParsedTokens {
   const flags: RawFlags = {};
+  const positionals: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i]!;
-    if (!tok.startsWith('--')) throw new UsageError(`unexpected argument: ${tok}`);
+    if (!tok.startsWith('-')) {
+      positionals.push(tok);
+      continue;
+    }
+    if (!tok.startsWith('--')) {
+      const long = SHORT_FLAGS[tok.slice(1)];
+      if (long === undefined) throw new UsageError(`unknown flag: ${tok}`);
+      flags[canonicalFlag(long)] = true; // every registered short flag is a valueless boolean
+      continue;
+    }
     const body = tok.slice(2);
     const eq = body.indexOf('=');
     if (eq !== -1) {
-      flags[body.slice(0, eq)] = body.slice(eq + 1);
+      flags[canonicalFlag(body.slice(0, eq))] = body.slice(eq + 1);
+      continue;
+    }
+    if (VALUELESS_FLAGS.has(body)) {
+      flags[canonicalFlag(body)] = true;
       continue;
     }
     const next = tokens[i + 1];
+    // A lone `-` (the stdin sentinel for --goal/--intent/--rubric) is a value, not a flag, so the
+    // value-consumption check stays at `--` to keep `--goal -` working.
     if (next === undefined || next.startsWith('--')) {
-      flags[body] = true; // boolean flag
+      flags[canonicalFlag(body)] = true; // boolean flag
     } else {
-      flags[body] = next;
+      flags[canonicalFlag(body)] = next;
       i++;
     }
   }
-  return flags;
+  return { flags, positionals };
 }
 
 export class UsageError extends Error {}
@@ -376,17 +443,37 @@ export async function parseArgs(
   if (command === 'runs') {
     return runsResult(parseRunsCommand(rest));
   }
-  if (command !== 'run') {
-    throw new UsageError(`unknown command: ${command}`);
-  }
+  // `run` is optional: an argv that doesn't lead with a known subcommand (`runs`/`help`) is an
+  // implicit run, whose first token may be a positional goal (`goaly "my goal"`) or a flag
+  // (`goaly -d "my goal"`). A bare `goaly` already returned help above.
+  const runArgs = command === 'run' ? rest : argv;
 
-  const cliFlags = parseFlags(rest);
+  const { flags: cliFlags, positionals } = parseFlags(runArgs);
 
   // `--max-gate-a-revisions` was renamed to `--max-seal-revisions` (no alias). The CLI otherwise
   // ignores unknown flags, so reject the removed spelling explicitly — silently dropping a flag a
   // user's script used to rely on would lose the setting without warning.
   if (cliFlags['max-gate-a-revisions'] !== undefined) {
     throw new UsageError('--max-gate-a-revisions was renamed to --max-seal-revisions');
+  }
+
+  // A single bare positional is the goal — sugar for `--goal` so a developer can just type it
+  // (`goaly "my goal"`). Fold it into the CLI flags so it reuses the whole existing goal pipeline
+  // (resolveInputSources + the config double-source override). More than one positional, or a
+  // positional alongside an explicit --goal/--goal-file, is a fail-closed conflict.
+  if (positionals.length > 1) {
+    throw new UsageError(
+      `unexpected extra argument '${positionals[1]}' (pass a single goal; quote it if it has spaces)`,
+    );
+  }
+  const positionalGoal = positionals[0];
+  if (positionalGoal !== undefined) {
+    if (cliFlags['goal'] !== undefined || cliFlags['goal-file'] !== undefined) {
+      throw new UsageError(
+        `goal given both positionally ('${positionalGoal}') and via --goal/--goal-file (use one)`,
+      );
+    }
+    cliFlags['goal'] = positionalGoal;
   }
 
   // A config file (.goalyrc in --workspace/cwd, plus an explicit --config <path>) supplies DEFAULT
@@ -630,7 +717,7 @@ function parseRunsCommand(rest: string[]): { runs: RunsCommand; workspace: strin
 }
 
 function runsWorkspace(tokens: string[]): string {
-  return str(parseFlags(tokens), 'workspace') ?? process.cwd();
+  return str(parseFlags(tokens).flags, 'workspace') ?? process.cwd();
 }
 
 function helpResult(): ParsedArgs {

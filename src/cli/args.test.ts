@@ -28,7 +28,19 @@ function fakeConfig(
   files: Record<string, string>,
 ): (dir: string, explicit: string | undefined) => Promise<LoadedConfig> {
   const reader: ConfigFileReader = async (p) => files[p];
-  return (dir, explicit) => loadConfig(dir, explicit, reader);
+  return (dir, explicit) => loadConfig(dir, explicit, reader, homeDir);
+}
+
+/** A fixed, non-existent home dir so the default `load`/`fakeConfig` never read a real ~/.goalyrc. */
+const homeDir = '/home/test-user';
+
+/** Like {@link fakeConfig} but with a custom home dir so the ~/.goalyrc layer can be exercised. */
+function fakeConfigWithHome(
+  files: Record<string, string>,
+  home: string,
+): (dir: string, explicit: string | undefined) => Promise<LoadedConfig> {
+  const reader: ConfigFileReader = async (p) => files[p];
+  return (dir, explicit) => loadConfig(dir, explicit, reader, home);
 }
 
 describe('parseArgs', () => {
@@ -178,8 +190,57 @@ describe('parseArgs', () => {
     expect((await parseArgs(['--help'])).command).toBe('help');
   });
 
-  it('throws UsageError on an unknown command', async () => {
-    await expect(parseArgs(['frobnicate'])).rejects.toThrow(UsageError);
+  describe('positional goal + implicit run (easy mode)', () => {
+    it('treats a bare positional as the goal and implies run (generate by default)', async () => {
+      const a = await parseArgs(['make the build green']);
+      expect(a.command).toBe('run');
+      expect(a.config.goal).toBe('make the build green');
+      // No --verify-cmd ⇒ the verifier defaults to generate (LLM authors it).
+      expect(a.config.verifier.kind).toBe('generate');
+    });
+
+    it('accepts the positional under an explicit run too', async () => {
+      const a = await parseArgs(['run', 'do the thing']);
+      expect(a.command).toBe('run');
+      expect(a.config.goal).toBe('do the thing');
+    });
+
+    it('-d / --defaults is hands-off sugar for --autonomous', async () => {
+      const short = await parseArgs(['-d', 'ship it']);
+      expect(short.config.goal).toBe('ship it');
+      expect(short.config.autonomous).toBe(true);
+
+      const long = await parseArgs(['--defaults', 'ship it']);
+      expect(long.config.autonomous).toBe(true);
+    });
+
+    it('valueless boolean flags do not swallow the positional goal', async () => {
+      const afterGoal = await parseArgs(['ship it', '-d']);
+      expect(afterGoal.config.goal).toBe('ship it');
+      expect(afterGoal.config.autonomous).toBe(true);
+
+      const beforeGoal = await parseArgs(['--generate', 'ship it']);
+      expect(beforeGoal.config.goal).toBe('ship it');
+      expect(beforeGoal.config.verifier.kind).toBe('generate');
+    });
+
+    it('parses a value-taking flag after the positional goal', async () => {
+      const a = await parseArgs(['ship it', '--model', 'opus']);
+      expect(a.config.goal).toBe('ship it');
+      expect(a.models.model).toBe('opus');
+    });
+
+    it('rejects a positional goal alongside --goal (double source)', async () => {
+      await expect(parseArgs(['positional', '--goal', 'flag'])).rejects.toThrow(UsageError);
+    });
+
+    it('rejects more than one positional', async () => {
+      await expect(parseArgs(['goal one', 'goal two'])).rejects.toThrow(UsageError);
+    });
+
+    it('rejects an unknown single-dash flag (fail-closed)', async () => {
+      await expect(parseArgs(['-x', 'g'])).rejects.toThrow(UsageError);
+    });
   });
 
   describe('runs subcommand (issue #14)', () => {
@@ -567,6 +628,38 @@ describe('parseArgs', () => {
     it('reports no config file when none is present', async () => {
       const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
       expect(a.configSources).toEqual([]);
+    });
+
+    it('fills defaults from a home-level ~/.goalyrc so just the goal need be typed', async () => {
+      const a = await parseArgs(
+        ['just do this'],
+        fakeReaders({}),
+        fakeConfigWithHome(
+          { [path.join('/home/u', '.goalyrc')]: '{ "autonomous": true, "harness": "fake" }' },
+          '/home/u',
+        ),
+      );
+      expect(a.config.goal).toBe('just do this');
+      expect(a.config.autonomous).toBe(true);
+      expect(a.harness).toBe('fake');
+      expect(a.configSources).toEqual(['~/.goalyrc']);
+    });
+
+    it('a workspace .goalyrc overrides the home ~/.goalyrc on conflicts', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'g', '--workspace', '/ws'],
+        fakeReaders({}),
+        fakeConfigWithHome(
+          {
+            [path.join('/home/u', '.goalyrc')]: '{ "harness": "fake", "max-iterations": 2 }',
+            [path.join('/ws', '.goalyrc')]: '{ "harness": "codex" }',
+          },
+          '/home/u',
+        ),
+      );
+      expect(a.harness).toBe('codex'); // workspace wins
+      expect(a.config.maxIterations).toBe(2); // home supplies what the workspace doesn't
+      expect(a.configSources).toEqual(['~/.goalyrc', '.goalyrc']);
     });
   });
 

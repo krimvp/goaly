@@ -317,6 +317,15 @@ with `--llm-provider`). Pick the model per layer with `--model` / `--llm-model` 
 ## Usage
 
 ```bash
+# Easiest: just give it a goal. The LLM authors the verification (--generate) and checks the work,
+# using Claude (the claude-code harness + claude LLM provider) — all defaults, no flags. The goal is
+# a positional and `run` is optional. A human approves the frozen contract once at Seal:
+goaly "make the parser handle empty input"
+
+# Fully hands-off: -d (alias --defaults) auto-accepts the (still-frozen, still-logged) contract.
+# That's its only effect — generate + Claude already apply with no flag:
+goaly -d "add a /health endpoint returning 200"
+
 # Point at an existing test command; a human approves the frozen contract once:
 goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
 
@@ -391,8 +400,9 @@ goaly run --goal "..." --verify-cmd "npm test" --sandbox=bwrap --sandbox-net all
 # Add an approximate USD cost to the end-of-run spend report (tokens-only without it):
 goaly run --goal "..." --verify-cmd "npm test" --cost-table ./prices.json
 
-# With a .goalyrc in the repo, the repeated wiring lives in the file — just pass the goal:
-goaly run --goal "make the parser handle empty input"
+# With a .goalyrc in the repo (or ~/.goalyrc at home), the repeated wiring lives in the file —
+# just pass the goal positionally:
+goaly "make the parser handle empty input"
 
 # Inspect past runs (read-only — replays the run log, re-runs nothing):
 goaly runs list
@@ -402,14 +412,24 @@ goaly runs show run-<id>
 ### Config file
 
 So you don't repeat the same wiring on every invocation, `goaly run` reads **default flags from a
-JSON config file** in two layers (later overrides earlier):
+JSON config file** in three layers (later overrides earlier):
 
-1. an **implicit `.goalyrc`** discovered in `--workspace` (or the current directory) — optional,
-2. an **explicit `--config <path>`** JSON file — when given it **must exist** (fails closed).
+1. a **home-level `~/.goalyrc`** — your personal defaults across every project — optional,
+2. an **implicit `.goalyrc`** discovered in `--workspace` (or the current directory) — optional,
+3. an **explicit `--config <path>`** JSON file — when given it **must exist** (fails closed).
 
 Keys mirror the CLI flag names in **kebab-case** (`verify-cmd`, `max-iterations`,
 `harness-timeout-ms`). **Any flag passed on the command line overrides the file**, so the full
-precedence is: **CLI flag > `--config` file > `.goalyrc` > tool default**.
+precedence is:
+**CLI flag > `--config` file > `<workspace>/.goalyrc` > `~/.goalyrc` > tool default**.
+
+This is what makes `goaly "my goal"` enough: drop your hands-off preference in `~/.goalyrc` once
+and every project inherits it.
+
+```jsonc
+// ~/.goalyrc — your personal default: run hands-off everywhere (generate + Claude already apply)
+{ "autonomous": true }
+```
 
 ```jsonc
 // .goalyrc — committed once, applies to every `goaly run` in this repo

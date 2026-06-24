@@ -1,4 +1,5 @@
 import { readFile as fsReadFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { errorMessage } from '../util/errors';
@@ -9,18 +10,25 @@ import { UsageError, type RawFlags } from './args';
  * models, per-step timeouts, …) need not be repeated on every `goaly run`. A JSON file provides
  * DEFAULT flags that any explicit CLI flag overrides.
  *
- * Two sources, layered low→high precedence (v1 keeps this deliberately small):
- *   1. an implicit `.goalyrc` discovered in `--workspace` (or the cwd) — absent is fine,
- *   2. an explicit `--config <path>` JSON file — when given it MUST exist (fails closed).
- * So the full resolution order is: tool default < `.goalyrc` < `--config` file < CLI flag.
+ * Three sources, layered low→high precedence (each is optional except where noted):
+ *   1. a home-level `~/.goalyrc` — a developer's personal defaults across every project,
+ *   2. an implicit `.goalyrc` discovered in `--workspace` (or the cwd) — project defaults,
+ *   3. an explicit `--config <path>` JSON file — when given it MUST exist (fails closed).
+ * So the full resolution order is:
+ *   tool default < `~/.goalyrc` < `<workspace>/.goalyrc` < `--config` file < CLI flag.
+ * This is what makes `goaly "my goal"` enough: a one-time `~/.goalyrc` (e.g. `{ "autonomous":
+ * true }`) carries the easy-mode wiring so only the goal need be typed.
  *
  * Keys mirror the CLI flag names in kebab-case (`max-iterations`, `verify-cmd`) — one spelling,
  * no aliases. This is an external seam: it parses with Zod and fails closed (invalid JSON, an
  * unknown key, or a non-primitive value is a usage error, never a silent ignore).
  */
 
-/** The implicit config file discovered in the workspace/cwd. JSON content. */
+/** The implicit config file discovered in the workspace/cwd (and at the home level). JSON content. */
 export const IMPLICIT_CONFIG_FILENAME = '.goalyrc';
+
+/** Human-readable source label for the home-level config (the real path is `os.homedir()/.goalyrc`). */
+export const HOME_CONFIG_LABEL = `~/${IMPLICIT_CONFIG_FILENAME}`;
 
 /** A single config value: the JSON primitives a CLI flag can carry. */
 const FlagValue = z.union([z.string(), z.number(), z.boolean()]);
@@ -149,27 +157,45 @@ function overlayFromText(text: string, source: string): RawFlags {
 }
 
 /**
- * Load the layered config overlay: the implicit {@link IMPLICIT_CONFIG_FILENAME} in `dir` (if
- * present) overlaid by an explicit `--config <path>` file (if given — a missing explicit path is a
- * usage error). Returns an empty overlay when neither exists. These two reads are the ONLY
- * filesystem access here; everything downstream sees a plain {@link RawFlags} overlay.
+ * Load the layered config overlay: a home-level `~/.goalyrc` (lowest precedence) overlaid by the
+ * implicit {@link IMPLICIT_CONFIG_FILENAME} in `dir`, overlaid by an explicit `--config <path>`
+ * file (if given — a missing explicit path is a usage error). Returns an empty overlay when none
+ * exist. These reads are the ONLY filesystem access here; everything downstream sees a plain
+ * {@link RawFlags} overlay. `homeDir` is injectable so tests stay deterministic without depending
+ * on the runner's real home.
  */
 export async function loadConfig(
   dir: string,
   explicitPath: string | undefined,
   read: ConfigFileReader = defaultConfigFileReader,
+  homeDir: string = os.homedir(),
 ): Promise<LoadedConfig> {
   const overlay: RawFlags = {};
   const sources: string[] = [];
 
-  // 1. Implicit `.goalyrc` (optional — absent is fine, it's only a source of defaults).
-  const implicit = await read(path.join(dir, IMPLICIT_CONFIG_FILENAME));
+  const homePath = path.join(homeDir, IMPLICIT_CONFIG_FILENAME);
+  const workspacePath = path.join(dir, IMPLICIT_CONFIG_FILENAME);
+  // When the cwd IS the home dir the two implicit files are the same on disk — read/apply/list it
+  // once (as the workspace file) so a single `~/.goalyrc` doesn't get layered onto itself.
+  const homeIsWorkspace = path.resolve(homePath) === path.resolve(workspacePath);
+
+  // 1. Home-level `~/.goalyrc` (optional, lowest precedence — personal cross-project defaults).
+  if (!homeIsWorkspace) {
+    const home = await read(homePath);
+    if (home !== undefined) {
+      Object.assign(overlay, overlayFromText(home, HOME_CONFIG_LABEL));
+      sources.push(HOME_CONFIG_LABEL);
+    }
+  }
+
+  // 2. Implicit workspace/cwd `.goalyrc` (optional — overrides the home file on conflicts).
+  const implicit = await read(workspacePath);
   if (implicit !== undefined) {
     Object.assign(overlay, overlayFromText(implicit, IMPLICIT_CONFIG_FILENAME));
     sources.push(IMPLICIT_CONFIG_FILENAME);
   }
 
-  // 2. Explicit `--config <path>` (required to exist; overrides the implicit file on conflicts).
+  // 3. Explicit `--config <path>` (required to exist; overrides the implicit files on conflicts).
   if (explicitPath !== undefined) {
     const text = await read(explicitPath);
     if (text === undefined) {
