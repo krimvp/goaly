@@ -107,6 +107,8 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     prepared: PreparedOutcome,
     /** Whether a setup command actually ran (for logs / `runs show`); false when the contract had none. */
     setupRan: z.boolean(),
+    /** LLM spend by the pre-flight soundness classification (absent when it did not run — see prepare.ts). */
+    llm: TokenUsage.optional(),
   }),
   z.object({
     tag: z.literal('AGENT_RAN'),

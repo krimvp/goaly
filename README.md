@@ -84,11 +84,16 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   you (e.g. `npm ci`) — delegated like the contract itself; `--setup-cmd` overrides it and `--no-setup`
   disables it. A non-zero setup exit is a typed, fail-closed **`SETUP_FAILED`** — the worker never starts
   on a broken tree (which is what drives an agent to hand-roll brittle workarounds for missing deps). The
-  pre-flight then proves the authored verification can actually *run*: if a deterministic check fails with
-  an error originating **in the authored verification files** (it can't even compile/collect), that's a
-  typed **`CONTRACT_UNSOUND`** abort **before any worker token is spent** — vs. an honest red (the
-  implementation is simply missing), which proceeds to the loop. The setup command is frozen into the
-  contract (shown at SEAL) so it can't drift. A plain `--verify-cmd` run with no setup skips this phase.
+  pre-flight then proves the authored verification can actually *run*: when a deterministic check fails, a
+  single **language-agnostic** classification (one read-only LLM call) decides whether the frozen
+  verification is **broken** (it can't compile/collect/run — a defect the agent can never fix) → a typed
+  **`CONTRACT_UNSOUND`** abort **before any worker token is spent**, vs. an honest red (the implementation
+  is simply missing) → proceed to the loop. (Reading the failure the way a human would is what keeps this
+  generic — pytest, `cargo`, `go test` and tsc all encode "couldn't run" vs "ran and failed" differently,
+  so no exit-code/regex rule could be both correct and cross-language.) It fails *open* to proceed on any
+  uncertainty — a genuinely broken frozen verifier is still caught at runtime by repeat-failure stuck
+  detection, so a false abort never blocks a legitimate run. The setup command is frozen into the contract
+  (shown at SEAL) so it can't drift. A plain `--verify-cmd` run with no authored files skips the check.
 - **Two keys for DONE:** the frozen verifier passes *and* the independent approver (Sign-off, veto-only)
   doesn't veto.
 - **Compile is resilient, not one-shot.** A `COMPILE_FAILED` (a correctable authoring mistake — bad

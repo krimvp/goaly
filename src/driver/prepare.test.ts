@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { prepareWorkspace } from './prepare';
 import { makeFakeContract, FakeWorkspace } from '../testing/fakes';
+import { FakeLlm } from '../llm/provider';
 import type { CommandResult } from '../workspace/workspace';
 
 /** A workspace whose `run` returns scripted results in order, recording each command it was given. */
@@ -64,103 +65,101 @@ describe('prepareWorkspace — setup (Fix #1)', () => {
 });
 
 describe('prepareWorkspace — pre-flight (Fix #2)', () => {
-  it('a deterministic failure rooted in src/ is an honest red → proceed', async () => {
+  // The pre-flight soundness classification is language-agnostic: a failing deterministic rung is
+  // handed to the LLM, which decides broken-frozen-verifier (→ contract-unsound) vs honest-red
+  // (→ proceed). These tests drive that decision with a scripted FakeLlm rather than text/exit-code
+  // heuristics, so they hold for pytest, cargo, go test, tsc — any runner.
+  const generatedFiles = [{ path: 'verify/x.test.ts', sha256: 'a'.repeat(64) }];
+  /** A FakeLlm whose single response is the classifier's JSON verdict. */
+  const soundnessLlm = (brokenVerification: boolean, reason = 'because') =>
+    new FakeLlm([JSON.stringify({ brokenVerification, reason })]);
+
+  it('the LLM judges a red an honest red (impl missing) → proceed', async () => {
     const ws = new ScriptedWorkspace([{ exitCode: 1, stdout: '', stderr: 'src/parser.ts: not implemented' }]);
-    const contract = makeFakeContract({
-      rungs: [{ kind: 'deterministic', command: 'npm test' }],
-      generatedFiles: [{ path: 'verify/x.test.ts', sha256: 'a'.repeat(64) }],
-    });
-    const result = await prepareWorkspace({ workspace: ws }, contract);
+    const contract = makeFakeContract({ rungs: [{ kind: 'deterministic', command: 'npm test' }], generatedFiles });
+    const result = await prepareWorkspace({ workspace: ws, llm: soundnessLlm(false) }, contract);
     expect(result.prepared.status).toBe('proceed');
   });
 
-  it('a deterministic failure pointing at an authored verification file is contract-unsound', async () => {
+  it('the LLM judges the frozen verification broken → contract-unsound', async () => {
     const ws = new ScriptedWorkspace([
       { exitCode: 2, stdout: '', stderr: "verify/x.test.ts(3,5): error TS2339: Property 'not' does not exist" },
     ]);
     const contract = makeFakeContract({
       rungs: [{ kind: 'deterministic', command: 'npm run typecheck' }],
-      generatedFiles: [{ path: 'verify/x.test.ts', sha256: 'a'.repeat(64) }],
+      generatedFiles,
     });
-    const result = await prepareWorkspace({ workspace: ws }, contract);
+    const result = await prepareWorkspace(
+      { workspace: ws, llm: soundnessLlm(true, 'TS2339 in the authored test — it cannot compile') },
+      contract,
+    );
     expect(result.prepared.status).toBe('contract-unsound');
-    if (result.prepared.status === 'contract-unsound') expect(result.prepared.detail).toContain('verify/x.test.ts');
+    if (result.prepared.status === 'contract-unsound') {
+      expect(result.prepared.detail).toContain('cannot compile'); // the LLM's reason
+      expect(result.prepared.detail).toContain('verify/x.test.ts'); // the raw verifier output
+    }
   });
 
   // Regression (issue: `--verifier generate` + pytest aborts at pre-flight with 0 iterations). pytest
-  // echoes the authored test file's path on EVERY run — the session header and each traceback frame —
-  // so a healthy honest red (the implementation files don't exist yet) names the authored file too. A
-  // bare path-substring match wrongly rejected that as CONTRACT_UNSOUND. An honest assertion red must
-  // proceed: only a verification that could not RUN (compile/syntax/collection error) is unsound.
-  it('a pytest honest red that NAMES the authored test file is still proceed (issue regression)', async () => {
+  // echoes the authored test file's path on EVERY run — session header + every traceback frame — so a
+  // healthy honest red (the implementation files don't exist yet) names the authored file too. The old
+  // substring heuristic wrongly rejected that as CONTRACT_UNSOUND; the LLM reads it as the expected red.
+  it('a pytest honest red that NAMES the authored test file proceeds (issue regression)', async () => {
     const honestRed = [
-      'python3 -m pytest test_pi_verification.py: exit 1',
-      '============================= test session starts =============================',
-      'collected 5 items',
-      '',
       'test_pi_verification.py FFFFF                                            [100%]',
-      '',
-      '=================================== FAILURES ===================================',
-      '_________________________________ test_pi_1 ___________________________________',
       'test_pi_verification.py:8: in test_pi_1',
       '    pytest.fail("pi_1.py not found")',
       'E   Failed: pi_1.py not found',
-      '=========================== short test summary info ===========================',
       'FAILED test_pi_verification.py::test_pi_1 - Failed: pi_1.py not found',
-      '============================== 5 failed in 0.04s ==============================',
     ].join('\n');
     const ws = new ScriptedWorkspace([{ exitCode: 1, stdout: honestRed, stderr: '' }]);
     const contract = makeFakeContract({
       rungs: [{ kind: 'deterministic', command: 'python3 -m pytest test_pi_verification.py' }],
       generatedFiles: [{ path: 'test_pi_verification.py', sha256: 'a'.repeat(64) }],
     });
-    const result = await prepareWorkspace({ workspace: ws }, contract);
+    const result = await prepareWorkspace({ workspace: ws, llm: soundnessLlm(false) }, contract);
     expect(result.prepared.status).toBe('proceed');
   });
 
-  it('a pytest collection error in the authored test IS contract-unsound (fail-closed preserved)', async () => {
-    const collectionError = [
-      'python3 -m pytest test_pi_verification.py: exit 2',
-      '============================= test session starts =============================',
-      'collected 0 items / 1 error',
-      '',
-      '=================================== ERRORS ====================================',
-      '_____________________ ERROR collecting test_pi_verification.py ________________',
-      'test_pi_verification.py:3: in <module>',
-      '    import not_a_real_helper',
-      "E   ModuleNotFoundError: No module named 'not_a_real_helper'",
-      '=========================== short test summary info ===========================',
-      'ERROR test_pi_verification.py',
-      '!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!',
-    ].join('\n');
-    const ws = new ScriptedWorkspace([{ exitCode: 2, stdout: collectionError, stderr: '' }]);
+  it('a red with NO authored verification files proceeds without consulting the LLM', async () => {
+    const ws = new ScriptedWorkspace([ok, { exitCode: 1, stdout: '', stderr: 'some failure' }]);
     const contract = makeFakeContract({
-      rungs: [{ kind: 'deterministic', command: 'python3 -m pytest test_pi_verification.py' }],
-      generatedFiles: [{ path: 'test_pi_verification.py', sha256: 'a'.repeat(64) }],
-    });
-    const result = await prepareWorkspace({ workspace: ws }, contract);
-    expect(result.prepared.status).toBe('contract-unsound');
-    if (result.prepared.status === 'contract-unsound')
-      expect(result.prepared.detail).toContain('test_pi_verification.py');
+      setup: 'npm ci', // ⇒ pre-flight runs (needsPreparation) even with no generatedFiles
+      rungs: [{ kind: 'deterministic', command: 'npm test' }],
+    }); // no generatedFiles
+    const llm = soundnessLlm(true); // would say "broken" — but must never be called
+    const result = await prepareWorkspace({ workspace: ws, llm }, contract);
+    expect(result.prepared.status).toBe('proceed');
+    expect(llm.requests).toEqual([]); // classifier was not consulted
   });
 
-  it('a pytest SyntaxError in the authored test IS contract-unsound', async () => {
-    const syntaxError = [
-      'python3 -m pytest test_pi_verification.py: exit 2',
-      '_____________________ ERROR collecting test_pi_verification.py ________________',
-      'test_pi_verification.py:5: in <module>',
-      '    def test_pi_1(:',
-      'E     def test_pi_1(:',
-      'E                  ^',
-      'E   SyntaxError: invalid syntax',
-    ].join('\n');
-    const ws = new ScriptedWorkspace([{ exitCode: 2, stdout: syntaxError, stderr: '' }]);
-    const contract = makeFakeContract({
-      rungs: [{ kind: 'deterministic', command: 'python3 -m pytest test_pi_verification.py' }],
-      generatedFiles: [{ path: 'test_pi_verification.py', sha256: 'a'.repeat(64) }],
-    });
-    const result = await prepareWorkspace({ workspace: ws }, contract);
-    expect(result.prepared.status).toBe('contract-unsound');
+  it('a red with no LLM wired proceeds (cannot classify ⇒ honest red assumed)', async () => {
+    const ws = new ScriptedWorkspace([{ exitCode: 1, stdout: '', stderr: 'verify/x.test.ts boom' }]);
+    const contract = makeFakeContract({ rungs: [{ kind: 'deterministic', command: 'npm test' }], generatedFiles });
+    const result = await prepareWorkspace({ workspace: ws }, contract); // no llm
+    expect(result.prepared.status).toBe('proceed');
+  });
+
+  it('a classifier LLM that errors fails OPEN to proceed (runtime ladder is the real backstop)', async () => {
+    const ws = new ScriptedWorkspace([{ exitCode: 2, stdout: '', stderr: 'verify/x.test.ts boom' }]);
+    const contract = makeFakeContract({ rungs: [{ kind: 'deterministic', command: 'npm test' }], generatedFiles });
+    const throwingLlm = new (class extends FakeLlm {
+      constructor() {
+        super(['unused']);
+      }
+      override async complete(): ReturnType<FakeLlm['complete']> {
+        throw new Error('provider exploded');
+      }
+    })();
+    const result = await prepareWorkspace({ workspace: ws, llm: throwingLlm }, contract);
+    expect(result.prepared.status).toBe('proceed');
+  });
+
+  it('an unparseable classifier response fails OPEN to proceed', async () => {
+    const ws = new ScriptedWorkspace([{ exitCode: 2, stdout: '', stderr: 'verify/x.test.ts boom' }]);
+    const contract = makeFakeContract({ rungs: [{ kind: 'deterministic', command: 'npm test' }], generatedFiles });
+    const result = await prepareWorkspace({ workspace: ws, llm: new FakeLlm(['not json at all']) }, contract);
+    expect(result.prepared.status).toBe('proceed');
   });
 
   it('all deterministic rungs already passing ⇒ proceed', async () => {

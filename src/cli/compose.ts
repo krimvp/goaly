@@ -271,6 +271,10 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     }),
     makeLadder: (contract) => buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs),
     approver: new AgentApprover({ llm: llmFor(models.approver, 'approve') }),
+    // Pre-flight soundness classifier (Fix #2): a read-only call that decides whether a failing
+    // deterministic pre-flight rung is a broken frozen verifier or an honest red. Reuses the judge
+    // model — it is a verification judgment — and is metered through the same shared meter.
+    prepareLlm: llmFor(models.judge, 'preflight'),
     workspace,
     clock,
     budget: new SystemBudgetMeter(config.budget, clock),
