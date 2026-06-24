@@ -336,8 +336,10 @@ goaly runs show run-&lt;id&gt;</pre>
       always run on the <b>full working tree</b> (they execute commands, not diffs — the ungameable key), and the
       terminal <b>Sign-off approver</b> is pinned to the run's <b>start</b> baseline, so it reviews the
       <b>entire</b> change — a violation smeared across iterations, where no single delta looks bad, is still
-      caught. A checkpoint that can't be taken falls back to the full diff (never an empty one); it's a no-op
-      under <code>--phased</code>, which already bounds each phase's diff.</p>
+      caught. A checkpoint that can't be taken falls back to the full diff (never an empty one). It
+      <b>composes with <code>--phased</code></b>: per-iteration deltas feed the judge <i>within</i> a phase,
+      while the approver baseline advances only at phase boundaries — so each phase's Sign-off still reviews
+      that phase's whole cumulative diff.</p>
 
     <p class="lede reveal" style="margin-top:1.6rem">
       The full picture — the state machine, the DECIDE truth table, stuck-detection, the four seams, the

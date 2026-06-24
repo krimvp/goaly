@@ -9,12 +9,15 @@ import {
   FakeApprover,
   FakeCompiler,
   FakeSealGate,
+  FakePlanner,
+  FakePlanGate,
   FakeWorkspace,
   ManualClock,
   ManualBudgetMeter,
   InMemoryRunLog,
   recordingLogger,
   makeFakeContract,
+  makeFakePlan,
   makeConfig,
   passVerdict,
   failVerdict,
@@ -197,5 +200,67 @@ describe('drive() — per-iteration delta diffs for the judge (issue #49)', () =
     expect(verifier.baselines).toEqual(['HEAD', 'HEAD']);
     // The approver diffs against the active (default) baseline exactly as before.
     expect(approver.inputs[0]!.diff).toBe('default-diff');
+  });
+});
+
+describe('drive() — --delta-verify composes with --phased (issue #49)', () => {
+  it('per-iteration deltas feed the judge WITHIN a phase, while the approver stays pinned to each phase start', async () => {
+    const ws = new FakeWorkspace('0000000');
+    // Per-baseline diff text so we can prove exactly which baseline each Sign-off reviewed.
+    ws.setDiffFor('HEAD', 'cum-phase0'); // phase 0 (sub-goal one) start = run start
+    ws.setDiffFor('aaaa001', 'DELTA-within-phase0'); // the per-iteration checkpoint inside phase 0
+    ws.setDiffFor('aaaa002', 'cum-phase1'); // phase 1 (sub-goal two) start
+    ws.setDiffFor('aaaa003', 'cum-accept'); // acceptance phase start
+
+    // One shared "judge": phase 0 takes TWO iterations (fail → pass) so a delta checkpoint lands
+    // inside it; phases 1 and acceptance pass first try. Records the baseline each verify saw.
+    const judge = new RecordingVerifier([
+      failVerdict(),
+      passVerdict(),
+      passVerdict(),
+      passVerdict(),
+    ]);
+
+    const runlog = new InMemoryRunLog();
+    const deps: DriverDeps = {
+      compiler: new FakeCompiler(makeFakeContract({ goal: 'phase contract' })),
+      seal: new FakeSealGate({ kind: 'approve' }),
+      planner: new FakePlanner(makeFakePlan({ phases: [{ goal: 'one' }, { goal: 'two' }] })),
+      planGate: new FakePlanGate({ kind: 'approve' }),
+      // 4 agent turns: phase0-iter1, phase0-iter2, phase1, acceptance — all distinct tree hashes.
+      harness: new FakeHarness(
+        [{ postHash: 'aaaa001' }, { postHash: 'aaaa002' }, { postHash: 'aaaa003' }, { postHash: 'aaaa004' }],
+        ws,
+      ),
+      makeLadder: () => judge,
+      approver: new FakeApprover([]),
+      workspace: ws,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(false),
+      runlog,
+    };
+
+    const approver = deps.approver as FakeApprover;
+    const outcome = await drive(
+      deps,
+      makeConfig({ phased: true, deltaVerify: true, goal: 'big goal' }),
+      runId,
+    );
+    expect(outcome.status).toBe('DONE');
+
+    // The JUDGE saw the per-iteration delta inside phase 0: iteration 2 ran against the checkpoint
+    // taken after iteration 1 (aaaa001), not the phase start.
+    expect(judge.baselines).toEqual(['HEAD', 'aaaa001', 'aaaa002', 'aaaa003']);
+
+    // The APPROVER stayed cumulative per phase: it reviewed each phase's WHOLE diff (against that
+    // phase's start), and NEVER the shrunken within-phase delta.
+    expect(approver.inputs.map((i) => i.diff)).toEqual(['cum-phase0', 'cum-phase1', 'cum-accept']);
+    expect(approver.inputs.some((i) => i.diff === 'DELTA-within-phase0')).toBe(false);
+
+    // Delta-verify was genuinely active inside the phase: a per-iteration CHECKPOINTED (tree aaaa001)
+    // sits alongside the two between-phase PHASE_ADVANCED markers.
+    const entries = (await runlog.read())!.entries;
+    expect(entries.some((e) => e.event.tag === 'CHECKPOINTED' && e.event.tree === 'aaaa001')).toBe(true);
+    expect(entries.filter((e) => e.event.tag === 'PHASE_ADVANCED')).toHaveLength(2);
   });
 });

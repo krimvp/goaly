@@ -122,9 +122,10 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   **DONE decision stays cumulative** — the deterministic rungs always run on the **full working tree**
   (the ungameable key), and the terminal **Sign-off approver reviews the diff against the run's start
   baseline** — so a change *smeared* across iterations (no single delta looks bad) is still caught. If
-  a checkpoint can't be taken it falls back to the full diff (never an empty one). For a huge
-  **monolithic** change, prefer `--phased` to bound the cumulative diff the terminal approver ingests;
-  `--delta-verify` is a no-op under `--phased` (which already decomposes).
+  a checkpoint can't be taken it falls back to the full diff (never an empty one). It **composes with
+  `--phased`**: per-iteration deltas feed the judge *within* a phase, while the approver stays pinned
+  to each *phase's* start (so it reviews that phase's whole cumulative diff) — and `--phased` is still
+  the right tool to bound the cumulative diff for a huge monolithic change.
 - **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable, **resumable**, and
   **inspectable** after the fact (`goaly runs list` / `goaly runs show`).
 - **Per-run spend report:** every run ends with a token breakdown by layer — the **harness** vs. the
@@ -496,10 +497,12 @@ together cover the whole change:
 Other guarantees hold: the working-tree hash that drives stuck-detection is unaffected (it never
 looks at the baseline); the checkpoints are written to the run log so `--resume` frames the same
 deltas; and if a checkpoint can't be taken the iteration **falls back to the full diff** (never an
-empty one that would read as "nothing to review"). For a huge **monolithic** change, prefer `--phased`
-to bound the cumulative diff the terminal approver ingests — `--delta-verify` is a **no-op under
-`--phased`**, which already decomposes the goal and runs its own per-phase approver plus a final
-cumulative acceptance.
+empty one that would read as "nothing to review"). It **composes with `--phased`**: per-iteration
+deltas feed the judge *within* each phase, while the approver baseline advances only at **phase
+boundaries** — so each phase's Sign-off reviews that phase's whole cumulative diff, exactly as a
+non-delta phased run does. For a huge **monolithic** change, `--phased` remains the way to bound the
+cumulative diff the terminal approver ingests, by decomposing the goal into phases each with their own
+per-phase approver plus a final cumulative acceptance.
 
 ### Per-run spend report
 
