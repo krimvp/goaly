@@ -107,8 +107,13 @@ export async function drive(
   const log = deps.logger ?? noopLogger;
   const llmMeter = deps.llmMeter ?? new LlmTokenMeter();
   // Capture the run's START baseline BEFORE any internal checkpoint (or the resume re-point below)
-  // advances it (compose re-applies `--baseline`/HEAD before drive() runs, so this is stable across
-  // resume). Under --delta-verify the terminal Sign-off approver is pinned to a CUMULATIVE baseline —
+  // advances it. On a FRESH run this is `--baseline`/HEAD as compose applied it. On --resume it is
+  // whatever compose re-applied THIS invocation: `--baseline` is not persisted in the log, so a resumed
+  // run that omits the flag falls back to HEAD here (the approver then reviews HEAD→now instead of
+  // ref→now). That is safe for what delta-verify guards against — goaly makes no commits mid-run, so
+  // every iteration's work is post-HEAD and stays fully in the approver's view; only pre-existing
+  // ref→HEAD committed code drops out, which the deterministic rungs cover anyway. Phased runs instead
+  // re-pin from the log below. Under --delta-verify the terminal Sign-off approver is pinned to a CUMULATIVE baseline —
   // `approverBaseline` — so it reviews the whole change a per-iteration judge would never see at once
   // (the cumulative guard, issue #49). It starts at the run-start baseline and, in a --phased run,
   // advances to each PHASE boundary (so the approver reviews that phase's whole cumulative diff) while
@@ -205,6 +210,11 @@ export async function drive(
         (event.tag === 'VERIFIED' || event.tag === 'SIGNOFF_DECIDED') &&
         commands[0]?.tag === 'RUN_AGENT'
       ) {
+        // Snapshot the baseline BEFORE checkpointing: `recordCheckpoint` calls `workspace.checkpoint()`
+        // which advances the in-memory baseline *before* it appends the CHECKPOINTED marker, so if that
+        // append throws we must roll the baseline back (below) — otherwise the live judge keeps seeing
+        // the delta while the unlogged advance silently diverges from what `--resume` reconstructs.
+        const priorBaseline = deps.workspace.currentBaseline();
         try {
           const cp = await recordCheckpoint(
             { workspace: deps.workspace, runlog: deps.runlog, clock: deps.clock, logger: log },
@@ -216,8 +226,12 @@ export async function drive(
           seq = cp.seq;
         } catch (e) {
           // Fail-closed fallback (#4): a failed checkpoint must NEVER crash the run or leave an empty
-          // baseline. Skip advancing — the judge then sees the larger cumulative diff this iteration
-          // (safe; never the "nothing to review" empty diff that would read as a false green).
+          // baseline. Roll the baseline back to its pre-checkpoint value (checkpoint() may have already
+          // advanced it before the append threw) so the judge genuinely falls back to the larger
+          // cumulative diff this iteration — never the "nothing to review" empty diff that would read as
+          // a false green — and the live run frames the same diff a resume (which never saw a
+          // CHECKPOINTED) would reconstruct.
+          deps.workspace.setBaseline(priorBaseline);
           log.warn('delta-verify checkpoint failed; judge will see the full diff this iteration', {
             reason: errorMessage(e),
           });

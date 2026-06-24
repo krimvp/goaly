@@ -180,6 +180,38 @@ describe('drive() — per-iteration delta diffs for the judge (issue #49)', () =
     ).toBe(true);
   });
 
+  it('rolls the baseline back when the CHECKPOINTED append throws (checkpoint advanced it first)', async () => {
+    const ws = new FakeWorkspace('0000000');
+    const { deps, verifier, runlog, records } = build({
+      ws,
+      verdicts: [failVerdict(), passVerdict()],
+      approvals: [approve()],
+      harness: [{ postHash: '1111111' }, { postHash: '2222222' }],
+    });
+    // The checkpoint snapshot SUCCEEDS (advancing the active baseline to 1111111), but persisting the
+    // CHECKPOINTED marker throws — the crash window the rollback guards. Other appends still succeed so
+    // the run can reach DONE.
+    const realAppend = runlog.append.bind(runlog);
+    runlog.append = async (entry) => {
+      if (entry.event.tag === 'CHECKPOINTED') throw new Error('append exploded');
+      return realAppend(entry);
+    };
+
+    const outcome = await drive(deps, makeConfig({ goal: 'delta goal', deltaVerify: true }), runId);
+
+    expect(outcome.status).toBe('DONE');
+    // checkpoint() advanced the baseline to 1111111, then the failed append rolled it back to HEAD —
+    // so iteration 2's judge saw the FULL diff (HEAD), not the unlogged delta (the fail-closed promise).
+    expect(ws.baselineCalls).toEqual(['1111111', 'HEAD']);
+    expect(verifier.baselines).toEqual(['HEAD', 'HEAD']);
+    // The append never landed → no CHECKPOINTED in the log, so a resume reconstructs the same HEAD
+    // baseline the live run rolled back to (no live-vs-replay divergence).
+    expect((await runlog.read())!.entries.some((e) => e.event.tag === 'CHECKPOINTED')).toBe(false);
+    expect(
+      records.some((r) => r.msg === 'delta-verify checkpoint failed; judge will see the full diff this iteration'),
+    ).toBe(true);
+  });
+
   it('is a no-op when the flag is off: no checkpoints, approver diff unchanged (default-mode parity)', async () => {
     const ws = new FakeWorkspace('0000000');
     ws.setDiffFor('HEAD', 'default-diff');
