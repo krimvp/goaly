@@ -106,6 +106,21 @@ export async function drive(
   let contractHash: ContractHash | null = null;
   const log = deps.logger ?? noopLogger;
   const llmMeter = deps.llmMeter ?? new LlmTokenMeter();
+  // Capture the run's START baseline BEFORE any internal checkpoint (or the resume re-point below)
+  // advances it. On a FRESH run this is `--baseline`/HEAD as compose applied it. On --resume it is
+  // whatever compose re-applied THIS invocation: `--baseline` is not persisted in the log, so a resumed
+  // run that omits the flag falls back to HEAD here (the approver then reviews HEAD→now instead of
+  // ref→now). That is safe for what delta-verify guards against — goaly makes no commits mid-run, so
+  // every iteration's work is post-HEAD and stays fully in the approver's view; only pre-existing
+  // ref→HEAD committed code drops out, which the deterministic rungs cover anyway. Phased runs instead
+  // re-pin from the log below. Under --delta-verify the terminal Sign-off approver is pinned to a CUMULATIVE baseline —
+  // `approverBaseline` — so it reviews the whole change a per-iteration judge would never see at once
+  // (the cumulative guard, issue #49). It starts at the run-start baseline and, in a --phased run,
+  // advances to each PHASE boundary (so the approver reviews that phase's whole cumulative diff) while
+  // per-iteration delta checkpoints advance only the judge's (workspace) baseline. It never advances
+  // on those per-iteration checkpoints — that is what keeps the approver cumulative.
+  const runStartBaseline = deps.workspace.currentBaseline();
+  let approverBaseline = runStartBaseline;
 
   log.info(options.resume === true ? 'resuming run' : 'starting run', {
     runId,
@@ -123,6 +138,9 @@ export async function drive(
     // the same small-diff baseline it had advanced to. This OVERRIDES any `--baseline` set at compose
     // time: the logged checkpoint reflects real progress and is the authoritative resume state.
     if (resumed.baseline !== null) deps.workspace.setBaseline(resumed.baseline);
+    // Re-pin the approver's cumulative baseline to the current phase's start (issue #49). Null ⇒ no
+    // phase has advanced yet (or a classic run) ⇒ keep the run-start baseline captured above.
+    if (resumed.phaseBaseline !== null) approverBaseline = resumed.phaseBaseline;
   } else {
     [state, commands] = initial(config);
     seq = 0;
@@ -141,7 +159,13 @@ export async function drive(
 
       // Perform the effect (the only place anything stochastic/IO happens), then build the
       // Event. `ladder` is created at COMPILE and reused for every RUN_VERIFIER.
-      const performed = await perform(command, deps, ladder, llmMeter);
+      const performed = await perform(
+        command,
+        deps,
+        ladder,
+        llmMeter,
+        config.deltaVerify ? approverBaseline : undefined,
+      );
       const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge
       if (performed.ladder !== undefined) ladder = performed.ladder;
       if (event.tag === 'CONTRACT_COMPILED') contractHash = event.contract.contractHash;
@@ -166,6 +190,53 @@ export async function drive(
       log.debug('transition', { from: state.tag, to: next.tag, seq });
       state = next;
       commands = nextCommands;
+
+      // Advance the approver's CUMULATIVE baseline at each --phased boundary (issue #49): from the
+      // next phase on, Sign-off reviews that phase's whole change (against its start), exactly as a
+      // non-delta phased run does. Per-iteration delta checkpoints (below) never touch this — only
+      // phase boundaries do — which is what keeps the approver cumulative within a phase.
+      if (event.tag === 'PHASE_ADVANCED') approverBaseline = event.tree;
+
+      // Delta-verify (issue #49): after each CONTINUATION iteration — a ladder fail (`VERIFIED` →
+      // `RUN_AGENT`) or a Sign-off veto (`SIGNOFF_DECIDED` → `RUN_AGENT`) that loops back to the
+      // agent — take an internal checkpoint so the NEXT iteration's judge sees only its own delta.
+      // (The first `RUN_AGENT` is excluded: its predecessor is CONTRACT_COMPILED/SEALED, not a
+      // verify/Sign-off event.) The cumulative keys are untouched: deterministic rungs always run on
+      // the full working tree, and the terminal approver is pinned to `approverBaseline`. This runs
+      // in a --phased run too: it advances only the judge's (workspace) baseline WITHIN a phase, while
+      // the approver baseline advances only at phase boundaries (above) — so the two compose cleanly.
+      if (
+        config.deltaVerify &&
+        (event.tag === 'VERIFIED' || event.tag === 'SIGNOFF_DECIDED') &&
+        commands[0]?.tag === 'RUN_AGENT'
+      ) {
+        // Snapshot the baseline BEFORE checkpointing: `recordCheckpoint` calls `workspace.checkpoint()`
+        // which advances the in-memory baseline *before* it appends the CHECKPOINTED marker, so if that
+        // append throws we must roll the baseline back (below) — otherwise the live judge keeps seeing
+        // the delta while the unlogged advance silently diverges from what `--resume` reconstructs.
+        const priorBaseline = deps.workspace.currentBaseline();
+        try {
+          const cp = await recordCheckpoint(
+            { workspace: deps.workspace, runlog: deps.runlog, clock: deps.clock, logger: log },
+            runId,
+            seq,
+            contractHash,
+            next.tag,
+          );
+          seq = cp.seq;
+        } catch (e) {
+          // Fail-closed fallback (#4): a failed checkpoint must NEVER crash the run or leave an empty
+          // baseline. Roll the baseline back to its pre-checkpoint value (checkpoint() may have already
+          // advanced it before the append threw) so the judge genuinely falls back to the larger
+          // cumulative diff this iteration — never the "nothing to review" empty diff that would read as
+          // a false green — and the live run frames the same diff a resume (which never saw a
+          // CHECKPOINTED) would reconstruct.
+          deps.workspace.setBaseline(priorBaseline);
+          log.warn('delta-verify checkpoint failed; judge will see the full diff this iteration', {
+            reason: errorMessage(e),
+          });
+        }
+      }
     }
   } catch (e) {
     // Last-resort safety net: every effectful seam is individually fail-closed, but an unexpected
@@ -204,12 +275,15 @@ export type CheckpointDeps = Pick<DriverDeps, 'workspace' | 'runlog' | 'clock'> 
  * {@link Workspace.checkpoint}), adopt it as the new diff baseline, and append a `CHECKPOINTED` event
  * to the run log so `--resume` reconstructs the advanced baseline by replaying the log.
  *
- * This is the PRIMITIVE; the *policy* of when to checkpoint (e.g. between phases of a large build) is
- * deliberately a separate concern (issue #46) — so this is not wired into the standard verify/Sign-off
- * loop, where advancing the baseline mid-run would shrink what Sign-off's approver reviews. The reducer
- * is untouched: a `CHECKPOINTED` event is a baseline marker, never fed to `step()`. Returns the next
- * `seq` and the snapshotted tree SHA. Fail-closed: a checkpoint snapshot that throws propagates to the
- * caller's loop, which resolves to a crashed/ABORTED run — never a silently empty baseline.
+ * This is the PRIMITIVE; the *policy* of when to checkpoint is the caller's. Two callers use it:
+ * phased runs checkpoint between phases (issue #46/#48), and `--delta-verify` checkpoints after each
+ * continuation iteration (issue #49) so the next iteration's judge sees only its own delta. Wiring it
+ * into the per-iteration loop is safe ONLY because delta-verify pins the terminal Sign-off approver to
+ * the run's START baseline — otherwise advancing the baseline mid-run would shrink what Sign-off
+ * reviews. The reducer is untouched: a `CHECKPOINTED` event is a baseline marker, never fed to
+ * `step()`. Returns the next `seq` and the snapshotted tree SHA. Fail-closed: a checkpoint snapshot
+ * that throws propagates to the caller, which under --delta-verify degrades to the full diff for that
+ * iteration (never a silently empty baseline).
  */
 export async function recordCheckpoint(
   deps: CheckpointDeps,
@@ -337,6 +411,14 @@ async function perform(
   deps: DriverDeps,
   ladder: Verifier | null,
   llmMeter: LlmTokenMeter,
+  /**
+   * Delta-verify (#49): the cumulative baseline the Sign-off approver's diff is pinned to — the run's
+   * START baseline, or in a --phased run the current PHASE's start. `undefined` ⇒ default behavior —
+   * the approver diffs against the workspace's active baseline, exactly as before. Set only when
+   * `--delta-verify` is on, so the terminal approver stays cumulative while per-iteration checkpoints
+   * have advanced the active baseline for the judge.
+   */
+  approverBaseline: string | undefined,
 ): Promise<Performed> {
   const log = deps.logger ?? noopLogger;
 
@@ -521,7 +603,10 @@ async function perform(
     case 'REQUEST_SIGNOFF': {
       let diff = '';
       try {
-        diff = await deps.workspace.diff();
+        // Pin the approver to the run's START baseline under --delta-verify so it reviews the WHOLE
+        // cumulative change (the guard), not the shrunken delta the internal checkpoints left on the
+        // active baseline. `undefined` ⇒ the default active-baseline diff (behavior unchanged).
+        diff = await deps.workspace.diff(approverBaseline);
         const approval = await deps.approver.review({
           goal: command.goal,
           rubric: command.rubric,
@@ -569,6 +654,8 @@ type Resumed = {
   contract: CompiledContract | null;
   /** The latest internal checkpoint's tree SHA (issue #47), or null when none was taken. */
   baseline: DiffHash | null;
+  /** The current phase's start tree SHA (last PHASE_ADVANCED), for re-pinning the approver (#49). */
+  phaseBaseline: DiffHash | null;
 };
 
 /**
@@ -579,16 +666,32 @@ async function resume(deps: DriverDeps, config: RunConfig): Promise<Resumed> {
   const stored = await deps.runlog.read();
   if (stored === null) {
     const [state, commands] = initial(config);
-    return { state, commands, seq: 0, contractHash: null, contract: null, baseline: null };
+    return {
+      state,
+      commands,
+      seq: 0,
+      contractHash: null,
+      contract: null,
+      baseline: null,
+      phaseBaseline: null,
+    };
   }
 
   // Same replay-fold the read-only `runs` inspection uses — a single source of truth so an
   // inspected run's state matches exactly what resume reconstructs here.
-  const { state, commands, contract, contractHash, baseline } = replay(
+  const { state, commands, contract, contractHash, baseline, phaseBaseline } = replay(
     stored.header.config,
     stored.entries,
   );
-  return { state, commands, seq: stored.entries.length, contractHash, contract, baseline };
+  return {
+    state,
+    commands,
+    seq: stored.entries.length,
+    contractHash,
+    contract,
+    baseline,
+    phaseBaseline,
+  };
 }
 
 function buildOutcome(state: OrchestratorState, runId: RunId): RunOutcome {

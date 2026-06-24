@@ -21,6 +21,9 @@ function spyWorkspace(result: CommandResult): {
       return DiffHash.parse('0'.repeat(40));
     },
     setBaseline() {},
+    currentBaseline() {
+      return 'HEAD';
+    },
     async run(command, opts) {
       calls.push(opts !== undefined ? { command, opts } : { command });
       return result;

@@ -215,6 +215,10 @@ export class FakeWorkspace implements Workspace {
   readonly #fileHashes: Map<string, string> = new Map();
   /** Every baseline `setBaseline()`/`checkpoint()` adopted, in order — for asserting resume wiring. */
   readonly baselineCalls: string[] = [];
+  /** The effective baseline each `diff()` call resolved to, in order — for asserting delta-verify (#49). */
+  readonly diffBaselines: string[] = [];
+  /** Optional per-baseline diff text so a test can prove which baseline a `diff()` used. */
+  readonly #diffByBaseline: Map<string, string> = new Map();
   constructor(hash = '0000000', diffText = '', cmdResults: CommandResult[] = []) {
     this.#hash = hash;
     this.#diffText = diffText;
@@ -227,8 +231,16 @@ export class FakeWorkspace implements Workspace {
   get baseline(): string | undefined {
     return this.baselineCalls[this.baselineCalls.length - 1];
   }
+  /** The active baseline `diff()` defaults to (matches GitWorkspace's `HEAD` default). */
+  currentBaseline(): string {
+    return this.baseline ?? 'HEAD';
+  }
   setBaseline(ref: string): void {
     this.baselineCalls.push(ref);
+  }
+  /** Stub the diff text returned when `diff()` resolves to `baseline` (overrides the default text). */
+  setDiffFor(baseline: string, text: string): void {
+    this.#diffByBaseline.set(baseline, text);
   }
   /** Snapshot the current tree hash as the new baseline and return it (no real git). */
   async checkpoint(): Promise<DiffHash> {
@@ -244,8 +256,10 @@ export class FakeWorkspace implements Workspace {
   async diffHash(): Promise<DiffHash> {
     return DiffHash.parse(this.#hash);
   }
-  async diff(): Promise<string> {
-    return this.#diffText;
+  async diff(baseline?: string): Promise<string> {
+    const effective = baseline ?? this.currentBaseline();
+    this.diffBaselines.push(effective);
+    return this.#diffByBaseline.get(effective) ?? this.#diffText;
   }
   async run(_command: string): Promise<CommandResult> {
     return this.#cmdResults.shift() ?? { exitCode: 0, stdout: '', stderr: '' };

@@ -178,6 +178,11 @@ function phaseConfigFor(phase: PhaseCtx): RunConfig {
     budget: base.budget,
     stuckPolicy: base.stuckPolicy,
     diffIgnore: base.diffIgnore,
+    // Delta-verify is driven by the OUTER run config in the Driver loop (it reads `config.deltaVerify`
+    // for the whole run, not per-phase); this inner phase contract just inherits the value for honest
+    // round-tripping. Within a phase it advances only the judge's baseline; the approver baseline
+    // advances at phase boundaries — so it composes with phasing (issue #49).
+    deltaVerify: base.deltaVerify,
     judge: base.judge,
     ...(sub.rubric !== undefined ? { rubric: sub.rubric } : {}),
   };

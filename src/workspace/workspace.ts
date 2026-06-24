@@ -15,8 +15,16 @@ export type CommandResult = {
 export interface Workspace {
   /** Non-mutating content hash of the working tree (tracked changes + untracked files). */
   diffHash(): Promise<DiffHash>;
-  /** The working-tree diff as text, for the approver's Sign-off input. */
-  diff(): Promise<string>;
+  /**
+   * The working-tree diff as text, for the judge and the approver's Sign-off input. Defaults to the
+   * active baseline (see {@link setBaseline}/{@link checkpoint}). Pass an explicit `baseline` (a git
+   * ref or tree SHA) to diff against it instead — used by delta-verify (issue #49) to pin the terminal
+   * approver to the run's START baseline (the cumulative guard) even while internal checkpoints have
+   * advanced the active baseline so the per-iteration judge sees only the delta.
+   */
+  diff(baseline?: string): Promise<string>;
+  /** The currently-active diff baseline (a git ref or tree SHA; default `HEAD`). Read-only. */
+  currentBaseline(): string;
   /**
    * Snapshot the current working tree into a baseline handle (a git tree object) WITHOUT writing a
    * user-visible commit, moving HEAD/the branch, or touching the user's index — then make subsequent

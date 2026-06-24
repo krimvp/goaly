@@ -108,6 +108,17 @@ export const RunConfig = z.object({
    */
   diffIgnore: z.array(z.string().min(1)).default([]),
   /**
+   * Per-iteration delta diffs for the judge (issue #49). When true the Driver takes an internal
+   * checkpoint after each continuation iteration (issue #47), so the next iteration's LLM judge sees
+   * only the delta since that checkpoint instead of the full cumulative diff — keeping its prompt flat
+   * across a long run. The DONE decision stays cumulative: the deterministic rungs always run on the
+   * full working tree (ungameable key) and the terminal Sign-off approver reviews the diff against the
+   * run's START baseline (the cumulative guard). Scoped to the classic single-contract loop; a no-op
+   * under `--phased`, which already decomposes. Default false. Pure wiring; never enters the frozen
+   * contract.
+   */
+  deltaVerify: z.boolean().default(false),
+  /**
    * Quorum size + confidence floor for any LLM-judge rung. Frozen with the contract.
    */
   judge: z
@@ -148,6 +159,8 @@ export const CliInput = z.object({
   budgetWallClockMs: z.coerce.number().int().positive().optional(),
   /** Comma-separated extra paths to keep out of diffHash/diff. */
   diffIgnore: z.string().optional(),
+  /** Per-iteration delta diffs for the judge (issue #49); the CLI pre-parses the boolean. */
+  deltaVerify: z.boolean().optional(),
   /** Stuck-policy tuning (issue #54); booleans are pre-parsed by the CLI, the threshold coerced. */
   stuckNoDiff: z.boolean().optional(),
   stuckRepeatThreshold: z.coerce.number().int().min(2).optional(),
@@ -205,6 +218,7 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
       : {}),
     budget,
     ...(diffIgnore.length > 0 ? { diffIgnore } : {}),
+    ...(input.deltaVerify !== undefined ? { deltaVerify: input.deltaVerify } : {}),
     ...(Object.keys(stuckPolicy).length > 0 ? { stuckPolicy } : {}),
   } satisfies RunConfigInput);
 }

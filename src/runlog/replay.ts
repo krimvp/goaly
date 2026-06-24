@@ -24,6 +24,15 @@ export type ReplayResult = {
    * and a phased run's PHASE_ADVANCED (which also checkpoints between phases — issue #48).
    */
   readonly baseline: DiffHash | null;
+  /**
+   * The tree SHA of the most recent PHASE boundary (a phased run's PHASE_ADVANCED), or null before the
+   * first phase completes. Distinct from {@link baseline}: under `--delta-verify` per-iteration
+   * CHECKPOINTED markers advance the judge's baseline, but the terminal Sign-off approver is pinned to
+   * the CURRENT PHASE's start so it always reviews that phase's whole cumulative change (issue #49).
+   * The Driver re-points the approver baseline at this on `--resume`. Null ⇒ the approver falls back to
+   * the run-start baseline (the classic single-contract run, or phase 0 before any advance).
+   */
+  readonly phaseBaseline: DiffHash | null;
   /** The frozen plan a phased run authored (issue #48), or null on a classic single-contract run. */
   readonly plan: PhasePlan | null;
 };
@@ -39,6 +48,7 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
   let contract: CompiledContract | null = null;
   let contractHash: ContractHash | null = null;
   let baseline: DiffHash | null = null;
+  let phaseBaseline: DiffHash | null = null;
   let plan: PhasePlan | null = null;
 
   for (const entry of entries) {
@@ -61,9 +71,10 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
     // *and* updates `baseline`, unlike the pure CHECKPOINTED marker.
     if (entry.event.tag === 'PHASE_ADVANCED') {
       baseline = entry.event.tree;
+      phaseBaseline = entry.event.tree;
     }
     [state, commands] = step(state, entry.event);
   }
 
-  return { state, commands, contract, contractHash, baseline, plan };
+  return { state, commands, contract, contractHash, baseline, phaseBaseline, plan };
 }

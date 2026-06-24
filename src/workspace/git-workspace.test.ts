@@ -292,6 +292,55 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(delta).not.toContain('hello'); // the original committed content is below the baseline
   });
 
+  it('diff(baseline) diffs against the explicit baseline, ignoring the advanced active baseline (#49)', async () => {
+    const ws = new GitWorkspace(root);
+    // Iteration 1's change, then checkpoint so the active baseline advances past it.
+    await writeFile(join(root, 'file.txt'), 'first step\n');
+    await ws.checkpoint(); // active baseline := tree-after-first-step
+    // Iteration 2's change.
+    await writeFile(join(root, 'file.txt'), 'second step\n');
+
+    // The judge's per-iteration view: diff() against the ADVANCED baseline = only the delta.
+    const delta = await ws.diff();
+    expect(delta).toContain('second step');
+    expect(delta).toContain('-first step');
+
+    // The approver's cumulative view: diff('HEAD') reviews the WHOLE change since the run start,
+    // regardless of how far checkpoints advanced the active baseline (the cumulative guard).
+    const cumulative = await ws.diff('HEAD');
+    expect(cumulative).toContain('second step');
+    expect(cumulative).toContain('-hello'); // the original committed content IS under the run-start baseline
+    expect(cumulative).not.toContain('first step'); // the intermediate step is gone from the final tree
+  });
+
+  it('diff(baseline) keeps the empty-tree fallback when the baseline is HEAD on an unborn branch (#49)', async () => {
+    const bare = await mkdtemp(join(tmpdir(), 'goaly-gw-unborn-base-'));
+    try {
+      git(bare, 'init', '-q');
+      git(bare, 'config', 'user.email', 'test@example.com');
+      git(bare, 'config', 'user.name', 'Test User');
+      await writeFile(join(bare, 'fresh.txt'), 'brand new\n');
+      git(bare, 'add', '-A');
+
+      const ws = new GitWorkspace(bare);
+      // Explicit 'HEAD' baseline must fall back to the empty tree exactly like the default diff().
+      const text = await ws.diff('HEAD');
+      expect(text).toContain('fresh.txt');
+      expect(text).toContain('brand new');
+    } finally {
+      await rm(bare, { recursive: true, force: true });
+    }
+  });
+
+  it('currentBaseline reports HEAD by default and follows setBaseline/checkpoint (#49)', async () => {
+    const ws = new GitWorkspace(root);
+    expect(ws.currentBaseline()).toBe('HEAD');
+    ws.setBaseline('abc1234');
+    expect(ws.currentBaseline()).toBe('abc1234');
+    const tree = await ws.checkpoint();
+    expect(ws.currentBaseline()).toBe(tree);
+  });
+
   it('checkpoint never writes a commit and never moves HEAD/the branch (no user-visible footprint)', async () => {
     const ws = new GitWorkspace(root);
     const headBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout;
