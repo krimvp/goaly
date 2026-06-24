@@ -120,6 +120,10 @@ export class GitWorkspace implements Workspace {
     this.#baseline = ref;
   }
 
+  currentBaseline(): string {
+    return this.#baseline;
+  }
+
   /**
    * Snapshot the full working tree into a git TREE object (never a commit) and adopt it as the new
    * baseline, so the NEXT `diff()` is computed against current progress. The snapshot reuses the same
@@ -189,9 +193,12 @@ export class GitWorkspace implements Workspace {
     }
   }
 
-  async diff(): Promise<string> {
+  async diff(baseline?: string): Promise<string> {
     const ps = this.#pathspec();
-    let tracked = await this.#exec('git', ['-C', this.#root, 'diff', this.#baseline, ...ps], {
+    // Default to the active baseline; an explicit `baseline` (delta-verify's cumulative guard, #49)
+    // pins this diff to the run-start baseline regardless of how far checkpoints have advanced.
+    const base = baseline ?? this.#baseline;
+    let tracked = await this.#exec('git', ['-C', this.#root, 'diff', base, ...ps], {
       cwd: this.#root,
     });
 

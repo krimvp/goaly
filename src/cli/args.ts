@@ -102,7 +102,7 @@ Usage:
                [--sandbox[=none|auto|bwrap|container]]
                [--sandbox-net none|allow|allow:<host,…>]
                [--sandbox-image <ref>] [--sandbox-runtime docker|podman]
-               [--cost-table <path>] [--baseline <ref>] [--workspace <dir>] [--resume <runId>]
+               [--cost-table <path>] [--baseline <ref>] [--delta-verify] [--workspace <dir>] [--resume <runId>]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
                [--stream] [--stream-transcript] [--stream-file <path>]
 
@@ -154,6 +154,15 @@ Diff baseline (issue #47 — keep a run's diff small without touching the user's
                     N+1 at where run N finished, so each run reviews only its own delta — no
                     user-visible commits required. The no-op tree hash that drives stuck-detection is
                     unaffected (it always hashes the working tree). Precedence: CLI flag > config.
+  --delta-verify    (issue #49) keep the per-iteration JUDGE prompt flat across a long run: after each
+                    continuation iteration goaly takes an internal checkpoint (a --baseline-style tree,
+                    no commit) so the NEXT iteration's judge reviews only that iteration's delta, not
+                    the whole cumulative diff. The DONE decision stays cumulative — the deterministic
+                    rungs always run on the FULL working tree (ungameable), and the terminal Sign-off
+                    approver reviews the diff against the run's START baseline — so a change smeared
+                    across iterations is still caught. Default off. A no-op under --phased (which
+                    already decomposes). For a huge MONOLITHIC change, prefer --phased to bound the
+                    cumulative diff the terminal approver ingests.
 
 Stuck-detection tuning:
   --diff-ignore "<p1,p2,…>"  comma-separated extra paths kept OUT of the working-tree hash that
@@ -437,6 +446,7 @@ export async function parseArgs(
       ? { budgetWallClockMs: str(flags, 'budget-wall-ms') }
       : {}),
     ...(str(flags, 'diff-ignore') !== undefined ? { diffIgnore: str(flags, 'diff-ignore') } : {}),
+    ...(flags['delta-verify'] !== undefined ? { deltaVerify: true } : {}),
   });
 
   const harness = parseHarness(str(flags, 'harness'));

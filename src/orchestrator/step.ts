@@ -178,6 +178,9 @@ function phaseConfigFor(phase: PhaseCtx): RunConfig {
     budget: base.budget,
     stuckPolicy: base.stuckPolicy,
     diffIgnore: base.diffIgnore,
+    // Delta-verify is a no-op under phased decomposition (phased already bounds each phase's diff and
+    // advances the baseline at phase edges) — keep it off inside a phase contract (issue #49).
+    deltaVerify: false,
     judge: base.judge,
     ...(sub.rubric !== undefined ? { rubric: sub.rubric } : {}),
   };

@@ -326,6 +326,19 @@ goaly runs show run-&lt;id&gt;</pre>
       whole-run total; <code>--autonomous</code> auto-accepts the plan <b>and</b> each phase (still frozen +
       logged); <code>--resume</code> re-enters mid-plan without repeating completed phases.</p>
 
+    <!-- Per-iteration delta diffs -->
+    <h3 class="reveal" style="margin-top:3rem">Delta diffs: a flat judge prompt, a cumulative DONE</h3>
+    <p class="lede reveal" style="margin-bottom:1.2rem"><code>--delta-verify</code> (default off) keeps the
+      per-iteration <b>judge</b> prompt flat on a long run: after each continuation iteration goaly takes an
+      internal checkpoint (the same private tree snapshot as <code>--baseline</code> — <b>no commit</b>), so the
+      next iteration's judge reviews only <b>that iteration's delta</b> instead of the whole cumulative diff.
+      The trust model is preserved by keeping the <b>DONE decision cumulative</b>: the <b>deterministic rungs</b>
+      always run on the <b>full working tree</b> (they execute commands, not diffs — the ungameable key), and the
+      terminal <b>Sign-off approver</b> is pinned to the run's <b>start</b> baseline, so it reviews the
+      <b>entire</b> change — a violation smeared across iterations, where no single delta looks bad, is still
+      caught. A checkpoint that can't be taken falls back to the full diff (never an empty one); it's a no-op
+      under <code>--phased</code>, which already bounds each phase's diff.</p>
+
     <p class="lede reveal" style="margin-top:1.6rem">
       The full picture — the state machine, the DECIDE truth table, stuck-detection, the four seams, the
       write-ahead log and resume — is in the architecture docs.

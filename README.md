@@ -116,6 +116,15 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   computed *against*; the working-tree hash that drives stuck-detection is unaffected. (goaly can also
   advance the baseline internally via a private tree snapshot — no commit, no `HEAD`/branch/index
   movement — recorded so `--resume` reconstructs it.)
+- **Per-iteration delta diffs** (`--delta-verify`, default off) — keep the LLM **judge's** prompt flat
+  across a long run. goaly takes an internal checkpoint after each continuation iteration, so the next
+  iteration's judge reviews only *that iteration's* delta instead of the whole cumulative diff. The
+  **DONE decision stays cumulative** — the deterministic rungs always run on the **full working tree**
+  (the ungameable key), and the terminal **Sign-off approver reviews the diff against the run's start
+  baseline** — so a change *smeared* across iterations (no single delta looks bad) is still caught. If
+  a checkpoint can't be taken it falls back to the full diff (never an empty one). For a huge
+  **monolithic** change, prefer `--phased` to bound the cumulative diff the terminal approver ingests;
+  `--delta-verify` is a no-op under `--phased` (which already decomposes).
 - **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable, **resumable**, and
   **inspectable** after the fact (`goaly runs list` / `goaly runs show`).
 - **Per-run spend report:** every run ends with a token breakdown by layer — the **harness** vs. the
@@ -327,6 +336,9 @@ goaly run --goal "..." --resume run-<id> --workspace ./myrepo
 # Diff against a baseline instead of HEAD — keep a multi-step build's diff small with no commits:
 goaly run --goal "step 2 of the build" --verify-cmd "npm test" --baseline <ref-or-sha>
 
+# Keep the per-iteration judge prompt flat on a long run (DONE stays cumulative-safe):
+goaly run --goal "..." --verify-cmd "npm test" --delta-verify
+
 # Author verification into test/, give the compiler more self-correction, and loosen no-diff for an
 # exploratory build (authored files are auto git-excluded, so your `git status` stays clean):
 goaly run --goal "..." --generate --autonomous --verify-dir test \
@@ -459,8 +471,35 @@ finished on, and each run reviews only its own delta.
 - `goaly` can also advance the baseline **internally** via a private tree snapshot — a `git write-tree`
   through a throwaway index, so it writes **no commit and never moves `HEAD`, the branch, or the user's
   staging area** (objects are left dangling, gc-collectable; no `refs/goaly/*` is left behind). Each
-  snapshot is recorded in the run log so `--resume` reconstructs the advanced baseline. (The *policy*
-  for when to snapshot automatically is a follow-up; this ships the primitive + the explicit flag.)
+  snapshot is recorded in the run log so `--resume` reconstructs the advanced baseline. The *policy*
+  for when to snapshot automatically is `--delta-verify` (below) and `--phased`.
+
+### Per-iteration delta diffs (`--delta-verify`)
+
+Every iteration the LLM **judge** ingests the worker's diff; against the default `HEAD` baseline that
+diff grows monotonically across a long run, so the judge's prompt (and cost) balloons even when an
+iteration changed very little. `--delta-verify` (default **off**) keeps it flat: after each
+*continuation* iteration (a ladder fail or a Sign-off veto that loops back to the agent) goaly takes an
+internal checkpoint — the same private tree snapshot as `--baseline`, **no commit** — so the next
+iteration's judge reviews only **that iteration's delta**.
+
+The catch is the trust model: shrinking what each iteration sees must not let a change *smeared* across
+iterations slip through. The **DONE decision therefore stays cumulative**, backed by two keys that
+together cover the whole change:
+
+- the **deterministic rungs** always execute on the **full working tree** (they run commands, not
+  diffs — so they ignore the baseline entirely and remain the ungameable cumulative key); **and**
+- the terminal **Sign-off approver** is pinned to the run's **start** baseline, so it reviews the
+  **entire cumulative diff** — never the shrunken per-iteration delta. A violation that no single delta
+  reveals is still visible to the approver (and to the deterministic rungs).
+
+Other guarantees hold: the working-tree hash that drives stuck-detection is unaffected (it never
+looks at the baseline); the checkpoints are written to the run log so `--resume` frames the same
+deltas; and if a checkpoint can't be taken the iteration **falls back to the full diff** (never an
+empty one that would read as "nothing to review"). For a huge **monolithic** change, prefer `--phased`
+to bound the cumulative diff the terminal approver ingests — `--delta-verify` is a **no-op under
+`--phased`**, which already decomposes the goal and runs its own per-phase approver plus a final
+cumulative acceptance.
 
 ### Per-run spend report
 
