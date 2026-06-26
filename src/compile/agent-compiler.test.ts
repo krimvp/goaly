@@ -21,6 +21,22 @@ describe('AgentCompiler — existing verifier', () => {
     expect(llm.requests).toHaveLength(0); // no LLM call for existing
   });
 
+  it('derives requiredTools heuristically from the verify command (no LLM call)', async () => {
+    const compiler = new AgentCompiler({ llm: new FakeLlm([]) });
+    const config = makeConfig({
+      verifier: { kind: 'existing', ref: 'cargo fmt -- --check && cargo test' },
+    });
+    const contract = await compiler.compile(config);
+    expect(contract.requiredTools).toEqual(['cargo']);
+  });
+
+  it('a tool-less verify command (only builtins) freezes an empty requiredTools', async () => {
+    const compiler = new AgentCompiler({ llm: new FakeLlm([]) });
+    const config = makeConfig({ verifier: { kind: 'existing', ref: 'true' } });
+    const contract = await compiler.compile(config);
+    expect(contract.requiredTools).toEqual([]);
+  });
+
   it('carries --setup-cmd into the contract on the existing-command path (no LLM call)', async () => {
     const llm = new FakeLlm([]);
     const compiler = new AgentCompiler({ llm });
@@ -112,6 +128,22 @@ describe('AgentCompiler — generate verifier', () => {
     ]);
     expect(llm.requests).toHaveLength(1);
     expect(llm.requests[0]?.temperature).toBe(0);
+  });
+
+  it('freezes the LLM-authored requiredTools manifest into the contract', async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({ command: 'cargo test', rubric: '', requiredTools: ['cargo', 'rustup'] }),
+    ]);
+    const compiler = new AgentCompiler({ llm });
+    const contract = await compiler.compile(makeConfig({ verifier: { kind: 'generate' } }));
+    expect(contract.requiredTools).toEqual(['cargo', 'rustup']);
+  });
+
+  it('falls back to the heuristic when the LLM omits requiredTools', async () => {
+    const llm = new FakeLlm([JSON.stringify({ command: 'pytest -q', rubric: '' })]);
+    const compiler = new AgentCompiler({ llm });
+    const contract = await compiler.compile(makeConfig({ verifier: { kind: 'generate' } }));
+    expect(contract.requiredTools).toEqual(['pytest']);
   });
 
   it('freezes the LLM-authored setup command into the contract (Fix #1)', async () => {

@@ -5,7 +5,7 @@ import { DiffHash } from '../domain/ids';
 import { errorMessage } from '../util/errors';
 import { sha256Hex } from '../util/hash';
 import { runProcess } from '../util/spawn';
-import { scrubEnv } from './scrub-env';
+import { scrubEnv, augmentToolPath } from './scrub-env';
 import type { CommandResult, Workspace } from './workspace';
 
 /** The well-known git empty-tree object — a stable base for diffing a repo with no HEAD. */
@@ -285,12 +285,15 @@ export class GitWorkspace implements Workspace {
     // Honor the Workspace "never rejects" contract even if the injected exec throws.
     try {
       // The verify command runs worker/model-authored code on the host: deny it the parent's
-      // ambient secrets. Git operations above deliberately keep the full env.
-      const env = this.#scrubVerifyEnv ? scrubEnv(process.env) : undefined;
+      // ambient secrets. Git operations above deliberately keep the full env. Either way, extend PATH
+      // with the standard per-user tool bin dirs so a toolchain the agent installs mid-run (the default
+      // --install-missing-tools path) is discoverable here even though our process.env was fixed at
+      // startup.
+      const env = augmentToolPath(this.#scrubVerifyEnv ? scrubEnv(process.env) : process.env);
       const result = await this.#runExec(command, [], {
         cwd: this.#root,
         shell: true,
-        ...(env !== undefined ? { env } : {}),
+        env,
         ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       });
       return { exitCode: result.code, stdout: result.stdout, stderr: result.stderr };

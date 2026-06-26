@@ -78,12 +78,26 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   **reject** it (abort), or give **free-text feedback to revise** it — goaly re-authors the contract
   and re-presents it, bounded by `--max-seal-revisions` (default 10; `0` disables revision).
   `--autonomous` skips this pause entirely, never the freeze.
+- **Required-tools preflight, before anything else.** Every contract carries a frozen **`requiredTools`**
+  manifest — the external programs the verification assumes already exist on PATH (`cargo`, `python`,
+  `pytest`, `go`, `node`…). Under `--generate` the compiler authors it; on `--verify-cmd` it's derived
+  heuristically from the command. Before the loop, goaly probes each. A missing tool, by **default**, is
+  **handed to the agent to install**: goaly skips its own setup (which would only fail on the absent
+  toolchain) and threads the missing tools — plus the setup command — into the first prompt as a
+  bootstrap step, so the experience stays seamless (run `goaly "…in rust…"` on a box without rust and the
+  agent installs it). `--install-missing-tools false` opts out: a missing tool is then a typed,
+  fail-closed **`TOOLS_MISSING`** abort with guidance, before any token is spent. So that an
+  agent-installed toolchain is actually visible to the verifier, goaly extends the verify/setup PATH with the standard
+  per-user install dirs (`~/.cargo/bin`, `~/.local/bin`, `~/go/bin`, …). The manifest is shown at SEAL
+  and part of the `contractHash`.
 - **One-time setup + pre-flight, before the first agent turn.** After SEAL and before iteration 1,
   goaly runs a single **setup** command to prepare the tree (install deps, etc.) and then **pre-flights**
   the frozen deterministic checks once. Under `--generate` the compiler *authors* the setup command for
   you (e.g. `npm ci`) — delegated like the contract itself; `--setup-cmd` overrides it and `--no-setup`
   disables it. A non-zero setup exit is a typed, fail-closed **`SETUP_FAILED`** — the worker never starts
-  on a broken tree (which is what drives an agent to hand-roll brittle workarounds for missing deps). The
+  on a broken tree (which is what drives an agent to hand-roll brittle workarounds for missing deps); an
+  exit `127` (a toolchain like `rustup`/`cargo`/`go` simply isn't installed here, which goaly can't
+  bootstrap for you) adds an actionable hint pointing at `--setup-cmd` / `--no-setup`. The
   pre-flight then proves the authored verification can actually *run*: when a deterministic check fails, a
   single **language-agnostic** classification (one read-only LLM call) decides whether the frozen
   verification is **broken** (it can't compile/collect/run — a defect the agent can never fix) → a typed
@@ -106,8 +120,12 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   failure still trips it — keyed on the **verifier-failure signature, independent of the diff hash**, so
   a worker that churns unrelated files every turn while the same error repeats is still caught as a typed
   **`STUCK_REPEATED_FAILURE`** that *names the repeated signature*), short-period oscillation (period-N,
-  not just A,B,A,B), and budget. Tune it
-  with `--stuck-no-diff`, `--stuck-repeat-threshold`, `--stuck-oscillation`. Use `--diff-ignore` to
+  not just A,B,A,B), **harness-crash** (the agent CLI exited abnormally N times in a row — a typed
+  **`STUCK_HARNESS_CRASH`** that surfaces the harness's own error and points at the environment, so a
+  crashing CLI is diagnosed as such instead of looping on the stale verifier red an unfinished turn
+  leaves behind), and budget. Tune it
+  with `--stuck-no-diff`, `--stuck-repeat-threshold`, `--stuck-oscillation`, `--stuck-crash-threshold`.
+  Use `--diff-ignore` to
   keep verifier-produced artifacts (coverage dirs, `__pycache__`, build output) out of the tree hash
   so they can't make a no-op agent look like it changed something. A no-diff iteration is **excused
   once** when the agent never had a fair chance to act — the previous turn timed out, or the ladder is

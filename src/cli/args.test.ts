@@ -136,18 +136,39 @@ describe('parseArgs', () => {
     expect(b.config.noSetup).toBe(true);
   });
 
+  it('defaults installMissingTools to true and parses --install-missing-tools false (fail-closed)', async () => {
+    const def = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+    expect(def.config.installMissingTools).toBe(true);
+
+    const off = await parseArgs([
+      'run', '--goal', 'g', '--verify-cmd', 'true', '--install-missing-tools', 'false',
+    ]);
+    expect(off.config.installMissingTools).toBe(false);
+
+    await expect(
+      parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--install-missing-tools', 'maybe']),
+    ).rejects.toThrow(UsageError);
+  });
+
   it('parses the --stuck-* tuning flags fail-closed (issue #54)', async () => {
     const a = await parseArgs([
       'run', '--goal', 'g', '--verify-cmd', 'true',
       '--stuck-no-diff', 'false',
       '--stuck-repeat-threshold', '5',
       '--stuck-oscillation', 'false',
+      '--stuck-crash-threshold', '4',
     ]);
     expect(a.config.stuckPolicy).toEqual({
       noDiff: false,
       repeatFailureThreshold: 5,
       oscillation: false,
+      harnessCrashThreshold: 4,
     });
+  });
+
+  it('defaults the harness-crash threshold to 2 when the flag is omitted', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+    expect(a.config.stuckPolicy.harnessCrashThreshold).toBe(2);
   });
 
   it('treats a bare --stuck-no-diff as true and keeps other stuck defaults (issue #54)', async () => {

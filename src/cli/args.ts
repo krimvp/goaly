@@ -96,13 +96,14 @@ Usage:
   goaly [run] "<goal>" [flags]   (or --goal "<goal>"; see "Goal / intent / rubric input" below)
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
                [--smoke "<cmd>"] [--setup-cmd "<cmd>" | --no-setup] [--setup-timeout-ms N]
+               [--install-missing-tools true|false]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
                [--phased [--max-phases N] [--max-plan-revisions N] [--plan-file <p>]
                          [--planner-model <m>]]
                [--max-seal-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
-               [--stuck-oscillation true|false]
+               [--stuck-oscillation true|false] [--stuck-crash-threshold N]
                [--harness claude-code|codex|droid] [--model <m>] [--llm-model <m>]
                [--llm-provider claude|codex|droid] [--harness-timeout-ms N]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
@@ -146,6 +147,11 @@ Verification:
                       contract (shown at SEAL) so it can't drift. Capped by --setup-timeout-ms.
   --no-setup         disable the setup phase entirely — drop any authored/--setup-cmd bootstrap and
                       start the worker on the tree as-is.
+  --install-missing-tools <bool>  what to do when a tool the verification needs (cargo, python, go…)
+                      isn't on PATH (default true). true = the agent installs it (goaly skips its own
+                      setup, which would only fail on the absent toolchain, and threads the install
+                      into the first prompt). false = a typed, fail-closed TOOLS_MISSING abort with
+                      guidance, before any token is spent.
   --verify-dir <dir>  preferred directory for files the compiler authors under --generate (issue
                       #52). Authored files are written to idiomatic locations and AUTO-REGISTERED in
                       .git/info/exclude (git's per-clone, never-committed ignore) — so they never
@@ -184,6 +190,9 @@ Stuck-detection tuning:
                                   gets one real turn to act on a correct critique first (issue #54).
   --stuck-repeat-threshold N      abort after N identical normalized verifier failures (default 3).
   --stuck-oscillation <bool>      toggle diff-hash oscillation detection (default true).
+  --stuck-crash-threshold N       abort after N consecutive harness crashes (default 2) — a typed
+                                  STUCK_HARNESS_CRASH that surfaces the harness error itself, instead
+                                  of looping on the downstream verifier red an unfinished turn leaves.
 
 Phased decomposition (issue #48 — split one big goal into a frozen plan of small, verified phases):
   --phased            turn one big goal into a PLAN of ordered sub-goals, each run as its OWN frozen,
@@ -501,6 +510,9 @@ export async function parseArgs(
     ...(str(flags, 'smoke') !== undefined ? { smoke: str(flags, 'smoke') } : {}),
     ...(str(flags, 'setup-cmd') !== undefined ? { setupCmd: str(flags, 'setup-cmd') } : {}),
     ...(flags['no-setup'] !== undefined ? { noSetup: true } : {}),
+    ...(boolFlag(flags, 'install-missing-tools') !== undefined
+      ? { installMissingTools: boolFlag(flags, 'install-missing-tools') }
+      : {}),
     ...(resolved.intent !== undefined ? { intent: resolved.intent } : {}),
     ...(resolved.rubric !== undefined ? { rubric: resolved.rubric } : {}),
     ...(flags['autonomous'] !== undefined ? { autonomous: true } : {}),
@@ -526,6 +538,9 @@ export async function parseArgs(
       : {}),
     ...(boolFlag(flags, 'stuck-oscillation') !== undefined
       ? { stuckOscillation: boolFlag(flags, 'stuck-oscillation') }
+      : {}),
+    ...(str(flags, 'stuck-crash-threshold') !== undefined
+      ? { stuckCrashThreshold: str(flags, 'stuck-crash-threshold') }
       : {}),
     ...(str(flags, 'budget-tokens') !== undefined
       ? { budgetTokens: str(flags, 'budget-tokens') }

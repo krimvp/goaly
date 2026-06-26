@@ -168,6 +168,7 @@ function phaseConfigFor(phase: PhaseCtx): RunConfig {
     goal: sub.goal,
     verifier,
     noSetup: base.noSetup,
+    installMissingTools: base.installMissingTools,
     autonomous: base.autonomous,
     maxSealRevisions: base.maxSealRevisions,
     maxCompileRetries: base.maxCompileRetries,
@@ -262,7 +263,7 @@ function stepAwaitSeal(
       if (needsPreparation(contract)) {
         return [
           { tag: 'PREPARING', config, contract, ...(phase !== undefined ? { phase } : {}) },
-          [{ tag: 'PREPARE_WORKSPACE', contract }],
+          [{ tag: 'PREPARE_WORKSPACE', contract, installMissingTools: config.installMissingTools }],
         ];
       }
       const ctx = initialCtx(config, contract, phase);
@@ -314,12 +315,16 @@ function stepAwaitSeal(
 
 /**
  * Does this frozen contract need the one-time prepare phase? Yes when it carries a setup command to
- * run (Fix #1) or authored verification files to pre-flight (Fix #2). A plain `--verify-cmd` contract
- * has neither, so preparation is skipped and the loop starts exactly as before — no new event, no
- * behavior change for the common path.
+ * run (Fix #1), authored verification files to pre-flight (Fix #2), or a required-tools manifest to
+ * probe before the loop. A plain `--verify-cmd` contract over only shell builtins has none, so
+ * preparation is skipped and the loop starts exactly as before — no new event for the common path.
  */
 function needsPreparation(contract: CompiledContract): boolean {
-  return contract.setup !== undefined || contract.generatedFiles.length > 0;
+  return (
+    contract.setup !== undefined ||
+    contract.generatedFiles.length > 0 ||
+    contract.requiredTools.length > 0
+  );
 }
 
 /**
@@ -342,8 +347,21 @@ function stepPreparing(
   switch (prepared.status) {
     case 'proceed': {
       const ctx = initialCtx(config, contract, phase);
-      return startIteration(ctx, buildInitialPrompt(contract), undefined);
+      return startIteration(ctx, buildInitialPrompt(contract, prepared.installTools), undefined);
     }
+    case 'tools-missing':
+      return [
+        {
+          tag: 'FAILED',
+          reason: phaseReason(
+            phase,
+            `TOOLS_MISSING: a tool the verification needs is not installed before any agent turn — ${prepared.detail}`,
+          ),
+          iterations: 0,
+          contractHash: contract.contractHash,
+        },
+        [],
+      ];
     case 'setup-failed':
       return [
         {
@@ -384,6 +402,8 @@ function stepRunningAgent(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
     diffHashHistory: [...ctx.diffHashHistory, event.diffHash],
     lastNoDiff: event.prevDiffHash === event.diffHash,
     lastRunStatus: event.run.status,
+    runStatusHistory: [...ctx.runStatusHistory, event.run.status],
+    lastRunOutput: event.run.output,
     lastBudget: event.budget,
   };
   return [{ tag: 'VERIFYING', ctx: next }, [{ tag: 'RUN_VERIFIER', contract: next.contract }]];
@@ -514,17 +534,42 @@ function describeRungs(rungs: readonly Rung[]): string {
     .join('\n');
 }
 
-function buildInitialPrompt(contract: CompiledContract): string {
+function buildInitialPrompt(contract: CompiledContract, installTools?: readonly string[]): string {
   return [
     '# Goal',
     contract.goal,
     '',
+    buildBootstrapSection(contract, installTools),
     '# Frozen success contract (you cannot modify it)',
     'Your work is accepted only when ALL of the following pass:',
     describeRungs(contract.rungs),
     contract.rubric ? `\nOverall rubric:\n${contract.rubric}` : '',
     '',
     'Make the changes needed to satisfy the contract. Do not weaken or rewrite the checks themselves.',
+  ].join('\n');
+}
+
+/**
+ * The bootstrap instruction prepended to the first prompt when required tools are missing and goaly is
+ * delegating their install to the agent (the default `--install-missing-tools` path). goaly skipped its
+ * own one-time setup (it would only fail on the absent toolchain), so the agent must install the tools
+ * AND run the project setup itself before the verification can pass. Empty when nothing is missing.
+ */
+function buildBootstrapSection(
+  contract: CompiledContract,
+  installTools?: readonly string[],
+): string {
+  if (installTools === undefined || installTools.length === 0) return '';
+  const setupNote =
+    contract.setup !== undefined
+      ? ` Then run the project's one-time setup: \`${contract.setup}\`.`
+      : '';
+  return [
+    '# Bootstrap required first',
+    `The verification needs these tools, which are NOT installed on PATH: ${installTools.join(', ')}.`,
+    `Install them first (you have shell access; use the standard installer and make sure each ends up on PATH).${setupNote}`,
+    'Only then implement the goal — the verification cannot pass until the toolchain is present.',
+    '',
   ].join('\n');
 }
 

@@ -63,3 +63,37 @@ export function scrubEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   }
   return scrubbed;
 }
+
+/**
+ * Standard per-user install directories (relative to `$HOME`) that toolchain installers drop binaries
+ * into — rustup → `~/.cargo/bin`, pip/pipx --user → `~/.local/bin`, go → `~/go/bin`, etc. goaly spawns
+ * the verifier from a copy of its OWN `process.env` taken at startup, so a tool the AGENT installs
+ * mid-run (the default `--install-missing-tools` path) would otherwise be invisible to the later verify
+ * subprocess even though it's on disk. Appending these (lowest priority, so system tools still win)
+ * makes an agent-installed toolchain discoverable without depending on the agent editing a shell rc.
+ */
+const USER_TOOL_BIN_DIRS = [
+  '.cargo/bin',
+  '.local/bin',
+  '.local/share/pnpm',
+  'go/bin',
+  '.deno/bin',
+  '.bun/bin',
+  '.npm-global/bin',
+  'bin',
+];
+
+/**
+ * Return a copy of `env` whose PATH also includes the standard per-user tool bin dirs (see
+ * `USER_TOOL_BIN_DIRS`). Pure; never mutates input. A no-op when `HOME` is unset. Entries already on
+ * PATH are not duplicated; new entries are APPENDED so a system binary of the same name still wins.
+ */
+export function augmentToolPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const home = env.HOME;
+  if (home === undefined || home.length === 0) return { ...env };
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const existing = (env.PATH ?? '').split(sep).filter((p) => p.length > 0);
+  const have = new Set(existing);
+  const extra = USER_TOOL_BIN_DIRS.map((d) => `${home}/${d}`).filter((d) => !have.has(d));
+  return { ...env, PATH: [...existing, ...extra].join(sep) };
+}

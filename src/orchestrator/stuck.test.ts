@@ -170,6 +170,64 @@ describe('detectStuck', () => {
     });
   });
 
+  describe('harness-crash streak', () => {
+    it('fires after the default threshold (2) of consecutive crashes', () => {
+      const ctx = makeCtx({ runStatusHistory: ['crashed', 'crashed'] });
+      const reason = detectStuck(ctx);
+      expect(reason).toContain('STUCK_HARNESS_CRASH');
+      expect(reason).toContain('exited abnormally');
+    });
+
+    it('does not fire on a single crash (which may be transient — one retry is allowed)', () => {
+      expect(detectStuck(makeCtx({ runStatusHistory: ['crashed'] }))).toBeNull();
+    });
+
+    it('resets when a crash is interrupted by a completed run', () => {
+      const ctx = makeCtx({ runStatusHistory: ['crashed', 'completed', 'crashed'] });
+      expect(detectStuck(ctx)).toBeNull();
+    });
+
+    it('surfaces the harness output verbatim so the real cause is visible, not the downstream red', () => {
+      const ctx = makeCtx({
+        runStatusHistory: ['crashed', 'crashed'],
+        lastRunOutput: 'claude: command not found',
+      });
+      expect(detectStuck(ctx)).toContain('claude: command not found');
+    });
+
+    it('honors a custom threshold', () => {
+      const ctx = makeCtx({
+        config: makeConfig({ stuckPolicy: { harnessCrashThreshold: 3 } }),
+        runStatusHistory: ['crashed', 'crashed'],
+      });
+      expect(detectStuck(ctx)).toBeNull();
+      const tripped = makeCtx({
+        config: makeConfig({ stuckPolicy: { harnessCrashThreshold: 3 } }),
+        runStatusHistory: ['crashed', 'crashed', 'crashed'],
+      });
+      expect(detectStuck(tripped)).toContain('STUCK_HARNESS_CRASH');
+    });
+
+    it('wins over the downstream verifier red a crashed turn leaves (the misdiagnosis fix)', () => {
+      // The real incident: the harness crashed every turn, leaving a stale verifier ImportError that
+      // repeated. The crash is the true cause, so it must be reported instead of STUCK_REPEATED_FAILURE.
+      const ctx = makeCtx({
+        runStatusHistory: ['crashed', 'crashed', 'crashed'],
+        lastRunStatus: 'crashed',
+        verifierDetailHistory: ['ImportError', 'ImportError', 'ImportError'],
+      });
+      const reason = detectStuck(ctx);
+      expect(reason).toContain('STUCK_HARNESS_CRASH');
+      expect(reason).not.toContain('STUCK_REPEATED_FAILURE');
+    });
+
+    it('excuses no-diff for a crashed turn so the crash diagnosis wins (not a misleading no-diff)', () => {
+      // A crash that left the tree unchanged must not abort as "no-diff" — it never got to edit.
+      const ctx = makeCtx({ lastNoDiff: true, iteration: 1, lastRunStatus: 'crashed' });
+      expect(detectStuck(ctx)).toBeNull();
+    });
+  });
+
   describe('budget', () => {
     it('fires when the meter reports exceeded, regardless of iteration', () => {
       const ctx = makeCtx({ iteration: 0, lastBudget: { exceeded: true } });
@@ -181,6 +239,7 @@ describe('detectStuck', () => {
         lastNoDiff: true,
         diffHashHistory: dh('a', 'b', 'a', 'b'),
         verifierDetailHistory: ['same', 'same', 'same'],
+        runStatusHistory: ['crashed', 'crashed'],
         lastBudget: { exceeded: true },
       });
       expect(detectStuck(ctx)).toBe('budget exceeded');

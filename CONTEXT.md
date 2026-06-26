@@ -37,7 +37,8 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
 - **diffHash** — a non-mutating content hash of the working tree, computed by the **Workspace**
   (not the adapter). Drives stuck detection. _avoid:_ a commit; an adapter responsibility.
 - **Stuck** — a pre-`maxIterations` bail with a reason: no-diff, repeat-failure, oscillation,
-  or budget. _avoid:_ a normal failure (that's FAILED).
+  harness-crash (consecutive `crashed` runs → `STUCK_HARNESS_CRASH`), or budget. _avoid:_ a normal
+  failure (that's FAILED).
 - **Autonomous** — the flag that moves **Seal only** (auto-accept). It skips the human pause,
   never the freeze. _avoid:_ "the agent rewrites its own test"; skipping verification.
 - **Command** — data describing an effect the Driver must perform. Never persisted.

@@ -205,7 +205,7 @@ it's talking to.
   autonomous: false,       // flag; gates contract approval (Seal) only
   maxIterations,
   budget,                  // tokens / time
-  stuckPolicy              // thresholds for no-diff / repeat / oscillation
+  stuckPolicy              // thresholds for no-diff / repeat / oscillation / harness-crash
 }
 ```
 

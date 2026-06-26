@@ -43,6 +43,23 @@ describe('prepareWorkspace — setup (Fix #1)', () => {
     expect(ws.commands).toEqual(['npm ci']); // short-circuited before pre-flight
   });
 
+  it('exit 127 (command not found) adds an actionable hint about the missing toolchain', async () => {
+    const ws = new ScriptedWorkspace([
+      { exitCode: 127, stdout: '', stderr: '/bin/sh: 1: rustup: not found' },
+    ]);
+    const contract = makeFakeContract({
+      setup: 'rustup component add clippy rustfmt',
+      rungs: [{ kind: 'deterministic', command: 'cargo test' }],
+    });
+    const result = await prepareWorkspace({ workspace: ws }, contract);
+    expect(result.prepared.status).toBe('setup-failed');
+    if (result.prepared.status === 'setup-failed') {
+      expect(result.prepared.detail).toContain('rustup: not found');
+      expect(result.prepared.detail).toContain('not installed');
+      expect(result.prepared.detail).toContain('--no-setup');
+    }
+  });
+
   it('a setup command that throws fails closed to setup-failed', async () => {
     const ws = new (class extends FakeWorkspace {
       override async run(): Promise<CommandResult> {
@@ -61,6 +78,76 @@ describe('prepareWorkspace — setup (Fix #1)', () => {
     const result = await prepareWorkspace({ workspace: ws }, contract);
     expect(result.setupRan).toBe(false);
     expect(ws.commands).toEqual(['npm test']);
+  });
+});
+
+describe('prepareWorkspace — required-tools preflight', () => {
+  const toolContract = (over: Partial<Parameters<typeof makeFakeContract>[0]> = {}) =>
+    makeFakeContract({
+      requiredTools: ['cargo'],
+      setup: 'cargo fetch',
+      rungs: [{ kind: 'deterministic', command: 'cargo test' }],
+      ...over,
+    });
+
+  it('all tools present ⇒ probe runs FIRST, then setup, then pre-flight', async () => {
+    // probe → empty stdout (nothing missing); setup ok; pre-flight rung ok.
+    const ws = new ScriptedWorkspace([{ exitCode: 0, stdout: '', stderr: '' }, ok, ok]);
+    const result = await prepareWorkspace({ workspace: ws }, toolContract());
+    expect(result.prepared.status).toBe('proceed');
+    expect(result.setupRan).toBe(true);
+    expect(ws.commands[0]).toContain('command -v cargo'); // the probe ran first
+    expect(ws.commands.slice(1)).toEqual(['cargo fetch', 'cargo test']);
+  });
+
+  it('missing tool + --install-missing-tools false ⇒ typed tools-missing, setup never runs', async () => {
+    const ws = new ScriptedWorkspace([{ exitCode: 0, stdout: 'cargo\n', stderr: '' }]);
+    const result = await prepareWorkspace(
+      { workspace: ws, installMissingTools: false },
+      toolContract(),
+    );
+    expect(result.prepared.status).toBe('tools-missing');
+    if (result.prepared.status === 'tools-missing') {
+      expect(result.prepared.detail).toContain('cargo');
+      expect(result.prepared.detail).toContain('install');
+    }
+    expect(result.setupRan).toBe(false);
+    expect(ws.commands).toHaveLength(1); // only the probe — short-circuited before setup
+  });
+
+  it('missing tool + default (install) ⇒ proceed carrying installTools, goaly setup SKIPPED', async () => {
+    const ws = new ScriptedWorkspace([{ exitCode: 0, stdout: 'cargo\n', stderr: '' }]);
+    const result = await prepareWorkspace({ workspace: ws }, toolContract());
+    expect(result.prepared.status).toBe('proceed');
+    if (result.prepared.status === 'proceed') {
+      expect(result.prepared.installTools).toEqual(['cargo']);
+    }
+    expect(result.setupRan).toBe(false); // the agent runs setup itself; goaly's would only fail
+    expect(ws.commands).toHaveLength(1); // probe only; no setup, no pre-flight on the absent toolchain
+  });
+
+  it('reports only the tools that are actually absent', async () => {
+    const ws = new ScriptedWorkspace([{ exitCode: 0, stdout: 'pytest\n', stderr: '' }]);
+    const result = await prepareWorkspace(
+      { workspace: ws, installMissingTools: false },
+      toolContract({ requiredTools: ['python', 'pytest'] }),
+    );
+    expect(result.prepared.status).toBe('tools-missing');
+    if (result.prepared.status === 'tools-missing') {
+      expect(result.prepared.detail).toContain('pytest');
+      expect(result.prepared.detail).not.toContain('python,'); // python was present
+    }
+  });
+
+  it('fails OPEN (proceeds) when the probe itself errors — a glitch never blocks a legit run', async () => {
+    const ws = new (class extends FakeWorkspace {
+      override async run(): Promise<CommandResult> {
+        throw new Error('probe blew up');
+      }
+    })();
+    const contract = makeFakeContract({ requiredTools: ['cargo'], rungs: [{ kind: 'deterministic', command: 'true' }] });
+    const result = await prepareWorkspace({ workspace: ws, installMissingTools: false }, contract);
+    expect(result.prepared.status).toBe('proceed'); // not tools-missing — the probe couldn't determine
   });
 });
 

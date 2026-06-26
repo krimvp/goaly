@@ -4,6 +4,7 @@ import type { CompiledContract, GeneratedFile, Rung, UnhashedContract } from '..
 import { freezeContract, sha256Hex } from '../util/hash';
 import type { LlmProvider } from '../llm/provider';
 import type { VerifierCompiler } from './compiler';
+import { extractRequiredTools } from './required-tools';
 
 /** Schema for the JSON the authoring LLM must emit (validated fail-closed). */
 const GeneratedVerification = z.object({
@@ -15,6 +16,13 @@ const GeneratedVerification = z.object({
    * `npm ci`). Runs once before the first agent turn; a `--setup-cmd` flag overrides it.
    */
   setup: z.string().optional(),
+  /**
+   * External programs the command/setup need to ALREADY be installed on PATH — the toolchain/runner
+   * (e.g. ["cargo"] for Rust, ["python","pytest"] for Python, ["go"], ["node","npm"]). NOT project
+   * files and NOT shell builtins. goaly probes these before the loop; a missing one is either installed
+   * by the agent (default) or a typed `TOOLS_MISSING` abort. Omit when the command uses only builtins.
+   */
+  requiredTools: z.array(z.string().min(1)).optional(),
   files: z
     .array(
       z.object({
@@ -30,7 +38,7 @@ const SYSTEM_PROMPT =
   'You author verification for software goals. Reply with ONLY a single JSON object, ' +
   'no prose, no markdown fences. Shape: ' +
   '{ "command": string, "rubric": string, "setup"?: string, ' +
-  '"files"?: Array<{ "path": string, "content": string }> }. ' +
+  '"requiredTools"?: string[], "files"?: Array<{ "path": string, "content": string }> }. ' +
   'The command must exit 0 exactly when the goal is achieved.\n' +
   'Guardrails for a RUNNABLE bar (issue #55):\n' +
   "- Author the command over the repo's EXISTING tooling (its test / build / lint runner). Do not " +
@@ -43,7 +51,11 @@ const SYSTEM_PROMPT =
   '- If the verification needs dependencies installed (or any one-time prep) before it can run, put ' +
   'that in "setup" (e.g. "npm ci", "pip install -r requirements.txt", "go mod download") so the ' +
   'worker starts from a populated tree. Use the lockfile-respecting install for the repo\'s manifest. ' +
-  'Omit "setup" when no preparation is needed.';
+  'Omit "setup" when no preparation is needed.\n' +
+  '- List in "requiredTools" the external programs the command and setup assume ALREADY exist on PATH ' +
+  '— the language toolchain and test runner (e.g. ["cargo"], ["python","pytest"], ["go"], ' +
+  '["node","npm"]). These are what goaly probes (and installs, or aborts on) before the loop; do NOT ' +
+  'list shell builtins or coreutils. Omit when the command relies only on builtins.';
 
 /**
  * Extract the first balanced JSON object from a string. Tolerant of surrounding prose
@@ -200,6 +212,7 @@ export class AgentCompiler implements VerifierCompiler {
       rungs: buildRungs(ref, rubric, config.judge, config.smoke),
       rubric,
       generatedFiles: [],
+      requiredTools: resolveRequiredTools(undefined, [ref, config.smoke, setup]),
       ...(setup !== undefined ? { setup } : {}),
     };
     return freezeContract(unhashed);
@@ -271,10 +284,35 @@ export class AgentCompiler implements VerifierCompiler {
       rungs: buildRungs(generated.command, generated.rubric, config.judge, config.smoke),
       rubric: generated.rubric,
       generatedFiles,
+      requiredTools: resolveRequiredTools(generated.requiredTools, [
+        generated.command,
+        config.smoke,
+        setup,
+      ]),
       ...(setup !== undefined ? { setup } : {}),
     };
     return freezeContract(unhashed);
   }
+}
+
+/**
+ * Resolve the frozen required-tools manifest. The authored list (LLM under `--generate`) is primary;
+ * when it is absent/empty — always on the `--verify-cmd` path — fall back to a heuristic parse of the
+ * frozen commands. Trims/dedupes; returns `[]` for a tool-less bar. (User chose "LLM manifest + heuristic
+ * fallback".)
+ */
+function resolveRequiredTools(
+  authored: readonly string[] | undefined,
+  commands: readonly (string | undefined)[],
+): string[] {
+  const cleaned = dedupe((authored ?? []).map((t) => t.trim()).filter((t) => t.length > 0));
+  if (cleaned.length > 0) return cleaned;
+  return extractRequiredTools(commands.filter((c): c is string => c !== undefined));
+}
+
+/** Distinct values in first-seen order. */
+function dedupe(values: readonly string[]): string[] {
+  return [...new Set(values)];
 }
 
 /**

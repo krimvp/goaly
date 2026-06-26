@@ -51,9 +51,19 @@ export type BudgetSnapshot = z.infer<typeof BudgetSnapshot>;
  * the two typed, fail-closed aborts that happen BEFORE any worker token is spent.
  */
 export const PreparedOutcome = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('proceed') }),
+  z.object({
+    status: z.literal('proceed'),
+    /**
+     * Tools the verification needs that are NOT installed, which goaly is delegating to the agent to
+     * install (the default `--install-missing-tools` path). Threaded into the first prompt as a
+     * bootstrap instruction. Absent/empty when every required tool was already present.
+     */
+    installTools: z.array(z.string()).optional(),
+  }),
   z.object({ status: z.literal('setup-failed'), detail: z.string() }),
   z.object({ status: z.literal('contract-unsound'), detail: z.string() }),
+  /** Required tools are missing AND `--install-missing-tools false` opted out of agent-install. */
+  z.object({ status: z.literal('tools-missing'), detail: z.string() }),
 ]);
 export type PreparedOutcome = z.infer<typeof PreparedOutcome>;
 
@@ -166,7 +176,7 @@ export type Command =
   | { tag: 'CHECKPOINT_AND_ADVANCE' }
   | { tag: 'COMPILE_VERIFIER'; config: RunConfig; feedback?: string }
   | { tag: 'REQUEST_SEAL'; contract: CompiledContract }
-  | { tag: 'PREPARE_WORKSPACE'; contract: CompiledContract }
+  | { tag: 'PREPARE_WORKSPACE'; contract: CompiledContract; installMissingTools: boolean }
   | { tag: 'RUN_AGENT'; prompt: string; sessionId: SessionId | undefined }
   | { tag: 'RUN_VERIFIER'; contract: CompiledContract }
   | { tag: 'REQUEST_SIGNOFF'; goal: string; rubric: string; verdicts: Verdict[] };
