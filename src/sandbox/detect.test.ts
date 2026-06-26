@@ -17,6 +17,16 @@ describe('detectMechanism', () => {
     expect(r.kind).toBe('unavailable');
   });
 
+  it('firejail present → firejail', () => {
+    expect(detectMechanism('firejail', { which: probe('firejail') })).toEqual({ kind: 'firejail' });
+  });
+
+  it('firejail absent → unavailable (fail-closed)', () => {
+    const r = detectMechanism('firejail', { which: probe() });
+    expect(r.kind).toBe('unavailable');
+    if (r.kind === 'unavailable') expect(r.reason).toContain('firejail');
+  });
+
   it('container present → container with the discovered runtime', () => {
     expect(detectMechanism('container', { which: probe('docker') })).toEqual({
       kind: 'container',
@@ -38,17 +48,29 @@ describe('detectMechanism', () => {
     expect(detectMechanism('container', { which: probe() }).kind).toBe('unavailable');
   });
 
-  it('auto on Linux prefers bwrap', () => {
+  it('auto on Linux prefers bwrap over firejail', () => {
     expect(
-      detectMechanism('auto', { which: probe('bwrap', 'docker'), platform: 'linux' }),
+      detectMechanism('auto', { which: probe('bwrap', 'firejail', 'docker'), platform: 'linux' }),
     ).toEqual({ kind: 'bwrap' });
   });
 
-  it('auto on Linux without bwrap falls back to a container runtime', () => {
+  it('auto on Linux without bwrap prefers firejail over a container (issue #40)', () => {
+    expect(
+      detectMechanism('auto', { which: probe('firejail', 'docker'), platform: 'linux' }),
+    ).toEqual({ kind: 'firejail' });
+  });
+
+  it('auto on Linux without bwrap or firejail falls back to a container runtime', () => {
     expect(detectMechanism('auto', { which: probe('podman'), platform: 'linux' })).toEqual({
       kind: 'container',
       runtime: 'podman',
     });
+  });
+
+  it('auto on non-Linux ignores firejail and uses a container runtime', () => {
+    expect(
+      detectMechanism('auto', { which: probe('firejail', 'docker'), platform: 'darwin' }),
+    ).toEqual({ kind: 'container', runtime: 'docker' });
   });
 
   it('auto on non-Linux ignores bwrap and uses a container runtime', () => {

@@ -29,6 +29,16 @@ describe('makeLauncher', () => {
     expect(l.available).toBe(true);
   });
 
+  it('firejail present (bwrap absent) → a FirejailLauncher', () => {
+    const l = makeLauncher(SandboxPolicy.parse({ mode: 'firejail' }), {
+      which: probe('firejail'),
+      platform: 'linux',
+      home: '/home/me',
+    });
+    expect(l.mode).toBe('firejail');
+    expect(l.available).toBe(true);
+  });
+
   it('container present → a ContainerLauncher honouring image/runtime', () => {
     const l = makeLauncher(SandboxPolicy.parse({ mode: 'container', runtime: 'podman', image: 'n:1' }), {
       which: probe('podman'),

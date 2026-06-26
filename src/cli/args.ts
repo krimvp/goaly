@@ -107,7 +107,7 @@ Usage:
                [--harness claude-code|codex|droid] [--model <m>] [--llm-model <m>]
                [--llm-provider claude|codex|droid] [--harness-timeout-ms N]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
-               [--sandbox[=none|auto|bwrap|container]]
+               [--sandbox[=none|auto|bwrap|firejail|container]]
                [--sandbox-net none|allow|allow:<host,…>]
                [--sandbox-image <ref>] [--sandbox-runtime docker|podman]
                [--cost-table <path>] [--baseline <ref>] [--delta-verify] [--workspace <dir>] [--resume <runId>]
@@ -263,8 +263,10 @@ Sandboxing (opt-in OS isolation — issue #9; default OFF, behavior unchanged wi
   --sandbox[=<mode>]  jail the two untrusted-code execs — the coding agent AND the verify command —
                       where <mode> is one of:
                         none       (default) no isolation; the caller is responsible (CI/container)
-                        auto       detect the best available mechanism (bwrap on Linux, else container)
+                        auto       detect the best available mechanism (bwrap, then firejail, on
+                                   Linux, else container)
                         bwrap      Linux bubblewrap
+                        firejail   Linux firejail (fallback when bwrap is absent)
                         container  a docker/podman 'run --rm' (portable; covers macOS)
                       Bare --sandbox means --sandbox=auto. If a requested mechanism is absent the run
                       REFUSES TO START (fail-closed) — it never silently runs unsandboxed. Per-seam

@@ -35,8 +35,12 @@ describe('SandboxPolicy schema', () => {
     expect(p).toEqual({ mode: 'container', network: 'allow', image: 'node:20', runtime: 'podman' });
   });
 
+  it('accepts the firejail mode (issue #40)', () => {
+    expect(SandboxPolicy.parse({ mode: 'firejail' }).mode).toBe('firejail');
+  });
+
   it('rejects an unknown mode (fail-closed)', () => {
-    expect(SandboxPolicy.safeParse({ mode: 'firejail' }).success).toBe(false);
+    expect(SandboxPolicy.safeParse({ mode: 'jail' }).success).toBe(false);
     expect(SandboxPolicy.safeParse({ mode: 'garbage' }).success).toBe(false);
   });
 

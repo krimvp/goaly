@@ -2,6 +2,7 @@ import { which as defaultWhich } from '../util/which';
 import { runProcess } from '../util/spawn';
 import type { AgentExecFn } from '../agent-cli/codec';
 import { BwrapLauncher } from './bwrap';
+import { FirejailLauncher } from './firejail';
 import { ContainerLauncher } from './container';
 import { detectMechanism, type WhichProbe } from './detect';
 import { NoneLauncher, UnavailableLauncher, type SandboxLauncher } from './launcher';
@@ -56,6 +57,9 @@ export function makeLauncher(policy: SandboxPolicy, opts: MakeLauncherOpts = {})
   }
   if (detected.kind === 'bwrap') {
     return new BwrapLauncher(opts.home);
+  }
+  if (detected.kind === 'firejail') {
+    return new FirejailLauncher(opts.home);
   }
   return new ContainerLauncher({
     runtime: detected.runtime,
