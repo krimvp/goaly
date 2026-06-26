@@ -95,9 +95,9 @@
       pills: ['<span class="pill gate">human · once</span>', '<span class="pill neutral">or auto-accept</span>', '<span class="pill neutral">🔁 revise ≤ --max-seal-revisions</span>'],
     },
     prepare: {
-      t: "Setup + pre-flight — once, before iteration 1",
-      d: "After SEAL and before the first agent turn, goaly runs a one-time <b>setup</b> command to prepare the tree (e.g. <code>npm ci</code> — authored by the compiler under <code>--generate</code>, overridable with <code>--setup-cmd</code>), then <b>pre-flights</b> the frozen deterministic checks once. A non-zero setup exit is a typed <code>SETUP_FAILED</code>. When a check fails, a <b>language-agnostic</b> classification (one read-only LLM call) decides: a <b>broken</b> frozen verification (it can't compile/collect/run) is a typed <code>CONTRACT_UNSOUND</code> abort <b>before any worker token is spent</b>; an honest red (implementation missing) proceeds to the loop. It fails <i>open</i> to proceed — a truly broken verifier is still caught at runtime by repeat-failure stuck detection — so a false abort never blocks a legitimate run. (A regex/exit-code rule can't be both correct and cross-language: pytest, cargo, go test and tsc all signal “couldn't run” vs “ran and failed” differently.)",
-      pills: ['<span class="pill neutral">setup, once</span>', '<span class="pill fail">SETUP_FAILED / CONTRACT_UNSOUND</span>'],
+      t: "Tools + setup + pre-flight — once, before iteration 1",
+      d: "After SEAL and before the first agent turn, goaly first probes the frozen <b>requiredTools</b> manifest — the external programs the verification assumes on PATH (cargo, python, go…). A missing tool by DEFAULT is handed to the agent to install (goaly skips its own setup, which would only fail on the absent toolchain, and threads the install into the first prompt); <code>--install-missing-tools false</code> opts out with a typed <code>TOOLS_MISSING</code> abort. (The verify PATH is extended with the standard per-user install dirs so an agent-installed toolchain is actually visible.) Then a one-time <b>setup</b> command prepares the tree (e.g. <code>npm ci</code> — authored under <code>--generate</code>, overridable with <code>--setup-cmd</code>); a non-zero exit is a typed <code>SETUP_FAILED</code>. Finally goaly <b>pre-flights</b> the frozen deterministic checks once: a <b>language-agnostic</b> classification (one read-only LLM call) decides a <b>broken</b> frozen verification (can't compile/collect/run) → <code>CONTRACT_UNSOUND</code> abort <b>before any worker token is spent</b>, vs. an honest red (implementation missing) → proceed. It fails <i>open</i> on uncertainty so a false abort never blocks a legitimate run.",
+      pills: ['<span class="pill neutral">tools + setup, once</span>', '<span class="pill fail">TOOLS_MISSING / SETUP_FAILED / CONTRACT_UNSOUND</span>'],
     },
     run: {
       t: "RUN_AGENT — one headless turn",
@@ -116,7 +116,7 @@
     },
     decide: {
       t: "DECIDE — the pure truth table",
-      d: "Zero-LLM. DONE needs <b>two keys</b> (ladder passes AND no veto). Otherwise apply the backstops: stuck → ABORTED, iteration cap → FAILED, else CONTINUE. <b>🔁 Retriable:</b> a red iteration (ladder FAIL or SIGN-OFF veto) loops back to RUN_AGENT with the failure/veto threaded into the next prompt, up to <code>--max-iterations</code> (default 10) or until STUCK.",
+      d: "Zero-LLM. DONE needs <b>two keys</b> (ladder passes AND no veto). Otherwise apply the backstops: stuck → ABORTED, iteration cap → FAILED, else CONTINUE. Stuck has typed reasons — no-diff, <code>STUCK_REPEATED_FAILURE</code> (same verifier signature N×), oscillation, <code>STUCK_HARNESS_CRASH</code> (the agent CLI exited abnormally N× in a row — a harness/environment failure surfaced as such, not looped on), and budget. <b>🔁 Retriable:</b> a red iteration (ladder FAIL or SIGN-OFF veto) loops back to RUN_AGENT with the failure/veto threaded into the next prompt, up to <code>--max-iterations</code> (default 10) or until STUCK.",
       pills: ['<span class="pill pass">two keys → DONE</span>', '<span class="pill neutral">🔁 else loop ≤ --max-iterations</span>'],
     },
   };

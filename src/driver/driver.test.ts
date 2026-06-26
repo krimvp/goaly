@@ -142,6 +142,32 @@ describe('drive() — full loop with zero IO', () => {
     expect(harness.prompts).toHaveLength(0); // never handed the worker a broken tree
   });
 
+  it('a missing required tool + --install-missing-tools false → FAILED (TOOLS_MISSING) before any worker turn', async () => {
+    const toolContract = makeFakeContract({ goal: 'build it', requiredTools: ['cargo'] });
+    // The tool probe is the first workspace.run; its stdout names the missing program.
+    const workspace = new FakeWorkspace('0000000', 'a fake diff', [
+      { exitCode: 0, stdout: 'cargo\n', stderr: '' },
+    ]);
+    const { deps, harness } = wire({
+      workspace,
+      compiler: new FakeCompiler(toolContract),
+      scripts: [],
+      verdicts: [],
+    });
+
+    const outcome = await drive(
+      deps,
+      makeConfig({ goal: 'build it', installMissingTools: false }),
+      runId,
+    );
+
+    expect(outcome.status).toBe('FAILED');
+    expect(outcome.reason).toContain('TOOLS_MISSING');
+    expect(outcome.reason).toContain('cargo');
+    expect(outcome.iterations).toBe(0);
+    expect(harness.prompts).toHaveLength(0); // never spent a worker turn
+  });
+
   it('retries a COMPILE_FAILED with the error fed back, then proceeds (issue #51)', async () => {
     const compiler = new FakeCompiler([
       new Error('refusing a verification command that references an out-of-repo path /tmp/x.sh'),
@@ -204,6 +230,26 @@ describe('drive() — full loop with zero IO', () => {
     expect(outcome.reason).toContain('no-diff');
     expect(outcome.iterations).toBe(2);
     expect(approver.inputs).toHaveLength(0);
+  });
+
+  it('ABORTED (STUCK_HARNESS_CRASH) after two consecutive harness crashes — fast and named, not a 6-iteration repeat-failure', async () => {
+    // The real incident: the agent CLI crashed every turn (status=crashed), leaving a stale verifier
+    // red that repeated. The loop must stop after the crash streak (2) with a harness-focused reason,
+    // not churn until the downstream verifier signature trips STUCK_REPEATED_FAILURE.
+    const { deps } = wire({
+      scripts: [
+        { status: 'crashed', output: 'claude: command not found', postHash: '0000001' },
+        { status: 'crashed', output: 'claude: command not found', postHash: '0000002' },
+        { status: 'crashed', output: 'claude: command not found', postHash: '0000003' },
+      ],
+      verdicts: [failVerdict('ImportError'), failVerdict('ImportError'), failVerdict('ImportError')],
+    });
+    const outcome = await drive(deps, makeConfig({ maxIterations: 10 }), runId);
+    expect(outcome.status).toBe('ABORTED');
+    expect(outcome.iterations).toBe(2); // bailed after the 2nd crash, not the 6th
+    expect(outcome.reason).toContain('STUCK_HARNESS_CRASH');
+    expect(outcome.reason).toContain('claude: command not found');
+    expect(outcome.reason).not.toContain('STUCK_REPEATED_FAILURE');
   });
 
   it('fail-closed: a harness that throws is caught and mapped to a crashed run (never rejects)', async () => {

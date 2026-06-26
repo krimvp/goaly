@@ -34,6 +34,13 @@ export const StuckPolicy = z.object({
   repeatFailureThreshold: z.number().int().min(2).default(3),
   /** Abort if the diff hash flip-flops between two states. */
   oscillation: z.boolean().default(true),
+  /**
+   * Abort after this many consecutive harness crashes (the agent CLI exited abnormally and never
+   * completed a turn). A crash is an environment/harness failure, not a code problem, so retrying it
+   * is near-useless and disguises the real cause behind a downstream verifier red. A single crash may
+   * be transient (one retry); this many in a row is a typed `STUCK_HARNESS_CRASH`.
+   */
+  harnessCrashThreshold: z.number().int().min(2).default(2),
 });
 export type StuckPolicy = z.infer<typeof StuckPolicy>;
 export type StuckPolicyInput = z.input<typeof StuckPolicy>;
@@ -62,6 +69,15 @@ export const RunConfig = z.object({
    * `--setup-cmd` bootstrap so the worker starts on the tree as-is. Default false.
    */
   noSetup: z.boolean().default(false),
+  /**
+   * What to do when a tool the verification requires (`contract.requiredTools`) is missing before the
+   * loop. `true` (default) DELEGATES the install to the agent: goaly skips its own pre-loop setup (it
+   * would only fail on the absent toolchain) and threads the missing tools — plus the setup command —
+   * into the first prompt as a bootstrap instruction, so the experience stays seamless. `false` opts
+   * out: a missing tool is a typed, fail-closed `TOOLS_MISSING` abort with guidance, before any token
+   * is spent (for environments that must not be mutated by the agent).
+   */
+  installMissingTools: z.boolean().default(true),
   /** Frozen after compile; seeds the LLM-judge portion of the ladder when present. */
   rubric: z.string().optional(),
   /** Gates contract approval (Seal) ONLY. Never skips the freeze. */
@@ -147,6 +163,8 @@ export const CliInput = z.object({
   setupCmd: z.string().min(1).optional(),
   /** Disable the setup phase entirely (Fix #1). */
   noSetup: z.coerce.boolean().optional(),
+  /** Missing-tool policy: default true (agent installs); the CLI pre-parses this tri-state boolean. */
+  installMissingTools: z.boolean().optional(),
   autonomous: z.coerce.boolean().optional(),
   maxSealRevisions: z.coerce.number().int().nonnegative().optional(),
   maxCompileRetries: z.coerce.number().int().nonnegative().optional(),
@@ -165,6 +183,7 @@ export const CliInput = z.object({
   stuckNoDiff: z.boolean().optional(),
   stuckRepeatThreshold: z.coerce.number().int().min(2).optional(),
   stuckOscillation: z.boolean().optional(),
+  stuckCrashThreshold: z.coerce.number().int().min(2).optional(),
 });
 export type CliInput = z.infer<typeof CliInput>;
 
@@ -195,6 +214,8 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
   if (input.stuckRepeatThreshold !== undefined)
     stuckPolicy.repeatFailureThreshold = input.stuckRepeatThreshold;
   if (input.stuckOscillation !== undefined) stuckPolicy.oscillation = input.stuckOscillation;
+  if (input.stuckCrashThreshold !== undefined)
+    stuckPolicy.harnessCrashThreshold = input.stuckCrashThreshold;
 
   return RunConfig.parse({
     goal: input.goal,
@@ -202,6 +223,9 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     ...(input.smoke !== undefined ? { smoke: input.smoke } : {}),
     ...(input.setupCmd !== undefined ? { setupCmd: input.setupCmd } : {}),
     ...(input.noSetup !== undefined ? { noSetup: input.noSetup } : {}),
+    ...(input.installMissingTools !== undefined
+      ? { installMissingTools: input.installMissingTools }
+      : {}),
     ...(input.rubric !== undefined ? { rubric: input.rubric } : {}),
     ...(input.autonomous !== undefined ? { autonomous: input.autonomous } : {}),
     ...(input.maxSealRevisions !== undefined

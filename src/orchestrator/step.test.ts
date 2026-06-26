@@ -17,6 +17,18 @@ function agentRan(prev: string, post: string): OrchestratorEvent {
   };
 }
 
+/** A crashed agent run (harness exited abnormally), carrying the harness's own error output. */
+function agentCrashed(prev: string, post: string, output: string): OrchestratorEvent {
+  const [p, q] = dh(prev, post);
+  return {
+    tag: 'AGENT_RAN',
+    run: { output, sessionId: 'sess-1' as never, status: 'crashed' },
+    prevDiffHash: p!,
+    diffHash: q!,
+    budget,
+  };
+}
+
 describe('step() transitions', () => {
   it('initial() seeds COMPILING + a COMPILE_VERIFIER command', () => {
     const [state, commands] = initial(makeConfig());
@@ -88,7 +100,22 @@ describe('step() transitions', () => {
       const [s1] = step(initial(makeConfig())[0], { tag: 'CONTRACT_COMPILED', contract: setupContract });
       const [s2, cmds] = step(s1, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } });
       expect(s2.tag).toBe('PREPARING');
-      expect(cmds[0]).toMatchObject({ tag: 'PREPARE_WORKSPACE' });
+      // The command carries the missing-tool policy so the Driver knows whether to install or abort.
+      expect(cmds[0]).toMatchObject({ tag: 'PREPARE_WORKSPACE', installMissingTools: true });
+    });
+
+    it('a requiredTools manifest alone triggers PREPARING (so the tool probe runs)', () => {
+      const toolContract = makeFakeContract({ requiredTools: ['cargo'] });
+      const [s1] = step(initial(makeConfig())[0], { tag: 'CONTRACT_COMPILED', contract: toolContract });
+      const [s2] = step(s1, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } });
+      expect(s2.tag).toBe('PREPARING');
+    });
+
+    it('--install-missing-tools false rides on the PREPARE_WORKSPACE command', () => {
+      const cfg = makeConfig({ installMissingTools: false });
+      const [s1] = step(initial(cfg)[0], { tag: 'CONTRACT_COMPILED', contract: setupContract });
+      const [, cmds] = step(s1, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } });
+      expect(cmds[0]).toMatchObject({ tag: 'PREPARE_WORKSPACE', installMissingTools: false });
     });
 
     it('Seal approval with authored generatedFiles also pre-flights (PREPARING)', () => {
@@ -119,6 +146,33 @@ describe('step() transitions', () => {
       });
       expect(s.tag).toBe('RUNNING_AGENT');
       expect(cmds[0]).toMatchObject({ tag: 'RUN_AGENT', sessionId: undefined });
+    });
+
+    it('proceed carrying installTools → first prompt includes the bootstrap install instruction', () => {
+      const [s, cmds] = step(preparing(), {
+        tag: 'WORKSPACE_PREPARED',
+        prepared: { status: 'proceed', installTools: ['cargo', 'rustup'] },
+        setupRan: false,
+      });
+      expect(s.tag).toBe('RUNNING_AGENT');
+      if (cmds[0]?.tag === 'RUN_AGENT') {
+        expect(cmds[0].prompt).toContain('Bootstrap required first');
+        expect(cmds[0].prompt).toContain('cargo, rustup');
+        expect(cmds[0].prompt).toContain('npm ci'); // the skipped setup is handed to the agent
+      }
+    });
+
+    it('tools-missing → FAILED (TOOLS_MISSING) before any worker turn', () => {
+      const [s] = step(preparing(), {
+        tag: 'WORKSPACE_PREPARED',
+        prepared: { status: 'tools-missing', detail: 'the verification requires cargo, which is not installed' },
+        setupRan: false,
+      });
+      expect(s).toMatchObject({ tag: 'FAILED', iterations: 0 });
+      if (s.tag === 'FAILED') {
+        expect(s.reason).toContain('TOOLS_MISSING');
+        expect(s.reason).toContain('cargo');
+      }
     });
 
     it('setup-failed → FAILED (SETUP_FAILED) before any worker turn', () => {
@@ -212,6 +266,33 @@ describe('step() transitions', () => {
     const [next, cmds] = step(ra, agentRan('0000000', '0000001'));
     expect(next.tag).toBe('VERIFYING');
     expect(cmds[0]).toEqual({ tag: 'RUN_VERIFIER', contract });
+  });
+
+  it('a crashed AGENT_RAN threads the run status + output into the loop ctx (for crash-streak detection)', () => {
+    const [next] = step(runningAgent(), agentCrashed('0000000', '0000001', 'claude: command not found'));
+    expect(next.tag).toBe('VERIFYING');
+    if (next.tag === 'VERIFYING') {
+      expect(next.ctx.runStatusHistory).toEqual(['crashed']);
+      expect(next.ctx.lastRunStatus).toBe('crashed');
+      expect(next.ctx.lastRunOutput).toBe('claude: command not found');
+    }
+  });
+
+  it('two consecutive harness crashes → ABORTED (STUCK_HARNESS_CRASH), not the downstream verifier red', () => {
+    // First crash: a red ladder CONTINUEs (one crash may be transient). The crash output is surfaced.
+    const v1 = step(runningAgent(), agentCrashed('0000000', '0000001', 'segfault'))[0];
+    const [cont] = step(v1, { tag: 'VERIFIED', verdict: failVerdict('ImportError: no module') });
+    expect(cont.tag).toBe('RUNNING_AGENT');
+
+    // Second consecutive crash: the streak (2) trips the typed harness-crash abort.
+    const v2 = step(cont, agentCrashed('0000001', '0000002', 'segfault'))[0];
+    const [aborted] = step(v2, { tag: 'VERIFIED', verdict: failVerdict('ImportError: no module') });
+    expect(aborted.tag).toBe('ABORTED');
+    if (aborted.tag === 'ABORTED') {
+      expect(aborted.reason).toContain('STUCK_HARNESS_CRASH');
+      expect(aborted.reason).toContain('segfault');
+      expect(aborted.reason).not.toContain('STUCK_REPEATED_FAILURE');
+    }
   });
 
   it('VERIFIED pass → AWAIT_SIGNOFF + REQUEST_SIGNOFF with the frozen rubric', () => {

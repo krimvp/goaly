@@ -5,9 +5,15 @@ describe('RunConfig', () => {
   it('applies defaults for the optional fields', () => {
     const c = RunConfig.parse({ goal: 'g', verifier: { kind: 'existing', ref: 'npm test' } });
     expect(c.autonomous).toBe(false);
+    expect(c.installMissingTools).toBe(true);
     expect(c.maxIterations).toBe(10);
     expect(c.maxSealRevisions).toBe(10);
-    expect(c.stuckPolicy).toEqual({ noDiff: true, repeatFailureThreshold: 3, oscillation: true });
+    expect(c.stuckPolicy).toEqual({
+      noDiff: true,
+      repeatFailureThreshold: 3,
+      oscillation: true,
+      harnessCrashThreshold: 2,
+    });
     expect(c.judge).toEqual({ quorum: 3, confidenceFloor: 0.66 });
     expect(c.diffIgnore).toEqual([]);
   });

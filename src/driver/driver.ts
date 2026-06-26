@@ -532,6 +532,7 @@ async function perform(
       const result = await prepareWorkspace(
         {
           workspace: deps.workspace,
+          installMissingTools: command.installMissingTools,
           ...(deps.logger !== undefined ? { logger: deps.logger } : {}),
           ...(deps.prepareTimeouts !== undefined ? { timeouts: deps.prepareTimeouts } : {}),
           ...(deps.prepareLlm !== undefined ? { llm: deps.prepareLlm } : {}),

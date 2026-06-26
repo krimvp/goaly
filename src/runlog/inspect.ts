@@ -92,7 +92,7 @@ export type RunDetail = {
 
 /** The prepare-phase projection for `runs show` (Fix #1 / #2). */
 export type PrepareDetail = {
-  readonly status: 'proceed' | 'setup-failed' | 'contract-unsound';
+  readonly status: 'proceed' | 'setup-failed' | 'contract-unsound' | 'tools-missing';
   readonly setupRan: boolean;
 };
 

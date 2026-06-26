@@ -5,11 +5,14 @@ import type { Workspace } from '../workspace/workspace';
 import type { LlmProvider } from '../llm/provider';
 import { DeterministicVerifier } from '../verify/deterministic';
 import { classifyPreflightSoundness } from './preflight-soundness';
+import { isProbeSafe } from '../compile/required-tools';
 import { noopLogger, type Logger } from '../log/logger';
 import { errorMessage } from '../util/errors';
 
 /** Default kill-timeout for the one-time setup command when none is configured (10 min, like the LLM steps). */
 const DEFAULT_SETUP_TIMEOUT_MS = 600_000;
+/** Kill-timeout for the tool-availability probe (a handful of `command -v` checks — should be instant). */
+const TOOL_PROBE_TIMEOUT_MS = 30_000;
 /** Max chars of setup / pre-flight output folded into a fail-closed reason, so the run log stays bounded. */
 const DETAIL_LIMIT = 2000;
 
@@ -27,6 +30,13 @@ export type PrepareDeps = {
    * and does not — abort on a red; it proceeds and lets the runtime ladder + stuck detection govern.
    */
   llm?: LlmProvider;
+  /**
+   * What to do when a `requiredTools` program is missing. `true` (default) delegates the install to the
+   * agent (skip goaly's own setup — it would only fail on the absent toolchain — and thread the missing
+   * tools into the first prompt); `false` opts out with a typed `tools-missing` abort. Mirrors
+   * `RunConfig.installMissingTools`.
+   */
+  installMissingTools?: boolean;
 };
 
 export type PrepareResult = { prepared: PreparedOutcome; setupRan: boolean };
@@ -50,8 +60,27 @@ export async function prepareWorkspace(
   contract: CompiledContract,
 ): Promise<PrepareResult> {
   const log = deps.logger ?? noopLogger;
-  let setupRan = false;
 
+  // 0. TOOL PREFLIGHT: are the external programs the verification needs already on PATH? Runs BEFORE
+  // setup, because setup itself assumes the toolchain exists (a `rustup component add` is useless if
+  // `rustup` is missing). A miss is either handed to the agent (default) or a typed fail-closed abort.
+  const missing = await checkMissingTools(deps.workspace, contract.requiredTools, log);
+  if (missing.length > 0) {
+    if (deps.installMissingTools === false) {
+      log.error('required tools missing and --install-missing-tools is off (→ TOOLS_MISSING)', {
+        missing: missing.join(', '),
+      });
+      return { prepared: { status: 'tools-missing', detail: toolsMissingDetail(missing) }, setupRan: false };
+    }
+    // Default: delegate the install to the agent. Skip goaly's own setup + pre-flight — both would only
+    // fail on the absent toolchain — and carry the missing tools into the first prompt as a bootstrap.
+    log.info('required tools missing — delegating install to the agent (default)', {
+      missing: missing.join(', '),
+    });
+    return { prepared: { status: 'proceed', installTools: missing }, setupRan: false };
+  }
+
+  let setupRan = false;
   if (contract.setup !== undefined) {
     setupRan = true;
     const setupFailure = await runSetup(deps.workspace, contract.setup, deps.timeouts?.setupMs, log);
@@ -60,6 +89,54 @@ export async function prepareWorkspace(
 
   const prepared = await preflightDeterministic(deps, contract, log);
   return { prepared, setupRan };
+}
+
+/**
+ * Probe which of `tools` are NOT on PATH, using the workspace's own shell + (PATH-augmented) env — the
+ * same environment the verifier will use, so the check is accurate. One subprocess: each safe name is
+ * `command -v`-tested and echoed back only when absent. Fail-OPEN: any probe error (or no safely-probeable
+ * names) yields `[]`, so a probe glitch never blocks a legitimate run — the runtime ladder is the backstop.
+ */
+async function checkMissingTools(
+  workspace: Workspace,
+  tools: readonly string[],
+  log: Logger,
+): Promise<string[]> {
+  const safe = [...new Set(tools.filter(isProbeSafe))];
+  if (safe.length === 0) return [];
+  const script = safe.map((t) => `command -v ${t} >/dev/null 2>&1 || printf '%s\\n' ${t}`).join('\n');
+  try {
+    const r = await workspace.run(script, { timeoutMs: TOOL_PROBE_TIMEOUT_MS });
+    const reported = new Set(r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0));
+    return safe.filter((t) => reported.has(t));
+  } catch (e) {
+    log.warn('tool preflight probe errored (advisory only) — proceeding', { reason: errorMessage(e) });
+    return [];
+  }
+}
+
+/** The `tools-missing` detail (opt-out path): name the absent programs and how to proceed. */
+function toolsMissingDetail(missing: readonly string[]): string {
+  return (
+    `the verification requires ${missing.join(', ')}, which ${missing.length === 1 ? 'is' : 'are'} not ` +
+    'installed on PATH. Install the toolchain, or drop `--install-missing-tools false` to let the agent ' +
+    'install it, or re-run with a `--verify-cmd` whose tools are present.'
+  );
+}
+
+/**
+ * Append an actionable hint to a `setup-failed` detail. Exit 127 from the shell means "command not
+ * found" — the setup program (a toolchain like `rustup`/`cargo`/`go`, or a missing dependency) simply
+ * isn't installed here, which goaly can't bootstrap for you. Point the user at the fix rather than
+ * leaving them with a bare exit code.
+ */
+function setupHint(exitCode: number): string {
+  if (exitCode !== 127) return '';
+  return (
+    '\n\nHint: exit 127 means the setup command’s program is not installed in this environment. ' +
+    'Install the required toolchain/dependency, or re-run with `--setup-cmd "<correct command>"` to ' +
+    'override it, or `--no-setup` if the tree is already prepared.'
+  );
 }
 
 /** Run the one-time setup command; return a `setup-failed` outcome on non-zero/throw, or null on success. */
@@ -75,7 +152,10 @@ async function runSetup(
     if (r.exitCode === 0) return null;
     log.error('workspace setup failed (fail-closed → SETUP_FAILED)', { exitCode: r.exitCode });
     const output = (r.stderr || r.stdout).slice(0, DETAIL_LIMIT);
-    return { status: 'setup-failed', detail: `\`${setup}\` exited ${r.exitCode}\n${output}` };
+    return {
+      status: 'setup-failed',
+      detail: `\`${setup}\` exited ${r.exitCode}\n${output}${setupHint(r.exitCode)}`,
+    };
   } catch (e) {
     log.error('workspace setup threw (fail-closed → SETUP_FAILED)', { reason: errorMessage(e) });
     return { status: 'setup-failed', detail: `\`${setup}\` failed to run: ${errorMessage(e)}` };

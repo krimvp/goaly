@@ -26,6 +26,9 @@ function renderContract(contract: CompiledContract): string {
   if (contract.setup !== undefined) {
     lines.push(`setup (one-time, before iteration 1): ${contract.setup}`);
   }
+  if (contract.requiredTools.length > 0) {
+    lines.push(`requiredTools (must be on PATH; installed by the agent if missing): ${contract.requiredTools.join(', ')}`);
+  }
   lines.push('rungs:');
   contract.rungs.forEach((rung, i) => {
     lines.push(describeRung(rung, i));

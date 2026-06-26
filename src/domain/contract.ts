@@ -58,6 +58,16 @@ export const CompiledContract = z.object({
    * a non-zero exit is a typed `SETUP_FAILED` that aborts before any worker tokens are spent.
    */
   setup: z.string().min(1).optional(),
+  /**
+   * External programs the verification (setup + deterministic rungs) needs to ALREADY exist on PATH —
+   * a toolchain/runner like `cargo`, `python`, `pytest`, `go`, `node`. Authored by the compiler under
+   * `--generate` and derived heuristically from the commands on the `--verify-cmd` path; frozen with
+   * the contract (so the bar's environment requirements are auditable). NOT a rung — it gates nothing.
+   * Before the loop, goaly probes each: if any are missing it either hands the install to the agent
+   * (the default, seamless path) or fails closed with a typed `TOOLS_MISSING` (opt-out). Distinct from
+   * `setup`, which installs project *dependencies* and itself assumes these tools already exist.
+   */
+  requiredTools: z.array(z.string().min(1)).default([]),
   /** The frozen overall rubric (for audit + the approver's Sign-off input). */
   rubric: z.string(),
   /**
@@ -102,5 +112,8 @@ export function canonicalContractString(c: UnhashedContract): string {
     // The frozen setup command is part of the authored bar's identity (so the hash proves it didn't
     // drift). `null` when absent keeps the canonical string stable for the common no-setup contract.
     setup: c.setup ?? null,
+    // The required-tools manifest is part of the frozen bar's environment identity. Sorted so order
+    // never perturbs the hash; an empty manifest keeps the canonical string stable for tool-less goals.
+    requiredTools: [...(c.requiredTools ?? [])].sort(),
   });
 }

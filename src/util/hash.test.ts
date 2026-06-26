@@ -57,6 +57,19 @@ describe('contract hashing', () => {
     expect(hashContract(withSetup)).not.toBe(hashContract(otherSetup));
   });
 
+  it('changes when the required-tools manifest changes (it is part of the bar environment)', () => {
+    const withTools: UnhashedContract = { ...base, requiredTools: ['cargo'] };
+    const otherTools: UnhashedContract = { ...base, requiredTools: ['go'] };
+    expect(hashContract(withTools)).not.toBe(hashContract(base));
+    expect(hashContract(withTools)).not.toBe(hashContract(otherTools));
+  });
+
+  it('is stable regardless of requiredTools ordering (canonicalized)', () => {
+    const a: UnhashedContract = { ...base, requiredTools: ['python', 'pytest'] };
+    const b: UnhashedContract = { ...base, requiredTools: ['pytest', 'python'] };
+    expect(hashContract(a)).toBe(hashContract(b));
+  });
+
   it('freezeContract attaches a valid hash and parses', () => {
     const frozen = freezeContract(base);
     expect(frozen.contractHash).toBe(hashContract(base));

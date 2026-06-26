@@ -7,6 +7,7 @@ import {
   overlayFromConfig,
   defaultConfigFileReader,
   IMPLICIT_CONFIG_FILENAME,
+  HOME_CONFIG_LABEL,
   type ConfigFileReader,
 } from './config-file';
 import { UsageError } from './args';
@@ -110,6 +111,47 @@ describe('loadConfig', () => {
 
   it('fails closed when an explicit --config path does not exist', async () => {
     await expect(loadConfig('/proj', '/missing.json', fakeReader({}))).rejects.toThrow(UsageError);
+  });
+
+  describe('home-level ~/.goalyrc layer', () => {
+    const home = '/home/u';
+    const homeRc = path.join(home, IMPLICIT_CONFIG_FILENAME);
+
+    it('loads the home ~/.goalyrc and labels its source', async () => {
+      const files = { [homeRc]: '{ "autonomous": true, "harness": "fake" }' };
+      const loaded = await loadConfig('/proj', undefined, fakeReader(files), home);
+      expect(loaded.sources).toEqual([HOME_CONFIG_LABEL]);
+      expect(loaded.overlay).toEqual({ autonomous: true, harness: 'fake' });
+    });
+
+    it('lets the workspace .goalyrc override the home one (home-first sources)', async () => {
+      const files = {
+        [homeRc]: '{ "harness": "fake", "max-iterations": 2 }',
+        [path.join('/proj', IMPLICIT_CONFIG_FILENAME)]: '{ "harness": "codex" }',
+      };
+      const loaded = await loadConfig('/proj', undefined, fakeReader(files), home);
+      expect(loaded.sources).toEqual([HOME_CONFIG_LABEL, IMPLICIT_CONFIG_FILENAME]);
+      expect(loaded.overlay).toEqual({ harness: 'codex', 'max-iterations': '2' });
+    });
+
+    it('lets --config override both implicit files', async () => {
+      const files = {
+        [homeRc]: '{ "harness": "fake", "max-iterations": 2 }',
+        [path.join('/proj', IMPLICIT_CONFIG_FILENAME)]: '{ "harness": "droid" }',
+        '/cfg.json': '{ "harness": "codex" }',
+      };
+      const loaded = await loadConfig('/proj', '/cfg.json', fakeReader(files), home);
+      expect(loaded.sources).toEqual([HOME_CONFIG_LABEL, IMPLICIT_CONFIG_FILENAME, '/cfg.json']);
+      expect(loaded.overlay).toEqual({ harness: 'codex', 'max-iterations': '2' });
+    });
+
+    it('reads the file once when the cwd IS the home dir (no double-apply)', async () => {
+      const files = { [homeRc]: '{ "harness": "fake" }' };
+      // dir === home: the home and workspace paths resolve to the same file.
+      const loaded = await loadConfig(home, undefined, fakeReader(files), home);
+      expect(loaded.sources).toEqual([IMPLICIT_CONFIG_FILENAME]);
+      expect(loaded.overlay).toEqual({ harness: 'fake' });
+    });
   });
 
   it('turns invalid JSON into a UsageError', async () => {

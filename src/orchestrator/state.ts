@@ -44,6 +44,10 @@ export type LoopCtx = {
   readonly lastNoDiff: boolean;
   /** Status of the most recent agent run (surfaced as feedback when not 'completed'). */
   readonly lastRunStatus: HarnessRunResult['status'] | undefined;
+  /** Per-run harness statuses, in order (drives consecutive-crash detection). */
+  readonly runStatusHistory: readonly HarnessRunResult['status'][];
+  /** Output of the most recent agent run — surfaced verbatim when a crash streak aborts the run. */
+  readonly lastRunOutput: string | undefined;
   readonly lastBudget: BudgetSnapshot | undefined;
   /** The ladder verdict of the current iteration (set in VERIFYING, read at Sign-off). */
   readonly lastVerdict: Verdict | undefined;
@@ -183,6 +187,8 @@ export function initialCtx(
     verifierDetailHistory: [],
     lastNoDiff: false,
     lastRunStatus: undefined,
+    runStatusHistory: [],
+    lastRunOutput: undefined,
     lastBudget: undefined,
     lastVerdict: undefined,
     feedback: undefined,

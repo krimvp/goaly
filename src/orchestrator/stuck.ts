@@ -70,7 +70,10 @@ export function normalizeDetail(detail: string): string {
  * the loop still terminates and a red is never turned green.
  */
 function noDiffExcused(ctx: LoopCtx, current?: DecisionContext): boolean {
-  if (ctx.lastRunStatus === 'timeout') return true;
+  // A timed-out OR crashed turn never finished — it had no fair chance to edit. Excuse the no-diff
+  // so the more specific terminal (timeout → maxIterations backstop; crash → harness-crash streak)
+  // makes the call, instead of a misleading "no-diff" masking that the harness died.
+  if (ctx.lastRunStatus === 'timeout' || ctx.lastRunStatus === 'crashed') return true;
   if (current?.ladder.pass === true && current.approval?.veto === true) {
     const reason = current.approval.reason ?? '';
     return reason !== (ctx.feedback ?? '');
@@ -82,6 +85,15 @@ export function detectStuck(ctx: LoopCtx, current?: DecisionContext): StuckReaso
   // Budget — independent of iteration count.
   if (ctx.lastBudget?.exceeded === true) {
     return 'budget exceeded';
+  }
+
+  // Harness crash — the agent CLI exited abnormally N times in a row without ever completing a turn.
+  // Checked BEFORE no-diff / repeat-failure because both of those are downstream symptoms of a crash
+  // (the verifier runs on a tree the agent never finished editing) and would otherwise disguise an
+  // environment/harness failure as "your code is wrong". Names the actual harness error, not the red.
+  const crashThreshold = ctx.config.stuckPolicy.harnessCrashThreshold;
+  if (isCrashStreak(ctx.runStatusHistory, crashThreshold)) {
+    return harnessCrashReason(crashThreshold, ctx.lastRunOutput ?? '');
   }
 
   // No-diff — the most recent iteration left the working tree unchanged. Excused once (issue #54)
@@ -115,6 +127,36 @@ export function detectStuck(ctx: LoopCtx, current?: DecisionContext): StuckReaso
   }
 
   return null;
+}
+
+/** Cap the harness-error snippet folded into the crash reason so a large dump doesn't bloat the log. */
+const CRASH_OUTPUT_LIMIT = 500;
+
+/**
+ * The harness-crash abort reason: the agent CLI exited abnormally `threshold` times in a row without
+ * completing a turn. This is an environment/harness failure (the agent never ran), NOT a problem with
+ * the code or the frozen contract — so the message points the user at the harness, not at a downstream
+ * verifier red, and surfaces the harness's own error output verbatim so the real cause is visible.
+ */
+function harnessCrashReason(threshold: number, output: string): StuckReason {
+  const trimmed = output.trim();
+  const snippet =
+    trimmed.length > CRASH_OUTPUT_LIMIT ? `${trimmed.slice(0, CRASH_OUTPUT_LIMIT)}…` : trimmed;
+  const tail = snippet.length > 0 ? ` Last harness output: ${snippet}` : '';
+  return (
+    `STUCK_HARNESS_CRASH: the coding-agent harness exited abnormally ${threshold} times in a row — ` +
+    'it never completed a turn, so this is a harness/environment failure, not a problem with your ' +
+    'code or the frozen contract. Check that the agent CLI is installed, authenticated, and runnable ' +
+    'in this directory (try invoking it directly), then re-run — optionally with a different ' +
+    `--harness.${tail}`
+  );
+}
+
+/** True when the last `threshold` harness runs all crashed (a consecutive crash streak). */
+function isCrashStreak(history: readonly string[], threshold: number): boolean {
+  if (history.length < threshold) return false;
+  const tail = history.slice(history.length - threshold);
+  return tail.every((s) => s === 'crashed');
 }
 
 /** Cap the signature folded into the abort reason so a large verifier dump doesn't bloat the run log. */

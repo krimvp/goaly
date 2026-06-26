@@ -63,8 +63,8 @@
 
     <div class="hero-art reveal">
       <div class="code" aria-hidden="true">
-        <button class="copy-btn" data-clip='goaly run --goal "add /health endpoint" --generate --autonomous'>copy</button>
-<pre><span class="cmt">$</span> <span class="fn">goaly</span> run --goal <span class="str">"add /health endpoint"</span> --generate --autonomous
+        <button class="copy-btn" data-clip='goaly -d "add /health endpoint"'>copy</button>
+<pre><span class="cmt">$</span> <span class="fn">goaly</span> -d <span class="str">"add /health endpoint"</span>  <span class="cmt"># just the goal — Claude + generate by default</span>
 
 <span class="tok">✔ COMPILE</span>  contract frozen   <span class="cmt">┌ sha 9f3c…a2</span>
 <span class="str">● SEAL</span>  auto-accepted     <span class="cmt">(logged loudly)</span>
@@ -164,13 +164,18 @@ goaly help</pre>
       <div class="row">
         <span class="rn">03</span>
         <div class="rt">
-          <b>Or let the agent write the check, and run unattended</b>
-          <p style="margin-bottom:0.7rem"><code>--generate</code> has the agent author the verification;
-            <code>--autonomous</code> skips the Seal pause (the contract is still frozen and logged loudly).</p>
+          <b>Or just give it a goal — the agent writes the check too</b>
+          <p style="margin-bottom:0.7rem">The goal is a positional and <code>run</code> is optional. With no
+            <code>--verify-cmd</code>, the LLM authors the verification (<code>--generate</code>) and checks the
+            work, using Claude — all defaults. Add <code>-d</code> (alias <code>--defaults</code>) to run
+            hands-off: it auto-accepts the Seal pause (the contract is still frozen and logged loudly).</p>
           <div class="code">
             <button class="copy-btn">copy</button>
-<pre>goaly run --goal <span class="str">"add a /health endpoint returning 200"</span> \
-  --generate --autonomous</pre>
+<pre><span class="cmt"># approve the contract once at Seal</span>
+goaly <span class="str">"add a /health endpoint returning 200"</span>
+
+<span class="cmt"># …or fully hands-off</span>
+goaly -d <span class="str">"add a /health endpoint returning 200"</span></pre>
           </div>
         </div>
       </div>
@@ -208,7 +213,8 @@ goaly runs show run-&lt;id&gt;</pre>
     <div class="panel reveal" style="padding:1rem 1.3rem; margin-top:1.6rem">
       <p style="margin:0; font-family:var(--mono); font-size:0.82rem; line-height:1.7; color:var(--fg-dim)">
         <b style="color:var(--fg)">Tip:</b> add <code>.goaly/</code> to your repo's <code>.gitignore</code> (it holds run logs).
-        Put repeated flags in a <code>.goalyrc</code> file once, then just pass the goal. Exit codes:
+        Put repeated flags in a <code>.goalyrc</code> file once — per-project, or a personal
+        <code>~/.goalyrc</code> (e.g. <code>{ "autonomous": true }</code>) — then just pass the goal. Exit codes:
         <span class="pill pass">0 DONE</span> <span class="pill fail">1 FAILED / ABORTED</span> <span class="pill neutral">2 usage error</span>
       </p>
     </div>
@@ -236,7 +242,7 @@ goaly runs show run-&lt;id&gt;</pre>
         <span class="arrow">→</span>
         <div class="stage gate" data-stage="seal"><span class="st-k">SEAL</span><span class="st-s">lock the bar · 🔁 revise</span></div>
         <span class="arrow">→</span>
-        <div class="stage" data-stage="prepare"><span class="st-k">setup + pre-flight</span><span class="st-s">prep, once</span></div>
+        <div class="stage" data-stage="prepare"><span class="st-k">tools + setup + pre-flight</span><span class="st-s">prep, once</span></div>
         <span class="arrow">→</span>
         <div class="loop-band">
           <span class="loop-tag">loop 🔁 ≤ --max-iterations (bails early on STUCK)</span>

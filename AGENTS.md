@@ -48,7 +48,7 @@ These are the product. A change that violates one is wrong even if tests pass �
 7. **Write-ahead + resume.** Events are appended before the state advances; resume is a replay-fold
    over the log; no completed iteration is repeated. Durability is at-least-once by design.
 8. **Stuck detection stays pure** over `LoopCtx` histories: no-diff, repeat-failure, oscillation,
-   budget.
+   harness-crash (consecutive `crashed` runs → typed `STUCK_HARNESS_CRASH`), budget.
 
 ## The mental model: one deep module, four seams
 
@@ -87,7 +87,7 @@ src/
   orchestrator/ state, step, decide, stuck              — PURE reducer (the spine)
   driver/      driver, clock, budget                    — effects + seam #4
   verify/      verifier, ladder, deterministic, judge, approver, agent-approver   — seam #2/#3
-  compile/     compiler, agent-compiler, seal, seal-gates   — Phase 1 + freeze + Seal
+  compile/     compiler, agent-compiler, required-tools, seal, seal-gates   — Phase 1 + freeze + Seal
   agent-cli/   codec, <tool>-codec, output, stream, estimate — one deep codec per CLI (seam-shared)
   harness/     adapter, agent-cli-harness, claude-code, codex, droid — seam #1
   workspace/   workspace, git-workspace                 — harness-independent diff/run
