@@ -181,46 +181,16 @@ goaly -d <span class="str">"add a /health endpoint returning 200"</span></pre>
       </div>
     </div>
 
-    <h3 class="reveal" style="margin-top:2.6rem">A few more things you'll reach for</h3>
-    <div class="grid grid-2 reveal" style="align-items:start">
-      <div class="code">
-        <button class="copy-btn">copy</button>
-<pre><span class="cmt"># pick a harness, cap iterations, set a token budget</span>
-goaly run --goal <span class="str">"…"</span> --harness codex \
-  --max-iterations 8 --budget-tokens 500000
-
-<span class="cmt"># a long goal from a file (or stdin)</span>
-goaly run --goal-file <span class="str">./GOAL.md</span> --generate
-cat GOAL.md | goaly run --goal <span class="str">-</span> --generate
-
-<span class="cmt"># resume a crashed run from its log</span>
-goaly run --goal <span class="str">"…"</span> --resume run-&lt;id&gt;</pre>
-      </div>
-      <div class="code">
-        <button class="copy-btn">copy</button>
-<pre><span class="cmt"># watch the agent's turns live as they happen</span>
-goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --stream
-
-<span class="cmt"># jail the agent + verifier in an OS sandbox (opt-in)</span>
-goaly run --goal <span class="str">"…"</span> --verify-cmd <span class="str">"npm test"</span> --sandbox
-
-<span class="cmt"># inspect past runs (read-only, re-runs nothing)</span>
-goaly runs list
-goaly runs show run-&lt;id&gt;</pre>
-      </div>
-    </div>
-
     <div class="panel reveal" style="padding:1rem 1.3rem; margin-top:1.6rem">
       <p style="margin:0; font-family:var(--mono); font-size:0.82rem; line-height:1.7; color:var(--fg-dim)">
-        <b style="color:var(--fg)">Tip:</b> add <code>.goaly/</code> to your repo's <code>.gitignore</code> (it holds run logs).
-        Put repeated flags in a <code>.goalyrc</code> file once — per-project, or a personal
-        <code>~/.goalyrc</code> (e.g. <code>{ "autonomous": true }</code>) — then just pass the goal. Exit codes:
-        <span class="pill pass">0 DONE</span> <span class="pill fail">1 FAILED / ABORTED</span> <span class="pill neutral">2 usage error</span>
+        <b style="color:var(--fg)">Good to know:</b> add <code>.goaly/</code> to <code>.gitignore</code> (it holds run logs).
+        Put repeated flags in a <code>.goalyrc</code> (per-project or <code>~/.goalyrc</code>), then just pass the goal.
+        Exit codes: <span class="pill pass">0 DONE</span> <span class="pill fail">1 FAILED / ABORTED</span> <span class="pill neutral">2 usage</span>
       </p>
     </div>
 
     <p class="lede reveal" style="margin-top:1.4rem">
-      Full install options, every flag, the config file, sandboxing, budgets and the spend report are in the
+      Every flag, the config file, sandboxing, budgets and the per-run spend report are in the
       <a href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener" style="color:var(--accent)">README →</a>
     </p>
   </div>
@@ -233,8 +203,9 @@ goaly runs show run-&lt;id&gt;</pre>
   <div class="wrap">
     <div class="eyebrow reveal">How it works</div>
     <h2 class="reveal">One compile, then a verified loop.</h2>
-    <p class="lede reveal">A single pure, zero-LLM reducer owns all the policy; a thin driver does the actual
-      work it asks for. Click any stage to see what it does.</p>
+    <p class="lede reveal">A single pure, zero-LLM reducer owns all the policy; a thin driver does the work it
+      asks for. There are exactly <b>two gates</b> and <b>three bounded retry edges</b> — nothing else loops.
+      Click any stage to see what it does.</p>
 
     <div class="pipeline-wrap reveal">
       <div class="pipeline">
@@ -263,11 +234,10 @@ goaly runs show run-&lt;id&gt;</pre>
       <div class="detail" id="pipeline-detail"></div>
     </div>
     <p class="lede reveal" style="margin-top:1rem;font-size:.92rem">
-      <b>🔁 marks the only three places goaly loops back</b>, each explicitly bounded:
-      <b>COMPILE</b> re-authors on a correctable miss (<code>--max-compile-retries</code>),
-      <b>SEAL</b> re-authors from your feedback on “revise” (<code>--max-seal-revisions</code>), and a
-      red iteration re-runs the agent with the FAIL/veto fed back (<code>--max-iterations</code>, or until STUCK).
-      Everything else runs once per pass — and the bar sealed at SEAL is never rewritten.</p>
+      <b>🔁 marks the only three places goaly loops back</b>, each explicitly bounded: <b>COMPILE</b> re-authors
+      on a correctable miss, <b>SEAL</b> re-authors from your feedback on “revise”, and a red iteration re-runs
+      the agent with the FAIL/veto fed back. Everything else runs once per pass — and the bar sealed at SEAL is
+      never rewritten.</p>
 
     <!-- Verify ladder — kept because it makes "verifiable" concrete -->
     <h3 class="reveal" style="margin-top:3rem">Verify cheap-and-ungameable first</h3>
@@ -298,72 +268,26 @@ goaly runs show run-&lt;id&gt;</pre>
       <div class="card"><h3><code>--autonomous</code></h3><p>Moves Seal <b>only</b>. It skips the human pause, never the freeze and never verification. The two-key contract is identical either way.</p></div>
     </div>
 
-    <!-- Phased goals — a frozen plan of frozen contracts -->
-    <h3 class="reveal" style="margin-top:3rem">Phased: a frozen plan of frozen contracts</h3>
-    <p class="lede reveal" style="margin-bottom:1.2rem"><code>--phased</code> decomposes one big goal into an
-      ordered plan of small sub-goals, runs each as its own frozen, two-key contract (with an internal
-      checkpoint between phases so each diff stays small), and finishes with a <b>cumulative acceptance</b>
-      contract on the <b>original</b> goal — so decomposition can't green a goal whose parts pass but whole
-      doesn't. The plan is frozen + hashed + logged; re-planning is only the bounded, human-gated plan-Seal
-      revise path.</p>
-    <div class="pipeline-wrap reveal">
-      <div class="pipeline">
-        <div class="stage"><span class="st-k">PLAN</span><span class="st-s">author + freeze · 🔁 revise</span></div>
-        <span class="arrow">→</span>
-        <div class="stage gate"><span class="st-k">plan SEAL</span><span class="st-s">approve the plan</span></div>
-        <span class="arrow">→</span>
-        <div class="loop-band">
-          <span class="loop-tag">for each phase 🔁 (compile → SEAL → loop → CHECKPOINT)</span>
-          <div class="stage"><span class="st-k">phase contract</span><span class="st-s">a normal frozen run</span></div>
-          <span class="arrow">→</span>
-          <div class="stage"><span class="st-k">CHECKPOINT</span><span class="st-s">scope the next diff</span></div>
-        </div>
-        <span class="arrow">→</span>
-        <div class="stage gate"><span class="st-k">ACCEPT</span><span class="st-s">cumulative, original goal</span></div>
-        <div class="term-row">
-          <div class="term done">DONE ✔</div>
-          <div class="term failed">FAILED</div>
-        </div>
-      </div>
-    </div>
-    <p class="lede reveal" style="margin-top:1rem;font-size:.92rem">
-      The planner is a read-only LLM seam (like the compiler) — or supply the plan yourself with
-      <code>--plan-file</code>. <code>--max-phases</code> caps the plan; <code>--budget-tokens</code> is the
-      whole-run total; <code>--autonomous</code> auto-accepts the plan <b>and</b> each phase (still frozen +
-      logged); <code>--resume</code> re-enters mid-plan without repeating completed phases.</p>
-
-    <!-- Per-iteration delta diffs -->
-    <h3 class="reveal" style="margin-top:3rem">Delta diffs: a flat judge prompt, a cumulative DONE</h3>
-    <p class="lede reveal" style="margin-bottom:1.2rem"><code>--delta-verify</code> (default off) keeps the
-      per-iteration <b>judge</b> prompt flat on a long run: after each continuation iteration goaly takes an
-      internal checkpoint (the same private tree snapshot as <code>--baseline</code> — <b>no commit</b>), so the
-      next iteration's judge reviews only <b>that iteration's delta</b> instead of the whole cumulative diff.
-      The trust model is preserved by keeping the <b>DONE decision cumulative</b>: the <b>deterministic rungs</b>
-      always run on the <b>full working tree</b> (they execute commands, not diffs — the ungameable key), and the
-      terminal <b>Sign-off approver</b> is pinned to the run's <b>start</b> baseline, so it reviews the
-      <b>entire</b> change — a violation smeared across iterations, where no single delta looks bad, is still
-      caught. A checkpoint that can't be taken falls back to the full diff (never an empty one). It
-      <b>composes with <code>--phased</code></b>: per-iteration deltas feed the judge <i>within</i> a phase,
-      while the approver baseline advances only at phase boundaries — so each phase's Sign-off still reviews
-      that phase's whole cumulative diff.</p>
-
-    <h3 class="reveal" style="margin-top:3rem">Under the hood: a deep module at every seam</h3>
-    <p class="lede reveal" style="margin-bottom:1.2rem">Each moving part is a small interface over a lot of
-      behaviour — so the policy is testable in one place and a new variant is one file.</p>
-    <div class="grid grid-3 reveal">
-      <div class="card"><h3>One codec, both roles</h3><p>A single <code>codecFor()</code> registry maps a CLI to its <code>AgentCliCodec</code>. The write-role harness <b>and</b> the read-only judge / approver / compiler resolve through it — so a CLI is one codec module + one line, never wiring repeated in three places.</p></div>
-      <div class="card"><h3>Sandbox policy, resolved once</h3><p>The per-seam isolation policy (<code>$HOME</code> denial, egress, proxy) is resolved into one <code>SandboxProfile</code>; each launcher — bwrap / firejail / container — only <b>translates</b> it into its flag dialect, so no policy is duplicated across mechanisms.</p></div>
-      <div class="card"><h3>Config by lifetime</h3><p>One <code>RunConfig</code>, read through four typed views — <code>ContractInput</code> (frozen), <code>GatePolicy</code>, <code>LoopPolicy</code>, <code>DriverWiring</code> — so the compiler <b>cannot</b> read a loop knob into the frozen contract, and wiring can't reach the reducer.</p></div>
-      <div class="card"><h3>The diff scope, owned</h3><p>A <code>Baseline</code> module owns what the judge vs the Sign-off approver each diff against, and when to checkpoint under <code>--delta-verify</code> — in one place, not threaded through the loop by hand.</p></div>
-      <div class="card"><h3>Typed stuck reasons</h3><p>Stuck detection stays pure over the loop histories and returns a typed <code>{ kind, message }</code>; the one reason-specific excuse — a fresh, unseen Sign-off veto pardons a no-diff once — lives in DECIDE, which holds the verdict.</p></div>
-      <div class="card"><h3>Pure reducer, real seams</h3><p>The same shape throughout: a small interface, a fake + a real adapter behind it, the policy in a synchronous reducer the Driver feeds. Leverage for callers, locality for changes, testability for everyone.</p></div>
-    </div>
-
-    <p class="lede reveal" style="margin-top:1.6rem">
-      The full picture — the state machine, the DECIDE truth table, stuck-detection, the four seams, the
-      write-ahead log and resume — is in the architecture docs.
+    <p class="lede reveal" style="margin-top:1.8rem">
+      Under the hood it's <b>a deep module at every seam</b> — the harness, the verifier ladder, the approver and
+      the compiler each hide a lot of behaviour behind a small interface, so the policy is testable in one place
+      and a new variant is one file. The full picture — the state machine, the DECIDE truth table, stuck
+      detection, the four seams, and the write-ahead log that makes runs replayable — is in the architecture docs.
       <a href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener" style="color:var(--accent)">Read ARCHITECTURE.md →</a>
     </p>
+
+    <!-- ===================== WHAT'S POSSIBLE ===================== -->
+    <h3 class="reveal" style="margin-top:3rem">What else you can turn on</h3>
+    <p class="lede reveal" style="margin-bottom:1.2rem">Defaults get you a verified run with one command. These
+      flags scale it to bigger goals, longer runs and tighter isolation — every one is documented in the README.</p>
+    <div class="grid grid-3 reveal" style="align-items:start">
+      <div class="card"><h3><code>--phased</code> Big goals</h3><p>Decompose one large goal into a <b>frozen plan</b> of small, individually-verified sub-goals, then accept <b>cumulatively</b> on the original — so parts passing can't green a broken whole.</p></div>
+      <div class="card"><h3><code>--delta-verify</code> Long runs</h3><p>Keep the per-iteration judge prompt flat by reviewing only each iteration's delta — while the DONE decision stays cumulative and ungameable.</p></div>
+      <div class="card"><h3><code>--sandbox</code> Isolation</h3><p>Jail the agent <em>and</em> the verifier in an OS sandbox (bubblewrap / container): deny <code>$HOME</code>, control egress. One policy, many launchers.</p></div>
+      <div class="card"><h3><code>--resume run-&lt;id&gt;</code> Recover</h3><p>Continue a crashed run from its write-ahead log — same session, same iteration count, no completed work repeated.</p></div>
+      <div class="card"><h3><code>--stream</code> Observe</h3><p>Watch the agent's turns live — tool calls, messages, token counts — for the run and the LLM steps; persist it for offline replay.</p></div>
+      <div class="card"><h3><code>--budget-tokens</code> Spend</h3><p>Cap the whole run by tokens or time; every run ends with a per-step spend report (add an approximate USD cost on request).</p></div>
+    </div>
   </div>
 </section>
 
@@ -376,116 +300,27 @@ goaly runs show run-&lt;id&gt;</pre>
     <h2 class="reveal">Adding a harness is one small module.</h2>
     <p class="lede reveal">A "harness" is any coding agent you can drive headlessly. The orchestrator can't tell
       which one it called — so wrapping a new one changes nothing else in the system. You write one
-      <code>AgentCliCodec</code> that holds everything goaly needs to know about that CLI, and register it
-      with one line.</p>
+      <code>AgentCliCodec</code> that holds everything goaly needs to know about that CLI, and register it with
+      one line. The shared core does the heavy lifting — the tolerant JSON/JSONL parse, the subprocess dance,
+      diff hashing, and verifier execution all live <b>outside</b> your codec.</p>
 
-    <!-- The three (four) things to figure out -->
-    <h3 class="reveal" style="margin-top:2rem">What you need to figure out about a CLI</h3>
-    <div class="rows reveal">
-      <div class="row"><span class="rn">01</span><div class="rt"><b>How to run one headless turn</b><p>The non-interactive / print flag (<code>-p</code>, <code>exec</code>, <code>--print</code>). The prompt is usually an argv value or read from stdin.</p></div></div>
-      <div class="row"><span class="rn">02</span><div class="rt"><b>How to read the result</b><p>The machine-readable output (<code>--output-format json</code>, <code>--json</code>). Note the shape — a whole-stdout JSON object, a JSONL stream, or text-only — and which field carries the answer.</p></div></div>
-      <div class="row"><span class="rn">03</span><div class="rt"><b>How to resume the session</b><p>Where the session id appears in a fresh run, and which flag replays it next turn (<code>--resume</code>, <code>--session-id</code>, <code>exec resume &lt;id&gt;</code>). No resume → return a stable id and accept cold turns.</p></div></div>
-      <div class="row"><span class="rn">04</span><div class="rt"><b>Per-turn streaming <span style="opacity:0.6">(optional)</span></b><p>If the CLI has a streaming mode, map each line onto the canonical <code>AgentStreamEvent</code> taxonomy so the live view works. No streaming → skip it; the run is unaffected.</p></div></div>
+    <div class="grid grid-3 reveal" style="align-items:start; margin-top:1.6rem">
+      <div class="card"><h3>1 · Run one turn</h3><p>The headless/print flag (<code>-p</code>, <code>exec</code>, <code>--print</code>) and how the prompt is passed.</p></div>
+      <div class="card"><h3>2 · Read the result</h3><p>The machine-readable output shape and which field carries the answer, the session id, and token usage.</p></div>
+      <div class="card"><h3>3 · Resume the session</h3><p>Where the session id appears and which flag replays it (<code>--resume</code>, <code>--session-id</code>, …). Per-turn streaming is optional.</p></div>
     </div>
-
-    <!-- The codec interface -->
-    <h3 class="reveal" style="margin-top:2.4rem">The one interface you implement</h3>
-    <div class="code reveal" style="margin-top:1rem">
-      <button class="copy-btn">copy</button>
-<pre><span class="kw">interface</span> <span class="fn">AgentCliCodec</span> {
-  <span class="kw">readonly</span> name: <span class="tok">string</span>;
-  <span class="kw">readonly</span> command: <span class="tok">string</span>;                 <span class="cmt">// the binary to spawn</span>
-  <span class="kw">readonly</span> fieldExtractor: FieldExtractor;     <span class="cmt">// where result / session / tokens live</span>
-  <span class="kw">readonly</span> streamExtractor: StreamEventExtractor; <span class="cmt">// per-turn → AgentStreamEvent (optional)</span>
-  <span class="fn">harnessArgs</span>(opts): <span class="tok">string</span>[];               <span class="cmt">// write-mode argv (drives edits)</span>
-  <span class="fn">readonlyArgs</span>(opts): <span class="tok">string</span>[];              <span class="cmt">// read-only argv (judge / approver)</span>
-  <span class="fn">parse</span>(stdout): AgentOutput | <span class="kw">null</span>;          <span class="cmt">// tolerant, never throws</span>
-  <span class="fn">classify</span>(input): HarnessRunResult;          <span class="cmt">// process outcome → status</span>
-}</pre>
-    </div>
-    <p class="reveal" style="margin-top:1rem">The shared core does the heavy lifting — the tolerant JSON/JSONL
-      parse, the subprocess dance (timeouts, output caps, process-group kill), the diff hashing, and verifier
-      execution all live <b>outside</b> the codec. So your module is just this CLI's quirks, in one place.
-      The same codec also powers the read-only LLM steps (judge / approver / compiler) for free.</p>
-
-    <!-- four bundled adapters -->
-    <h3 class="reveal" style="margin-top:2.4rem">…already solved for the four bundled adapters</h3>
-    <div class="reveal">
-      <div class="tabs">
-        <button class="tab active" data-tab="cc">claude</button>
-        <button class="tab" data-tab="cx">codex</button>
-        <button class="tab" data-tab="dr">droid</button>
-        <button class="tab" data-tab="pi">pi</button>
-      </div>
-      <div class="tabpane active" id="tab-cc">
-        <dl class="kv">
-          <dt>fresh</dt><dd><code>claude -p "&lt;prompt&gt;" --output-format json --permission-mode acceptEdits</code></dd>
-          <dt>resume</dt><dd><code>claude -p … --resume &lt;id&gt;</code></dd>
-          <dt>output</dt><dd>json-object, or stream-json (one JSON object per line)</dd>
-          <dt>result ←</dt><dd><code>.result</code> ?? <code>.text</code> ?? <code>.response</code></dd>
-          <dt>session ←</dt><dd><code>.session_id</code> — latch the first seen across the stream</dd>
-        </dl>
-      </div>
-      <div class="tabpane" id="tab-cx">
-        <dl class="kv">
-          <dt>fresh</dt><dd><code>codex exec --full-auto "&lt;prompt&gt;" --json</code></dd>
-          <dt>resume</dt><dd><code>codex exec resume &lt;id&gt; --full-auto "&lt;prompt&gt;" --json</code></dd>
-          <dt>output</dt><dd>jsonl-stream — the last result-bearing line carries the answer</dd>
-          <dt>result ←</dt><dd>last <code>agent_message</code>'s <code>item.text</code></dd>
-          <dt>session ←</dt><dd><code>thread_id</code> — latch the first established at stream start</dd>
-        </dl>
-      </div>
-      <div class="tabpane" id="tab-dr">
-        <dl class="kv">
-          <dt>fresh</dt><dd><code>droid exec --output-format json --auto &lt;level&gt; "&lt;prompt&gt;"</code></dd>
-          <dt>resume</dt><dd><code>droid exec … --session-id &lt;id&gt; "&lt;prompt&gt;"</code></dd>
-          <dt>output</dt><dd>json-object (agent-SDK result envelope), tolerant to JSONL</dd>
-          <dt>result ←</dt><dd><code>.result</code> (with aliases)</dd>
-          <dt>session ←</dt><dd><code>.session_id</code> — latch the first</dd>
-        </dl>
-      </div>
-      <div class="tabpane" id="tab-pi">
-        <dl class="kv">
-          <dt>fresh</dt><dd><code>pi --print --mode json --tools read,edit,write,grep,find,ls "&lt;prompt&gt;"</code></dd>
-          <dt>resume</dt><dd><code>pi --print --mode json … --continue "&lt;prompt&gt;"</code></dd>
-          <dt>output</dt><dd>jsonl event-stream (<code>session</code> / <code>message_*</code> / <code>turn_*</code> / <code>agent_end</code>)</dd>
-          <dt>result ←</dt><dd>last assistant message's <code>content[]</code> text blocks</dd>
-          <dt>session ←</dt><dd>the <code>session</code> event's <code>.id</code> — latch the first</dd>
-          <dt>model</dt><dd><code>--model "provider/id"</code> — pi is provider-agnostic (one flag picks both)</dd>
-        </dl>
-      </div>
-    </div>
-
-    <!-- registration -->
-    <details class="disc reveal" style="margin-top:1.6rem">
-      <summary>Register it — one map + the parsers<span class="s-sub">registry.ts · args.ts</span></summary>
-      <div class="disc-body">
-        <div class="code" style="margin-top:0.9rem">
-          <button class="copy-btn">copy</button>
-<pre><span class="cmt">// src/agent-cli/registry.ts — add the literal to AgentCli + one codecFor case</span>
-<span class="kw">export type</span> AgentCli = <span class="str">'claude'</span> | <span class="str">'codex'</span> | <span class="str">'droid'</span> | <span class="str">'pi'</span> | <span class="str">'myagent'</span>;
-<span class="cmt">// ...inside codecFor(cli):  case 'myagent': return myagentCodec;</span>
-
-<span class="cmt">// makeHarness AND makeLlmProvider are already generic — both roles resolve via codecFor.</span>
-<span class="cmt">// HarnessChoice = AgentCli | 'fake';  LlmProviderChoice = AgentCli. Allow it in args.ts parsers.</span></pre>
-        </div>
-        <p style="margin-top:0.9rem">Then add your codec to the shared <code>adapter.contract.test.ts</code> matrix —
-          it runs every adapter through the same scenarios (success / non-zero / garbage / timeout / exec-throws)
-          to prove it never throws and always returns a valid <code>HarnessRunResult</code>.</p>
-      </div>
-    </details>
 
     <div class="panel reveal" style="padding:1.4rem 1.5rem; margin-top:1.6rem">
       <div class="skill-card">
         <div class="skill-badge">🛠️</div>
         <div>
-          <h3 style="margin-bottom:0.4rem">Let an agent do the probing</h3>
+          <h3 style="margin-bottom:0.4rem">The full guide — and an agent that does the probing</h3>
           <p style="margin:0; font-family:var(--mono); font-size:0.85rem; line-height:1.65; color:var(--fg-dim)">
-            The repo ships an <code>investigate-harness</code> skill that probes an unfamiliar CLI safely
-            (read-only first, the agent only runs in a throwaway git repo) and emits the filled-in codec,
-            the two registration edits, and tests. The full walkthrough — interface signatures, a copy-paste
-            skeleton, and field/status-mapping recipes — lives in
+            The codec interface, a copy-paste skeleton, the four bundled adapters (claude / codex / droid / pi),
+            and the field / status / stream mapping recipes all live in
             <a href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener" style="color:var(--accent)">docs/adding-a-harness.md →</a>
+            The repo also ships an <code>investigate-harness</code> skill that probes an unfamiliar CLI safely and
+            emits the filled-in codec plus its two registration edits.
           </p>
         </div>
       </div>
@@ -506,7 +341,7 @@ goaly runs show run-&lt;id&gt;</pre>
     <div class="grid grid-2 reveal" style="margin-top:1.8rem; align-items:start">
       <a class="card" href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener">
         <h3>README <span class="pill pass">start here</span></h3>
-        <p>Install, every CLI flag, the config file, sandboxing, budgets and the per-run spend report. The practical reference.</p>
+        <p>Install, every CLI flag, the config file, sandboxing, budgets, phased goals, delta-verify, and the per-run spend report. The practical reference.</p>
       </a>
       <a class="card" href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener">
         <h3>Adding a harness</h3>
@@ -518,7 +353,7 @@ goaly runs show run-&lt;id&gt;</pre>
       </a>
       <a class="card" href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">
         <h3>ARCHITECTURE.md — how</h3>
-        <p>The pure reducer, the state machine, the DECIDE truth table, the four seams, and the write-ahead log.</p>
+        <p>The pure reducer, the state machine, the DECIDE truth table, the seams and deep modules, phased &amp; delta-verify, and the write-ahead log.</p>
       </a>
       <a class="card" href="https://github.com/krimvp/goaly/blob/main/AGENTS.md" target="_blank" rel="noopener">
         <h3>AGENTS.md — contributing</h3>

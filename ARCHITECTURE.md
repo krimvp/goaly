@@ -1,25 +1,25 @@
-# Goal-Orchestration Layer — Architecture Plan
+# Goal-Orchestration Layer — Architecture
 
 > Companion to [`DESIGN.md`](DESIGN.md). DESIGN.md says *what* to build and *why*;
-> this doc says *how* to structure it — deep modules, real seams, validation at every
-> edge, and a TDD build order. Implementation target: **TypeScript/Node**, run under
-> **WSL/Linux**. Start from a clean repo root.
+> this doc says *how* it's structured — deep modules, real seams, validation at every
+> edge, in **TypeScript/Node** under **WSL/Linux**. The first half is the walking-skeleton
+> spine (pure reducer + four seams); ["What the implementation added"](#what-the-implementation-added-beyond-the-walking-skeleton)
+> below covers the deep modules layered on since.
 
 ## Context
 
 DESIGN.md specifies a **harness-agnostic orchestration layer**: run a coding agent
 repeatedly until a goal is *verifiably* achieved, with a deterministic thin layer in
 control and a frozen success criterion the agent can't weaken mid-loop (the
-anti-reward-hacking core). The design has converged conceptually but has **zero
-implementation**.
+anti-reward-hacking core).
 
-This plan turns the spec into a **deep-module architecture** (Matt Pocock's
+This doc turns the spec into a **deep-module architecture** (Matt Pocock's
 `codebase-design` vocabulary: Module / Interface / Implementation / Seam / Adapter /
 Depth) with **runtime validation at every seam** (Zod), so that:
 
 - the tool is **easy to use** — a `goaly` CLI over a clean embeddable core;
-- **adding a new harness is trivial** — implement one method (`run()`) and register the
-  adapter; nothing else changes;
+- **adding a new harness is trivial** — write one `AgentCliCodec` and register it with one
+  line; the orchestrator can't tell which harness it called, so nothing else changes;
 - the control flow is **pure, replayable, and table-testable** — no LLM call can sneak
   into the loop logic.
 
@@ -75,26 +75,34 @@ it *is* the product's intelligence.
 
 ## Why adding a harness is trivial (the "thin adapter" requirement)
 
-A new harness = **one file** implementing one method:
+The orchestrator-facing seam is one method:
 
 ```ts
 interface HarnessAdapter {
-  run(prompt: string, sessionId?: SessionId): Promise<RunResult>;
+  run(prompt: string, sessionId?: SessionId, onEvent?: AgentEventSink): Promise<HarnessRunResult>;
 }
-type RunResult = {
+type HarnessRunResult = {
   output: string;
   sessionId: SessionId;
   status: 'completed' | 'crashed' | 'truncated' | 'timeout';
-  diffHash: DiffHash;            // computed by the shared Workspace, NOT the harness
+  tokensUsed?: number;           // diffHash is NOT here — the shared Workspace computes it
 };
 ```
 
-Implement `run` (spawn the headless command, parse its JSON tolerantly, thread the session
-id), register it. The orchestrator can't tell which harness it called — so nothing else in
-the system changes. `diffHash` and verifier execution live *outside* the adapter, identical
-everywhere, so stuck-detection works on any harness for free. Claude Code's in-process
-`Stop`-hook optimization lives **inside its adapter only**, behind the same `run()` — hooks
-never leak to the orchestrator (DESIGN's "wrapper-first, hooks as an optimization").
+But you almost never implement `run()` by hand. The generic `AgentCliHarness` already satisfies
+the seam for any CLI — it spawns, taps the stream, and classifies through a shared core. What you
+actually write is **one `AgentCliCodec`**: a single module holding that CLI's two argv dialects
+(write-mode vs read-only), its field/stream extractors, and its status mapping. Register it with
+one line in `codecFor` and the orchestrator can't tell which harness it called — so nothing else in
+the system changes. `diffHash` and verifier execution live *outside* the codec, identical
+everywhere, so stuck-detection works on any harness for free. Claude Code's in-process `Stop`-hook
+optimization lives **inside its adapter only**, behind the same `run()` — hooks never leak to the
+orchestrator (DESIGN's "wrapper-first, hooks as an optimization").
+
+> The full authoring walkthrough — the codec interface, a copy-paste skeleton, and the
+> field/status/stream mapping recipes — is in [`docs/adding-a-harness.md`](docs/adding-a-harness.md).
+> The same codec also backs the read-only LLM steps (judge / approver / compiler / planner) via the
+> `LlmProvider` seam, so a CLI is wired once and plays both roles.
 
 ## The Verifier unification
 
@@ -175,25 +183,88 @@ header stores the full `RunConfig` + frozen `CompiledContract` (logged **loudly*
 reconstruct state (incl. sessionId, iteration, stuck histories), continue** — no work from
 iteration 0 repeated.
 
+## What the implementation added (beyond the walking skeleton)
+
+The walking skeleton above is the spine. The shipped tool layers the following on top — each one a
+**deep module behind a small seam**, so the pure reducer and the trust model are untouched. (For how
+to *drive* each from the CLI, see the [`README`](README.md); this section is the architectural shape.)
+
+- **One codec, both roles.** A single `codecFor()` registry (`src/agent-cli/`) maps a CLI to its
+  `AgentCliCodec`. The write-role harness **and** the read-only LLM role (judge / approver / compiler /
+  planner, via the `LlmProvider` seam) resolve through it — so a CLI is one codec module + one line,
+  never wiring repeated in three places. The shared core owns the tolerant JSON/JSONL parse, the
+  subprocess dance, and the streaming tap; the codec is only that CLI's quirks.
+
+- **Config by lifetime.** One `RunConfig` is read through narrow, typed *views* — `ContractInput`
+  (frozen at compile), `GatePolicy`, `LoopPolicy`, `DriverWiring` — so the compiler **cannot** read a
+  loop knob into the frozen contract, and wiring can't reach the reducer. The seam is enforced by the
+  type, not by discipline.
+
+- **The diff scope, owned (`Baseline`).** A `Baseline` module (`src/driver/baseline.ts`) owns what the
+  judge vs. the Sign-off approver each diff against, and when to checkpoint — in one place, not threaded
+  through the loop by hand.
+
+- **Typed stuck reasons.** `detectStuck` stays pure over the loop histories and returns a typed
+  `{ kind, message }`. Kinds: no-diff, `STUCK_REPEATED_FAILURE` (same verifier signature N×),
+  oscillation, `STUCK_HARNESS_CRASH` (the agent CLI exited abnormally N× in a row — surfaced as an
+  environment failure, not looped on), and budget. The one reason-specific excuse — a fresh, unseen
+  Sign-off veto pardons a no-diff once — lives in DECIDE, which holds the verdict.
+
+- **Prepare: tools + setup + pre-flight (once, after SEAL).** Before iteration 1 the Driver
+  (`src/driver/prepare.ts`) probes the frozen `requiredTools` manifest (missing tools are handed to the
+  agent to install by default, or a typed `TOOLS_MISSING` abort), runs the one-time `setup` command
+  (`SETUP_FAILED` on non-zero), and **pre-flights** the frozen deterministic checks: a language-agnostic
+  read-only classification (`src/driver/preflight-soundness.ts`) aborts a *broken* contract
+  (`CONTRACT_UNSOUND`) before any worker token is spent, while failing **open** on uncertainty so a
+  legitimate red still proceeds.
+
+- **Phased: a frozen plan of frozen contracts (`--phased`).** A read-only **planner** seam
+  (`src/plan/`) decomposes the goal into an ordered plan of sub-goals; the plan is frozen, hashed and
+  logged like a contract (re-planning is only the bounded, human-gated plan-Seal revise path). Each
+  phase runs as its own normal frozen, two-key contract with an internal checkpoint between phases, and
+  the run finishes with a **cumulative ACCEPT** contract on the *original* goal — so decomposition can't
+  green a goal whose parts pass but whole doesn't.
+
+- **Delta-verify: flat judge prompt, cumulative DONE (`--delta-verify`).** After each continuation
+  iteration the Driver takes an internal checkpoint (no commit), so the next iteration's **judge** sees
+  only that iteration's delta. The trust model is preserved by keeping the DONE decision cumulative: the
+  deterministic rungs always run on the **full** working tree, and the terminal Sign-off approver is
+  pinned to the run's **start** baseline. Composes with `--phased` (the approver baseline advances only
+  at phase boundaries).
+
+- **Sandboxing (`--sandbox`, ADR 0007).** A per-seam isolation policy (`$HOME` denial, egress, proxy)
+  is resolved once into a `SandboxProfile`; each launcher (`src/sandbox/`: bwrap / firejail / container)
+  only **translates** it into its flag dialect. It is composed at the root around the codec's
+  `command`/argv and is **transparent to codec authors** — by default an identity passthrough.
+
+- **Streaming (`AgentStreamEvent`).** A canonical, tool-neutral event taxonomy (`src/agent-cli/stream.ts`)
+  the codecs map their per-turn output *into* (issue #23), feeding the live `--stream` view and the
+  token estimator. It is a feature substrate, deliberately **kept out of the state-replay log**.
+
 ## Directory layout & build order
 
+The shipped layout is a single package, core under `src/` with the CLI isolated in `src/cli/`:
+
 ```
-packages/core/src/
-  domain/    ids.ts config.ts contract.ts verdict.ts events.ts   (types + Zod schemas)
-  orchestrator/  state.ts step.ts decide.ts stuck.ts             (PURE — the spine)
-  driver/    driver.ts clock.ts budget.ts                        (effects, seam #4)
-  verify/    verifier.ts deterministic.ts judge.ts approver.ts   (seam #2, #3)
-  compile/   compiler.ts seal.ts seal-gates.ts                                (Phase 1 + freeze)
-  harness/   adapter.ts claude-code.ts codex.ts fake.ts          (seam #1)
-  workspace/ workspace.ts        runlog/ runlog.ts
-packages/cli/src/main.ts         CONTEXT.md  docs/adr/
+src/
+  domain/      ids.ts config.ts contract.ts verdict.ts events.ts plan.ts usage.ts  (types + Zod)
+  orchestrator/  state.ts step.ts decide.ts stuck.ts                 (PURE — the spine)
+  driver/      driver.ts clock.ts budget.ts baseline.ts prepare.ts preflight-soundness.ts llm-meter.ts
+  verify/      verifier.ts deterministic.ts judge.ts approver.ts     (seam #2, #3)
+  compile/     compiler.ts seal.ts seal-gates.ts                     (Phase 1 + freeze)
+  plan/        the read-only planner for --phased (a frozen plan of sub-goals)
+  harness/     adapter.ts agent-cli-harness.ts fake.ts               (seam #1)
+  agent-cli/   codec.ts registry.ts output.ts stream.ts <name>-codec.ts   (the per-CLI codecs)
+  llm/         provider.ts agent-cli-provider.ts                     (read-only LLM seam)
+  sandbox/     policy.ts launcher.ts bwrap.ts firejail.ts container.ts proxy.ts   (ADR 0007)
+  workspace/   workspace.ts     runlog/ runlog.ts     log/ structured diagnostics
+  testing/     shared fakes      util/ spawn.ts + helpers
+  cli/         args.ts compose.ts main.ts             (thin caller; composition root)
+CONTEXT.md   docs/adr/
 ```
 
-> A single-package start (core under `src/`, CLI isolated in `src/cli/` importing only
-> core) is an acceptable simplification for the walking skeleton; split into workspaces
-> once the core stabilizes. Suggested toolchain: `tsx` for dev, `vitest` for tests,
-> strict `tsconfig` (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
-> `verbatimModuleSyntax`).
+> Suggested toolchain: `tsx` for dev, `vitest` for tests, strict `tsconfig`
+> (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`).
 
 **TDD walking-skeleton order (red→green, one vertical slice at a time — not
 all-tests-first):**
@@ -223,7 +294,7 @@ Rubric, Verdict, Ladder, Seal / Sign-off, Two Keys, Harness, Adapter, Driver, Or
 DECIDE, diffHash, Stuck, Autonomous** (each with an "avoid:" list, e.g. Harness ≠
 model/agent).
 
-Record these ADRs (each hard-to-reverse, surprising, a real trade-off):
+These ADRs are recorded in [`docs/adr/`](docs/adr) (each hard-to-reverse, surprising, a real trade-off):
 
 - **0001** Wrapper over hooks (portable headless `run()`; hooks are an in-adapter optimization).
 - **0002** Compile-once-then-freeze the Contract (the anti-reward-hacking core).
@@ -231,6 +302,7 @@ Record these ADRs (each hard-to-reverse, surprising, a real trade-off):
 - **0004** Pure reducer + Driver split → zero-LLM-in-control-flow as a *type-level* guarantee.
 - **0005** Zod parse-don't-validate at every seam, branded ids.
 - **0006** Write-ahead run log as the source of truth for resume.
+- **0007** Sandboxing model — one resolved `SandboxProfile`, per-launcher translation (`--sandbox`).
 
 ## Verification (how we'll know it works)
 
