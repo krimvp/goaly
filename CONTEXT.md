@@ -51,6 +51,12 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
   CONTINUE / DONE / FAILED / ABORTED. _avoid:_ a place that runs effects.
 - **diffHash** — a non-mutating content hash of the working tree, computed by the **Workspace**
   (not the adapter). Drives stuck detection. _avoid:_ a commit; an adapter responsibility.
+- **Baseline** — the Driver-side module that owns the run's two diff baselines and the delta-verify
+  checkpoint policy — "which diff does each key see, and when do we snapshot". The JUDGE/active
+  baseline lives in the Workspace (advanced by `checkpoint()`); the APPROVER/cumulative baseline is held
+  here, pinned to the run/phase start so Sign-off reviews the WHOLE change even when per-iteration
+  checkpoints shrank the judge's diff. `--delta-verify` is read here (Driver wiring), never the reducer.
+  _avoid:_ threading baselines through the loop by hand; letting the approver's diff scope vary silently.
 - **Stuck** — a pre-`maxIterations` bail with a typed `{ kind, message }` reason — `kind` ∈
   `no-diff | repeat | oscillation | crash | budget` (`STUCK_HARNESS_CRASH` / `STUCK_REPEATED_FAILURE`
   in the message). `detectStuck` is pure over the `LoopCtx` histories; **DECIDE** keys the one
