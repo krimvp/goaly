@@ -347,6 +347,18 @@ goaly runs show run-&lt;id&gt;</pre>
       while the approver baseline advances only at phase boundaries — so each phase's Sign-off still reviews
       that phase's whole cumulative diff.</p>
 
+    <h3 class="reveal" style="margin-top:3rem">Under the hood: a deep module at every seam</h3>
+    <p class="lede reveal" style="margin-bottom:1.2rem">Each moving part is a small interface over a lot of
+      behaviour — so the policy is testable in one place and a new variant is one file.</p>
+    <div class="grid grid-3 reveal">
+      <div class="card"><h3>One codec, both roles</h3><p>A single <code>codecFor()</code> registry maps a CLI to its <code>AgentCliCodec</code>. The write-role harness <b>and</b> the read-only judge / approver / compiler resolve through it — so a CLI is one codec module + one line, never wiring repeated in three places.</p></div>
+      <div class="card"><h3>Sandbox policy, resolved once</h3><p>The per-seam isolation policy (<code>$HOME</code> denial, egress, proxy) is resolved into one <code>SandboxProfile</code>; each launcher — bwrap / firejail / container — only <b>translates</b> it into its flag dialect, so no policy is duplicated across mechanisms.</p></div>
+      <div class="card"><h3>Config by lifetime</h3><p>One <code>RunConfig</code>, read through four typed views — <code>ContractInput</code> (frozen), <code>GatePolicy</code>, <code>LoopPolicy</code>, <code>DriverWiring</code> — so the compiler <b>cannot</b> read a loop knob into the frozen contract, and wiring can't reach the reducer.</p></div>
+      <div class="card"><h3>The diff scope, owned</h3><p>A <code>Baseline</code> module owns what the judge vs the Sign-off approver each diff against, and when to checkpoint under <code>--delta-verify</code> — in one place, not threaded through the loop by hand.</p></div>
+      <div class="card"><h3>Typed stuck reasons</h3><p>Stuck detection stays pure over the loop histories and returns a typed <code>{ kind, message }</code>; the one reason-specific excuse — a fresh, unseen Sign-off veto pardons a no-diff once — lives in DECIDE, which holds the verdict.</p></div>
+      <div class="card"><h3>Pure reducer, real seams</h3><p>The same shape throughout: a small interface, a fake + a real adapter behind it, the policy in a synchronous reducer the Driver feeds. Leverage for callers, locality for changes, testability for everyone.</p></div>
+    </div>
+
     <p class="lede reveal" style="margin-top:1.6rem">
       The full picture — the state machine, the DECIDE truth table, stuck-detection, the four seams, the
       write-ahead log and resume — is in the architecture docs.
@@ -400,7 +412,7 @@ goaly runs show run-&lt;id&gt;</pre>
     <h3 class="reveal" style="margin-top:2.4rem">…already solved for the four bundled adapters</h3>
     <div class="reveal">
       <div class="tabs">
-        <button class="tab active" data-tab="cc">claude-code</button>
+        <button class="tab active" data-tab="cc">claude</button>
         <button class="tab" data-tab="cx">codex</button>
         <button class="tab" data-tab="dr">droid</button>
         <button class="tab" data-tab="pi">pi</button>
@@ -446,15 +458,16 @@ goaly runs show run-&lt;id&gt;</pre>
 
     <!-- registration -->
     <details class="disc reveal" style="margin-top:1.6rem">
-      <summary>Register it — two tiny edits<span class="s-sub">args.ts · compose.ts</span></summary>
+      <summary>Register it — one map + the parsers<span class="s-sub">registry.ts · args.ts</span></summary>
       <div class="disc-body">
         <div class="code" style="margin-top:0.9rem">
           <button class="copy-btn">copy</button>
-<pre><span class="cmt">// src/cli/args.ts — add the literal to the choice union</span>
-<span class="kw">export type</span> HarnessChoice = <span class="str">'claude-code'</span> | <span class="str">'codex'</span> | <span class="str">'droid'</span> | <span class="str">'pi'</span> | <span class="str">'fake'</span> | <span class="str">'myagent'</span>;
+<pre><span class="cmt">// src/agent-cli/registry.ts — add the literal to AgentCli + one codecFor case</span>
+<span class="kw">export type</span> AgentCli = <span class="str">'claude'</span> | <span class="str">'codex'</span> | <span class="str">'droid'</span> | <span class="str">'pi'</span> | <span class="str">'myagent'</span>;
+<span class="cmt">// ...inside codecFor(cli):  case 'myagent': return myagentCodec;</span>
 
-<span class="cmt">// src/cli/compose.ts — wire your codec into makeHarness()</span>
-<span class="kw">case</span> <span class="str">'myagent'</span>: <span class="kw">return</span> <span class="kw">new</span> <span class="fn">AgentCliHarness</span>(myagentCodec, opts);</pre>
+<span class="cmt">// makeHarness AND makeLlmProvider are already generic — both roles resolve via codecFor.</span>
+<span class="cmt">// HarnessChoice = AgentCli | 'fake';  LlmProviderChoice = AgentCli. Allow it in args.ts parsers.</span></pre>
         </div>
         <p style="margin-top:0.9rem">Then add your codec to the shared <code>adapter.contract.test.ts</code> matrix —
           it runs every adapter through the same scenarios (success / non-zero / garbage / timeout / exec-throws)

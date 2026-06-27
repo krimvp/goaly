@@ -49,7 +49,7 @@ describe('parseArgs', () => {
     expect(a.command).toBe('run');
     expect(a.config.goal).toBe('do x');
     expect(a.config.verifier).toEqual({ kind: 'existing', ref: 'npm test' });
-    expect(a.harness).toBe('claude-code');
+    expect(a.harness).toBe('claude');
   });
 
   it('supports the --key=value form', async () => {

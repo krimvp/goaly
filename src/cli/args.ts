@@ -5,11 +5,13 @@ import { LogLevel } from '../log/logger';
 import { ModelSelection, type ModelSelectionInput } from './models';
 import { resolveInputSources, defaultReaders, type InputReaders } from './input-sources';
 import { loadConfig, type LoadedConfig } from './config-file';
+import type { AgentCli } from '../agent-cli/registry';
 
-export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'pi' | 'fake';
+/** The harness (write-role coding agent): any bundled CLI, plus the IO-free `fake`. */
+export type HarnessChoice = AgentCli | 'fake';
 
 /** Which CLI runs the LLM workflow steps (judge / approver / compiler). */
-export type LlmProviderChoice = 'claude' | 'codex' | 'droid' | 'pi';
+export type LlmProviderChoice = AgentCli;
 
 /** The read-only run-inspection subcommand (`goaly runs list` / `goaly runs show <id>`). */
 export type RunsCommand = { readonly kind: 'list' } | { readonly kind: 'show'; readonly runId: string };
@@ -104,7 +106,7 @@ Usage:
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
                [--stuck-oscillation true|false] [--stuck-crash-threshold N]
-               [--harness claude-code|codex|droid|pi] [--model <m>] [--llm-model <m>]
+               [--harness claude|codex|droid|pi] [--model <m>] [--llm-model <m>]
                [--llm-provider claude|codex|droid|pi] [--harness-timeout-ms N]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
                [--sandbox[=none|auto|bwrap|firejail|container]]
@@ -242,7 +244,7 @@ Seal (contract approval):
   --max-seal-revisions N    cap the free-text revise rounds (default 10; 0 disables revision)
   --autonomous                skip the prompt: auto-accept (still frozen; logged loudly)
   -d, --defaults              hands-off sugar for --autonomous. The other easy-mode defaults
-                              (--generate, the claude LLM provider, the claude-code harness) already
+                              (--generate, the claude LLM provider, the claude harness) already
                               apply with no flag, so -d's only effect is auto-accepting the contract.
 
   Note: piping the goal via stdin (--goal -) leaves no stdin for the interactive prompt;
@@ -317,7 +319,7 @@ Live streaming & transcript (opt-in observability — issues #23 / #28):
                     phase ([agent] / [compile] / [judge] / [approve]). Independent of --log-level
                     (which routes the same events into the diagnostics file at debug). Pure
                     observability: it never touches the frozen contract, the verifier, or the run
-                    log. All bundled harnesses stream (claude-code & droid via stream-json, codex
+                    log. All bundled harnesses stream (claude & droid via stream-json, codex
                     via its --json JSONL); a tool that only emits a final envelope degrades to a
                     closing summary.
   --stream-transcript  ALSO persist that canonical stream durably as JSONL to
@@ -365,7 +367,7 @@ const VALUELESS_FLAGS = new Set([
 
 /**
  * `--defaults` / `-d` is hands-off sugar for `--autonomous`: the other easy-mode defaults
- * (generate, the claude LLM provider, the claude-code harness) already apply with no flag, so the
+ * (generate, the claude LLM provider, the claude harness) already apply with no flag, so the
  * only thing it adds is auto-accepting the (still-frozen, still-logged) contract at Seal.
  */
 function canonicalFlag(name: string): string {
@@ -678,9 +680,9 @@ function parseSandbox(flags: RawFlags): SandboxPolicy {
 }
 
 function parseHarness(value: string | undefined): HarnessChoice {
-  if (value === undefined) return 'claude-code';
+  if (value === undefined) return 'claude';
   if (
-    value === 'claude-code' ||
+    value === 'claude' ||
     value === 'codex' ||
     value === 'droid' ||
     value === 'pi' ||
@@ -688,9 +690,12 @@ function parseHarness(value: string | undefined): HarnessChoice {
   ) {
     return value;
   }
-  throw new UsageError(
-    `unknown harness: ${value} (expected claude-code | codex | droid | pi | fake)`,
-  );
+  // The `claude-code` value was renamed to `claude` (one name per CLI across the harness and the
+  // LLM-provider roles); fail closed with the migration hint rather than silently accept the old one.
+  if (value === 'claude-code') {
+    throw new UsageError(`unknown harness: claude-code (renamed — did you mean 'claude'?)`);
+  }
+  throw new UsageError(`unknown harness: ${value} (expected claude | codex | droid | pi | fake)`);
 }
 
 function parseLlmProvider(value: string | undefined): LlmProviderChoice {
@@ -771,7 +776,7 @@ function baseArgs(
     runs,
     // a placeholder config; never used for the help / runs commands.
     config: cliInputToRunConfig(CliInput.parse({ goal: 'help', verifyCmd: 'true' })),
-    harness: 'claude-code',
+    harness: 'claude',
     models: ModelSelection.parse({}),
     llmProvider: 'claude',
     workspace,

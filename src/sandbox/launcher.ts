@@ -1,17 +1,18 @@
-import type { LauncherMode, SandboxRunOpts } from './policy';
+import type { LauncherMode, SandboxProfile } from './policy';
 
 /** The result of rewriting a command into its jailed form: a new argv front, same semantics. */
 export type WrappedCommand = { command: string; args: string[] };
 
 /**
- * The sandbox seam (issue #9). A launcher rewrites a `(command, args)` pair into its jailed form —
- * PURE string construction only: no spawn, no IO. That keeps every mechanism fully table-testable
- * and keeps the effect (actually spawning the rewritten command) in the Driver, where the real exec
- * already lives.
+ * The sandbox seam (issue #9). A launcher TRANSLATES a resolved {@link SandboxProfile} into its own
+ * flag dialect, rewriting a `(command, args)` pair into its jailed form — PURE string construction
+ * only: no spawn, no IO. All POLICY is already resolved in the profile, so a launcher makes no policy
+ * decision. That keeps every mechanism fully table-testable and keeps the effect (actually spawning
+ * the rewritten command) in the Driver, where the real exec already lives.
  */
 export interface SandboxLauncher {
-  /** Rewrite a command into its jailed form. PURE — no spawn, no IO. */
-  wrap(command: string, args: string[], opts: SandboxRunOpts): WrappedCommand;
+  /** Translate a resolved profile into this mechanism's jailed argv. PURE — no spawn, no IO. */
+  wrap(command: string, args: string[], profile: SandboxProfile): WrappedCommand;
   /** The concrete mechanism this launcher implements (`none` | `bwrap` | `container`). */
   readonly mode: LauncherMode;
   /**

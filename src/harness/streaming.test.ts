@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { CodexAdapter } from './codex';
-import { ClaudeCodeAdapter } from './claude-code';
-import { DroidAdapter } from './droid';
+import { AgentCliHarness } from './agent-cli-harness';
+import { codexCodec } from '../agent-cli/codex-codec';
+import { claudeCodec } from '../agent-cli/claude-codec';
+import { droidCodec } from '../agent-cli/droid-codec';
 import type { AgentStreamEvent } from '../agent-cli/stream';
 
 /**
@@ -53,7 +54,7 @@ const droidStreamJson = [
 describe('CodexAdapter streaming', () => {
   it('forwards ordered intermediate events while preserving the final result', async () => {
     const events: AgentStreamEvent[] = [];
-    const adapter = new CodexAdapter({ exec: streamingExec(codexJsonl) });
+    const adapter = new AgentCliHarness(codexCodec,{ exec: streamingExec(codexJsonl) });
 
     const result = await adapter.run('go', undefined, (e) => events.push(e));
 
@@ -73,18 +74,18 @@ describe('CodexAdapter streaming', () => {
   });
 
   it('produces an identical result whether or not streaming is on', async () => {
-    const withStream = await new CodexAdapter({ exec: streamingExec(codexJsonl) }).run(
+    const withStream = await new AgentCliHarness(codexCodec,{ exec: streamingExec(codexJsonl) }).run(
       'go',
       undefined,
       () => {},
     );
-    const without = await new CodexAdapter({ exec: streamingExec(codexJsonl) }).run('go');
+    const without = await new AgentCliHarness(codexCodec,{ exec: streamingExec(codexJsonl) }).run('go');
     expect(withStream).toEqual(without);
   });
 
   it('a throwing sink never crashes the run and never changes the result', async () => {
-    const baseline = await new CodexAdapter({ exec: streamingExec(codexJsonl) }).run('go');
-    const result = await new CodexAdapter({ exec: streamingExec(codexJsonl) }).run('go', undefined, () => {
+    const baseline = await new AgentCliHarness(codexCodec,{ exec: streamingExec(codexJsonl) }).run('go');
+    const result = await new AgentCliHarness(codexCodec,{ exec: streamingExec(codexJsonl) }).run('go', undefined, () => {
       throw new Error('sink exploded');
     });
     expect(result).toEqual(baseline);
@@ -106,8 +107,8 @@ describe('ClaudeCodeAdapter streaming', () => {
     };
 
     const events: AgentStreamEvent[] = [];
-    const streamed = await new ClaudeCodeAdapter({ exec }).run('go', undefined, (e) => events.push(e));
-    const plain = await new ClaudeCodeAdapter({ exec }).run('go');
+    const streamed = await new AgentCliHarness(claudeCodec,{ exec }).run('go', undefined, (e) => events.push(e));
+    const plain = await new AgentCliHarness(claudeCodec,{ exec }).run('go');
 
     expect(seenArgs[0]).toContain('stream-json');
     expect(seenArgs[0]).toContain('--verbose');
@@ -133,7 +134,7 @@ describe('token estimation fallback (issue #24)', () => {
   ].join('\n');
 
   it('claude: estimates from streamed turns when the run self-reports no usage', async () => {
-    const result = await new ClaudeCodeAdapter({ exec: streamingExec(claudeStreamNoUsage) }).run(
+    const result = await new AgentCliHarness(claudeCodec,{ exec: streamingExec(claudeStreamNoUsage) }).run(
       'go',
       undefined,
       () => {},
@@ -145,7 +146,7 @@ describe('token estimation fallback (issue #24)', () => {
   });
 
   it('claude: marks a self-reported count as reported, never estimated', async () => {
-    const result = await new ClaudeCodeAdapter({ exec: streamingExec(claudeStreamJson) }).run(
+    const result = await new AgentCliHarness(claudeCodec,{ exec: streamingExec(claudeStreamJson) }).run(
       'go',
       undefined,
       () => {},
@@ -166,7 +167,7 @@ describe('token estimation fallback (issue #24)', () => {
       }),
       JSON.stringify({ type: 'turn.completed' }), // no usage block
     ].join('\n');
-    const result = await new CodexAdapter({ exec: streamingExec(noUsage) }).run('go', undefined, () => {});
+    const result = await new AgentCliHarness(codexCodec,{ exec: streamingExec(noUsage) }).run('go', undefined, () => {});
     expect(result.status).toBe('completed');
     expect(result.tokenSource).toBe('estimated');
     // 13 chars → ceil(13 / 4) = 4, NOT inflated by the streamed deltas.
@@ -174,7 +175,7 @@ describe('token estimation fallback (issue #24)', () => {
   });
 
   it('does NOT estimate when not streaming (the lean envelope still reports usage)', async () => {
-    const result = await new ClaudeCodeAdapter({ exec: streamingExec(claudeJson) }).run('go');
+    const result = await new AgentCliHarness(claudeCodec,{ exec: streamingExec(claudeJson) }).run('go');
     expect(result.tokenSource).toBe('reported');
     expect(result.tokensUsed).toBe(7);
   });
@@ -193,7 +194,7 @@ describe('DroidAdapter streaming', () => {
       return { stdout: droidStreamJson, stderr: '', code: 0 };
     };
     const events: AgentStreamEvent[] = [];
-    const result = await new DroidAdapter({ exec }).run('go', undefined, (e) => events.push(e));
+    const result = await new AgentCliHarness(droidCodec,{ exec }).run('go', undefined, (e) => events.push(e));
 
     expect(seenArgs[0]).toContain('stream-json');
     expect(events.map((e) => e.kind)).toEqual(['session', 'message', 'usage', 'done']);
@@ -211,7 +212,7 @@ describe('DroidAdapter streaming', () => {
         code: 0,
       };
     };
-    await new DroidAdapter({ exec }).run('go');
+    await new AgentCliHarness(droidCodec,{ exec }).run('go');
     expect(seenArgs[0]).toContain('json');
     expect(seenArgs[0]).not.toContain('stream-json');
   });

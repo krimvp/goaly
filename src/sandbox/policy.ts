@@ -93,6 +93,25 @@ export function proxyUrlFor(host: string, proxy: SandboxProxy | undefined): stri
   return `http://${host}:${proxy.port}`;
 }
 
+/**
+ * Emit the standard proxy env vars (issue #39) for a `proxied` profile through a launcher-supplied
+ * `emit(name, value)` — the launchers differ only in flag SYNTAX (`--setenv NAME val` /
+ * `--env=NAME=val` / `-e NAME=val`), so the var NAMES and the `NO_PROXY` exemption live here ONCE.
+ * `host` is the launcher's own route to the host proxy (`127.0.0.1` for bwrap/firejail; the container
+ * gateway alias). Fail-closed (invariant #4): a `proxied` profile with no running proxy throws via
+ * {@link proxyUrlFor}. PURE.
+ */
+export function proxyEnv(
+  emit: (name: string, value: string) => void,
+  host: string,
+  proxy: SandboxProxy | undefined,
+): void {
+  const url = proxyUrlFor(host, proxy);
+  for (const name of PROXY_ENV_VARS) emit(name, url);
+  emit('NO_PROXY', PROXY_NO_PROXY);
+  emit('no_proxy', PROXY_NO_PROXY);
+}
+
 /** The container runtime, when `mode === 'container'` (or `auto` resolves to it). */
 export const SandboxRuntime = z.enum(['docker', 'podman']);
 export type SandboxRuntime = z.infer<typeof SandboxRuntime>;
@@ -140,23 +159,61 @@ export type SandboxProxy = {
 };
 
 /**
- * The per-run options a launcher needs to rewrite a command: the workspace it may write, whether
- * egress is allowed, and the (already-prepared, possibly scrubbed) env to pass through.
+ * The egress shape a launcher must enforce, resolved from the per-seam {@link SandboxNetwork}:
+ *  - `isolated` — cut the network entirely (`none`).
+ *  - `proxied`  — keep it up but route through the egress proxy (an `{ allowlist }`).
+ *  - `open`     — full egress (`allow`).
+ * The launcher branches on these three, never on the raw allowlist (the proxy enforces the hosts).
  */
-export type SandboxRunOpts = {
+export type SandboxNetMode = 'isolated' | 'proxied' | 'open';
+
+/**
+ * The mechanism-AGNOSTIC isolation profile a launcher translates into its own flag dialect. ALL the
+ * per-seam POLICY is resolved here once ({@link resolveProfile}); a launcher makes no policy decision
+ * — it only expresses this profile in bwrap / firejail / docker flags. That kills the triplicated
+ * `$HOME`-denial / network-branching / proxy logic the launchers used to each re-derive.
+ */
+export type SandboxProfile = {
   /** Absolute workspace path bound read-write (and mirrored inside a container). */
   readonly workspace: string;
-  /** Egress: `allow` keeps the host network; `none` cuts it off; `{ allowlist }` proxies it. */
-  readonly network: SandboxNetwork;
+  /** Absolute credential dirs to DENY inside the jail (already `$HOME`-resolved). */
+  readonly denyDirs: readonly string[];
+  /** The resolved egress shape — the launcher branches on this, not the raw allowlist. */
+  readonly network: SandboxNetMode;
   /** The environment to expose inside the jail (container `-e` passthrough). */
   readonly env?: NodeJS.ProcessEnv;
-  /**
-   * The egress proxy to route through when `network` is an allowlist (issue #39). The launcher
-   * derives the in-jail proxy URL from it (bwrap shares the host loopback; a container reaches the
-   * host via its gateway alias). Required whenever `network` is an allowlist — absent ⇒ fail-closed.
-   */
+  /** The egress proxy to route through when `network === 'proxied'` (issue #39); absent ⇒ fail-closed. */
   readonly proxy?: SandboxProxy;
 };
+
+/**
+ * Resolve the mechanism-agnostic {@link SandboxProfile} for one seam from its already-per-seam
+ * egress ({@link networkForSeam}) plus the workspace / env / proxy / `$HOME`. The single place the
+ * `$HOME` credential dirs are turned into absolute deny paths and the tri-state egress is chosen, so
+ * every launcher consumes a finished profile and re-derives nothing. PURE (given `home`).
+ */
+export function resolveProfile(
+  network: SandboxNetwork,
+  opts: {
+    workspace: string;
+    env?: NodeJS.ProcessEnv | undefined;
+    proxy?: SandboxProxy | undefined;
+    home?: string | undefined;
+  },
+): SandboxProfile {
+  const home = opts.home ?? process.env.HOME;
+  const denyDirs =
+    home !== undefined && home.length > 0 ? DENIED_HOME_SECRETS.map((s) => `${home}/${s}`) : [];
+  const mode: SandboxNetMode =
+    network === 'none' ? 'isolated' : isAllowlist(network) ? 'proxied' : 'open';
+  return {
+    workspace: opts.workspace,
+    denyDirs,
+    network: mode,
+    ...(opts.env !== undefined ? { env: opts.env } : {}),
+    ...(opts.proxy !== undefined ? { proxy: opts.proxy } : {}),
+  };
+}
 
 /**
  * Resolve the policy's egress for one seam. Pure.

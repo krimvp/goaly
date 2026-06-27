@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ContainerLauncher, CONTAINER_HOST_GATEWAY } from './container';
-import { DEFAULT_CONTAINER_IMAGE } from './policy';
+import { DEFAULT_CONTAINER_IMAGE, DENIED_HOME_SECRETS } from './policy';
 
 const WS = '/work/repo';
 
@@ -8,7 +8,8 @@ describe('ContainerLauncher.wrap', () => {
   it('rewrites into a `docker run --rm` with the workspace mirrored rw and as cwd', () => {
     const { command, args } = new ContainerLauncher().wrap('npm', ['test'], {
       workspace: WS,
-      network: 'allow',
+      denyDirs: [],
+      network: 'open',
     });
     expect(command).toBe('docker');
     const joined = args.join(' ');
@@ -22,7 +23,7 @@ describe('ContainerLauncher.wrap', () => {
     const { command, args } = new ContainerLauncher({ runtime: 'podman', image: 'node:20' }).wrap(
       'sh',
       ['-c', 'true'],
-      { workspace: WS, network: 'allow' },
+      { workspace: WS, denyDirs: [], network: 'open' },
     );
     expect(command).toBe('podman');
     expect(args).toContain('node:20');
@@ -30,8 +31,8 @@ describe('ContainerLauncher.wrap', () => {
   });
 
   it('cuts egress with --network none only when network is none', () => {
-    const off = new ContainerLauncher().wrap('x', [], { workspace: WS, network: 'none' });
-    const on = new ContainerLauncher().wrap('x', [], { workspace: WS, network: 'allow' });
+    const off = new ContainerLauncher().wrap('x', [], { workspace: WS, denyDirs: [], network: 'isolated' });
+    const on = new ContainerLauncher().wrap('x', [], { workspace: WS, denyDirs: [], network: 'open' });
     expect(off.args.join(' ')).toContain('--network none');
     expect(on.args.join(' ')).not.toContain('--network none');
   });
@@ -39,7 +40,8 @@ describe('ContainerLauncher.wrap', () => {
   it('routes an allowlist through the egress proxy via a host-gateway alias + -e (issue #39)', () => {
     const { args } = new ContainerLauncher().wrap('npm', ['test'], {
       workspace: WS,
-      network: { allowlist: ['*.npmjs.org'] },
+      denyDirs: [],
+      network: 'proxied',
       proxy: { port: 8123 },
     });
     const joined = args.join(' ');
@@ -57,7 +59,8 @@ describe('ContainerLauncher.wrap', () => {
     expect(() =>
       new ContainerLauncher().wrap('x', [], {
         workspace: WS,
-        network: { allowlist: ['x.com'] },
+        denyDirs: [],
+        network: 'proxied',
       }),
     ).toThrow(/no egress-proxy/);
   });
@@ -65,7 +68,8 @@ describe('ContainerLauncher.wrap', () => {
   it('passes env NAMEs through with -e (never the secret values in argv)', () => {
     const { args } = new ContainerLauncher().wrap('x', [], {
       workspace: WS,
-      network: 'none',
+      denyDirs: [],
+      network: 'isolated',
       env: { PATH: '/usr/bin', CI: 'true', MISSING: undefined },
     });
     expect(args).toContain('-e');
@@ -75,8 +79,14 @@ describe('ContainerLauncher.wrap', () => {
     expect(args).not.toContain('MISSING'); // undefined env vars skipped
   });
 
-  it('never bind-mounts the host $HOME or credential dirs', () => {
-    const { args } = new ContainerLauncher().wrap('x', [], { workspace: WS, network: 'none' });
+  it('never bind-mounts the host $HOME or credential dirs (denyDirs are moot for containers)', () => {
+    // The container never mounts $HOME, so it simply ignores the profile's denyDirs — even when they
+    // are supplied, the argv must never reference the host credential paths.
+    const { args } = new ContainerLauncher().wrap('x', [], {
+      workspace: WS,
+      denyDirs: DENIED_HOME_SECRETS.map((s) => `/home/me/${s}`),
+      network: 'isolated',
+    });
     const joined = args.join(' ');
     expect(joined).not.toContain('/home');
     expect(joined).not.toContain('.ssh');

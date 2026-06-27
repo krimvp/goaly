@@ -110,18 +110,10 @@ export { AgentPlanner } from './plan/agent-planner';
 export { StaticPlanner, type PlanFileReader } from './plan/static-planner';
 export { AutoPlanGate, HumanPlanGate } from './plan/plan-gates';
 export { AgentCliHarness } from './harness/agent-cli-harness';
-export { ClaudeCodeAdapter, parseClaudeOutput, claudeStreamExtractor } from './harness/claude-code';
-export { CodexAdapter, parseCodexOutput, codexExtractor, codexStreamExtractor } from './harness/codex';
-export {
-  DroidAdapter,
-  parseDroidOutput,
-  droidExtractor,
-  droidStreamExtractor,
-  type AutonomyLevel,
-} from './harness/droid';
-export { PiAdapter, parsePiOutput, piExtractor, piStreamExtractor } from './harness/pi';
-export { CliLlmProvider, buildLlmArgs } from './llm/cli-provider';
 export { AgentCliLlmProvider } from './llm/agent-cli-provider';
+// The single source of truth mapping a CLI name to its codec, consumed by BOTH roles a CLI plays
+// (write-role AgentCliHarness + read-only AgentCliLlmProvider). A new CLI is one codec + one case.
+export { codecFor, type AgentCli } from './agent-cli/registry';
 
 // Shared agent-CLI output parsing (reused by harness adapters + LLM providers).
 export {
@@ -147,7 +139,7 @@ export {
 } from './agent-cli/codec';
 export { claudeCodec } from './agent-cli/claude-codec';
 export { codexCodec } from './agent-cli/codex-codec';
-export { droidCodec, makeDroidCodec, DEFAULT_AUTONOMY } from './agent-cli/droid-codec';
+export { droidCodec, makeDroidCodec, DEFAULT_AUTONOMY, type AutonomyLevel } from './agent-cli/droid-codec';
 export { piCodec } from './agent-cli/pi-codec';
 
 // Local token ESTIMATION (issue #24): the fallback when a streamed run/step self-reports no usage.

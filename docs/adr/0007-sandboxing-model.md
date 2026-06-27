@@ -66,8 +66,8 @@ harness on full egress for the model API and only opens the verifier), an allowl
 the list. The point (per the issue): `npm test` can reach the registry without *also* opening the
 unrestricted exfiltration egress that full `allow` does.
 
-Enforcement is per launcher, via standard proxy env vars (`SandboxRunOpts` carries an optional
-`proxy` field with the chosen loopback port):
+Enforcement is per launcher, via standard proxy env vars (the resolved `SandboxProfile` carries an
+optional `proxy` field with the chosen loopback port):
 - **bwrap**: keeps the host network (NOT `--unshare-net`) and sets `HTTP(S)_PROXY` / `ALL_PROXY`
   (and lowercase variants) + `NO_PROXY=localhost,127.0.0.1` via `--setenv`, pointing at
   `127.0.0.1:<proxyPort>`.
@@ -102,3 +102,14 @@ is fail-closed: a proxy that can't start aborts the run rather than degrading to
 - Network/FS tensions (e.g. `npm test` needing the network) are surfaced as explicit policy toggles
   (`--sandbox-net`, now including a host allowlist), documented, not hidden.
 - The pure reducer and the eight invariants are untouched; this is a Driver/effects concern.
+
+## Refinement — policy resolves once into a `SandboxProfile`
+The per-seam policy is resolved ONCE, at the composition edge, into a mechanism-agnostic
+`SandboxProfile` (`{ workspace, denyDirs, network: 'isolated'|'proxied'|'open', env?, proxy? }`) by
+`resolveProfile(networkForSeam(...), { workspace, env, proxy, home })`. Each launcher's
+`wrap(command, args, profile)` then only **translates** that finished profile into its own flag
+dialect — it makes no policy decision. The `$HOME` credential dirs (`DENIED_HOME_SECRETS`), the
+tri-state egress, and the proxy env-var names (`proxyEnv()`) are decided in one place instead of each
+launcher re-deriving them in three. This does not change the threat model or any per-seam profile
+above — it relocates *where* the policy is computed, so adding a launcher (e.g. macOS `sandbox-exec`)
+is a pure profile→flags translation with nothing to re-derive.

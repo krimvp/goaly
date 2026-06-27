@@ -1,7 +1,7 @@
 import type { AgentExecFn } from '../agent-cli/codec';
 import type { ExecFn } from '../workspace/git-workspace';
 import type { SandboxLauncher } from './launcher';
-import type { SandboxNetwork, SandboxProxy } from './policy';
+import { resolveProfile, type SandboxNetwork, type SandboxProxy } from './policy';
 
 /**
  * The two untrusted-code exec seams differ in shape, so each gets its own wrapper. Both are pure
@@ -27,6 +27,8 @@ export type SandboxExecOpts = {
    * an allowlist; absent under an allowlist ⇒ the launcher fails closed.
    */
   readonly proxy?: SandboxProxy;
+  /** `$HOME` for resolving the credential-deny dirs (default `process.env.HOME`; injected in tests). */
+  readonly home?: string | undefined;
 };
 
 /**
@@ -50,12 +52,13 @@ export function withSandboxAgent(
     // call). Keyed on the explicit `identity` flag, not on string-comparing the rewritten command,
     // so a real jail (or an UnavailableLauncher, whose `wrap()` throws) can never fail OPEN here.
     if (launcher.identity) return exec(args, input, onStdout);
-    const wrapped = launcher.wrap(command, args, {
+    const profile = resolveProfile(opts.network, {
       workspace: opts.workspace,
-      network: opts.network,
       ...(opts.env !== undefined ? { env: opts.env } : {}),
       ...(opts.proxy !== undefined ? { proxy: opts.proxy } : {}),
+      ...(opts.home !== undefined ? { home: opts.home } : {}),
     });
+    const wrapped = launcher.wrap(command, args, profile);
     // A real jail: spawn the launcher binary with its full argv. The inner exec is the neutral
     // spawner, so prepend the binary as argv[0].
     return exec([wrapped.command, ...wrapped.args], input, onStdout);
@@ -77,6 +80,7 @@ export function withSandboxVerify(
   launcher: SandboxLauncher,
   network: SandboxNetwork,
   proxy?: SandboxProxy,
+  home?: string,
 ): ExecFn {
   return (cmd, args, opts) => {
     // Identity launcher (NoneLauncher) ONLY: forward the ORIGINAL call byte-for-byte, shell and all
@@ -89,12 +93,13 @@ export function withSandboxVerify(
     const shellString = opts.shell === true && args.length === 0;
     const innerCmd = shellString ? 'sh' : cmd;
     const innerArgs = shellString ? ['-c', cmd] : args;
-    const wrapped = launcher.wrap(innerCmd, innerArgs, {
+    const profile = resolveProfile(network, {
       workspace: opts.cwd,
-      network,
       ...(opts.env !== undefined ? { env: opts.env } : {}),
       ...(proxy !== undefined ? { proxy } : {}),
+      ...(home !== undefined ? { home } : {}),
     });
+    const wrapped = launcher.wrap(innerCmd, innerArgs, profile);
     const { shell: _shell, ...rest } = opts;
     return exec(wrapped.command, wrapped.args, rest);
   };

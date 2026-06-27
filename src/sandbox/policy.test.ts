@@ -4,7 +4,10 @@ import {
   networkForSeam,
   isAllowlist,
   proxyUrlFor,
+  proxyEnv,
+  resolveProfile,
   PROXY_ENV_VARS,
+  PROXY_NO_PROXY,
   DENIED_HOME_SECRETS,
   DEFAULT_CONTAINER_IMAGE,
   DEFAULT_CONTAINER_RUNTIME,
@@ -109,6 +112,69 @@ describe('isAllowlist / proxyUrlFor (issue #39)', () => {
   it('exposes both upper- and lower-case proxy env var names', () => {
     expect(PROXY_ENV_VARS).toContain('HTTPS_PROXY');
     expect(PROXY_ENV_VARS).toContain('https_proxy');
+  });
+});
+
+describe('resolveProfile (issue #9)', () => {
+  it('maps the per-seam egress onto the tri-state: none → isolated, allow → open, allowlist → proxied', () => {
+    expect(resolveProfile('none', { workspace: '/ws' }).network).toBe('isolated');
+    expect(resolveProfile('allow', { workspace: '/ws' }).network).toBe('open');
+    expect(resolveProfile({ allowlist: ['x.com'] }, { workspace: '/ws' }).network).toBe('proxied');
+  });
+
+  it('keeps the workspace as given', () => {
+    expect(resolveProfile('none', { workspace: '/ws' }).workspace).toBe('/ws');
+  });
+
+  it('resolves the credential deny-dirs from an injected $HOME', () => {
+    const p = resolveProfile('none', { workspace: '/ws', home: '/home/me' });
+    expect(p.denyDirs).toEqual(DENIED_HOME_SECRETS.map((s) => `/home/me/${s}`));
+  });
+
+  it('yields no deny-dirs when the injected home is empty (nothing to mask)', () => {
+    expect(resolveProfile('none', { workspace: '/ws', home: '' }).denyDirs).toEqual([]);
+  });
+
+  it('yields no deny-dirs when neither an injected home nor $HOME is set', () => {
+    const saved = process.env.HOME;
+    try {
+      delete process.env.HOME;
+      expect(resolveProfile('none', { workspace: '/ws' }).denyDirs).toEqual([]);
+    } finally {
+      if (saved !== undefined) process.env.HOME = saved;
+    }
+  });
+
+  it('carries env and proxy through when provided', () => {
+    const p = resolveProfile(
+      { allowlist: ['x.com'] },
+      { workspace: '/ws', env: { CI: 'true' }, proxy: { port: 8123 } },
+    );
+    expect(p.env).toEqual({ CI: 'true' });
+    expect(p.proxy).toEqual({ port: 8123 });
+  });
+
+  it('omits env and proxy when not provided', () => {
+    const p = resolveProfile('none', { workspace: '/ws' });
+    expect(p.env).toBeUndefined();
+    expect(p.proxy).toBeUndefined();
+  });
+});
+
+describe('proxyEnv (issue #39)', () => {
+  it('emits every proxy env var (both cases) at the in-jail url, plus NO_PROXY/no_proxy', () => {
+    const pairs: Array<[string, string]> = [];
+    proxyEnv((n, v) => pairs.push([n, v]), '127.0.0.1', { port: 9 });
+    const url = 'http://127.0.0.1:9';
+    for (const name of PROXY_ENV_VARS) {
+      expect(pairs).toContainEqual([name, url]);
+    }
+    expect(pairs).toContainEqual(['NO_PROXY', PROXY_NO_PROXY]);
+    expect(pairs).toContainEqual(['no_proxy', PROXY_NO_PROXY]);
+  });
+
+  it('fails closed when no proxy is provided (never silently unrestricted egress)', () => {
+    expect(() => proxyEnv(() => {}, '127.0.0.1', undefined)).toThrow(/no egress-proxy/);
   });
 });
 

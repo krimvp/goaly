@@ -13,7 +13,7 @@ describe('makeLauncher', () => {
     const l = makeLauncher(SandboxPolicy.parse({ mode: 'none' }));
     expect(l.mode).toBe('none');
     expect(l.available).toBe(true);
-    expect(l.wrap('x', ['y'], { workspace: '/w', network: 'allow' })).toEqual({
+    expect(l.wrap('x', ['y'], { workspace: '/w', denyDirs: [], network: 'open' })).toEqual({
       command: 'x',
       args: ['y'],
     });
@@ -23,7 +23,6 @@ describe('makeLauncher', () => {
     const l = makeLauncher(SandboxPolicy.parse({ mode: 'bwrap' }), {
       which: probe('bwrap'),
       platform: 'linux',
-      home: '/home/me',
     });
     expect(l.mode).toBe('bwrap');
     expect(l.available).toBe(true);
@@ -33,7 +32,6 @@ describe('makeLauncher', () => {
     const l = makeLauncher(SandboxPolicy.parse({ mode: 'firejail' }), {
       which: probe('firejail'),
       platform: 'linux',
-      home: '/home/me',
     });
     expect(l.mode).toBe('firejail');
     expect(l.available).toBe(true);
@@ -44,7 +42,7 @@ describe('makeLauncher', () => {
       which: probe('podman'),
     });
     expect(l.mode).toBe('container');
-    const out = l.wrap('npm', ['test'], { workspace: '/w', network: 'allow' });
+    const out = l.wrap('npm', ['test'], { workspace: '/w', denyDirs: [], network: 'open' });
     expect(out.command).toBe('podman');
     expect(out.args).toContain('n:1');
   });

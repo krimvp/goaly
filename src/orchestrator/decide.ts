@@ -36,12 +36,14 @@ export function decide(
     return { kind: 'DONE' };
   }
 
-  // We would otherwise CONTINUE — apply the terminal backstops first. The in-flight verdict +
-  // approval are threaded in (issue #54) so a no-diff iteration blocked only by a fresh, correctable
-  // veto isn't aborted before the agent gets one real turn to act on it.
-  const stuck = detectStuck(ctx, { ladder, approval });
-  if (stuck !== null) {
-    return { kind: 'ABORTED', reason: stuck };
+  // We would otherwise CONTINUE — apply the terminal backstops first. `detectStuck` is pure over the
+  // histories; the one reason-specific excuse that needs the in-flight verdict/approval lives HERE
+  // (issue #54): a `no-diff` abort is excused when the agent had no fair chance to act on a FRESH,
+  // correctable Sign-off veto (green ladder, a veto whose reason the just-run turn was NOT yet given).
+  // Only `no-diff` is excusable — budget / crash / oscillation / repeat always abort.
+  const stuck = detectStuck(ctx);
+  if (stuck !== null && !(stuck.kind === 'no-diff' && freshVeto(ctx, ladder, approval))) {
+    return { kind: 'ABORTED', reason: stuck.message };
   }
 
   if (ctx.iteration >= ctx.config.maxIterations) {
@@ -60,4 +62,16 @@ export function decide(
     kind: 'CONTINUE',
     feedback: approval?.reason ?? 'rejected by the approval gate',
   };
+}
+
+/**
+ * The in-flight half of the no-diff excuse (issue #54): a green ladder blocked only by a FRESH
+ * Sign-off veto — one whose reason differs from the feedback the just-run turn was already given
+ * (`ctx.feedback`) — so the worker has not yet had a real turn to act on it. One-shot by construction:
+ * once that veto reason becomes the prior feedback, it no longer differs and the no-diff abort trips.
+ * Pure; lives in DECIDE because it needs the in-flight `ladder`/`approval` the reducer is deciding on.
+ */
+function freshVeto(ctx: LoopCtx, ladder: Verdict, approval: ApprovalVerdict | null): boolean {
+  if (ladder.pass !== true || approval?.veto !== true) return false;
+  return (approval.reason ?? '') !== (ctx.feedback ?? '');
 }

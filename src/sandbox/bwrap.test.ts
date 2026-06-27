@@ -6,12 +6,16 @@ const WS = '/home/me/project';
 const HOME = '/home/me';
 
 function wrap(network: 'none' | 'allow') {
-  return new BwrapLauncher(HOME).wrap('npm', ['test'], { workspace: WS, network });
+  return new BwrapLauncher().wrap('npm', ['test'], {
+    workspace: WS,
+    denyDirs: DENIED_HOME_SECRETS.map((s) => `${HOME}/${s}`),
+    network: network === 'none' ? 'isolated' : 'open',
+  });
 }
 
 describe('BwrapLauncher.wrap', () => {
   it('spawns bwrap and reports its mode', () => {
-    const launcher = new BwrapLauncher(HOME);
+    const launcher = new BwrapLauncher();
     expect(launcher.mode).toBe('bwrap');
     expect(launcher.available).toBe(true);
     expect(wrap('allow').command).toBe(BWRAP_COMMAND);
@@ -31,9 +35,10 @@ describe('BwrapLauncher.wrap', () => {
   it('binds the rw workspace AFTER --tmpfs /tmp so a workspace under /tmp is not shadowed', () => {
     // Regression: bubblewrap applies mounts in order; a `--tmpfs /tmp` placed after the workspace
     // bind would hide a workspace that lives under /tmp, breaking --chdir. The rw bind must come last.
-    const { args } = new BwrapLauncher('/home/me').wrap('sh', ['-c', 'true'], {
+    const { args } = new BwrapLauncher().wrap('sh', ['-c', 'true'], {
       workspace: '/tmp/work-xyz',
-      network: 'none',
+      denyDirs: [],
+      network: 'isolated',
     });
     const tmpfsTmp = args.indexOf('/tmp'); // the `--tmpfs /tmp` target
     const wsBind = args.lastIndexOf('/tmp/work-xyz');
@@ -66,9 +71,10 @@ describe('BwrapLauncher.wrap', () => {
   });
 
   it('routes an allowlist through the egress proxy via --setenv, keeping the network up (issue #39)', () => {
-    const { args } = new BwrapLauncher(HOME).wrap('npm', ['test'], {
+    const { args } = new BwrapLauncher().wrap('npm', ['test'], {
       workspace: WS,
-      network: { allowlist: ['*.npmjs.org'] },
+      denyDirs: [],
+      network: 'proxied',
       proxy: { port: 8123 },
     });
     // Network stays up (no --unshare-net) so the jail can reach the host-loopback proxy.
@@ -84,9 +90,10 @@ describe('BwrapLauncher.wrap', () => {
 
   it('fails closed when an allowlist is requested without a running proxy (issue #39)', () => {
     expect(() =>
-      new BwrapLauncher(HOME).wrap('npm', ['test'], {
+      new BwrapLauncher().wrap('npm', ['test'], {
         workspace: WS,
-        network: { allowlist: ['x.com'] },
+        denyDirs: [],
+        network: 'proxied',
       }),
     ).toThrow(/no egress-proxy/);
   });
@@ -98,10 +105,11 @@ describe('BwrapLauncher.wrap', () => {
     expect(args.slice(sep)).toEqual(['--', 'npm', 'test']);
   });
 
-  it('omits home masking when $HOME is unset, but still jails the rest', () => {
-    const { args } = new BwrapLauncher(undefined).wrap('sh', ['-c', 'true'], {
+  it('omits home masking when there are no deny dirs, but still jails the rest', () => {
+    const { args } = new BwrapLauncher().wrap('sh', ['-c', 'true'], {
       workspace: WS,
-      network: 'none',
+      denyDirs: [],
+      network: 'isolated',
     });
     expect(args.join(' ')).toContain('--ro-bind / /');
     expect(args.join(' ')).toContain('--unshare-net');

@@ -1,25 +1,20 @@
 import type { LoopCtx } from './state';
-import type { Verdict, ApprovalVerdict } from '../domain';
-
-/**
- * The in-flight decision context (issue #54): the verdict + approval the reducer is deciding on right
- * now. Threaded into stuck detection so a no-diff iteration whose ONLY blocker is a fresh, correctable
- * veto isn't aborted before the agent gets one real turn to act on it. Optional so callers that only
- * test the history-based detectors (budget / oscillation / repeat-failure) need not supply it.
- */
-export type DecisionContext = {
-  readonly ladder: Verdict;
-  readonly approval: ApprovalVerdict | null;
-};
 
 /**
  * Stuck detection (ARCHITECTURE "Stuck detection") — pure over the histories stored in
  * `LoopCtx`. `maxIterations` is the blunt backstop handled in DECIDE; these detectors
  * bail *before* it with an informative reason so an outer wrapper or human can escalate.
- *
- * Returns a human-readable reason string, or `null` if no stuck condition is met.
  */
-export type StuckReason = string;
+
+/** The kind of stuck condition, so DECIDE can apply reason-specific policy (e.g. excuse a no-diff). */
+export type StuckKind = 'budget' | 'crash' | 'no-diff' | 'oscillation' | 'repeat';
+
+/**
+ * A detected stuck condition: a typed `kind` + the human-readable `message` (the audit / feedback
+ * text). DECIDE keys reason-specific policy off `kind` (e.g. a fresh Sign-off veto excuses a `no-diff`
+ * abort, but never a `budget`/`crash`/`repeat`); the `message` is what surfaces in the ABORTED reason.
+ */
+export type StuckReason = { readonly kind: StuckKind; readonly message: string };
 
 /**
  * Volatile-token scrubbers applied (in order) before whitespace is collapsed, so a failure line
@@ -58,33 +53,21 @@ export function normalizeDetail(detail: string): string {
 }
 
 /**
- * Issue #54 — a no-diff iteration is EXCUSED (not yet terminal) when the agent never had a fair
- * chance to act, so we don't discard a correct, actionable signal before one real turn:
- *  - the previous turn was killed by a harness TIMEOUT (it never got to edit), or
- *  - the deterministic ladder is GREEN and the only blocker is a FRESH Sign-off veto the agent has not
- *    yet seen — its reason differs from the feedback the just-run turn was given (`ctx.feedback`).
- * A veto is the system's most valuable signal (it catches what the tests miss); aborting before the
- * worker can respond wastes the run AND throws away a correct critique. The excuse is one-shot: a
- * SECOND unproductive no-diff trips (the veto reason now equals the prior feedback, or the turn
- * completed rather than timing out), and budget / maxIterations / repeat-failure remain backstops, so
- * the loop still terminates and a red is never turned green.
+ * Issue #54 — the HISTORY-based half of the no-diff excuse: a no-diff iteration is excused when the
+ * previous turn was killed by a harness TIMEOUT or CRASHED — it never got a fair chance to edit, so a
+ * misleading "no-diff" must not mask that the harness died (let the timeout → maxIterations backstop /
+ * crash → harness-crash streak make the call). Pure over `LoopCtx`. The OTHER half of the excuse — a
+ * green ladder blocked only by a FRESH Sign-off veto — needs the in-flight verdict/approval and so
+ * lives in DECIDE (`decide.ts`), which holds them; this keeps `detectStuck` purely history-driven.
  */
-function noDiffExcused(ctx: LoopCtx, current?: DecisionContext): boolean {
-  // A timed-out OR crashed turn never finished — it had no fair chance to edit. Excuse the no-diff
-  // so the more specific terminal (timeout → maxIterations backstop; crash → harness-crash streak)
-  // makes the call, instead of a misleading "no-diff" masking that the harness died.
-  if (ctx.lastRunStatus === 'timeout' || ctx.lastRunStatus === 'crashed') return true;
-  if (current?.ladder.pass === true && current.approval?.veto === true) {
-    const reason = current.approval.reason ?? '';
-    return reason !== (ctx.feedback ?? '');
-  }
-  return false;
+function noDiffExcusedByRun(ctx: LoopCtx): boolean {
+  return ctx.lastRunStatus === 'timeout' || ctx.lastRunStatus === 'crashed';
 }
 
-export function detectStuck(ctx: LoopCtx, current?: DecisionContext): StuckReason | null {
+export function detectStuck(ctx: LoopCtx): StuckReason | null {
   // Budget — independent of iteration count.
   if (ctx.lastBudget?.exceeded === true) {
-    return 'budget exceeded';
+    return { kind: 'budget', message: 'budget exceeded' };
   }
 
   // Harness crash — the agent CLI exited abnormally N times in a row without ever completing a turn.
@@ -93,25 +76,25 @@ export function detectStuck(ctx: LoopCtx, current?: DecisionContext): StuckReaso
   // environment/harness failure as "your code is wrong". Names the actual harness error, not the red.
   const crashThreshold = ctx.config.stuckPolicy.harnessCrashThreshold;
   if (isCrashStreak(ctx.runStatusHistory, crashThreshold)) {
-    return harnessCrashReason(crashThreshold, ctx.lastRunOutput ?? '');
+    return { kind: 'crash', message: harnessCrashReason(crashThreshold, ctx.lastRunOutput ?? '') };
   }
 
-  // No-diff — the most recent iteration left the working tree unchanged. Excused once (issue #54)
-  // when the agent never got a fair chance to act on a correct signal (see noDiffExcused).
+  // No-diff — the most recent iteration left the working tree unchanged. Excused once (issue #54) by
+  // the history half here (timeout/crash); the fresh-veto half is applied by DECIDE on a `no-diff` kind.
   if (
     ctx.config.stuckPolicy.noDiff &&
     ctx.lastNoDiff &&
     ctx.iteration >= 1 &&
-    !noDiffExcused(ctx, current)
+    !noDiffExcusedByRun(ctx)
   ) {
-    return 'no-diff: working tree unchanged after an iteration';
+    return { kind: 'no-diff', message: 'no-diff: working tree unchanged after an iteration' };
   }
 
   // Oscillation — diff hash cycles with a short period (A,B,A,B; A,B,C,A,B,C; …).
   if (ctx.config.stuckPolicy.oscillation) {
     const period = oscillationPeriod(ctx.diffHashHistory);
     if (period !== null) {
-      return `oscillation: diff hash cycling with period ${period}`;
+      return { kind: 'oscillation', message: `oscillation: diff hash cycling with period ${period}` };
     }
   }
 
@@ -123,7 +106,7 @@ export function detectStuck(ctx: LoopCtx, current?: DecisionContext): StuckReaso
   const threshold = ctx.config.stuckPolicy.repeatFailureThreshold;
   if (isRepeating(ctx.verifierDetailHistory, threshold)) {
     const signature = ctx.verifierDetailHistory[ctx.verifierDetailHistory.length - 1] ?? '';
-    return repeatFailureReason(threshold, signature);
+    return { kind: 'repeat', message: repeatFailureReason(threshold, signature) };
   }
 
   return null;
@@ -138,7 +121,7 @@ const CRASH_OUTPUT_LIMIT = 500;
  * the code or the frozen contract — so the message points the user at the harness, not at a downstream
  * verifier red, and surfaces the harness's own error output verbatim so the real cause is visible.
  */
-function harnessCrashReason(threshold: number, output: string): StuckReason {
+function harnessCrashReason(threshold: number, output: string): string {
   const trimmed = output.trim();
   const snippet =
     trimmed.length > CRASH_OUTPUT_LIMIT ? `${trimmed.slice(0, CRASH_OUTPUT_LIMIT)}…` : trimmed;
@@ -169,7 +152,7 @@ const SIGNATURE_REASON_LIMIT = 500;
  * keeps editing unrelated files while the same error repeats is told to look at the file in the error,
  * the contract, or the setup, rather than churning on.
  */
-function repeatFailureReason(threshold: number, signature: string): StuckReason {
+function repeatFailureReason(threshold: number, signature: string): string {
   const sig =
     signature.length > SIGNATURE_REASON_LIMIT
       ? `${signature.slice(0, SIGNATURE_REASON_LIMIT)}…`

@@ -7,7 +7,7 @@
  * without re-running the agent, independent of `--log-level`.
  *
  * Because the events are already tool-neutral, the transcript is identical in shape across
- * claude-code / codex / droid / future SDK harnesses — that is the whole point.
+ * claude / codex / droid / future SDK harnesses — that is the whole point.
  *
  * Two invariants govern this module:
  * - It is a SEPARATE file from `log.jsonl` and is NEVER the state replay source, so resume stays a

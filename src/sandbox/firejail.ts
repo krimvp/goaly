@@ -1,12 +1,5 @@
 import type { SandboxLauncher, WrappedCommand } from './launcher';
-import {
-  DENIED_HOME_SECRETS,
-  PROXY_ENV_VARS,
-  PROXY_NO_PROXY,
-  isAllowlist,
-  proxyUrlFor,
-  type SandboxRunOpts,
-} from './policy';
+import { proxyEnv, type SandboxProfile } from './policy';
 
 /** The firejail binary name; the host probe (detect.ts) checks for it on PATH. */
 export const FIREJAIL_COMMAND = 'firejail';
@@ -23,18 +16,19 @@ export const FIREJAIL_COMMAND = 'firejail';
 export const FIREJAIL_CHDIR_WRAP = 'cd "$0" && exec "$@"';
 
 /**
- * The Linux fallback when bwrap is absent (issue #40): rewrite a command into a `firejail`
- * invocation. PURE string construction — no spawn, no IO — so the exact argv is table-testable.
+ * The Linux fallback when bwrap is absent (issue #40): translate a resolved {@link SandboxProfile}
+ * into a `firejail` invocation. PURE string construction — no spawn, no IO — so the exact argv is
+ * table-testable, and all policy is already decided in the profile.
  *
  * The jail mirrors {@link BwrapLauncher}'s security properties via firejail's flags: `--noprofile`
  * (deterministic — ignore the host's `/etc/firejail` profiles) + `--quiet` (no banner polluting the
  * agent/verifier stdout); the whole filesystem is made read-only (`--read-only=/`) with a fresh
- * `/dev` (`--private-dev`); each `$HOME` credential subdir is denied with `--blacklist` so even
- * though `/` is visible the agent can't read `~/.ssh`, `~/.aws`, …; the workspace is re-enabled
- * read-write (`--read-write=<ws>`); egress is cut with `--net=none` when `network:'none'`, or — when
- * `network` is an allowlist (issue #39) — kept up but pinned to the egress proxy via
- * `--env HTTP(S)_PROXY=…` (the proxy denies non-listed hosts); finally the command is run under the
- * {@link FIREJAIL_CHDIR_WRAP} shell so it lands in the workspace.
+ * `/dev` (`--private-dev`); each `profile.denyDirs` credential dir is denied with `--blacklist` so
+ * even though `/` is visible the agent can't read `~/.ssh`, `~/.aws`, …; the workspace is re-enabled
+ * read-write (`--read-write=<ws>`); egress is cut with `--net=none` when `isolated`, or — when
+ * `proxied` (issue #39) — kept up but pinned to the egress proxy via `--env HTTP(S)_PROXY=…` (the
+ * proxy denies non-listed hosts); finally the command is run under the {@link FIREJAIL_CHDIR_WRAP}
+ * shell so it lands in the workspace.
  *
  * `/tmp` handling differs from bwrap. firejail applies its filesystem ops in its OWN internal order
  * (not argv order), so bwrap's "bind the workspace LAST" trick has no firejail equivalent: a fresh
@@ -49,46 +43,32 @@ export class FirejailLauncher implements SandboxLauncher {
   readonly mode = 'firejail' as const;
   readonly identity = false;
   readonly available = true;
-  readonly #home: string | undefined;
 
-  /** `home` defaults to the process `$HOME`; injectable so the argv is deterministic in tests. */
-  constructor(home: string | undefined = process.env.HOME) {
-    this.#home = home;
-  }
-
-  wrap(command: string, args: string[], opts: SandboxRunOpts): WrappedCommand {
+  wrap(command: string, args: string[], profile: SandboxProfile): WrappedCommand {
     const firejailArgs: string[] = ['--quiet', '--noprofile', '--private-dev', '--read-only=/'];
-    // Deny each $HOME credential location so it can't be read through the visible `/`.
-    if (this.#home !== undefined && this.#home.length > 0) {
-      for (const secret of DENIED_HOME_SECRETS) {
-        firejailArgs.push(`--blacklist=${this.#home}/${secret}`);
-      }
+    // Deny each credential location so it can't be read through the visible `/`.
+    for (const dir of profile.denyDirs) {
+      firejailArgs.push(`--blacklist=${dir}`);
     }
     // Re-enable the workspace read-write (overrides the read-only root for this subtree).
-    firejailArgs.push(`--read-write=${opts.workspace}`);
+    firejailArgs.push(`--read-write=${profile.workspace}`);
     // A writable /tmp is always needed (the read-only root makes it RO otherwise). Prefer a fresh,
     // isolated tmpfs; fall back to the real /tmp when the workspace lives under it (a private tmpfs
     // would shadow it, and firejail can't re-expose it the way bwrap's "bind last" does).
-    if (isUnderTmp(opts.workspace)) {
+    if (isUnderTmp(profile.workspace)) {
       firejailArgs.push('--read-write=/tmp');
     } else {
       firejailArgs.push('--private-tmp');
     }
-    if (opts.network === 'none') {
+    if (profile.network === 'isolated') {
       firejailArgs.push('--net=none');
-    } else if (isAllowlist(opts.network)) {
-      // Allowlist (issue #39): keep the host network so the jail can reach the egress proxy on the
-      // shared host loopback, and point the standard proxy env vars at it with `--env` (firejail
-      // inherits the host env, so we override explicitly). Enforcement is proxy-side: only the
-      // allowlisted hosts get out. Fail-closed if the proxy port is missing (`proxyUrlFor` throws).
-      const url = proxyUrlFor('127.0.0.1', opts.proxy);
-      for (const name of PROXY_ENV_VARS) {
-        firejailArgs.push(`--env=${name}=${url}`);
-      }
-      firejailArgs.push(`--env=NO_PROXY=${PROXY_NO_PROXY}`, `--env=no_proxy=${PROXY_NO_PROXY}`);
+    } else if (profile.network === 'proxied') {
+      // Keep the host network so the jail reaches the egress proxy on the shared host loopback, and
+      // point the standard proxy env vars at it (firejail inherits the host env, so override).
+      proxyEnv((name, value) => firejailArgs.push(`--env=${name}=${value}`), '127.0.0.1', profile.proxy);
     }
     // firejail has no `--chdir`; run the command under a shell that cd's into the workspace first.
-    firejailArgs.push('sh', '-c', FIREJAIL_CHDIR_WRAP, opts.workspace, command, ...args);
+    firejailArgs.push('sh', '-c', FIREJAIL_CHDIR_WRAP, profile.workspace, command, ...args);
     return { command: FIREJAIL_COMMAND, args: firejailArgs };
   }
 }

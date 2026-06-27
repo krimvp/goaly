@@ -1,5 +1,6 @@
 import type { OrchestratorEvent, Command, HarnessRunResult } from '../domain/events';
 import type { RunConfig, VerifierIntent } from '../domain/config';
+import { pickGatePolicy, pickLoopPolicy, pickDriverWiring } from '../domain/config';
 import type { CompiledContract, Rung } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
 import type { OrchestratorState, LoopCtx, PhaseCtx } from './state';
@@ -159,33 +160,27 @@ function phaseConfigFor(phase: PhaseCtx): RunConfig {
   if (phase.index >= phase.plan.phases.length) {
     return { ...base, phased: false };
   }
+  // A sub-goal phase: FRESH contract inputs authored per sub-goal (goal/verifier/rubric), but the
+  // SAME operational policy as the run — inherited wholesale by lifetime VIEW (gate / loop / wiring)
+  // rather than re-listed field by field, plus the setup/judge knobs a sub-goal still needs. `phased`
+  // is cleared. The view spreads keep this honest: a new RunConfig field lands in exactly one view and
+  // is inherited automatically, so a phase config can't silently drop a field. (Delta-verify is in the
+  // wiring view; the Driver reads the OUTER run's `deltaVerify`, so the phase just round-trips it.)
   const sub = phase.plan.phases[phase.index]!;
   const verifier: VerifierIntent = {
     kind: 'generate',
     ...(sub.intent !== undefined ? { intent: sub.intent } : {}),
   };
   return {
+    ...pickGatePolicy(base),
+    ...pickLoopPolicy(base),
+    ...pickDriverWiring(base),
     goal: sub.goal,
     verifier,
     noSetup: base.noSetup,
-    installMissingTools: base.installMissingTools,
-    autonomous: base.autonomous,
-    maxSealRevisions: base.maxSealRevisions,
-    maxCompileRetries: base.maxCompileRetries,
-    maxIterations: base.maxIterations,
-    phased: false,
-    maxPhases: base.maxPhases,
-    maxPlanRevisions: base.maxPlanRevisions,
-    budget: base.budget,
-    stuckPolicy: base.stuckPolicy,
-    diffIgnore: base.diffIgnore,
-    // Delta-verify is driven by the OUTER run config in the Driver loop (it reads `config.deltaVerify`
-    // for the whole run, not per-phase); this inner phase contract just inherits the value for honest
-    // round-tripping. Within a phase it advances only the judge's baseline; the approver baseline
-    // advances at phase boundaries — so it composes with phasing (issue #49).
-    deltaVerify: base.deltaVerify,
     judge: base.judge,
     ...(sub.rubric !== undefined ? { rubric: sub.rubric } : {}),
+    phased: false,
   };
 }
 
