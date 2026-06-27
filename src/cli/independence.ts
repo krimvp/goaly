@@ -18,6 +18,10 @@ function harnessFamily(harness: HarnessChoice): LlmProviderChoice | undefined {
       return 'codex';
     case 'droid':
       return 'droid';
+    case 'goaly-code':
+      // The goaly-code harness drives an OpenAI-compatible endpoint — the same family as the openai provider.
+      return 'openai';
+    case 'pi':
     case 'fake':
       return undefined;
   }

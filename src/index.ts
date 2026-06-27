@@ -19,6 +19,7 @@ export {
   buildLadder,
   makeLlmProvider,
   NoopHarness,
+  EndpointConfigError,
   STATE_DIR,
   type ComposeOptions,
 } from './cli/compose';
@@ -92,6 +93,79 @@ export {
 } from './runlog/inspect';
 export type { LlmProvider, LlmRequest, LlmCompletion } from './llm/provider';
 export { FakeLlm } from './llm/provider';
+
+// goaly-code harness transport (Slice 0): the OpenAI-compatible chat-completions client + the read-only
+// provider on top of it (judge/approver/compiler against any such endpoint, no coding CLI installed).
+export {
+  OpenAiClient,
+  LlmClientError,
+  DEFAULT_LLM_HTTP_TIMEOUT_MS,
+  type LlmClient,
+  type ChatResult,
+  type FetchLike,
+  type OpenAiClientOptions,
+} from './llm-client/openai-client';
+export {
+  ChatMessage,
+  ChatToolCall,
+  ChatTool,
+  ChatRequest,
+  ChatResponse,
+  ChatUsage,
+  usageToBreakdown,
+} from './llm-client/schema';
+export { OpenAiLlmProvider } from './llm/openai-provider';
+
+// goaly-code harness (Slice 1): the first NON-codec HarnessAdapter — goaly's own tool-use loop driving an
+// OpenAI-compatible endpoint, behind `--harness goaly-code`. The leaves are exported for embedders/tests.
+export { GoalyCodeHarness, DEFAULT_GOALY_CODE_MAX_TURNS, type GoalyCodeHarnessOptions } from './goaly-code/harness';
+export { runAgentLoop, type LoopResult, type LoopTokens, type RunAgentLoopOptions } from './goaly-code/loop';
+export {
+  DEFAULT_TOOLS,
+  dispatchTool,
+  toApiTools,
+  type ToolHost,
+  type ToolSpec,
+  type ToolOutcome,
+} from './goaly-code/tools';
+export { applyEdit, type EditResult } from './goaly-code/edit';
+export { NodeToolHost, type ShellExec } from './goaly-code/fs-host';
+export {
+  FileSessionStore,
+  InMemorySessionStore,
+  sessionFileName,
+  type SessionStore,
+  type SessionFs,
+} from './goaly-code/session-store';
+export { GOALY_CODE_SYSTEM_PROMPT } from './goaly-code/prompt';
+
+// Training arc (Slices 2–3): export labeled trajectories from runs, assemble a rejection-sampling SFT
+// dataset, and the held-out eval bench. The ladder + approver are the label — for free.
+export {
+  exportRunTrajectory,
+  buildTrajectoryRecord,
+  lastSessionId,
+  type TrajectoryRecord,
+  type LadderOutcome,
+} from './training/trajectory';
+export {
+  selectPassing,
+  toSftExample,
+  toSftJsonl,
+  datasetStats,
+  type SftExample,
+  type SelectOptions,
+  type DatasetStats,
+} from './training/dataset';
+export {
+  BENCH_TASKS,
+  runBench,
+  summarizeBench,
+  type BenchTask,
+  type BenchResult,
+  type BenchSummary,
+  type RunTaskFn,
+} from './training/bench';
 
 // Seam #4 (real implementations) + concrete adapters/verifiers.
 export { SystemClock, type Clock } from './driver/clock';

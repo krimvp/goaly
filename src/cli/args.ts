@@ -7,11 +7,17 @@ import { resolveInputSources, defaultReaders, type InputReaders } from './input-
 import { loadConfig, type LoadedConfig } from './config-file';
 import type { AgentCli } from '../agent-cli/registry';
 
-/** The harness (write-role coding agent): any bundled CLI, plus the IO-free `fake`. */
-export type HarnessChoice = AgentCli | 'fake';
+/**
+ * The harness (write-role coding agent): any bundled CLI, the IO-free `fake`, plus `goaly-code` — the
+ * non-codec goaly-code harness that drives an OpenAI-compatible endpoint through goaly's own agent loop.
+ */
+export type HarnessChoice = AgentCli | 'fake' | 'goaly-code';
 
-/** Which CLI runs the LLM workflow steps (judge / approver / compiler). */
-export type LlmProviderChoice = AgentCli;
+/**
+ * Which provider runs the LLM workflow steps (judge / approver / compiler). Any bundled CLI, plus
+ * `openai` — a direct OpenAI-compatible chat-completions endpoint (no coding CLI installed).
+ */
+export type LlmProviderChoice = AgentCli | 'openai';
 
 /** The read-only run-inspection subcommand (`goaly runs list` / `goaly runs show <id>`). */
 export type RunsCommand = { readonly kind: 'list' } | { readonly kind: 'show'; readonly runId: string };
@@ -84,6 +90,18 @@ export type ParsedArgs = {
   costTablePath: string | undefined;
   /** Config files that supplied default flags, lowest-precedence first (pure wiring; for logging). */
   configSources: string[];
+  /**
+   * OpenAI-compatible endpoint base URL for `--harness goaly-code` / `--llm-provider openai` (e.g.
+   * `https://api.openai.com/v1`). Pure wiring — never enters the frozen contract. Absent ⇒ those
+   * targets fail closed at composition with a clear message.
+   */
+  baseUrl: string | undefined;
+  /**
+   * Env var name holding the bearer token for the OpenAI-compatible endpoint (default
+   * `OPENAI_API_KEY`). Read at the composition edge; a keyless local endpoint (e.g. ollama) needs no
+   * token, so an unset var is allowed (no `Authorization` header is sent).
+   */
+  llmApiKeyEnv: string;
 };
 
 export const USAGE = `goaly — run a coding agent until a frozen success contract is met.
@@ -106,8 +124,9 @@ Usage:
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
                [--stuck-oscillation true|false] [--stuck-crash-threshold N]
-               [--harness claude|codex|droid|pi] [--model <m>] [--llm-model <m>]
-               [--llm-provider claude|codex|droid|pi] [--harness-timeout-ms N]
+               [--harness claude|codex|droid|pi|goaly-code] [--model <m>] [--llm-model <m>]
+               [--llm-provider claude|codex|droid|pi|openai] [--harness-timeout-ms N]
+               [--base-url <url>] [--llm-api-key-env <NAME>]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
                [--sandbox[=none|auto|bwrap|firejail|container]]
                [--sandbox-net none|allow|allow:<host,…>]
@@ -230,11 +249,23 @@ Model selection (all optional; default = each tool's own default):
   --approver-model <m>  model for the Sign-off approver only
   --compiler-model <m>  model for the verification compiler only
   --planner-model <m>   model for the phased planner only (issue #48)
-  --llm-provider <p>    which CLI runs the LLM steps: claude (default) | codex | droid | pi
+  --llm-provider <p>    which provider runs the LLM steps: claude (default) | codex | droid | pi |
+                        openai. 'openai' calls an OpenAI-compatible chat endpoint directly (no coding
+                        CLI installed) — pair it with --base-url and a resolved --llm-model/--model.
   Precedence per LLM step: per-step flag → --llm-model → --model. The harness follows --model.
   Note: pi (pi.dev) is provider-agnostic — pass --model as "provider/id" (e.g.
   "anthropic/claude-opus-4-8", "ollama/qwen3:8b") to pick the provider+model on one flag, or omit
   --model to use pi's own configured default. Credentials come from your env / pi's config.
+
+goaly-code harness / OpenAI-compatible endpoint (--harness goaly-code, --llm-provider openai):
+  --harness goaly-code        run goaly's OWN agent loop against an OpenAI-compatible chat-completions
+                        endpoint (the first non-CLI harness), instead of delegating to a coding CLI.
+                        goaly owns the tool-use loop, file edits (path-guarded), and run_shell (the
+                        only sandboxed exec). Requires --base-url and a resolved --model.
+  --base-url <url>     the chat-completions endpoint base, e.g. https://api.openai.com/v1 or a local
+                        http://localhost:11434/v1 (ollama). '/chat/completions' is appended.
+  --llm-api-key-env <NAME>  env var holding the bearer token (default OPENAI_API_KEY). A keyless local
+                        endpoint needs no token — leave the var unset and no Authorization is sent.
 
 Seal (contract approval):
   default                     print the frozen contract and prompt for one of:
@@ -583,6 +614,8 @@ export async function parseArgs(
     sandbox: parseSandbox(flags),
     costTablePath: str(flags, 'cost-table'),
     configSources,
+    baseUrl: str(flags, 'base-url'),
+    llmApiKeyEnv: str(flags, 'llm-api-key-env') ?? 'OPENAI_API_KEY',
   };
 }
 
@@ -686,7 +719,8 @@ function parseHarness(value: string | undefined): HarnessChoice {
     value === 'codex' ||
     value === 'droid' ||
     value === 'pi' ||
-    value === 'fake'
+    value === 'fake' ||
+    value === 'goaly-code'
   ) {
     return value;
   }
@@ -695,13 +729,15 @@ function parseHarness(value: string | undefined): HarnessChoice {
   if (value === 'claude-code') {
     throw new UsageError(`unknown harness: claude-code (renamed — did you mean 'claude'?)`);
   }
-  throw new UsageError(`unknown harness: ${value} (expected claude | codex | droid | pi | fake)`);
+  throw new UsageError(`unknown harness: ${value} (expected claude | codex | droid | pi | goaly-code | fake)`);
 }
 
 function parseLlmProvider(value: string | undefined): LlmProviderChoice {
   if (value === undefined) return 'claude';
-  if (value === 'claude' || value === 'codex' || value === 'droid' || value === 'pi') return value;
-  throw new UsageError(`unknown llm provider: ${value} (expected claude | codex | droid | pi)`);
+  if (value === 'claude' || value === 'codex' || value === 'droid' || value === 'pi' || value === 'openai') {
+    return value;
+  }
+  throw new UsageError(`unknown llm provider: ${value} (expected claude | codex | droid | pi | openai)`);
 }
 
 /** Collect the model flags and validate them at the Zod seam (non-empty, fails closed). */
@@ -794,5 +830,7 @@ function baseArgs(
     sandbox: SandboxPolicy.parse({}),
     costTablePath: undefined,
     configSources: [],
+    baseUrl: undefined,
+    llmApiKeyEnv: 'OPENAI_API_KEY',
   };
 }

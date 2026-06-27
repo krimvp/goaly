@@ -89,11 +89,14 @@ src/
   verify/      verifier, ladder, deterministic, judge, approver, agent-approver   — seam #2/#3
   compile/     compiler, agent-compiler, required-tools, seal, seal-gates   — Phase 1 + freeze + Seal
   agent-cli/   codec, <tool>-codec, output, stream, estimate — one deep codec per CLI (seam-shared)
-  harness/     adapter, agent-cli-harness, claude-code, codex, droid — seam #1
+  harness/     adapter, agent-cli-harness, classify       — seam #1 (codec-backed adapter)
+  goaly-code/ harness, loop, tools, edit, fs-host, session-store, prompt — the NON-codec adapter (seam #1)
+  llm-client/  openai-client, schema                    — OpenAI-compatible HTTP transport (fetch + Zod)
   workspace/   workspace, git-workspace                 — harness-independent diff/run
   sandbox/     policy, launcher, bwrap, firejail, container, detect — opt-in OS isolation (seam)
   runlog/      runlog, file-runlog                      — write-ahead persistence + replay
-  llm/         provider, cli-provider                   — INTERNAL seam (judge/approver/compiler)
+  llm/         provider, agent-cli-provider, openai-provider — INTERNAL seam (judge/approver/compiler)
+  training/    trajectory, dataset, bench               — Slices 2–3: labeled-trajectory export + SFT dataset + eval bench
   cli/         args, compose, main                      — composition root + CLI
   testing/     fakes                                    — fakes for every seam
 ```
@@ -106,16 +109,31 @@ leaves behind frozen interfaces. Prove policy with fakes before spawning a subpr
 
 ## Adding a new harness
 
-A new harness is **one module** — an `AgentCliCodec` (`src/agent-cli/codec.ts`) holding all of one
-CLI's quirks in one place: its two argv dialects (`harnessArgs` write-mode + `readonlyArgs`
-read-only), its `fieldExtractor`/`streamExtractor`, and its `classify` status policy. It composes the
-shared agent-CLI core (`output.ts`: `parseAgentOutput` + a per-tool `FieldExtractor`; `flatExtractor`
-covers a flat envelope) and, for the standard status policy, the shared `classifyFlatRun`
-(`src/agent-cli/codec.ts`) — don't re-implement tolerant JSON/JSONL parsing or the subprocess dance
-(`runProcess` owns it). Register the codec by wiring the generic `AgentCliHarness` into `makeHarness`.
-See [`docs/adding-a-harness.md`](docs/adding-a-harness.md) for the full guide, and use the
-**`investigate-harness`** skill (`.claude/skills/investigate-harness/`) to probe an unfamiliar CLI
-and produce the field/flag/status mapping before you write the codec.
+There are **two adapter shapes** behind the one seam #1 (`HarnessAdapter`):
+
+**Codec-backed (wraps an external CLI).** A new CLI harness is **one module** — an `AgentCliCodec`
+(`src/agent-cli/codec.ts`) holding all of one CLI's quirks in one place: its two argv dialects
+(`harnessArgs` write-mode + `readonlyArgs` read-only), its `fieldExtractor`/`streamExtractor`, and its
+`classify` status policy. It composes the shared agent-CLI core (`output.ts`: `parseAgentOutput` + a
+per-tool `FieldExtractor`; `flatExtractor` covers a flat envelope) and, for the standard status
+policy, the shared `classifyFlatRun` (`src/agent-cli/codec.ts`) — don't re-implement tolerant
+JSON/JSONL parsing or the subprocess dance (`runProcess` owns it). Register the codec by wiring the
+generic `AgentCliHarness` into `makeHarness`. Use the **`investigate-harness`** skill
+(`.claude/skills/investigate-harness/`) to probe an unfamiliar CLI and produce the field/flag/status
+mapping before you write the codec.
+
+**SDK-native (no CLI — goaly is the agent).** `--harness goaly-code` (`src/goaly-code/`) is the first
+**non-codec** adapter: goaly runs its OWN tool-use loop (`loop.ts`) against an OpenAI-compatible
+endpoint via the shared HTTP transport (`src/llm-client/openai-client.ts`), with a minimal
+Zod-validated tool set (`tools.ts`), path-guarded file IO (`fs-host.ts`), a reliability-first
+`edit_file` (`edit.ts`), and resumable session persistence (`session-store.ts`). It is **purely
+additive** — the codec harnesses are byte-for-byte unchanged. The same transport backs the read-only
+`openai` LLM provider (`src/llm/openai-provider.ts`, `--llm-provider openai`). It must honor the same
+seam-#1 contract: never throw, always a typed `HarnessRunResult`, fail-closed everywhere. The
+untrusted exec is each `run_shell` call (sandboxed at the tool grain); file edits go through goaly's
+own path-guarded writers, never a subprocess.
+
+See [`docs/adding-a-harness.md`](docs/adding-a-harness.md) for both paths.
 
 A harness CLI can **optionally** also back the LLM workflow steps (compiler / judge / approver) via
 the separate, **read-only** `LlmProvider` seam — `AgentCliLlmProvider` consumes the **same codec**
