@@ -96,6 +96,7 @@ src/
   sandbox/     policy, launcher, bwrap, firejail, container, detect — opt-in OS isolation (seam)
   runlog/      runlog, file-runlog                      — write-ahead persistence + replay
   llm/         provider, agent-cli-provider, openai-provider — INTERNAL seam (judge/approver/compiler)
+  training/    trajectory, dataset, bench               — Slices 2–3: labeled-trajectory export + SFT dataset + eval bench
   cli/         args, compose, main                      — composition root + CLI
   testing/     fakes                                    — fakes for every seam
 ```

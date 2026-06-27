@@ -139,6 +139,34 @@ export {
 } from './goaly-code/session-store';
 export { GOALY_CODE_SYSTEM_PROMPT } from './goaly-code/prompt';
 
+// Training arc (Slices 2–3): export labeled trajectories from runs, assemble a rejection-sampling SFT
+// dataset, and the held-out eval bench. The ladder + approver are the label — for free.
+export {
+  exportRunTrajectory,
+  buildTrajectoryRecord,
+  lastSessionId,
+  type TrajectoryRecord,
+  type LadderOutcome,
+} from './training/trajectory';
+export {
+  selectPassing,
+  toSftExample,
+  toSftJsonl,
+  datasetStats,
+  type SftExample,
+  type SelectOptions,
+  type DatasetStats,
+} from './training/dataset';
+export {
+  BENCH_TASKS,
+  runBench,
+  summarizeBench,
+  type BenchTask,
+  type BenchResult,
+  type BenchSummary,
+  type RunTaskFn,
+} from './training/bench';
+
 // Seam #4 (real implementations) + concrete adapters/verifiers.
 export { SystemClock, type Clock } from './driver/clock';
 export { SystemBudgetMeter, type BudgetMeter } from './driver/budget';

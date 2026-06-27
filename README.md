@@ -835,6 +835,37 @@ await drive(deps, config, runId);
 const stream = await readStreamTranscript('.goaly', runId); // [{ phase, kind, …, ts }] | null
 ```
 
+## Training arc (experimental — the goaly-tuned model)
+
+`--harness goaly-code` exists so goaly can **own the inference path** and specialize a small model to
+its own loop, using the frozen verifier ladder + the independent approver as a free,
+reward-hacking-resistant training signal (a policy **cannot** win by weakening the bar — the contract
+is frozen and the approver is an independent key). The data pipeline (Slices 2–3) is shipped and
+embeddable:
+
+```ts
+import { exportRunTrajectory, toSftJsonl, BENCH_TASKS, runBench, summarizeBench } from 'goaly';
+
+// 1. Every goaly-code run is an automatically-LABELED trajectory: the conversation in our exact tool
+//    schema, tagged with its ladder/approver outcome (DONE = the two keys passed).
+const traj = await exportRunTrajectory({ stateDir: '.goaly', runId, sessionStore });
+
+// 2. Rejection-sample: keep only PASSED trajectories → an SFT dataset in goaly-code's tool schema.
+const sftJsonl = toSftJsonl(records, { maxIterations: 3 });
+
+// 3. A held-out eval bench compares harnesses / gates each new model (pass@1, iters, tokens).
+const summary = summarizeBench(await runBench(BENCH_TASKS, runTask));
+```
+
+**Status.** Slices 0–1 (the harness + transport) and the Slice 2–3 **data pipeline** (trajectory
+export, eval bench, rejection-sampling SFT assembly) are implemented and verified end-to-end against a
+real OpenAI-compatible endpoint. The remaining slices are infra-gated: **Slice 3 training** (feeding
+`sftJsonl` to a provider fine-tune API or a local LoRA), **Slice 4** (expert-iteration / RL using the
+ladder as reward), and **Slice 5** (a productionized, bench-gated `goaly-coder-vN` shipped as
+`--harness goaly-code --base-url <endpoint> --model goaly-coder-vN` — the harness code does not change,
+only the endpoint/model). See [`docs/adr/0008`](docs/adr/0008-goaly-code-harness.md) and
+[`docs/adr/0009`](docs/adr/0009-training-data-pipeline.md).
+
 ## License
 
 [MIT](LICENSE) © krimvp
