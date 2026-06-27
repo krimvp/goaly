@@ -99,7 +99,10 @@ export class GoalyCodeHarness implements HarnessAdapter {
 
     await this.#persist(id, loop.messages);
 
-    return HarnessRunResult.parse({
+    // Build the result; if any token field is somehow unparseable (defense-in-depth — the wire seam
+    // already drops non-finite usage), degrade to a token-less result rather than reject. The adapter
+    // must NEVER throw out of run() (invariant #4), even on a future accounting bug.
+    const full = HarnessRunResult.safeParse({
       output: loop.output,
       sessionId: id,
       status: loop.status,
@@ -107,6 +110,11 @@ export class GoalyCodeHarness implements HarnessAdapter {
       ...(loop.tokens.tokenSource !== undefined ? { tokenSource: loop.tokens.tokenSource } : {}),
       ...(loop.tokens.tokenBreakdown !== undefined ? { tokenBreakdown: loop.tokens.tokenBreakdown } : {}),
     });
+    if (full.success) return full.data;
+    this.#logger?.warn('goaly-code dropped an unparseable token count from the run result', {
+      sessionId: id,
+    });
+    return HarnessRunResult.parse({ output: loop.output, sessionId: id, status: loop.status });
   }
 
   /** Load prior history for a resumed session, or start fresh `[system, user]`. Never throws. */

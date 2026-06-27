@@ -77,4 +77,34 @@ describe('applyEdit', () => {
       expect(r.ok && r.strategy).toBe('exact');
     });
   });
+
+  describe('substring-vs-line uniqueness (review finding [3])', () => {
+    it('replaces a line-unique old_string that is a substring of a deeper-indented line', () => {
+      // "  return x;" occurs as a raw substring of "    return x;" too → naive counting = 2.
+      const r = applyEdit('  return x;\n    return x;', '  return x;', '  return y;');
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.strategy).toBe('exact');
+        expect(r.content).toBe('  return y;\n    return x;'); // only the whole-line match changed
+      }
+    });
+
+    it('still fails closed when there is no UNIQUE whole-line block (truly ambiguous)', () => {
+      const r = applyEdit('foo\nfoo\n', 'foo', 'bar');
+      expect(r.ok).toBe(false); // two identical whole lines → genuinely not unique
+    });
+  });
+
+  describe('line-ending preservation (review finding [5])', () => {
+    it('keeps CRLF endings when the whitespace branch splices new lines into a CRLF file', () => {
+      const content = 'a\r\nreturn x;\r\nb\r\n'; // CRLF; line 2 has no indent
+      const r = applyEdit(content, '    return x;', 'return y;'); // over-indented → whitespace branch
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.strategy).toBe('whitespace');
+        expect(r.content).toContain('return y;\r\n'); // inserted line carries CRLF, not a bare LF
+        expect(r.content).not.toContain('return y;\nb'); // no LF-only smear
+      }
+    });
+  });
 });

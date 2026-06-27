@@ -57,16 +57,27 @@ export const ChatRequest = z.object({
 });
 export type ChatRequest = z.infer<typeof ChatRequest>;
 
-/** Provider usage block. Tolerant: any field may be absent; extra fields pass through. */
+/**
+ * A reported token count: a finite, non-negative number, or DROPPED to `undefined` on anything else
+ * (a hostile/buggy server sending `1e400` → `Infinity`, a `NaN`, a negative). `.catch(undefined)`
+ * fails OPEN to "unknown" at the seam rather than failing the whole response — so a bad usage field
+ * degrades the spend report to unknown (never a silent zero) and can never turn a completed turn into
+ * a crashed one. Crucially it also means a non-finite count can never reach the `.int()` run-result
+ * schema and make the adapter reject (invariant #4).
+ */
+const usageCount = z.number().finite().nonnegative().optional().catch(undefined);
+
+/** Provider usage block. Tolerant: any field may be absent/garbage; extra fields pass through. */
 export const ChatUsage = z
   .object({
-    prompt_tokens: z.number().nonnegative().optional(),
-    completion_tokens: z.number().nonnegative().optional(),
-    total_tokens: z.number().nonnegative().optional(),
+    prompt_tokens: usageCount,
+    completion_tokens: usageCount,
+    total_tokens: usageCount,
     prompt_tokens_details: z
-      .object({ cached_tokens: z.number().nonnegative().optional() })
+      .object({ cached_tokens: usageCount })
       .passthrough()
-      .optional(),
+      .optional()
+      .catch(undefined),
   })
   .passthrough();
 export type ChatUsage = z.infer<typeof ChatUsage>;

@@ -139,6 +139,16 @@ describe('OpenAiClient', () => {
     expect(result.usage).toBeUndefined();
   });
 
+  it('drops a non-finite reported usage count (1e400 → Infinity) — never returns a non-finite total', async () => {
+    // Raw JSON body so the count survives as Infinity (JSON.stringify would coerce it to null).
+    const { fetch } = fakeFetch([
+      { kind: 'res', status: 200, body: '{"choices":[{"message":{"content":"x"}}],"usage":{"total_tokens":1e400,"completion_tokens":5}}' },
+    ]);
+    const result = await client(fetch).chat(REQ);
+    expect(result.content).toBe('x');
+    expect(Number.isFinite(result.usage?.total ?? 0)).toBe(true); // dropped total → falls back to breakdown
+  });
+
   it('aborts on timeout and surfaces a fail-closed error', async () => {
     // A fetch that respects the abort signal: rejects when aborted.
     const slowFetch: FetchLike = (_url, init) =>

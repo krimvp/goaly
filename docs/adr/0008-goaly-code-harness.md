@@ -62,8 +62,11 @@ own process making the API call, plus **many** shell subprocesses (one per `run_
 the inference HTTP call is made by goaly itself (un-jailed); **file edits go through goaly's own
 path-guarded writers, not a subprocess**; only `run_shell` is jailed, with the **same**
 `SandboxLauncher` the codec harnesses use, at a *finer* grain. The composition root injects the
-sandbox-wrapped shell into the host (keeping the harness network profile + full env); everything else
-in `src/goaly-code/` is testable with a fake shell.
+sandbox-wrapped shell into the host (harness network profile, but a **credential-scrubbed** env —
+`run_shell` does not make the inference call, so unlike a CLI harness it never needs API keys; this is
+strictly safer than the codec seam and matches the verifier default). The path guard resolves symlinks
+on the deepest existing ancestor and re-checks containment, so a symlinked component cannot lead a
+read/write/edit outside the workspace. Everything else in `src/goaly-code/` is testable with a fake shell.
 
 ### Edit reliability is the make-or-break of *quality* (not safety)
 `edit_file` is where naive agents thrash. `edit.ts` is a pure function with a deliberate ladder —

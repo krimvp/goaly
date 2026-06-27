@@ -355,8 +355,9 @@ export type AgentCli = 'claude' | 'codex' | 'droid' | 'pi' | 'myagent';
 case 'myagent': return myagentCodec;
 ```
 
-`HarnessChoice` (`= AgentCli | 'fake'`) and `LlmProviderChoice` (`= AgentCli`) pick up the new value
-from the union automatically; allow it in `parseHarness`/`parseLlmProvider` (`src/cli/args.ts`). That's
+`HarnessChoice` (`= AgentCli | 'fake' | 'goaly-code'`) and `LlmProviderChoice` (`= AgentCli | 'openai'`)
+pick up the new value from the union automatically; allow it in `parseHarness`/`parseLlmProvider`
+(`src/cli/args.ts`). That's
 the whole write-role wiring — `makeHarness` is already generic (`new AgentCliHarness(codecFor(choice),
 opts)`), and `opts` carries `{ model?, timeoutMs?, idleTimeoutMs?, cwd? }`.
 

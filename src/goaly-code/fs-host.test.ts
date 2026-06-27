@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { NodeToolHost, type ShellExec } from './fs-host';
@@ -97,6 +97,49 @@ describe('NodeToolHost (path-guarded fs + injected shell)', () => {
     });
     it('refuses to write outside the workspace', async () => {
       await expect(host.writeFile('../../evil.txt', 'x')).rejects.toThrow(/escapes the workspace/);
+    });
+  });
+
+  describe('symlink escape guard (review findings [2]/[7])', () => {
+    it('refuses to read THROUGH a symlink that points outside the workspace', async () => {
+      const outside = await mkdtemp(path.join(os.tmpdir(), 'goaly-outside-'));
+      try {
+        await writeFile(path.join(outside, 'secret.txt'), 'top secret');
+        await symlink(path.join(outside, 'secret.txt'), path.join(root, 'link.txt'));
+        await expect(host.readFile('link.txt')).rejects.toThrow(/symlink/);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('refuses to write THROUGH a symlinked directory that escapes the workspace', async () => {
+      const outside = await mkdtemp(path.join(os.tmpdir(), 'goaly-outside-'));
+      try {
+        await symlink(outside, path.join(root, 'out')); // root/out -> /outside
+        await expect(host.writeFile('out/evil.txt', 'x')).rejects.toThrow(/symlink/);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('grep ReDoS guard (review finding [4])', () => {
+    it('refuses a catastrophic-backtracking pattern instead of hanging', async () => {
+      await host.writeFile('a.txt', 'aaaaaaaaaaaaaaaaaaaa!');
+      const out = await host.grep('(a+)+$', undefined);
+      expect(out).toMatch(/catastrophic backtracking/);
+    });
+
+    it('still accepts a normal pattern', async () => {
+      await host.writeFile('a.txt', 'hello world');
+      expect(await host.grep('h.llo', undefined)).toMatch(/a\.txt:1:/);
+    });
+  });
+
+  describe('read_file range guard (review finding [6])', () => {
+    it('explains when start_line is after end_line instead of returning empty', async () => {
+      await host.writeFile('f.txt', 'l1\nl2\nl3\nl4\nl5');
+      expect(await host.readFile('f.txt', { startLine: 5, endLine: 2 })).toMatch(/after end_line/);
     });
   });
 

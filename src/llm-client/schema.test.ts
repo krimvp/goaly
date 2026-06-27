@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ChatResponse, ChatMessage, usageToBreakdown } from './schema';
+import { ChatResponse, ChatMessage, ChatUsage, usageToBreakdown } from './schema';
 
 describe('ChatResponse parsing (the wire seam, invariant #6)', () => {
   it('accepts a plain text completion with usage', () => {
@@ -79,5 +79,22 @@ describe('usageToBreakdown', () => {
     const b = usageToBreakdown({ prompt_tokens: 10, prompt_tokens_details: { cached_tokens: 40 } });
     expect(b.input).toBe(0);
     expect(b.cacheRead).toBe(40);
+  });
+});
+
+describe('non-finite usage (review finding [1] — must never reach the .int() run-result schema)', () => {
+  it('drops a non-finite token count to undefined (fail-open to unknown)', () => {
+    const u = ChatUsage.parse({ total_tokens: Infinity, completion_tokens: 5 });
+    expect(u.total_tokens).toBeUndefined();
+    expect(u.completion_tokens).toBe(5);
+  });
+
+  it('parses a response whose usage carries a non-finite count without failing the whole response', () => {
+    const parsed = ChatResponse.safeParse({
+      choices: [{ message: { content: 'x' } }],
+      usage: { total_tokens: Infinity, completion_tokens: 5 },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.usage?.total_tokens).toBeUndefined();
   });
 });

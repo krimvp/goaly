@@ -156,4 +156,13 @@ describe('GoalyCodeHarness sessions', () => {
     expect(r.tokenSource).toBe('reported');
     expect(r.tokenBreakdown).toEqual({ input: 30, output: 12 });
   });
+
+  it('never rejects on a non-finite reported token count, dropping it (invariant #4, finding [1])', async () => {
+    const r = await makeHarness([
+      finishTurn('done', { total: Infinity, breakdown: { input: Infinity, output: 5 } }),
+    ]).run('go');
+    expect(r.status).toBe('completed');
+    expect(r.output).toBe('done');
+    expect(r.tokensUsed).toBeUndefined(); // bad count degraded to "unknown", not a thrown ZodError
+  });
 });

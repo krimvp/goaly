@@ -40,7 +40,7 @@ import { NodeToolHost, type ShellExec } from '../goaly-code/fs-host';
 import { FileSessionStore } from '../goaly-code/session-store';
 import { codecFor, type AgentCli } from '../agent-cli/registry';
 import { runProcess } from '../util/spawn';
-import { augmentToolPath } from '../workspace/scrub-env';
+import { augmentToolPath, scrubEnv } from '../workspace/scrub-env';
 import { resolveProfile } from '../sandbox';
 import type { ResolvedModels } from './models';
 import type { AgentEventSink, PhasedStreamSink, StreamPhase } from '../agent-cli/stream';
@@ -601,7 +601,11 @@ function goalyCodeShellExec(opts: {
 }): ShellExec {
   const budget = opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs, killGroup: true } : { killGroup: true };
   return async (command) => {
-    const env = augmentToolPath(process.env);
+    // Scrub credentials: run_shell runs model-authored commands but, unlike a CLI harness, it does
+    // NOT make the inference call (goaly does, un-jailed), so it never needs API keys. Deny it the
+    // parent's secrets (matches the verifier seam); still augment PATH so an agent-installed toolchain
+    // is discoverable.
+    const env = augmentToolPath(scrubEnv(process.env));
     if (opts.launcher.identity) {
       const r = await runProcess(command, [], { cwd: opts.root, shell: true, env, ...budget });
       return { stdout: r.stdout, stderr: r.stderr, code: r.code, timedOut: r.timedOut };
