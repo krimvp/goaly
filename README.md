@@ -340,7 +340,7 @@ env / pi's config, the same boundary `claude` and `codex` already assume.
 
 ```bash
 # Easiest: just give it a goal. The LLM authors the verification (--generate) and checks the work,
-# using Claude (the claude-code harness + claude LLM provider) — all defaults, no flags. The goal is
+# using Claude (the claude harness + claude LLM provider) — all defaults, no flags. The goal is
 # a positional and `run` is optional. A human approves the frozen contract once at Seal:
 goaly "make the parser handle empty input"
 
@@ -382,7 +382,7 @@ goaly run --goal "..." --generate --autonomous --verify-dir test \
              --max-compile-retries 3 --stuck-no-diff false
 
 # Pick a model for the harness, and a different model for the LLM steps (judge/approver/compiler):
-goaly run --goal "..." --verify-cmd "npm test" --harness claude-code \
+goaly run --goal "..." --verify-cmd "npm test" --harness claude \
              --model claude-opus-4-8 --llm-model claude-sonnet-4-6
 
 # Run the LLM steps on a different CLI entirely (kept read-only so they never touch the tree):
@@ -661,8 +661,8 @@ reasoning, per-turn token usage — are rendered to **stderr** as they happen, e
 (`[agent]` / `[compile]` / `[judge]` / `[approve]`). Every tool maps its native stream onto one
 **canonical, tool-neutral event taxonomy** (`AgentStreamEvent`: `session` / `message` / `reasoning`
 / `tool_use` / `tool_result` / `usage` / `done`), Zod-validated at the seam, so the live view is
-uniform across claude-code, codex, droid, and pi (codex via its `--json` JSONL and pi via its
-`--mode json` JSONL; claude-code and droid via `--output-format stream-json`). It's **independent of
+uniform across claude, codex, droid, and pi (codex via its `--json` JSONL and pi via its
+`--mode json` JSONL; claude and droid via `--output-format stream-json`). It's **independent of
 `--log-level`** (which separately routes
 the same events into the diagnostics file at `debug`), and embedders can subscribe programmatically
 via `composeDeps({ onStreamEvent })` / `DriverDeps.onStreamEvent`. It is **pure observability**: the
@@ -676,7 +676,7 @@ line, the `AgentStreamEvent` shape verbatim. Where `--stream` is the live view a
 debug` folds the events into the human diagnostics file, the transcript is the **programmatic
 substrate**: a full-fidelity record any consumer (a UI, a cost report, an analyzer) can replay
 **offline without re-running the agent**, independent of log level or rotation. Because the events
-are already tool-neutral, the artifact is **identical in shape across claude-code / codex / droid /
+are already tool-neutral, the artifact is **identical in shape across claude / codex / droid /
 pi** and future harnesses — that's the point. It is **uncapped** (never size-rotated — a dropped `usage`
 or `tool` line would corrupt an offline cost report), and read back with the exported
 `readStreamTranscript(stateDir, runId)`, which Zod-validates each line and **drops** any corrupt one.
@@ -731,7 +731,7 @@ The codec is consumed by **both** roles a CLI can play, from one source of truth
 `HarnessAdapter` (seam #1) drives the agent, and the read-only `AgentCliLlmProvider` (the
 judge/approver/compiler LLM role) reuses the same extractors and the `readonlyArgs` dialect — so
 there is no `llm → harness` coupling. The generic `AgentCliHarness` is all the seam-#1 wiring a codec
-needs; registering a harness is one codec module + one line in `makeHarness`. `diffHash` and verifier
+needs; registering a harness is one codec module + one line in `codecFor`. `diffHash` and verifier
 execution live in the shared `Workspace`, not the codec — so stuck-detection and verification work on
 any harness for free. The shared `agent-cli` core owns the tolerant final-result parse, the streaming
 `StreamTap`, and the flat status policy (`classifyFlatRun`), and the shared `runProcess` owns the one

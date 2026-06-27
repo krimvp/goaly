@@ -1,13 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { SessionId } from '../domain/ids';
 import { HarnessRunResult } from '../domain/events';
-import { ClaudeCodeAdapter, parseClaudeOutput, type ExecFn } from './claude-code';
+import { AgentCliHarness } from '../harness/agent-cli-harness';
+import { claudeCodec } from './claude-codec';
+import { type AgentExecFn } from './codec';
 
 /** Build a fake exec that records its args and returns a canned process result. */
 function fakeExec(
   result: { stdout: string; stderr: string; code: number; timedOut?: boolean },
   capture?: { args: string[][]; prompts: string[] },
-): ExecFn {
+): AgentExecFn {
   return async (args, input) => {
     capture?.args.push(args);
     capture?.prompts.push(input.prompt);
@@ -15,7 +17,7 @@ function fakeExec(
   };
 }
 
-describe('parseClaudeOutput', () => {
+describe('claudeCodec.parse', () => {
   it('parses a whole-stdout JSON object', () => {
     const json = JSON.stringify({
       result: 'hello world',
@@ -23,7 +25,7 @@ describe('parseClaudeOutput', () => {
       usage: { input_tokens: 10, output_tokens: 5 },
     });
 
-    const parsed = parseClaudeOutput(json);
+    const parsed = claudeCodec.parse(json);
 
     expect(parsed).toEqual({
       text: 'hello world',
@@ -44,7 +46,7 @@ describe('parseClaudeOutput', () => {
         cache_creation_input_tokens: 3_273,
       },
     });
-    const parsed = parseClaudeOutput(json);
+    const parsed = claudeCodec.parse(json);
     expect(parsed?.tokens).toBe(21_061);
     expect(parsed?.breakdown).toEqual({
       input: 3,
@@ -60,7 +62,7 @@ describe('parseClaudeOutput', () => {
       usage: { input_tokens: 10, output_tokens: 5, total_tokens: 42 },
     });
 
-    expect(parseClaudeOutput(json)?.tokens).toBe(42);
+    expect(claudeCodec.parse(json)?.tokens).toBe(42);
   });
 
   it('parses JSON surrounded by log/noise lines', () => {
@@ -71,7 +73,7 @@ describe('parseClaudeOutput', () => {
       '[info] done',
     ].join('\n');
 
-    const parsed = parseClaudeOutput(stdout);
+    const parsed = claudeCodec.parse(stdout);
 
     expect(parsed).toEqual({ text: 'the answer', sessionId: 'sess-9' });
   });
@@ -83,21 +85,21 @@ describe('parseClaudeOutput', () => {
       JSON.stringify({ result: 'final', session_id: 'sess-1', usage: { total_tokens: 7 } }),
     ].join('\n');
 
-    const parsed = parseClaudeOutput(stdout);
+    const parsed = claudeCodec.parse(stdout);
 
     expect(parsed).toEqual({ text: 'final', sessionId: 'sess-1', tokens: 7 });
   });
 
   it('returns null when there is no JSON object carrying text', () => {
-    expect(parseClaudeOutput('just plain text, no json')).toBeNull();
-    expect(parseClaudeOutput('')).toBeNull();
-    expect(parseClaudeOutput(JSON.stringify({ session_id: 'x' }))).toBeNull();
+    expect(claudeCodec.parse('just plain text, no json')).toBeNull();
+    expect(claudeCodec.parse('')).toBeNull();
+    expect(claudeCodec.parse(JSON.stringify({ session_id: 'x' }))).toBeNull();
   });
 });
 
-describe('ClaudeCodeAdapter', () => {
+describe('AgentCliHarness(claudeCodec)', () => {
   it('exposes the harness name', () => {
-    expect(new ClaudeCodeAdapter().name).toBe('claude-code');
+    expect(new AgentCliHarness(claudeCodec).name).toBe('claude');
   });
 
   it('returns completed with parsed session id and tokens on exit 0 + valid json', async () => {
@@ -114,7 +116,7 @@ describe('ClaudeCodeAdapter', () => {
       },
       capture,
     );
-    const adapter = new ClaudeCodeAdapter({ exec });
+    const adapter = new AgentCliHarness(claudeCodec, { exec });
 
     const res = await adapter.run('do the thing');
 
@@ -136,7 +138,7 @@ describe('ClaudeCodeAdapter', () => {
       { stdout: JSON.stringify({ result: 'ok', session_id: 'sess-xyz' }), stderr: '', code: 0 },
       capture,
     );
-    const adapter = new ClaudeCodeAdapter({ exec });
+    const adapter = new AgentCliHarness(claudeCodec, { exec });
 
     await adapter.run('continue', SessionId.parse('sess-prev'));
 
@@ -158,7 +160,7 @@ describe('ClaudeCodeAdapter', () => {
       { stdout: JSON.stringify({ result: 'ok', session_id: 'sess' }), stderr: '', code: 0 },
       capture,
     );
-    const adapter = new ClaudeCodeAdapter({ exec, model: 'opus-x' });
+    const adapter = new AgentCliHarness(claudeCodec, { exec, model: 'opus-x' });
 
     await adapter.run('do it');
     expect(capture.args[0]).toEqual([
@@ -177,7 +179,7 @@ describe('ClaudeCodeAdapter', () => {
       'warning: experimental flag',
       JSON.stringify({ result: 'parsed anyway', session_id: 'sess-77' }),
     ].join('\n');
-    const adapter = new ClaudeCodeAdapter({
+    const adapter = new AgentCliHarness(claudeCodec, {
       exec: fakeExec({ stdout, stderr: '', code: 0 }),
     });
 
@@ -189,7 +191,7 @@ describe('ClaudeCodeAdapter', () => {
   });
 
   it('returns crashed (but a valid RunResult) on a non-zero exit code', async () => {
-    const adapter = new ClaudeCodeAdapter({
+    const adapter = new AgentCliHarness(claudeCodec, {
       exec: fakeExec({ stdout: '', stderr: 'boom: cli failed', code: 1 }),
     });
 
@@ -203,7 +205,7 @@ describe('ClaudeCodeAdapter', () => {
   });
 
   it('falls back to claude-unknown when crashing with no session anywhere', async () => {
-    const adapter = new ClaudeCodeAdapter({
+    const adapter = new AgentCliHarness(claudeCodec, {
       exec: fakeExec({ stdout: 'garbage', stderr: '', code: 1 }),
     });
 
@@ -214,7 +216,7 @@ describe('ClaudeCodeAdapter', () => {
   });
 
   it('returns timeout when the exec reports timedOut', async () => {
-    const adapter = new ClaudeCodeAdapter({
+    const adapter = new AgentCliHarness(claudeCodec, {
       exec: fakeExec({ stdout: '', stderr: 'killed', code: 137, timedOut: true }),
     });
 
@@ -226,7 +228,7 @@ describe('ClaudeCodeAdapter', () => {
   });
 
   it('returns truncated when exit 0 but stdout has no parseable json result', async () => {
-    const adapter = new ClaudeCodeAdapter({
+    const adapter = new AgentCliHarness(claudeCodec, {
       exec: fakeExec({ stdout: 'partial output, connection drop', stderr: '', code: 0 }),
     });
 
@@ -237,7 +239,7 @@ describe('ClaudeCodeAdapter', () => {
   });
 
   it('returns truncated when the json result is empty', async () => {
-    const adapter = new ClaudeCodeAdapter({
+    const adapter = new AgentCliHarness(claudeCodec, {
       exec: fakeExec({
         stdout: JSON.stringify({ result: '', session_id: 'sess-e' }),
         stderr: '',
@@ -252,10 +254,10 @@ describe('ClaudeCodeAdapter', () => {
   });
 
   it('never throws even if the injected exec rejects', async () => {
-    const exec: ExecFn = async () => {
+    const exec: AgentExecFn = async () => {
       throw new Error('exec exploded');
     };
-    const adapter = new ClaudeCodeAdapter({ exec });
+    const adapter = new AgentCliHarness(claudeCodec, { exec });
 
     const res = await adapter.run('prompt');
 

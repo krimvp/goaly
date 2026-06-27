@@ -12,7 +12,7 @@ import type { ResolvedModels } from './models';
 /** The llm-provider family whose model vendor matches a given harness CLI. */
 function harnessFamily(harness: HarnessChoice): LlmProviderChoice | undefined {
   switch (harness) {
-    case 'claude-code':
+    case 'claude':
       return 'claude';
     case 'codex':
       return 'codex';

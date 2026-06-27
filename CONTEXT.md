@@ -27,6 +27,13 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
   agent; the orchestrator.
 - **Adapter** — the one-method `run(prompt, sessionId?)` wrapper over a harness. _avoid:_ a
   place where verification or diffing happens (those live in the Workspace).
+- **Codec** (`AgentCliCodec`) — one deep module per coding-agent CLI holding all of its quirks in one
+  place: its two argv dialects (`harnessArgs` write-mode + `readonlyArgs` read-only), its
+  `fieldExtractor`/`streamExtractor`, its `promptOnStdin` flag, and its `classify` status policy. The
+  single `codecFor(cli)` registry is the **one** name→codec map; **both** roles a CLI plays — the
+  write-role Adapter (`AgentCliHarness`) and the read-only `LlmProvider` (`AgentCliLlmProvider`) —
+  resolve through it, so a new CLI is one codec module + one registry entry. _avoid:_ the Adapter (a
+  codec is what the generic adapter wraps, not a second adapter); a per-CLI wrapper in `compose`.
 - **Driver** — the imperative effect interpreter: performs Commands, feeds Events back,
   persists write-ahead. The only thing that touches a clock, budget, process, or disk.
   _avoid:_ the place where policy lives.

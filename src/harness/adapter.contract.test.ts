@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { ClaudeCodeAdapter } from './claude-code';
-import { CodexAdapter } from './codex';
-import { DroidAdapter } from './droid';
-import { PiAdapter } from './pi';
+import { AgentCliHarness } from './agent-cli-harness';
+import { claudeCodec } from '../agent-cli/claude-codec';
+import { codexCodec } from '../agent-cli/codex-codec';
+import { droidCodec } from '../agent-cli/droid-codec';
+import { piCodec } from '../agent-cli/pi-codec';
 import type { HarnessAdapter } from './adapter';
 import { HarnessRunResult } from '../domain/events';
 import { SessionId } from '../domain/ids';
@@ -71,10 +72,10 @@ function execFor(
 }
 
 const adapters: Array<{ name: string; make: (scenario: string) => HarnessAdapter }> = [
-  { name: 'claude-code', make: (s) => new ClaudeCodeAdapter({ exec: execFor('claude', s) }) },
-  { name: 'codex', make: (s) => new CodexAdapter({ exec: execFor('codex', s) }) },
-  { name: 'droid', make: (s) => new DroidAdapter({ exec: execFor('droid', s) }) },
-  { name: 'pi', make: (s) => new PiAdapter({ exec: execFor('pi', s) }) },
+  { name: 'claude', make: (s) => new AgentCliHarness(claudeCodec, { exec: execFor('claude', s) }) },
+  { name: 'codex', make: (s) => new AgentCliHarness(codexCodec, { exec: execFor('codex', s) }) },
+  { name: 'droid', make: (s) => new AgentCliHarness(droidCodec, { exec: execFor('droid', s) }) },
+  { name: 'pi', make: (s) => new AgentCliHarness(piCodec, { exec: execFor('pi', s) }) },
 ];
 
 const scenarios = ['success', 'nonzero', 'garbage', 'timeout', 'throw'];

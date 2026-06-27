@@ -124,7 +124,7 @@ import { parseAgentOutput, flatExtractor, type FieldExtractor } from './output';
 // If your envelope is FLAT (text under result/text/response, session under session_id/sessionId,
 // tokens in a `usage` block — input/output AND cache_read/cache_creation are read for you) you
 // don't write one at all — reuse the shared factory:
-const fieldExtractor = flatExtractor();                  // claude-code & droid use exactly this
+const fieldExtractor = flatExtractor();                  // claude & droid use exactly this
 // droid only adds a soft-error flag: flatExtractor({ errorKey: 'is_error' })
 
 // Write a CUSTOM extractor only if your shapes are nested (see `codexExtractor` in codex-codec.ts,
@@ -142,7 +142,7 @@ call what counts as "no text"). `parseAgentOutput` returns `null` when nothing u
 
 `classify` turns a finished process into a Zod-parsed `HarnessRunResult`. For the standard policy,
 delegate to the shared `classifyFlatRun({ parsed, code, stderr, timedOut, sessionId, unknownSession,
-estimator? })` (from `src/agent-cli/codec.ts`, used by claude-code **and** droid). The optional
+estimator? })` (from `src/agent-cli/codec.ts`, used by claude **and** droid). The optional
 `estimator` (issue #24) is the `StreamTokenEstimator` `runCodecHarness` threads in when the run
 streamed: when the parsed envelope carries **no** `usage`, `classifyFlatRun` falls back to its local
 estimate and stamps `tokenSource: 'estimated'` (vs `'reported'` for a real count). A non-streaming run
@@ -211,7 +211,7 @@ a throw degrades to "no events for this line" (fail-closed; observability never 
 import { sdkStreamExtractor, flatStreamExtractor, type StreamEventExtractor } from './stream';
 
 // If your tool emits the ANTHROPIC AGENT-SDK stream-json envelope (system/assistant/user/result
-// events) you don't write one at all — reuse the shared factory (claude-code & droid use exactly this):
+// events) you don't write one at all — reuse the shared factory (claude & droid use exactly this):
 const streamExtractor = sdkStreamExtractor();                  // droid adds { errorKey: 'is_error' }
 
 // If your tool only emits a single FINAL result object, degrade with the flat factory
@@ -227,7 +227,7 @@ const streamExtractor: StreamEventExtractor = (obj) => { /* ...map one line... *
 You don't wire the `StreamTap` yourself — `runCodecHarness` builds it from `codec.streamExtractor`
 whenever the caller passes `onEvent`, feeds it each stdout chunk, `end()`s it, and tees it into the
 issue-#24 token estimator. Your only streaming-aware choice is in `harnessArgs`/`readonlyArgs`: when a
-CLI's stream mode is a *different flag* (claude-code & droid switch `--output-format json` →
+CLI's stream mode is a *different flag* (claude & droid switch `--output-format json` →
 `stream-json` when streaming; codex's `--json` is already a stream), branch on the `stream` parameter.
 The **final-result parse is unchanged** — `fieldExtractor` still recovers the same `output` from the
 stream's closing line, so a non-streaming caller sees byte-identical behavior. See
@@ -310,19 +310,25 @@ worked example, including the `--continue` headless-resume pattern (a tool with 
 and a `--tools`-based autonomy split (write role keeps `edit`/`write` but not `bash`, so it can't
 `git commit` and empty the diff; the read-only role drops both).
 
-## Register it (two tiny edits)
+## Register it (one map + the parsers)
+
+There is **one** name→codec map, `codecFor` in `src/agent-cli/registry.ts`. Both roles a CLI can play
+resolve through it — the write-role `AgentCliHarness(codecFor(choice))`, the sandbox exec, and the
+read-only `AgentCliLlmProvider({ codec: codecFor(choice) })` — so the codec is registered in exactly
+one place and the harness and LLM-provider paths can never drift.
 
 ```ts
-// src/cli/args.ts — add the literal to the choice union + parser
-export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'pi' | 'fake' | 'myagent';
-// ...allow it in parseHarness(...)
-
-// src/cli/compose.ts — wire your codec into makeHarness(choice, model, timeoutMs?, idleTimeoutMs?)
-// via the generic adapter. `opts` already carries { model?, timeoutMs?, idleTimeoutMs?, cwd? }, so
-// just pass it through:
-import { myagentCodec } from '../agent-cli/myagent-codec';
-case 'myagent': return new AgentCliHarness(myagentCodec, opts);
+// src/agent-cli/registry.ts — add the literal to AgentCli + one case to codecFor
+import { myagentCodec } from './myagent-codec';
+export type AgentCli = 'claude' | 'codex' | 'droid' | 'pi' | 'myagent';
+// ...inside codecFor(cli):
+case 'myagent': return myagentCodec;
 ```
+
+`HarnessChoice` (`= AgentCli | 'fake'`) and `LlmProviderChoice` (`= AgentCli`) pick up the new value
+from the union automatically; allow it in `parseHarness`/`parseLlmProvider` (`src/cli/args.ts`). That's
+the whole write-role wiring — `makeHarness` is already generic (`new AgentCliHarness(codecFor(choice),
+opts)`), and `opts` carries `{ model?, timeoutMs?, idleTimeoutMs?, cwd? }`.
 
 Optionally export `myagentCodec` from `src/index.ts` for embedders.
 
@@ -356,30 +362,20 @@ same `usage` block your `FieldExtractor` already reads (cache buckets included);
 **estimates** the spend from the streamed turns whenever the CLI reports no usage (issue #24) — all
 internal. Surfacing nothing is still fine — a missing count degrades to "unknown", never a crash.
 
-`AgentCliLlmProvider` (`src/llm/agent-cli-provider.ts`) does the plumbing — build a read-only argv,
-exec, parse with your extractor via the same shared `parseAgentOutput`, return `{text, tokensUsed?}`
-or fail closed. The registration just hands it your codec's pieces:
+`AgentCliLlmProvider` (`src/llm/agent-cli-provider.ts`) does the plumbing — it takes your **whole
+codec** and builds the read-only argv (`codec.readonlyArgs`), delivers the prompt on stdin or argv
+per `codec.promptOnStdin`, parses with `codec.fieldExtractor` via the same shared `parseAgentOutput`,
+streams via `codec.streamExtractor`, and returns `{text, tokensUsed?}` or **fails closed** (throws on
+empty/unparseable output, invariant #4). Because it is driven entirely by the codec, **there is no
+per-provider registration** — `makeLlmProvider` is generic:
 
 ```ts
-// src/cli/args.ts — add the literal to the provider union + parser
-export type LlmProviderChoice = 'claude' | 'codex' | 'droid' | 'pi' | 'myagent';
-// ...allow it in parseLlmProvider(...)
-
-// src/cli/compose.ts — a read-only argv builder (delegating to the codec) + a makeLlmProvider() case
-export function myagentCompletionArgs(prompt: string, model: string | undefined): string[] {
-  return myagentCodec.readonlyArgs({ prompt, model, stream: false });
-}
-case 'myagent':
-  return new AgentCliLlmProvider({
-    name: myagentCodec.name,
-    command: myagentCodec.command,
-    extractor: myagentCodec.fieldExtractor,       // the SAME field mapping the harness role uses
-    buildArgs: (prompt) => myagentCompletionArgs(prompt, model),
-    // Streaming (issue #23) — the LLM steps stream too, reusing the SAME stream mapping. The sink is
-    // wired here at CONSTRUCTION (not via complete()) so the Verifier/Approver seams stay clean:
-    ...(onEvent !== undefined ? { onEvent, streamExtractor: myagentCodec.streamExtractor } : {}),
-  });
+// src/cli/compose.ts — ALREADY generic; no edit needed when you add a CLI:
+return new AgentCliLlmProvider({ codec: codecFor(choice), /* model, timeoutMs, onEvent */ });
 ```
+
+So once your codec is in `codecFor` (above) and the value is in the `AgentCli` union + parsers, the
+LLM-provider role works automatically — provided your `readonlyArgs` is genuinely read-only.
 
 **The read-only invocation is mandatory.** Find the flag that forbids edits: codex uses
 `--sandbox read-only`; droid's `exec` is read-only *unless* you pass `--auto`, so its `readonlyArgs`
@@ -396,12 +392,12 @@ applies automatically — your provider just receives a `model` string or `undef
 you pass, or the cascade may hand a name from one tool's namespace to another (`claude --model
 <a-codex-model>`).
 
-**Test the provider** by injecting a fake `exec` into `AgentCliLlmProvider` (see
-`src/llm/agent-cli-provider.test.ts`): assert it returns your parsed `text` (and `tokensUsed` when
-the `usage` block is present), that the argv carries your read-only flag (and `--model` when set),
-and that hostile/empty output **throws** (fail closed). Unit-test your `*CompletionArgs` builder
-directly (see `src/cli/compose.test.ts`), and your codec's argv dialects directly (see
-`src/agent-cli/codec.test.ts`).
+**Test the provider** by constructing `new AgentCliLlmProvider({ codec: myagentCodec, exec })` with a
+fake `exec` (see `src/llm/agent-cli-provider.test.ts`): assert it returns your parsed `text` (and
+`tokensUsed` when the `usage` block is present), that the argv carries your read-only flag (and
+`--model` when set), that the prompt rides on stdin or argv per `promptOnStdin`, and that
+hostile/empty output **throws** (fail closed). Test your codec's argv dialects directly (see
+`src/agent-cli/<name>-codec.test.ts` and `src/agent-cli/codec.test.ts`).
 
 ## Test it (no real process)
 
@@ -413,15 +409,15 @@ exec-throws) to a sane status. Then add codec-specific tests for your `parse` (r
 fields), your two argv dialects, and your `classify` policy (see `src/agent-cli/codec.test.ts`). If
 you implemented a non-trivial stream mapping, also add a streaming test (fake exec replays canned
 JSONL through `onStdout` → assert ordered `AgentStreamEvent`s and an identical final result
-with/without streaming) — see `src/harness/stream-extractors.test.ts` and `src/llm/streaming.test.ts`.
+with/without streaming) — see `src/harness/stream-extractors.test.ts` and `src/llm/agent-cli-provider.test.ts`.
 
 ## Checklist
 
 - [ ] An `AgentCliCodec` in `src/agent-cli/<name>-codec.ts`: `fieldExtractor` (or the shared `flatExtractor`) + a `parse` over `parseAgentOutput`; the extractor never throws and emits `text` only for real results.
 - [ ] Two argv dialects: `harnessArgs` runs **writable** (it can edit the tree); `readonlyArgs` runs **read-only**. Flags first, prompt last; `--model` (when set) before the prompt positional.
 - [ ] `classify` never throws; uses `classifyFlatRun` (or a documented bespoke policy) and returns a `HarnessRunResult.parse(...)`d value; session id uses `coerceSessionId(..., this.unknownSession)`.
-- [ ] Registered in `args.ts` + `compose.ts` (`case '<name>': return new AgentCliHarness(<name>Codec, opts)`); documented the assumed CLI contract in a header comment.
-- [ ] Added to `adapter.contract.test.ts`; codec-level tests for `parse` / argv dialects / `classify`; `npm run typecheck` and `npm test` are green.
+- [ ] Registered in `src/agent-cli/registry.ts` (the `AgentCli` union + one `codecFor` case) and allowed in `parseHarness`/`parseLlmProvider` (`src/cli/args.ts`); documented the assumed CLI contract in a header comment. (`makeHarness`/`makeLlmProvider` are already generic — no per-CLI case.)
+- [ ] Added to `adapter.contract.test.ts` (an `AgentCliHarness` over your codec); codec-level tests for `parse` / argv dialects / `classify`; `npm run typecheck` and `npm test` are green.
 - [ ] (optional, streaming — issue #23) A `streamExtractor` (the shared `sdkStreamExtractor` / `flatStreamExtractor`, or a custom one); `harnessArgs`/`readonlyArgs` branch on `stream` if the streaming output format is a different flag; final result is identical with/without streaming; streaming test added.
-- [ ] (optional, only if read-only) Added a `*CompletionArgs` builder delegating to `codec.readonlyArgs` + a `makeLlmProvider()` case (pass `extractor`/`streamExtractor` from the codec, and `onEvent`) + an `LlmProviderChoice` literal; tested it returns parsed text, carries the read-only flag, and fails closed.
+- [ ] (optional, only if read-only) Confirmed `readonlyArgs` is genuinely read-only — the LLM-provider role is then **automatic** via `codecFor` (no extra wiring); tested by constructing `AgentCliLlmProvider({ codec })` with a fake `exec` (returns parsed text, carries the read-only flag, fails closed).
 ```

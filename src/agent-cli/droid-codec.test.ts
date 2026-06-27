@@ -1,13 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { SessionId } from '../domain/ids';
 import { HarnessRunResult } from '../domain/events';
-import { DroidAdapter, parseDroidOutput, type ExecFn } from './droid';
+import { AgentCliHarness } from '../harness/agent-cli-harness';
+import { droidCodec, makeDroidCodec } from './droid-codec';
+import { type AgentExecFn } from './codec';
 
 /** Build a fake exec that records its args/prompts and returns a canned process result. */
 function fakeExec(
   result: { stdout: string; stderr: string; code: number; timedOut?: boolean },
   capture?: { args: string[][]; prompts: string[] },
-): ExecFn {
+): AgentExecFn {
   return async (args, input) => {
     capture?.args.push(args);
     capture?.prompts.push(input.prompt);
@@ -32,9 +34,9 @@ const droidRealSample = JSON.stringify({
   },
 });
 
-describe('parseDroidOutput', () => {
+describe('droidCodec.parse', () => {
   it('extracts result text, session id, and summed tokens from a real envelope', () => {
-    const parsed = parseDroidOutput(droidRealSample);
+    const parsed = droidCodec.parse(droidRealSample);
     expect(parsed).toEqual({
       text: 'ready',
       sessionId: '37afb4b6-fb90-480f-971e-56cbf7ad1cae',
@@ -49,7 +51,7 @@ describe('parseDroidOutput', () => {
       result: 'x',
       usage: { input_tokens: 10, output_tokens: 5, total_tokens: 42 },
     });
-    expect(parseDroidOutput(json)?.tokens).toBe(42);
+    expect(droidCodec.parse(json)?.tokens).toBe(42);
   });
 
   it('parses a JSON object surrounded by log/noise lines', () => {
@@ -59,7 +61,7 @@ describe('parseDroidOutput', () => {
       JSON.stringify({ result: 'the answer', session_id: 'sess-9' }),
       '[info] done',
     ].join('\n');
-    expect(parseDroidOutput(stdout)).toEqual({ text: 'the answer', sessionId: 'sess-9' });
+    expect(droidCodec.parse(stdout)).toEqual({ text: 'the answer', sessionId: 'sess-9' });
   });
 
   it('takes the LAST result-bearing line but latches the FIRST session id from a stream', () => {
@@ -68,12 +70,12 @@ describe('parseDroidOutput', () => {
       JSON.stringify({ result: 'first', session_id: 'sess-1' }),
       JSON.stringify({ result: 'final', usage: { total_tokens: 7 } }),
     ].join('\n');
-    expect(parseDroidOutput(stdout)).toEqual({ text: 'final', sessionId: 'sess-1', tokens: 7 });
+    expect(droidCodec.parse(stdout)).toEqual({ text: 'final', sessionId: 'sess-1', tokens: 7 });
   });
 
   it('surfaces is_error when droid reports a failed result', () => {
     const stdout = JSON.stringify({ result: 'could not finish', is_error: true, session_id: 's1' });
-    expect(parseDroidOutput(stdout)).toEqual({
+    expect(droidCodec.parse(stdout)).toEqual({
       text: 'could not finish',
       sessionId: 's1',
       isError: true,
@@ -81,20 +83,20 @@ describe('parseDroidOutput', () => {
   });
 
   it('returns null when there is no JSON object carrying text', () => {
-    expect(parseDroidOutput('just plain text, no json')).toBeNull();
-    expect(parseDroidOutput('')).toBeNull();
-    expect(parseDroidOutput(JSON.stringify({ session_id: 'x', is_error: false }))).toBeNull();
+    expect(droidCodec.parse('just plain text, no json')).toBeNull();
+    expect(droidCodec.parse('')).toBeNull();
+    expect(droidCodec.parse(JSON.stringify({ session_id: 'x', is_error: false }))).toBeNull();
   });
 });
 
-describe('DroidAdapter', () => {
+describe('AgentCliHarness(droidCodec)', () => {
   it('exposes the harness name', () => {
-    expect(new DroidAdapter().name).toBe('droid');
+    expect(new AgentCliHarness(droidCodec).name).toBe('droid');
   });
 
   it('maps a clean run to completed with parsed session id and tokens', async () => {
     const capture = { args: [] as string[][], prompts: [] as string[] };
-    const adapter = new DroidAdapter({ exec: fakeExec({ stdout: droidRealSample, stderr: '', code: 0 }, capture) });
+    const adapter = new AgentCliHarness(droidCodec, { exec: fakeExec({ stdout: droidRealSample, stderr: '', code: 0 }, capture) });
 
     const res = await adapter.run('do the thing');
 
@@ -111,7 +113,7 @@ describe('DroidAdapter', () => {
 
   it('adds --session-id <id> when resuming, keeping the prompt last', async () => {
     const capture = { args: [] as string[][], prompts: [] as string[] };
-    const adapter = new DroidAdapter({ exec: fakeExec({ stdout: droidRealSample, stderr: '', code: 0 }, capture) });
+    const adapter = new AgentCliHarness(droidCodec, { exec: fakeExec({ stdout: droidRealSample, stderr: '', code: 0 }, capture) });
 
     await adapter.run('continue', SessionId.parse('sess-prev'));
 
@@ -122,8 +124,7 @@ describe('DroidAdapter', () => {
 
   it('honors a configured autonomy level', async () => {
     const capture = { args: [] as string[][], prompts: [] as string[] };
-    const adapter = new DroidAdapter({
-      auto: 'medium',
+    const adapter = new AgentCliHarness(makeDroidCodec('medium'), {
       exec: fakeExec({ stdout: droidRealSample, stderr: '', code: 0 }, capture),
     });
 
@@ -136,7 +137,7 @@ describe('DroidAdapter', () => {
 
   it('threads --model among the leading flags, prompt last (fresh + resume)', async () => {
     const capture = { args: [] as string[][], prompts: [] as string[] };
-    const adapter = new DroidAdapter({
+    const adapter = new AgentCliHarness(droidCodec, {
       model: 'm1',
       exec: fakeExec({ stdout: droidRealSample, stderr: '', code: 0 }, capture),
     });
@@ -153,7 +154,7 @@ describe('DroidAdapter', () => {
   });
 
   it('returns crashed (but a valid RunResult) on a non-zero exit code', async () => {
-    const adapter = new DroidAdapter({ exec: fakeExec({ stdout: '', stderr: 'boom: cli failed', code: 1 }) });
+    const adapter = new AgentCliHarness(droidCodec, { exec: fakeExec({ stdout: '', stderr: 'boom: cli failed', code: 1 }) });
 
     const res = await adapter.run('prompt', SessionId.parse('sess-keep'));
 
@@ -164,7 +165,7 @@ describe('DroidAdapter', () => {
   });
 
   it('falls back to droid-unknown when crashing with no session anywhere', async () => {
-    const adapter = new DroidAdapter({ exec: fakeExec({ stdout: 'garbage', stderr: '', code: 1 }) });
+    const adapter = new AgentCliHarness(droidCodec, { exec: fakeExec({ stdout: 'garbage', stderr: '', code: 1 }) });
 
     const res = await adapter.run('prompt');
 
@@ -173,7 +174,7 @@ describe('DroidAdapter', () => {
   });
 
   it('returns truncated when exit 0 but stdout has no parseable json result', async () => {
-    const adapter = new DroidAdapter({
+    const adapter = new AgentCliHarness(droidCodec, {
       exec: fakeExec({ stdout: 'partial output, connection drop', stderr: '', code: 0 }),
     });
 
@@ -185,7 +186,7 @@ describe('DroidAdapter', () => {
 
   it('returns truncated when droid reports is_error on a clean exit', async () => {
     const stdout = JSON.stringify({ result: 'aborted mid-task', is_error: true, session_id: 'sess-e' });
-    const adapter = new DroidAdapter({ exec: fakeExec({ stdout, stderr: '', code: 0 }) });
+    const adapter = new AgentCliHarness(droidCodec, { exec: fakeExec({ stdout, stderr: '', code: 0 }) });
 
     const res = await adapter.run('go');
 
@@ -195,7 +196,7 @@ describe('DroidAdapter', () => {
   });
 
   it('maps a timed-out run to timeout, salvaging any parsed text and session', async () => {
-    const adapter = new DroidAdapter({
+    const adapter = new AgentCliHarness(droidCodec, {
       exec: fakeExec({ stdout: droidRealSample, stderr: '', code: 0, timedOut: true }),
     });
 
@@ -207,10 +208,10 @@ describe('DroidAdapter', () => {
   });
 
   it('never throws even if the injected exec rejects', async () => {
-    const exec: ExecFn = async () => {
+    const exec: AgentExecFn = async () => {
       throw new Error('spawn ENOENT');
     };
-    const adapter = new DroidAdapter({ exec });
+    const adapter = new AgentCliHarness(droidCodec, { exec });
 
     const res = await adapter.run('prompt');
 
@@ -222,7 +223,7 @@ describe('DroidAdapter', () => {
 
   it('omits tokensUsed when the envelope carries no usage', async () => {
     const stdout = JSON.stringify({ result: 'done', session_id: 's1' });
-    const adapter = new DroidAdapter({ exec: fakeExec({ stdout, stderr: '', code: 0 }) });
+    const adapter = new AgentCliHarness(droidCodec, { exec: fakeExec({ stdout, stderr: '', code: 0 }) });
 
     const res = await adapter.run('go');
 

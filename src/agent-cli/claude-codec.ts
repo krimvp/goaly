@@ -32,7 +32,7 @@ const fieldExtractor = flatExtractor();
 const streamExtractor = sdkStreamExtractor();
 
 export const claudeCodec: AgentCliCodec = {
-  name: 'claude-code',
+  name: 'claude',
   command: 'claude',
   unknownSession: UNKNOWN_SESSION,
   promptOnStdin: true,

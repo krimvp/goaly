@@ -9,7 +9,7 @@ import { SandboxUnavailableError } from '../sandbox';
 
 function base(launcher: SandboxLauncher) {
   return {
-    harness: 'claude-code' as const,
+    harness: 'claude' as const,
     workspaceRoot: '/repo',
     runId: asRunId('run-sbx'),
     noLogConsole: true,
@@ -28,7 +28,7 @@ describe('composeDeps — sandbox fail-closed (invariant #4)', () => {
 
   it('builds deps normally when a real launcher is available', () => {
     const deps = composeDeps(makeConfig(), base(new BwrapLauncher('/home/me')));
-    expect(deps.harness.name).toBe('claude-code');
+    expect(deps.harness.name).toBe('claude');
     expect(deps.workspace).toBeDefined();
   });
 });
@@ -36,7 +36,7 @@ describe('composeDeps — sandbox fail-closed (invariant #4)', () => {
 describe('composeDeps — Option 1 default is byte-for-byte unchanged', () => {
   it('with NoneLauncher the harness adapter still composes (identity passthrough)', () => {
     const deps = composeDeps(makeConfig(), base(new NoneLauncher()));
-    expect(deps.harness.name).toBe('claude-code');
+    expect(deps.harness.name).toBe('claude');
   });
 
   it('the default policy (no sandbox option) never refuses', () => {

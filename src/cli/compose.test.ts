@@ -1,13 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import {
-  composeDeps,
-  makeLlmProvider,
-  buildLadder,
-  codexCompletionArgs,
-  droidCompletionArgs,
-  piCompletionArgs,
-} from './compose';
+import { composeDeps, makeLlmProvider, buildLadder } from './compose';
+import { codexCodec } from '../agent-cli/codex-codec';
+import { droidCodec } from '../agent-cli/droid-codec';
+import { piCodec } from '../agent-cli/pi-codec';
 import { makeConfig, InMemoryLogFs } from '../testing/fakes';
 import { asRunId, DiffHash } from '../domain/ids';
 import { freezeContract } from '../util/hash';
@@ -16,25 +12,25 @@ import type { Workspace, CommandResult } from '../workspace/workspace';
 
 describe('LLM provider completion argv (read-only)', () => {
   it('codex runs --sandbox read-only with the model before the prompt positional', () => {
-    expect(codexCompletionArgs('judge this', 'gpt-x')).toEqual([
+    expect(codexCodec.readonlyArgs({ prompt: 'judge this', model: 'gpt-x', stream: false })).toEqual([
       'exec', '--sandbox', 'read-only', '--model', 'gpt-x', 'judge this', '--json',
     ]);
   });
 
   it('codex omits --model when none is set', () => {
-    expect(codexCompletionArgs('p', undefined)).toEqual([
+    expect(codexCodec.readonlyArgs({ prompt: 'p', model: undefined, stream: false })).toEqual([
       'exec', '--sandbox', 'read-only', 'p', '--json',
     ]);
   });
 
   it('droid never passes --auto (the exec default cannot edit the tree)', () => {
-    const args = droidCompletionArgs('p', 'm1');
+    const args = droidCodec.readonlyArgs({ prompt: 'p', model: 'm1', stream: false });
     expect(args).toEqual(['exec', '--output-format', 'json', '--model', 'm1', 'p']);
     expect(args).not.toContain('--auto');
   });
 
   it('pi runs read-only tools only (no edit/write/bash), model before the prompt positional', () => {
-    const args = piCompletionArgs('judge this', 'anthropic/claude-opus-4-8');
+    const args = piCodec.readonlyArgs({ prompt: 'judge this', model: 'anthropic/claude-opus-4-8', stream: false });
     expect(args).toEqual([
       '--print', '--mode', 'json', '--tools', 'read,grep,find,ls', '--model', 'anthropic/claude-opus-4-8', 'judge this',
     ]);
@@ -43,7 +39,7 @@ describe('LLM provider completion argv (read-only)', () => {
   });
 
   it('pi omits --model when none is set', () => {
-    expect(piCompletionArgs('p', undefined)).toEqual([
+    expect(piCodec.readonlyArgs({ prompt: 'p', model: undefined, stream: false })).toEqual([
       '--print', '--mode', 'json', '--tools', 'read,grep,find,ls', 'p',
     ]);
   });
@@ -52,9 +48,9 @@ describe('LLM provider completion argv (read-only)', () => {
 describe('makeLlmProvider', () => {
   it('names the provider after the chosen CLI', () => {
     expect(makeLlmProvider('claude', undefined).name).toBe('cli:claude');
-    expect(makeLlmProvider('codex', undefined).name).toBe('codex');
-    expect(makeLlmProvider('droid', undefined).name).toBe('droid');
-    expect(makeLlmProvider('pi', undefined).name).toBe('pi');
+    expect(makeLlmProvider('codex', undefined).name).toBe('cli:codex');
+    expect(makeLlmProvider('droid', undefined).name).toBe('cli:droid');
+    expect(makeLlmProvider('pi', undefined).name).toBe('cli:pi');
   });
 });
 

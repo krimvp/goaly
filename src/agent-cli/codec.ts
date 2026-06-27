@@ -66,7 +66,7 @@ export type CodecClassifyInput = {
  * and the read-only LLM role both consume it; nothing tool-specific leaks past it.
  */
 export interface AgentCliCodec {
-  /** Short identifier for logs (e.g. "claude-code", "codex", "droid"). */
+  /** Short identifier for logs (e.g. "claude", "codex", "droid"). */
   readonly name: string;
   /** The binary to spawn (e.g. "claude", "codex", "droid"). */
   readonly command: string;
@@ -186,7 +186,7 @@ export async function runCodecHarness(
 }
 
 /**
- * The shared run-status classifier for the FLAT codecs (claude-code, droid), whose `run()` tails are
+ * The shared run-status classifier for the FLAT codecs (claude, droid), whose `run()` tails are
  * identical: a timeout salvages any parsed text → `timeout`; a non-zero/killed exit → `crashed`;
  * exit-0 with no usable text → `truncated`; a soft `isError` flag (droid) → `truncated`; otherwise
  * `completed` (+tokens). Codex maps the non-zero / no-text cases the other way (no-parse → crashed,

@@ -8,7 +8,7 @@ import type { AgentEventSink } from '../agent-cli/stream';
  * `diffHash` is intentionally NOT here — the shared Workspace computes it.
  */
 export interface HarnessAdapter {
-  /** A short identifier for logs (e.g. "claude-code", "codex", "fake"). */
+  /** A short identifier for logs (e.g. "claude", "codex", "fake"). */
   readonly name: string;
   /**
    * Spawn the headless agent with `prompt`, resuming `sessionId` when provided. Must parse

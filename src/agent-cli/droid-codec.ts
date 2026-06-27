@@ -9,7 +9,7 @@
  *
  * droid emits the Anthropic agent-SDK envelope, so its final-result parse reuses the flat
  * {@link flatExtractor} (with droid's `is_error` soft-error key) and its stream mapping reuses the
- * shared {@link sdkStreamExtractor} — droid and claude-code share one stream mapping. Streaming
+ * shared {@link sdkStreamExtractor} — droid and claude share one stream mapping. Streaming
  * swaps `--output-format json` → `stream-json` for the per-turn JSONL.
  *
  * Autonomy: `droid exec` defaults to READ-ONLY (cannot modify files) — useless for a goaly loop — so

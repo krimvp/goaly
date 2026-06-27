@@ -1,11 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { StreamTap, type AgentStreamEvent } from '../agent-cli/stream';
-import { codexStreamExtractor } from './codex';
-import { claudeStreamExtractor } from './claude-code';
-import { droidStreamExtractor } from './droid';
+import { StreamTap, type AgentStreamEvent, type StreamEventExtractor } from '../agent-cli/stream';
+import { codexCodec } from '../agent-cli/codex-codec';
+import { claudeCodec } from '../agent-cli/claude-codec';
+import { droidCodec } from '../agent-cli/droid-codec';
+
+const codexStreamExtractor = codexCodec.streamExtractor;
+const claudeStreamExtractor = claudeCodec.streamExtractor;
+const droidStreamExtractor = droidCodec.streamExtractor;
 
 /** Feed canned JSONL through a tap and return the ordered events it forwards. */
-function run(extract: typeof codexStreamExtractor, lines: object[]): AgentStreamEvent[] {
+function run(extract: StreamEventExtractor, lines: object[]): AgentStreamEvent[] {
   const events: AgentStreamEvent[] = [];
   const tap = new StreamTap(extract, (e) => events.push(e));
   tap.push(lines.map((l) => JSON.stringify(l)).join('\n') + '\n');

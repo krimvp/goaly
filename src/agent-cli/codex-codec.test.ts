@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { SessionId } from '../domain/ids';
-import { CodexAdapter, parseCodexOutput, type ExecFn, type ExecResult } from './codex';
+import { AgentCliHarness } from '../harness/agent-cli-harness';
+import { codexCodec } from './codex-codec';
+import { type AgentExecFn, type AgentExecResult } from './codec';
 
-/** Build an ExecFn that returns a canned result and records the args it was called with. */
+/** Build an AgentExecFn that returns a canned result and records the args it was called with. */
 function fakeExec(
-  result: ExecResult,
+  result: AgentExecResult,
   sink?: { args: string[][]; prompts: string[] },
-): ExecFn {
+): AgentExecFn {
   return async (args, input) => {
     sink?.args.push(args);
     sink?.prompts.push(input.prompt);
@@ -24,9 +26,9 @@ const successJsonl = [
   }),
 ].join('\n');
 
-describe('parseCodexOutput', () => {
+describe('codexCodec.parse', () => {
   it('extracts final text, session id, and tokens from success JSONL', () => {
-    const parsed = parseCodexOutput(successJsonl);
+    const parsed = codexCodec.parse(successJsonl);
     expect(parsed).not.toBeNull();
     expect(parsed?.text).toBe('all done, files written');
     expect(parsed?.sessionId).toBe('codex-thread-42');
@@ -41,22 +43,22 @@ describe('parseCodexOutput', () => {
       '',
       JSON.stringify({ message: { content: 'second' } }),
     ].join('\n');
-    const parsed = parseCodexOutput(stdout);
+    const parsed = codexCodec.parse(stdout);
     expect(parsed?.text).toBe('second');
   });
 
   it('returns null when no line is valid JSON', () => {
-    expect(parseCodexOutput('garbage\nmore garbage')).toBeNull();
+    expect(codexCodec.parse('garbage\nmore garbage')).toBeNull();
   });
 
   it('returns null when JSON is valid but carries no text', () => {
     const stdout = JSON.stringify({ type: 'thread.started', thread_id: 'x' });
-    expect(parseCodexOutput(stdout)).toBeNull();
+    expect(codexCodec.parse(stdout)).toBeNull();
   });
 
   it('extracts text from a content array of parts', () => {
     const stdout = JSON.stringify({ content: [{ text: 'a' }, { text: 'b' }] });
-    expect(parseCodexOutput(stdout)?.text).toBe('ab');
+    expect(codexCodec.parse(stdout)?.text).toBe('ab');
   });
 
   // Regression: current codex nests assistant text under `item` and usage on `turn.completed`.
@@ -72,16 +74,16 @@ describe('parseCodexOutput', () => {
       JSON.stringify({ type: 'item.completed', item: { id: 'c', type: 'agent_message', text: 'Updated sum.mjs.' } }),
       JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 23, cached_input_tokens: 90 } }),
     ].join('\n');
-    const parsed = parseCodexOutput(stdout);
+    const parsed = codexCodec.parse(stdout);
     expect(parsed?.text).toBe('Updated sum.mjs.'); // last agent_message wins; command output is not text
     expect(parsed?.sessionId).toBe('th-9');
     expect(parsed?.tokens).toBe(123);
   });
 });
 
-describe('CodexAdapter', () => {
+describe('AgentCliHarness(codexCodec)', () => {
   it('has the name "codex"', () => {
-    expect(new CodexAdapter().name).toBe('codex');
+    expect(new AgentCliHarness(codexCodec).name).toBe('codex');
   });
 
   // Regression: the current codex event format (item.completed / turn.completed) must classify as
@@ -92,7 +94,7 @@ describe('CodexAdapter', () => {
       JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Updated sum.mjs.' } }),
       JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 23 } }),
     ].join('\n');
-    const adapter = new CodexAdapter({ exec: fakeExec({ stdout, stderr: '', code: 0 }) });
+    const adapter = new AgentCliHarness(codexCodec, { exec: fakeExec({ stdout, stderr: '', code: 0 }) });
 
     const result = await adapter.run('go');
 
@@ -105,7 +107,7 @@ describe('CodexAdapter', () => {
   it('maps a clean success run to status "completed" with session id and tokens', async () => {
     const sink = { args: [] as string[][], prompts: [] as string[] };
     const exec = fakeExec({ stdout: successJsonl, stderr: '', code: 0 }, sink);
-    const adapter = new CodexAdapter({ exec });
+    const adapter = new AgentCliHarness(codexCodec, { exec });
 
     const result = await adapter.run('do the thing');
 
@@ -120,7 +122,7 @@ describe('CodexAdapter', () => {
   it('passes a resume flag and session id when resuming', async () => {
     const sink = { args: [] as string[][], prompts: [] as string[] };
     const exec = fakeExec({ stdout: successJsonl, stderr: '', code: 0 }, sink);
-    const adapter = new CodexAdapter({ exec });
+    const adapter = new AgentCliHarness(codexCodec, { exec });
 
     const sid = SessionId.parse('prev-session');
     await adapter.run('continue', sid);
@@ -138,7 +140,7 @@ describe('CodexAdapter', () => {
   it('threads --model before the prompt positional (fresh + resume)', async () => {
     const sink = { args: [] as string[][], prompts: [] as string[] };
     const exec = fakeExec({ stdout: successJsonl, stderr: '', code: 0 }, sink);
-    const adapter = new CodexAdapter({ exec, model: 'gpt-x' });
+    const adapter = new AgentCliHarness(codexCodec, { exec, model: 'gpt-x' });
 
     await adapter.run('do it');
     expect(sink.args[0]).toEqual(['exec', '--full-auto', '--model', 'gpt-x', 'do it', '--json']);
@@ -158,7 +160,7 @@ describe('CodexAdapter', () => {
 
   it('maps malformed stdout to "crashed" but still a valid RunResult', async () => {
     const exec = fakeExec({ stdout: 'totally not json', stderr: 'boom', code: 1 });
-    const adapter = new CodexAdapter({ exec });
+    const adapter = new AgentCliHarness(codexCodec, { exec });
 
     const result = await adapter.run('go');
 
@@ -170,7 +172,7 @@ describe('CodexAdapter', () => {
 
   it('falls back to the resume session id when output omits one (crash path)', async () => {
     const exec = fakeExec({ stdout: 'nope', stderr: '', code: 1 });
-    const adapter = new CodexAdapter({ exec });
+    const adapter = new AgentCliHarness(codexCodec, { exec });
 
     const sid = SessionId.parse('resumed-1');
     const result = await adapter.run('go', sid);
@@ -181,7 +183,7 @@ describe('CodexAdapter', () => {
 
   it('maps a timed-out run to status "timeout"', async () => {
     const exec = fakeExec({ stdout: successJsonl, stderr: '', code: null, timedOut: true });
-    const adapter = new CodexAdapter({ exec });
+    const adapter = new AgentCliHarness(codexCodec, { exec });
 
     const result = await adapter.run('slow task');
 
@@ -194,7 +196,7 @@ describe('CodexAdapter', () => {
   it('maps a non-zero exit with parseable text to "truncated"', async () => {
     const stdout = JSON.stringify({ text: 'half-finished', session_id: 'sess-9' });
     const exec = fakeExec({ stdout, stderr: '', code: 137 });
-    const adapter = new CodexAdapter({ exec });
+    const adapter = new AgentCliHarness(codexCodec, { exec });
 
     const result = await adapter.run('go');
 
@@ -204,10 +206,10 @@ describe('CodexAdapter', () => {
   });
 
   it('never throws when the exec seam itself rejects', async () => {
-    const exec: ExecFn = async () => {
+    const exec: AgentExecFn = async () => {
       throw new Error('spawn ENOENT');
     };
-    const adapter = new CodexAdapter({ exec });
+    const adapter = new AgentCliHarness(codexCodec, { exec });
 
     const result = await adapter.run('go');
 
@@ -218,7 +220,7 @@ describe('CodexAdapter', () => {
   it('omits tokensUsed when the output carries no usage', async () => {
     const stdout = JSON.stringify({ text: 'done', session_id: 's1' });
     const exec = fakeExec({ stdout, stderr: '', code: 0 });
-    const adapter = new CodexAdapter({ exec });
+    const adapter = new AgentCliHarness(codexCodec, { exec });
 
     const result = await adapter.run('go');
 
