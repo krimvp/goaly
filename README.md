@@ -318,9 +318,13 @@ npm install -g .    # put `goaly` on your PATH
 make pack           # -> goaly-<version>.tgz, installable with `npm i -g ./goaly-*.tgz`
 ```
 
-Requires Node ≥ 20 and `git`. The default adapters shell out to the `claude` / `codex` / `droid`
-CLIs; the LLM compile/judge/approve steps use a CLI-backed provider (`claude` by default, switchable
-with `--llm-provider`). Pick the model per layer with `--model` / `--llm-model` (see Usage).
+Requires Node ≥ 20 and `git`. The default adapters shell out to the `claude` / `codex` / `droid` /
+`pi` CLIs; the LLM compile/judge/approve steps use a CLI-backed provider (`claude` by default,
+switchable with `--llm-provider`). Pick the model per layer with `--model` / `--llm-model` (see
+Usage). [`pi`](https://pi.dev) is provider-agnostic — one CLI over any model from any provider — so
+pass `--model` as `"provider/id"` (e.g. `"anthropic/claude-opus-4-8"`, `"ollama/qwen3:8b"`) to pick
+provider+model on one flag, or omit it to use pi's own configured default; credentials come from your
+env / pi's config, the same boundary `claude` and `codex` already assume.
 
 > Add `.goaly/` to your target repo's `.gitignore`. (goaly also excludes it from its own
 > tree-hash, so its run logs never pollute stuck-detection regardless.)
@@ -576,7 +580,8 @@ both the report and the `--budget-tokens` guard a gross undercount.
 
 **Fail-closed:** a harness or provider that doesn't surface usage degrades that layer to `unknown`
 (never a silent zero, never a crash). The default `claude` provider runs `--output-format json` so
-its usage is captured; `codex` / `droid` providers report usage too.
+its usage is captured; `codex` / `droid` / `pi` providers report usage too (pi via its `--mode json`
+`usage` block).
 
 **Estimated when unreported.** When a run or LLM step is **streaming** its turns (`--stream`, debug
 logging, or an embedder subscription — see **Live streaming** below) but the CLI still reports **no**
@@ -616,8 +621,9 @@ or stdin (`--goal -`). Giving a field more than one source is a usage error.
 is the global default (the harness *and* the LLM steps); `--llm-model` overrides all LLM steps; and
 `--judge-model` / `--approver-model` / `--compiler-model` override a single step. Precedence per LLM
 step: per-step flag → `--llm-model` → `--model` → the tool's own default. `--llm-provider`
-(`claude` default, or `codex` / `droid`) picks which CLI runs those steps — handy when the harness
-and the LLM steps should share a model namespace. Omit them all and every tool uses its own default.
+(`claude` default, or `codex` / `droid` / `pi`) picks which CLI runs those steps — handy when the
+harness and the LLM steps should share a model namespace. Omit them all and every tool uses its own
+default.
 
 At **Seal** (unless `--autonomous`), goaly prints the frozen contract and prompts:
 
@@ -655,8 +661,9 @@ reasoning, per-turn token usage — are rendered to **stderr** as they happen, e
 (`[agent]` / `[compile]` / `[judge]` / `[approve]`). Every tool maps its native stream onto one
 **canonical, tool-neutral event taxonomy** (`AgentStreamEvent`: `session` / `message` / `reasoning`
 / `tool_use` / `tool_result` / `usage` / `done`), Zod-validated at the seam, so the live view is
-uniform across claude-code, codex, and droid (codex via its `--json` JSONL; claude-code and droid
-via `--output-format stream-json`). It's **independent of `--log-level`** (which separately routes
+uniform across claude-code, codex, droid, and pi (codex via its `--json` JSONL and pi via its
+`--mode json` JSONL; claude-code and droid via `--output-format stream-json`). It's **independent of
+`--log-level`** (which separately routes
 the same events into the diagnostics file at `debug`), and embedders can subscribe programmatically
 via `composeDeps({ onStreamEvent })` / `DriverDeps.onStreamEvent`. It is **pure observability**: the
 stream never touches the frozen contract, the verifier ladder, or the two-key decision; events are
@@ -669,8 +676,8 @@ line, the `AgentStreamEvent` shape verbatim. Where `--stream` is the live view a
 debug` folds the events into the human diagnostics file, the transcript is the **programmatic
 substrate**: a full-fidelity record any consumer (a UI, a cost report, an analyzer) can replay
 **offline without re-running the agent**, independent of log level or rotation. Because the events
-are already tool-neutral, the artifact is **identical in shape across claude-code / codex / droid**
-and future harnesses — that's the point. It is **uncapped** (never size-rotated — a dropped `usage`
+are already tool-neutral, the artifact is **identical in shape across claude-code / codex / droid /
+pi** and future harnesses — that's the point. It is **uncapped** (never size-rotated — a dropped `usage`
 or `tool` line would corrupt an offline cost report), and read back with the exported
 `readStreamTranscript(stateDir, runId)`, which Zod-validates each line and **drops** any corrupt one.
 Crucially it is **NOT** the replay log: it is observational, so resume stays a pure fold over

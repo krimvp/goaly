@@ -6,10 +6,10 @@ import { ModelSelection, type ModelSelectionInput } from './models';
 import { resolveInputSources, defaultReaders, type InputReaders } from './input-sources';
 import { loadConfig, type LoadedConfig } from './config-file';
 
-export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'fake';
+export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'pi' | 'fake';
 
 /** Which CLI runs the LLM workflow steps (judge / approver / compiler). */
-export type LlmProviderChoice = 'claude' | 'codex' | 'droid';
+export type LlmProviderChoice = 'claude' | 'codex' | 'droid' | 'pi';
 
 /** The read-only run-inspection subcommand (`goaly runs list` / `goaly runs show <id>`). */
 export type RunsCommand = { readonly kind: 'list' } | { readonly kind: 'show'; readonly runId: string };
@@ -104,8 +104,8 @@ Usage:
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
                [--stuck-oscillation true|false] [--stuck-crash-threshold N]
-               [--harness claude-code|codex|droid] [--model <m>] [--llm-model <m>]
-               [--llm-provider claude|codex|droid] [--harness-timeout-ms N]
+               [--harness claude-code|codex|droid|pi] [--model <m>] [--llm-model <m>]
+               [--llm-provider claude|codex|droid|pi] [--harness-timeout-ms N]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
                [--sandbox[=none|auto|bwrap|firejail|container]]
                [--sandbox-net none|allow|allow:<host,…>]
@@ -228,8 +228,11 @@ Model selection (all optional; default = each tool's own default):
   --approver-model <m>  model for the Sign-off approver only
   --compiler-model <m>  model for the verification compiler only
   --planner-model <m>   model for the phased planner only (issue #48)
-  --llm-provider <p>    which CLI runs the LLM steps: claude (default) | codex | droid
+  --llm-provider <p>    which CLI runs the LLM steps: claude (default) | codex | droid | pi
   Precedence per LLM step: per-step flag → --llm-model → --model. The harness follows --model.
+  Note: pi (pi.dev) is provider-agnostic — pass --model as "provider/id" (e.g.
+  "anthropic/claude-opus-4-8", "ollama/qwen3:8b") to pick the provider+model on one flag, or omit
+  --model to use pi's own configured default. Credentials come from your env / pi's config.
 
 Seal (contract approval):
   default                     print the frozen contract and prompt for one of:
@@ -676,16 +679,24 @@ function parseSandbox(flags: RawFlags): SandboxPolicy {
 
 function parseHarness(value: string | undefined): HarnessChoice {
   if (value === undefined) return 'claude-code';
-  if (value === 'claude-code' || value === 'codex' || value === 'droid' || value === 'fake') {
+  if (
+    value === 'claude-code' ||
+    value === 'codex' ||
+    value === 'droid' ||
+    value === 'pi' ||
+    value === 'fake'
+  ) {
     return value;
   }
-  throw new UsageError(`unknown harness: ${value} (expected claude-code | codex | droid | fake)`);
+  throw new UsageError(
+    `unknown harness: ${value} (expected claude-code | codex | droid | pi | fake)`,
+  );
 }
 
 function parseLlmProvider(value: string | undefined): LlmProviderChoice {
   if (value === undefined) return 'claude';
-  if (value === 'claude' || value === 'codex' || value === 'droid') return value;
-  throw new UsageError(`unknown llm provider: ${value} (expected claude | codex | droid)`);
+  if (value === 'claude' || value === 'codex' || value === 'droid' || value === 'pi') return value;
+  throw new UsageError(`unknown llm provider: ${value} (expected claude | codex | droid | pi)`);
 }
 
 /** Collect the model flags and validate them at the Zod seam (non-empty, fails closed). */

@@ -28,6 +28,7 @@ import { StreamTranscriptSink, STREAM_FILE } from '../runlog/stream-transcript';
 import { ClaudeCodeAdapter } from '../harness/claude-code';
 import { CodexAdapter } from '../harness/codex';
 import { DroidAdapter } from '../harness/droid';
+import { PiAdapter } from '../harness/pi';
 import { SystemClock } from '../driver/clock';
 import { SystemBudgetMeter } from '../driver/budget';
 import { LlmTokenMeter, meterLlm } from '../driver/llm-meter';
@@ -38,6 +39,7 @@ import { CliLlmProvider } from '../llm/cli-provider';
 import { AgentCliLlmProvider } from '../llm/agent-cli-provider';
 import { codexCodec } from '../agent-cli/codex-codec';
 import { droidCodec } from '../agent-cli/droid-codec';
+import { piCodec } from '../agent-cli/pi-codec';
 import type { AgentEventSink, PhasedStreamSink, StreamPhase } from '../agent-cli/stream';
 import { makeStreamRenderer, streamLogFields } from './stream-render';
 import { resolveModels, type ModelSelection } from './models';
@@ -373,9 +375,10 @@ function buildRunLogger(options: ComposeOptions, stateDir: string): Logger {
 
 /**
  * Build the LLM provider for the workflow steps. `claude` uses the lean `claude -p` completion;
- * `codex`/`droid` wrap their agentic CLI in a one-shot READ-ONLY mode (codex `--sandbox read-only`,
- * droid's default no-`--auto` exec) so a judge / approver / compiler can use that tool's model
- * without ever mutating the working tree it is judging. The resolved per-step model is threaded in.
+ * `codex`/`droid`/`pi` wrap their agentic CLI in a one-shot READ-ONLY mode (codex `--sandbox
+ * read-only`, droid's default no-`--auto` exec, pi's `--tools read,grep,find,ls`) so a judge /
+ * approver / compiler can use that tool's model without ever mutating the working tree it is judging.
+ * The resolved per-step model is threaded in.
  */
 export function makeLlmProvider(
   choice: LlmProviderChoice,
@@ -409,6 +412,17 @@ export function makeLlmProvider(
           ? { onEvent: opts.onEvent, streamExtractor: droidCodec.streamExtractor }
           : {}),
       });
+    case 'pi':
+      return new AgentCliLlmProvider({
+        name: piCodec.name,
+        command: piCodec.command,
+        extractor: piCodec.fieldExtractor,
+        buildArgs: (prompt) => piCompletionArgs(prompt, model),
+        ...timeout,
+        ...(opts.onEvent !== undefined
+          ? { onEvent: opts.onEvent, streamExtractor: piCodec.streamExtractor }
+          : {}),
+      });
   }
 }
 
@@ -420,6 +434,11 @@ export function codexCompletionArgs(prompt: string, model: string | undefined): 
 /** droid one-shot completion argv — READ-ONLY (no `--auto`, droid's `exec` default cannot edit). */
 export function droidCompletionArgs(prompt: string, model: string | undefined): string[] {
   return droidCodec.readonlyArgs({ prompt, model, stream: false });
+}
+
+/** pi one-shot completion argv — READ-ONLY (`--tools read,grep,find,ls`, no edit/write/bash). */
+export function piCompletionArgs(prompt: string, model: string | undefined): string[] {
+  return piCodec.readonlyArgs({ prompt, model, stream: false });
 }
 
 /**
@@ -485,6 +504,8 @@ function makeHarness(
       return new CodexAdapter(opts);
     case 'droid':
       return new DroidAdapter(opts);
+    case 'pi':
+      return new PiAdapter(opts);
     case 'fake':
       return new NoopHarness();
   }
@@ -504,7 +525,13 @@ function sandboxedHarnessExec(
 ): ReturnType<typeof withSandboxAgent> | undefined {
   if (sandbox.launcher.identity || choice === 'fake') return undefined;
   const codec =
-    choice === 'codex' ? codexCodec : choice === 'droid' ? droidCodec : claudeCodec;
+    choice === 'codex'
+      ? codexCodec
+      : choice === 'droid'
+        ? droidCodec
+        : choice === 'pi'
+          ? piCodec
+          : claudeCodec;
   const budget = timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
   const inner = neutralAgentExec(budget, codec.promptOnStdin, idleTimeoutMs);
   return withSandboxAgent(codec.command, inner, sandbox.launcher, {

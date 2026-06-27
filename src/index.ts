@@ -119,6 +119,7 @@ export {
   droidStreamExtractor,
   type AutonomyLevel,
 } from './harness/droid';
+export { PiAdapter, parsePiOutput, piExtractor, piStreamExtractor } from './harness/pi';
 export { CliLlmProvider, buildLlmArgs } from './llm/cli-provider';
 export { AgentCliLlmProvider } from './llm/agent-cli-provider';
 
@@ -147,6 +148,7 @@ export {
 export { claudeCodec } from './agent-cli/claude-codec';
 export { codexCodec } from './agent-cli/codex-codec';
 export { droidCodec, makeDroidCodec, DEFAULT_AUTONOMY } from './agent-cli/droid-codec';
+export { piCodec } from './agent-cli/pi-codec';
 
 // Local token ESTIMATION (issue #24): the fallback when a streamed run/step self-reports no usage.
 export {
