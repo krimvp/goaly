@@ -11,11 +11,13 @@ import { z } from 'zod';
 /**
  * The sandbox mechanism requested on the CLI.
  *  - `none`   — identity passthrough; the current behavior, byte-for-byte (Option 1 default).
- *  - `auto`   — detect the best available mechanism (prefer `bwrap` on Linux, else `container`).
+ *  - `auto`   — detect the best available mechanism (prefer `bwrap`, then `firejail`, on Linux,
+ *    else `container`).
  *  - `bwrap`  — Linux bubblewrap.
+ *  - `firejail` — Linux firejail (the fallback when bwrap is absent; issue #40).
  *  - `container` — a docker/podman `run` (the portable, cross-platform mechanism).
  */
-export const SandboxMode = z.enum(['none', 'auto', 'bwrap', 'container']);
+export const SandboxMode = z.enum(['none', 'auto', 'bwrap', 'firejail', 'container']);
 export type SandboxMode = z.infer<typeof SandboxMode>;
 
 /**
@@ -96,7 +98,7 @@ export const SandboxRuntime = z.enum(['docker', 'podman']);
 export type SandboxRuntime = z.infer<typeof SandboxRuntime>;
 
 /** A concrete launcher mechanism (what a launcher reports as its `mode`). `auto` is never concrete. */
-export type LauncherMode = 'none' | 'bwrap' | 'container';
+export type LauncherMode = 'none' | 'bwrap' | 'firejail' | 'container';
 
 /**
  * The parsed, validated sandbox policy. Built once at the composition root from the CLI flags and

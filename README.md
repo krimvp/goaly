@@ -237,7 +237,7 @@ the composition root; the pure reducer and git plumbing (`diff`/`diffHash`, whic
 
 | Flag | Meaning |
 | --- | --- |
-| `--sandbox[=<mode>]` | `none` (default, no isolation) · `auto` (best available: `bwrap` on Linux, else `container`) · `bwrap` (Linux bubblewrap) · `container` (a `docker`/`podman run --rm`, portable, covers macOS). Bare `--sandbox` means `--sandbox=auto`. |
+| `--sandbox[=<mode>]` | `none` (default, no isolation) · `auto` (best available: `bwrap`, then `firejail`, on Linux, else `container`) · `bwrap` (Linux bubblewrap) · `firejail` (Linux firejail, the fallback when bwrap is absent) · `container` (a `docker`/`podman run --rm`, portable, covers macOS). Bare `--sandbox` means `--sandbox=auto`. |
 | `--sandbox-net <v>` | egress policy: `none` (default when sandboxed) · `allow` (full egress) · `allow:<host,…>` (an **allowlist** — only the listed hosts are reachable). With `none`/`allow` the **agent always keeps full egress** (it needs the model API); an allowlist constrains **both** seams, so the agent's model-API host must be on the list too. |
 | `--sandbox-image <ref>` | container image (`container` mode only; default `debian:stable-slim`). |
 | `--sandbox-runtime <r>` | `docker` (default) · `podman` (`container` mode only). |

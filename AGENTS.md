@@ -91,7 +91,7 @@ src/
   agent-cli/   codec, <tool>-codec, output, stream, estimate — one deep codec per CLI (seam-shared)
   harness/     adapter, agent-cli-harness, claude-code, codex, droid — seam #1
   workspace/   workspace, git-workspace                 — harness-independent diff/run
-  sandbox/     policy, launcher, bwrap, container, detect — opt-in OS isolation (seam)
+  sandbox/     policy, launcher, bwrap, firejail, container, detect — opt-in OS isolation (seam)
   runlog/      runlog, file-runlog                      — write-ahead persistence + replay
   llm/         provider, cli-provider                   — INTERNAL seam (judge/approver/compiler)
   cli/         args, compose, main                      — composition root + CLI

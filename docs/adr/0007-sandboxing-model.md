@@ -34,9 +34,20 @@ keys); the verifier gets rw-workspace + ro-system + no-network-by-default + the 
 (diff/diffHash) is NOT sandboxed — it must read the real `.git`.
 
 First implementation (slice 1, shipped together): Linux `bwrap` (bubblewrap), a portable `container`
-(docker/podman) launcher — which also covers macOS — and an identity `none` launcher. A native
-macOS `sandbox-exec` launcher and a `firejail` fallback remain follow-ups. Network-egress
-*allowlisting* (then a follow-up) is now **implemented** — see "Network-egress allowlist" below.
+(docker/podman) launcher — which also covers macOS — and an identity `none` launcher. A Linux
+`firejail` fallback (issue #40) is now **implemented** — `auto` prefers `bwrap`, then `firejail`, on
+Linux before falling back to a container. A native macOS `sandbox-exec` launcher remains a follow-up.
+Network-egress *allowlisting* (then a follow-up) is now **implemented** — see "Network-egress
+allowlist" below.
+
+`firejail` mirrors `bwrap`'s per-seam profile via firejail flags: `--noprofile` + `--quiet` (no host
+profile, no banner), `--read-only=/` + `--private-dev` for a read-only system, `--read-write=<ws>` to
+re-enable the workspace, `--blacklist=$HOME/<secret>` to deny credential dirs, and `--net=none` to
+cut egress. Because firejail has no `--chdir` and inherits the parent cwd (the package root for the
+harness seam), the command runs under a `sh -c 'cd "$0" && exec "$@"' <ws> …` preamble. `/tmp`: a
+fresh `--private-tmp` (matching bwrap's `--tmpfs /tmp`) is used UNLESS the workspace lives under
+`/tmp` — firejail applies fs ops in its own internal order, so there's no bwrap-style "bind last" to
+re-expose a workspace a private tmpfs would shadow; in that case the real `/tmp` is kept writable.
 
 ## Network-egress allowlist (issue #39, implemented)
 The binary `--sandbox-net none|allow` toggle is extended with a third form,
@@ -60,6 +71,8 @@ Enforcement is per launcher, via standard proxy env vars (`SandboxRunOpts` carri
 - **bwrap**: keeps the host network (NOT `--unshare-net`) and sets `HTTP(S)_PROXY` / `ALL_PROXY`
   (and lowercase variants) + `NO_PROXY=localhost,127.0.0.1` via `--setenv`, pointing at
   `127.0.0.1:<proxyPort>`.
+- **firejail**: keeps the host network (NOT `--net=none`) and sets the same proxy env vars via
+  `--env NAME=…`, pointing at `127.0.0.1:<proxyPort>` (the jail shares the host loopback, as bwrap).
 - **container** (docker/podman): keeps the bridge network, adds
   `--add-host goaly-host-gateway:host-gateway`, and sets the same proxy env vars (`-e NAME=…`)
   pointing at `goaly-host-gateway:<proxyPort>`.
@@ -84,7 +97,7 @@ is fail-closed: a proxy that can't start aborts the run rather than degrading to
 
 ## Consequences
 - A real isolation option exists for untrusted repos without forcing it on trusting users.
-- New optional dependency on a host mechanism (bwrap/docker/podman); absence is fail-closed, not a
+- New optional dependency on a host mechanism (bwrap/firejail/docker/podman); absence is fail-closed, not a
   silent downgrade.
 - Network/FS tensions (e.g. `npm test` needing the network) are surfaced as explicit policy toggles
   (`--sandbox-net`, now including a host allowlist), documented, not hidden.

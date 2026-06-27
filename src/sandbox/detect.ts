@@ -1,4 +1,5 @@
 import { BWRAP_COMMAND } from './bwrap';
+import { FIREJAIL_COMMAND } from './firejail';
 import type { LauncherMode, SandboxRuntime } from './policy';
 
 /**
@@ -11,6 +12,7 @@ export type WhichProbe = (binary: string) => boolean;
 /** What `--sandbox=auto`/explicit detection resolved to, plus the runtime when it's a container. */
 export type DetectedMechanism =
   | { kind: 'bwrap' }
+  | { kind: 'firejail' }
   | { kind: 'container'; runtime: SandboxRuntime }
   | { kind: 'unavailable'; reason: string };
 
@@ -35,8 +37,8 @@ function detectContainer(which: WhichProbe, preferred?: SandboxRuntime): Detecte
 
 /**
  * Resolve a requested mode against the host. Fail-closed (invariant #4): a mode whose mechanism is
- * absent resolves to `unavailable`, never a silent downgrade. `auto` prefers `bwrap` on Linux, else
- * a container runtime; `unavailable` when neither is present.
+ * absent resolves to `unavailable`, never a silent downgrade. `auto` prefers `bwrap` on Linux, then
+ * `firejail` (issue #40), else a container runtime; `unavailable` when none is present.
  */
 export function detectMechanism(
   mode: Exclude<LauncherMode, 'none'> | 'auto',
@@ -50,18 +52,28 @@ export function detectMechanism(
       : { kind: 'unavailable', reason: `bwrap requested but '${BWRAP_COMMAND}' not found on PATH` };
   }
 
+  if (mode === 'firejail') {
+    return opts.which(FIREJAIL_COMMAND)
+      ? { kind: 'firejail' }
+      : {
+          kind: 'unavailable',
+          reason: `firejail requested but '${FIREJAIL_COMMAND}' not found on PATH`,
+        };
+  }
+
   if (mode === 'container') {
     return detectContainer(opts.which, opts.preferredRuntime);
   }
 
-  // auto: prefer bwrap on Linux, else fall back to a container runtime.
-  if (platform === 'linux' && opts.which(BWRAP_COMMAND)) {
-    return { kind: 'bwrap' };
+  // auto: on Linux prefer bwrap, then firejail; otherwise fall back to a container runtime.
+  if (platform === 'linux') {
+    if (opts.which(BWRAP_COMMAND)) return { kind: 'bwrap' };
+    if (opts.which(FIREJAIL_COMMAND)) return { kind: 'firejail' };
   }
   const container = detectContainer(opts.which, opts.preferredRuntime);
   if (container.kind === 'container') return container;
   return {
     kind: 'unavailable',
-    reason: '--sandbox=auto found no available mechanism (no bwrap, no docker/podman)',
+    reason: '--sandbox=auto found no available mechanism (no bwrap, no firejail, no docker/podman)',
   };
 }

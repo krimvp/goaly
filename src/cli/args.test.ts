@@ -328,6 +328,7 @@ describe('parseArgs', () => {
 
     it('parses an explicit mode', async () => {
       expect((await parseArgs([...run, '--sandbox=bwrap'])).sandbox.mode).toBe('bwrap');
+      expect((await parseArgs([...run, '--sandbox=firejail'])).sandbox.mode).toBe('firejail');
       expect((await parseArgs([...run, '--sandbox=container'])).sandbox.mode).toBe('container');
     });
 
@@ -346,7 +347,7 @@ describe('parseArgs', () => {
     });
 
     it('rejects an unknown mode / net / runtime (fail-closed)', async () => {
-      await expect(parseArgs([...run, '--sandbox=firejail'])).rejects.toThrow(UsageError);
+      await expect(parseArgs([...run, '--sandbox=jail'])).rejects.toThrow(UsageError);
       await expect(parseArgs([...run, '--sandbox-net', 'partial'])).rejects.toThrow(UsageError);
       await expect(parseArgs([...run, '--sandbox-runtime', 'lxc'])).rejects.toThrow(UsageError);
     });
