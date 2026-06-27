@@ -352,6 +352,12 @@ pass `--model` as `"provider/id"` (e.g. `"anthropic/claude-opus-4-8"`, `"ollama/
 provider+model on one flag, or omit it to use pi's own configured default; credentials come from your
 env / pi's config, the same boundary `claude` and `codex` already assume.
 
+> **No CLI? Use `--harness goaly-code`.** The `goaly-code` harness needs no coding CLI at all — goaly runs its own
+> agent loop directly against any OpenAI-compatible chat-completions endpoint (`--base-url`, plus a
+> `--model`; the bearer token is read from `OPENAI_API_KEY`, override with `--llm-api-key-env`). The
+> read-only LLM steps can use the same endpoint with `--llm-provider openai`. Only Node ≥ 20's built-in
+> `fetch` is required. A local keyless endpoint (e.g. ollama) needs no token.
+
 > Add `.goaly/` to your target repo's `.gitignore`. (goaly also excludes it from its own
 > tree-hash, so its run logs never pollute stuck-detection regardless.)
 >
@@ -414,6 +420,13 @@ goaly run --goal "..." --verify-cmd "npm test" --harness claude \
 # Run the LLM steps on a different CLI entirely (kept read-only so they never touch the tree):
 goaly run --goal "..." --generate --autonomous --harness codex \
              --model gpt-5-codex --llm-provider codex --judge-model o3
+
+# Drive goaly's OWN agent loop against an OpenAI-compatible endpoint — no coding CLI installed:
+goaly run --goal "..." --verify-cmd "npm test" --harness goaly-code \
+             --base-url https://api.openai.com/v1 --model gpt-5    # reads OPENAI_API_KEY
+# ...or a local, keyless endpoint (ollama). The same flag also backs the read-only LLM steps:
+goaly run --goal "..." --autonomous --harness goaly-code --llm-provider openai \
+             --base-url http://localhost:11434/v1 --model qwen2.5-coder --approver-model llama3.1
 
 # Follow the loop step-by-step, and keep a structured diagnostics file (rotated):
 goaly run --goal "..." --verify-cmd "npm test" --log-level debug
@@ -647,9 +660,17 @@ or stdin (`--goal -`). Giving a field more than one source is a usage error.
 is the global default (the harness *and* the LLM steps); `--llm-model` overrides all LLM steps; and
 `--judge-model` / `--approver-model` / `--compiler-model` override a single step. Precedence per LLM
 step: per-step flag → `--llm-model` → `--model` → the tool's own default. `--llm-provider`
-(`claude` default, or `codex` / `droid` / `pi`) picks which CLI runs those steps — handy when the
-harness and the LLM steps should share a model namespace. Omit them all and every tool uses its own
-default.
+(`claude` default, or `codex` / `droid` / `pi` / `openai`) picks which provider runs those steps —
+handy when the harness and the LLM steps should share a model namespace. Omit them all and every tool
+uses its own default.
+
+**Harness selection.** `--harness` (`claude` default, or `codex` / `droid` / `pi` / `goaly-code`) picks the
+write-role coding agent. `goaly-code` is the first non-CLI harness: goaly drives its own tool-use loop
+against an OpenAI-compatible endpoint set by **`--base-url <url>`** (`/chat/completions` is appended),
+with the bearer token read from **`--llm-api-key-env <NAME>`** (default `OPENAI_API_KEY`; a keyless
+local endpoint like ollama needs none). `--harness goaly-code` requires a resolved `--model`; pair it with
+`--llm-provider openai` to run the read-only LLM steps through the same endpoint. Both fail closed
+(refuse to start) if the base URL or model is missing.
 
 At **Seal** (unless `--autonomous`), goaly prints the frozen contract and prompts:
 
@@ -763,6 +784,13 @@ any harness for free. The shared `agent-cli` core owns the tolerant final-result
 `StreamTap`, and the flat status policy (`classifyFlatRun`), and the shared `runProcess` owns the one
 tested subprocess dance (output cap, timeout, process-group kill, never-reject). See
 [`docs/adding-a-harness.md`](docs/adding-a-harness.md) for the full guide.
+
+There are **two adapter shapes**. The codec shape above wraps an external CLI. The `goaly-code` harness
+(`--harness goaly-code`) is the first **non-codec** adapter: goaly becomes the coding agent itself, running
+its own tool-use loop against an OpenAI-compatible chat-completions endpoint — so there is no CLI to
+install. It reuses the same seam #1 (`HarnessAdapter`), the same `Workspace`/sandbox/streaming/token
+machinery, and a shared HTTP transport (`OpenAiClient`) with the read-only `openai` LLM provider. See
+the "goaly-code harness" path in [`docs/adding-a-harness.md`](docs/adding-a-harness.md).
 
 ## Develop
 

@@ -30,6 +30,12 @@ only difference is the argv dialect: `harnessArgs` (writable) vs `readonlyArgs` 
 The rest of this guide is the detail behind each step, ending with a copy-paste **skeleton** and a
 **checklist**. In a hurry, skim those two and refer back to the numbered mapping sections as needed.
 
+> **Two adapter shapes.** Most of this guide covers the **codec-backed** shape: you wrap an external
+> CLI. There is a second shape — the **goaly-code harness** (SDK-native, non-codec; `--harness goaly-code`), where goaly is the
+> agent itself and drives an OpenAI-compatible endpoint through its own tool-use loop, no CLI
+> installed. Both implement the same seam #1 (`HarnessAdapter`). If you are wrapping a CLI, read on; if
+> you are adding a direct API/SDK target, jump to [the goaly-code harness](#the-goaly-code-harness-sdk-native-non-codec).
+
 ## The contract
 
 The orchestrator-facing seam is one method:
@@ -422,6 +428,130 @@ fake `exec` (see `src/llm/agent-cli-provider.test.ts`): assert it returns your p
 `--model` when set), that the prompt rides on stdin or argv per `promptOnStdin`, and that
 hostile/empty output **throws** (fail closed). Test your codec's argv dialects directly (see
 `src/agent-cli/<name>-codec.test.ts` and `src/agent-cli/codec.test.ts`).
+
+## The goaly-code harness (SDK-native, non-codec)
+
+Everything above wraps an external CLI: a CLI fills the whole agent loop (tool-use, file editing,
+context, session/resume, streaming, token accounting) for free, so a codec is ~150 lines. The
+**goaly-code harness** (`src/goaly-code/`, `--harness goaly-code`) takes the other path — **goaly becomes the
+coding agent** and owns that loop, driving an OpenAI-compatible chat-completions endpoint directly.
+It is the **first non-codec adapter**: there is no `AgentCliCodec`, no subprocess, no CLI to install
+— only Node's built-in `fetch`. It is purely additive behind `--harness goaly-code`; the codec harnesses are
+byte-for-byte unchanged.
+
+It implements the **same seam #1** (`HarnessAdapter.run(prompt, sessionId?, onEvent?)`), so the
+orchestrator can't tell it apart from a codec harness. The same `Workspace` (diff/diffHash/run), the
+same sandbox seam, the same `AgentStreamEvent` streaming taxonomy, and the same `TokenBreakdown`
+accounting all apply unchanged.
+
+### Module layout
+
+```
+src/llm-client/
+  schema.ts          # Zod for the chat-completions request/response envelope (the wire seam, #6)
+  openai-client.ts   # OpenAiClient implements LlmClient: fetch + Zod, base-url, auth, retries, usage→TokenBreakdown
+src/llm/
+  openai-provider.ts # read-only OpenAiLlmProvider on the same client (judge/approver/compiler — Slice 0)
+src/goaly-code/
+  harness.ts         # GoalyCodeHarness implements HarnessAdapter (seam #1): resolve session → loop → persist → typed result
+  loop.ts            # the tool-use agent loop (turn cap / deadline / fail-closed / event emit / token sum)
+  tools.ts           # the minimal tool set + dispatchTool (the never-crash guarantee) + toApiTools
+  edit.ts            # applyEdit — exact → whitespace-tolerant, with actionable failure strings
+  fs-host.ts         # NodeToolHost: path-guarded fs + the INJECTED sandboxed run_shell
+  session-store.ts   # FileSessionStore (resume) + InMemorySessionStore; fail-closed read
+  prompt.ts          # the goaly-tuned system prompt
+```
+
+### The transport (`LlmClient`) — shared with the `openai` provider
+
+The HTTP layer is one place (`OpenAiClient`): `fetch` + Zod, base-url + bearer auth, bounded retries
+(network / 429 / 5xx, then a fail-closed throw), per-request `AbortController` timeout, and `usage`
+→ `TokenBreakdown` (OpenAI's `prompt_tokens` is cache-inclusive, so cached tokens are split out into
+`cacheRead`). Both `fetch` and the backoff `sleep` are injectable, so unit tests touch no network and
+no real timer. It returns a **normalized** `ChatResult` (minted tool-call ids, parsed usage) so the
+loop never re-handles wire quirks.
+
+The same client backs the read-only `OpenAiLlmProvider` (`--llm-provider openai`): a single
+`[system?, user]` exchange with **no tools**, so it is structurally read-only — it fails closed
+(throws) when the endpoint returns no text (invariant #4), the same guarantee a CLI provider gets
+from its `readonlyArgs` dialect.
+
+### The loop and its fail-closed contract (the part that matters)
+
+`loop.ts` is the heart: call the model; append its turn; if it requested `tool_calls`, dispatch each
+and feed results back; if it returned a final message or called `finish`, stop. The termination and
+fail-closed mapping mirror `adapter.contract.test.ts`:
+
+| condition | status |
+|---|---|
+| turn cap hit | `truncated` |
+| wall-clock deadline reached | `timeout` |
+| client throws (network / 5xx / malformed envelope, after retries) | `crashed` (→ pure `STUCK_HARNESS_CRASH`) |
+| a throwing / invalid tool call | its error becomes the **tool result string** (never a crash) |
+| final message / `finish` | `completed` |
+
+The loop **never throws** out of `run()` — this is the single most important property and gets a
+dedicated adversarial test. A throwing event sink is swallowed (streaming is pure observability).
+
+### Tools, and why `edit_file` gets the heaviest test table
+
+The tool set is minimal and every tool **Zod-validates its arguments at the seam** (invariant #6):
+`read_file`, `list_dir`, `grep`, `write_file`, `edit_file`, `run_shell`, `finish`. `dispatchTool`
+owns the never-crash guarantee — an unknown tool, non-JSON arguments, or a throwing handler all become
+a result string the model can recover from.
+
+`edit_file` is the make-or-break of harness *quality* (not safety): a naive exact-only replace
+thrashes when the model copies text with a stray space or wrong indent. `edit.ts` is therefore a pure
+function with a ladder — exact match first, then whitespace-tolerant line matching — and returns a
+clear, actionable error for every failure (not found / not unique / empty / no-op). `write_file` is
+the escape hatch. This is the largest determinant of how many iterations a run takes, so it carries
+the heaviest unit-test table in the slice (`edit.test.ts`).
+
+### Sandboxing at the tool grain (the key architectural difference)
+
+A CLI harness is **one** opaque subprocess; the sandbox wraps the whole binary. The goaly-code harness is
+**goaly's own process** making the API call, plus **many** shell subprocesses (one per `run_shell`).
+So the untrusted surface shrinks to `run_shell`:
+
+- the inference HTTP call is made by goaly itself, **un-jailed** — no change to how the endpoint is
+  reached;
+- **file edits go through goaly's own path-guarded writers** (`NodeToolHost`), not a subprocess;
+- only `run_shell` is sandboxed, with the **same** launcher the codec harnesses use, at a *finer*
+  grain. `compose.ts` injects the sandbox-wrapped shell into the host (keeping the harness network
+  profile + full env); everything else in `goaly-code` is testable with a fake shell.
+
+### Session persistence (resume, invariant #7)
+
+The harness owns its conversation; the orchestrator only threads a `SessionId`. `FileSessionStore`
+persists the message log keyed by that id (sanitized into a safe filename) and reloads it on resume,
+appending the next prompt. It is fail-closed on read — a corrupt/missing/unparseable file degrades to
+a fresh session (logged loudly), never a throw — and validates every message with the same Zod schema
+the wire uses.
+
+### Registration (precise)
+
+- `src/cli/args.ts`: `HarnessChoice = AgentCli | 'fake' | 'goaly-code'`; `LlmProviderChoice = AgentCli |
+  'openai'`; allow both in `parseHarness`/`parseLlmProvider`; add `--base-url <url>` and
+  `--llm-api-key-env <NAME>` (default `OPENAI_API_KEY`); usage strings.
+- `src/cli/compose.ts`: `makeHarness` is bypassed for `goaly-code` — `composeDeps` routes to `makeGoalyCodeHarness`
+  (builds the `OpenAiClient`, the `NodeToolHost` with a sandbox-wrapped `run_shell`, and a
+  `FileSessionStore`). `makeLlmProvider` gains an `openai` branch (a direct `OpenAiLlmProvider`). Both
+  fail closed (`EndpointConfigError`) without a base URL / resolved model. `codecFor` is **untouched** (goaly-code
+  is not a codec). `src/cli/main.ts` resolves the bearer token from `--llm-api-key-env` and catches
+  `EndpointConfigError` for a friendly exit. `independence.ts` maps `goaly-code`'s family to `openai`.
+- Tests: `args` parses the new flags; `compose.goaly-code.test.ts` builds a `GoalyCodeHarness` / `openai` provider
+  and fails closed without config; `compose.goaly-code-e2e.test.ts` drives the **full pipeline** (real git +
+  fs) with a fake HTTP endpoint to a verified DONE; the loop is proven with a scripted `LlmClient` and
+  a fake host — **zero network, zero real shell**.
+
+### Testing the goaly-code harness (no network, no shell)
+
+Construct `new GoalyCodeHarness({ client, model, host, sessionStore })` with a **scripted `LlmClient`**
+(returns canned `ChatResult`s or throws) and a **fake `ToolHost`**, then assert the seam invariants:
+never throws, always a valid `HarnessRunResult`, every scenario (finish / final-text / client-throws /
+timeout / truncate) maps to a sane status — mirroring `adapter.contract.test.ts`. Test `applyEdit`
+directly (the heaviest table), `dispatchTool`'s fail-closed paths, `NodeToolHost` against a temp dir,
+and the session store round-trip / fail-closed read. See `src/goaly-code/*.test.ts`.
 
 ## Test it (no real process)
 

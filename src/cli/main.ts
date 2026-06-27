@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { parseArgs, USAGE, UsageError, type ParsedArgs } from './args';
-import { composeDeps, STATE_DIR } from './compose';
+import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
 import { runRuns } from './runs';
 import { drive } from '../driver/driver';
@@ -97,6 +97,10 @@ export async function main(argv: string[]): Promise<number> {
     egressProxy = await startEgressProxy(egressAllowlist);
   }
   try {
+    // Resolve the OpenAI-compatible bearer token from its env var (default OPENAI_API_KEY) at the
+    // composition edge. A keyless local endpoint (ollama) leaves it unset — that's allowed.
+    const llmApiKey = process.env[parsed.llmApiKeyEnv];
+
     let deps;
     try {
       deps = composeDeps(parsed.config, {
@@ -105,6 +109,8 @@ export async function main(argv: string[]): Promise<number> {
         llmProvider: parsed.llmProvider,
         workspaceRoot: parsed.workspace,
         runId,
+        ...(parsed.baseUrl !== undefined ? { baseUrl: parsed.baseUrl } : {}),
+        ...(llmApiKey !== undefined ? { llmApiKey } : {}),
         ...(parsed.baseline !== undefined ? { baseline: parsed.baseline } : {}),
         ...(parsed.verifyDir !== undefined ? { verifyDir: parsed.verifyDir } : {}),
         ...(parsed.planFile !== undefined ? { planFile: parsed.planFile } : {}),
@@ -122,6 +128,12 @@ export async function main(argv: string[]): Promise<number> {
       // Fail-closed (invariant #4): a requested sandbox mechanism that the host lacks REFUSES TO
       // START — a clear message and a non-zero exit, never a silent unsandboxed run.
       if (e instanceof SandboxUnavailableError) {
+        process.stderr.write(`goaly: ${e.message}\n`);
+        return 2;
+      }
+      // Fail-closed config error for `--harness goaly-code` / `--llm-provider openai` (missing base URL or
+      // model): a clear message + non-zero exit, never a silent run pointing at nothing.
+      if (e instanceof EndpointConfigError) {
         process.stderr.write(`goaly: ${e.message}\n`);
         return 2;
       }

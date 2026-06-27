@@ -33,7 +33,16 @@ import { buildLogger, type FileLogOptions } from '../log/build';
 import type { Logger, LogLevel } from '../log/logger';
 import type { LogFs } from '../log/sinks';
 import { AgentCliLlmProvider } from '../llm/agent-cli-provider';
+import { OpenAiLlmProvider } from '../llm/openai-provider';
+import { OpenAiClient, type FetchLike } from '../llm-client/openai-client';
+import { GoalyCodeHarness } from '../goaly-code/harness';
+import { NodeToolHost, type ShellExec } from '../goaly-code/fs-host';
+import { FileSessionStore } from '../goaly-code/session-store';
 import { codecFor, type AgentCli } from '../agent-cli/registry';
+import { runProcess } from '../util/spawn';
+import { augmentToolPath } from '../workspace/scrub-env';
+import { resolveProfile } from '../sandbox';
+import type { ResolvedModels } from './models';
 import type { AgentEventSink, PhasedStreamSink, StreamPhase } from '../agent-cli/stream';
 import { makeStreamRenderer, streamLogFields } from './stream-render';
 import { resolveModels, type ModelSelection } from './models';
@@ -135,7 +144,25 @@ export type ComposeOptions = {
   streamTranscript?: boolean;
   /** Override the stream-transcript path (implies {@link streamTranscript}). Default next to the run log. */
   streamFile?: string;
+  /**
+   * OpenAI-compatible endpoint base URL for `--harness goaly-code` / `--llm-provider openai`. Required for
+   * those targets; absent ⇒ they fail closed at composition (a typed {@link EndpointConfigError}).
+   */
+  baseUrl?: string;
+  /** Resolved bearer token for that endpoint (read from env at the composition edge). May be absent. */
+  llmApiKey?: string;
+  /** Inject the HTTP fetch for the OpenAI client (tests/embedders); default binds global fetch. */
+  llmFetch?: FetchLike;
+  /** Override the goaly-code harness per-run turn cap. */
+  goalyCodeMaxTurns?: number;
 };
+
+/**
+ * Thrown when `--harness goaly-code` / `--llm-provider openai` is selected without the config they require
+ * (a base URL, a resolved model). Fail-closed (invariant #4): the run refuses to start rather than
+ * silently pointing at nothing. The CLI catches it for a friendly message + exit 2.
+ */
+export class EndpointConfigError extends Error {}
 
 /** The orchestrator's own state directory name, kept out of stuck-detection hashing. */
 export const STATE_DIR = '.goaly';
@@ -228,6 +255,9 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
         makeLlmProvider(provider, model, {
           ...(timeouts.llmMs !== undefined ? { timeoutMs: timeouts.llmMs } : {}),
           ...(streamSink !== undefined ? { onEvent: (event) => streamSink(phase, event) } : {}),
+          ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
+          ...(options.llmApiKey !== undefined ? { apiKey: options.llmApiKey } : {}),
+          ...(options.llmFetch !== undefined ? { fetch: options.llmFetch } : {}),
         }),
       llmMeter,
     );
@@ -258,12 +288,15 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       ? new AutoSealGate()
       : new HumanSealGate({ allowRevise: config.maxSealRevisions > 0 }),
     ...(phasedSeams !== undefined ? phasedSeams : {}),
-    harness: makeHarness(options.harness, models.harness, timeouts.harnessMs, timeouts.harnessIdleMs, {
-      launcher,
-      workspace: options.workspaceRoot,
-      policy: options.sandbox ?? defaultPolicy(),
-      ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
-    }),
+    harness:
+      options.harness === 'goaly-code'
+        ? makeGoalyCodeHarness(options, models, stateDir, logger, launcher)
+        : makeHarness(options.harness, models.harness, timeouts.harnessMs, timeouts.harnessIdleMs, {
+            launcher,
+            workspace: options.workspaceRoot,
+            policy: options.sandbox ?? defaultPolicy(),
+            ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
+          }),
     makeLadder: (contract) => buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs),
     approver: new AgentApprover({ llm: llmFor(models.approver, 'approve') }),
     // Pre-flight soundness classifier (Fix #2): a read-only call that decides whether a failing
@@ -376,8 +409,26 @@ function buildRunLogger(options: ComposeOptions, stateDir: string): Logger {
 export function makeLlmProvider(
   choice: LlmProviderChoice,
   model: string | undefined,
-  opts: { onEvent?: AgentEventSink; timeoutMs?: number } = {},
+  opts: {
+    onEvent?: AgentEventSink;
+    timeoutMs?: number;
+    baseUrl?: string;
+    apiKey?: string;
+    fetch?: FetchLike;
+  } = {},
 ): LlmProvider {
+  // `openai` is the first non-CLI provider: a direct chat-completions call (no coding CLI). It is
+  // structurally read-only (one [system,user] exchange, no tools) and fails closed without the
+  // endpoint/model it needs.
+  if (choice === 'openai') {
+    if (opts.baseUrl === undefined) {
+      throw new EndpointConfigError('--llm-provider openai requires --base-url <url>');
+    }
+    if (model === undefined) {
+      throw new EndpointConfigError('--llm-provider openai requires a model (--llm-model or --model)');
+    }
+    return new OpenAiLlmProvider({ client: makeOpenAiClient(opts.baseUrl, opts.apiKey, opts.timeoutMs, opts.fetch), model });
+  }
   // One codec-driven provider for every CLI: the codec owns the read-only argv, the prompt-on-stdin
   // decision, and the field/stream extractors, so judge/approver/compiler share one source of truth
   // with the harness role. `claude` reads its prompt on stdin; codex/droid/pi carry it on argv —
@@ -387,6 +438,21 @@ export function makeLlmProvider(
     ...(model !== undefined ? { model } : {}),
     ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     ...(opts.onEvent !== undefined ? { onEvent: opts.onEvent } : {}),
+  });
+}
+
+/** Build the shared OpenAI-compatible HTTP client (transport for the provider AND the goaly-code harness). */
+function makeOpenAiClient(
+  baseUrl: string,
+  apiKey: string | undefined,
+  timeoutMs: number | undefined,
+  fetch: FetchLike | undefined,
+): OpenAiClient {
+  return new OpenAiClient({
+    baseUrl,
+    ...(apiKey !== undefined ? { apiKey } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(fetch !== undefined ? { fetch } : {}),
   });
 }
 
@@ -430,7 +496,8 @@ type HarnessSandbox = {
 };
 
 function makeHarness(
-  choice: HarnessChoice,
+  // `goaly-code` is the non-codec adapter, routed away in composeDeps; this builds only codec-backed (and fake).
+  choice: Exclude<HarnessChoice, 'goaly-code'>,
   model: string | undefined,
   timeoutMs: number | undefined,
   idleTimeoutMs: number | undefined,
@@ -459,7 +526,7 @@ function makeHarness(
  * the launcher's rewritten `[binary, ...argv]`; the harness seam always keeps network egress.
  */
 function sandboxedHarnessExec(
-  choice: HarnessChoice,
+  choice: Exclude<HarnessChoice, 'goaly-code'>,
   timeoutMs: number | undefined,
   idleTimeoutMs: number | undefined,
   sandbox: HarnessSandbox,
@@ -478,6 +545,76 @@ function sandboxedHarnessExec(
     // The egress proxy when an allowlist is active (issue #39); the launcher pins the jail at it.
     ...(sandbox.proxy !== undefined ? { proxy: sandbox.proxy } : {}),
   });
+}
+
+/**
+ * Build the goaly-code harness (the first non-codec adapter). It needs a base URL and a resolved model
+ * (fail-closed otherwise), an OpenAI client for inference, a path-guarded {@link NodeToolHost} whose
+ * `run_shell` is the ONLY sandboxed exec (finer-grained than wrapping an opaque CLI — spec §2.5), and
+ * a {@link FileSessionStore} for resume. `sandboxedHarnessExec` (a codec-command wrapper) is bypassed.
+ */
+function makeGoalyCodeHarness(
+  options: ComposeOptions,
+  models: ResolvedModels,
+  stateDir: string,
+  logger: Logger,
+  launcher: SandboxLauncher,
+): HarnessAdapter {
+  if (options.baseUrl === undefined) {
+    throw new EndpointConfigError('--harness goaly-code requires --base-url <url>');
+  }
+  if (models.harness === undefined) {
+    throw new EndpointConfigError('--harness goaly-code requires a model (--model <m>)');
+  }
+  const timeouts = options.timeouts ?? {};
+  const client = makeOpenAiClient(options.baseUrl, options.llmApiKey, timeouts.harnessMs, options.llmFetch);
+  const shell = goalyCodeShellExec({
+    root: options.workspaceRoot,
+    launcher,
+    policy: options.sandbox ?? defaultPolicy(),
+    ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
+    ...(timeouts.harnessMs !== undefined ? { timeoutMs: timeouts.harnessMs } : {}),
+  });
+  return new GoalyCodeHarness({
+    client,
+    model: models.harness,
+    host: new NodeToolHost({ root: options.workspaceRoot, shell }),
+    sessionStore: new FileSessionStore({ dir: path.join(stateDir, 'goaly-code-sessions') }),
+    logger,
+    ...(timeouts.harnessMs !== undefined ? { timeoutMs: timeouts.harnessMs } : {}),
+    ...(options.goalyCodeMaxTurns !== undefined ? { maxTurns: options.goalyCodeMaxTurns } : {}),
+  });
+}
+
+/**
+ * The sandboxed `run_shell` exec for the goaly-code harness — the agent's untrusted shell, jailed at the
+ * tool grain. Mirrors the verifier seam's `sh -c` rewrite but keeps the HARNESS network profile +
+ * full env (the agent may need egress to build/install; the inference call is made by goaly itself,
+ * un-jailed). With a {@link NoneLauncher} it is a plain in-workspace shell (default behavior).
+ */
+function goalyCodeShellExec(opts: {
+  root: string;
+  launcher: SandboxLauncher;
+  policy: SandboxPolicy;
+  proxy?: SandboxProxy;
+  timeoutMs?: number;
+}): ShellExec {
+  const budget = opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs, killGroup: true } : { killGroup: true };
+  return async (command) => {
+    const env = augmentToolPath(process.env);
+    if (opts.launcher.identity) {
+      const r = await runProcess(command, [], { cwd: opts.root, shell: true, env, ...budget });
+      return { stdout: r.stdout, stderr: r.stderr, code: r.code, timedOut: r.timedOut };
+    }
+    const profile = resolveProfile(networkForSeam(opts.policy, 'harness'), {
+      workspace: opts.root,
+      env,
+      ...(opts.proxy !== undefined ? { proxy: opts.proxy } : {}),
+    });
+    const wrapped = opts.launcher.wrap('sh', ['-c', command], profile);
+    const r = await runProcess(wrapped.command, wrapped.args, { cwd: opts.root, env, ...budget });
+    return { stdout: r.stdout, stderr: r.stderr, code: r.code, timedOut: r.timedOut };
+  };
 }
 
 /**
