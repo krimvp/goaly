@@ -21,6 +21,31 @@ criterion the agent can't weaken mid-loop.
 See [`DESIGN.md`](DESIGN.md) (what & why), [`ARCHITECTURE.md`](ARCHITECTURE.md) (how),
 [`CONTEXT.md`](CONTEXT.md) (glossary), and [`docs/adr/`](docs/adr) (decisions).
 
+## Quick start
+
+```bash
+npm i -g goaly                 # or, from a clone: make install
+
+# Just give it a goal — the agent writes the check, runs, and verifies (Claude + --generate,
+# all defaults). A human approves the frozen contract once at Seal:
+goaly "add a /health endpoint returning 200"
+
+# Run hands-off (-d auto-accepts the still-frozen, still-logged contract):
+goaly -d "add a /health endpoint returning 200"
+
+# Or point at a check you already have:
+goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
+```
+
+Exit codes: `0` DONE · `1` FAILED/ABORTED · `2` usage error. See [Usage](#usage) for every flag.
+
+## Contents
+
+- [How it works](#how-it-works) — the loop, the two gates, the verify ladder
+- [Install](#install) · [Usage](#usage) — every flag and mode
+- [Phased goals](#phased-goals---phased) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
+- [Develop](#develop) · [Embedding](#embedding) — contributing and the library API
+
 ## How it works
 
 The loop has exactly **two named gates** and **three bounded retry edges** — nothing else loops:
