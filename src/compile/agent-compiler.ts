@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { RunConfig } from '../domain/config';
+import type { ContractInput } from '../domain/config';
 import type { CompiledContract, GeneratedFile, Rung, UnhashedContract } from '../domain/contract';
 import { freezeContract, sha256Hex } from '../util/hash';
 import type { LlmProvider } from '../llm/provider';
@@ -153,7 +153,7 @@ function parseGenerated(raw: string): GeneratedVerification {
 function buildRungs(
   command: string,
   rubric: string,
-  judge: RunConfig['judge'],
+  judge: ContractInput['judge'],
   smoke: string | undefined,
 ): Rung[] {
   const rungs: Rung[] = [{ kind: 'deterministic', command }];
@@ -193,7 +193,7 @@ export class AgentCompiler implements VerifierCompiler {
     this.#verifyDir = opts.verifyDir;
   }
 
-  async compile(config: RunConfig, feedback?: string): Promise<CompiledContract> {
+  async compile(config: ContractInput, feedback?: string): Promise<CompiledContract> {
     if (config.verifier.kind === 'existing') {
       // An existing-command contract has no LLM authoring step, so there is nothing for a
       // Seal revise note to steer — recompilation is deterministic and feedback is ignored.
@@ -202,7 +202,7 @@ export class AgentCompiler implements VerifierCompiler {
     return this.#compileGenerate(config, config.verifier.intent, feedback);
   }
 
-  #compileExisting(config: RunConfig, ref: string): CompiledContract {
+  #compileExisting(config: ContractInput, ref: string): CompiledContract {
     const rubric = config.rubric ?? '';
     // No LLM authoring on the existing-command path, so setup comes ONLY from --setup-cmd (resolveSetup
     // drops it under --no-setup).
@@ -219,7 +219,7 @@ export class AgentCompiler implements VerifierCompiler {
   }
 
   async #compileGenerate(
-    config: RunConfig,
+    config: ContractInput,
     intent: string | undefined,
     feedback: string | undefined,
   ): Promise<CompiledContract> {
@@ -320,7 +320,7 @@ function dedupe(values: readonly string[]): string[] {
  * Precedence: `--no-setup` disables it entirely; otherwise `--setup-cmd` wins over what the compiler
  * authored. A blank authored string is treated as "no setup". Returns undefined when there is none.
  */
-function resolveSetup(config: RunConfig, authored: string | undefined): string | undefined {
+function resolveSetup(config: ContractInput, authored: string | undefined): string | undefined {
   if (config.noSetup) return undefined;
   if (config.setupCmd !== undefined) return config.setupCmd;
   const trimmed = authored?.trim();

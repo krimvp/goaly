@@ -1,4 +1,4 @@
-import type { RunConfig } from '../domain/config';
+import type { ContractInput } from '../domain/config';
 import type { CompiledContract } from '../domain/contract';
 
 /**
@@ -12,7 +12,11 @@ import type { CompiledContract } from '../domain/contract';
  * an authoring compiler should re-author the contract steered by it. This is pre-approval
  * renegotiation and does not weaken the freeze — each attempt is frozen and logged on its
  * own; only the approved contract enters the loop.
+ *
+ * The input is narrowed to {@link ContractInput} (goal / verification intent / judge bar): the
+ * compiler authors the FROZEN contract and so must NOT read loop, gate, or wiring config — the type
+ * makes that structural, not a convention. The Driver still passes the whole `RunConfig` (a superset).
  */
 export interface VerifierCompiler {
-  compile(config: RunConfig, feedback?: string): Promise<CompiledContract>;
+  compile(input: ContractInput, feedback?: string): Promise<CompiledContract>;
 }

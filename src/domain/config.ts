@@ -148,6 +148,53 @@ export type RunConfig = z.infer<typeof RunConfig>;
 export type RunConfigInput = z.input<typeof RunConfig>;
 
 /**
+ * `RunConfig` viewed by LIFETIME, so each seam is handed only the fields it may read. The runtime
+ * value is ONE flat `RunConfig`; these `Pick<>` views narrow the SEAM SIGNATURES — a compiler typed
+ * `ContractInput` cannot read a loop knob; the driver reads `DriverWiring`; the reducer reads loop /
+ * gate policy. `RunConfig` is a superset of every view, so passing the whole config where a view is
+ * expected needs no conversion (covariance) — the narrowing is purely about what a seam can *read*.
+ */
+/** Authored ONCE into the frozen `CompiledContract`: the goal, the verification intent, the bar. */
+export type ContractInput = Pick<
+  RunConfig,
+  'goal' | 'verifier' | 'smoke' | 'setupCmd' | 'noSetup' | 'rubric' | 'judge'
+>;
+/** The pre-loop, human-gated renegotiation bounds (Seal / plan revise + compile retry). */
+export type GatePolicy = Pick<
+  RunConfig,
+  'autonomous' | 'maxSealRevisions' | 'maxCompileRetries' | 'maxPlanRevisions'
+>;
+/** Operational loop policy the pure reducer reads: iteration cap, stuck, budget, phasing, tools. */
+export type LoopPolicy = Pick<
+  RunConfig,
+  'maxIterations' | 'stuckPolicy' | 'budget' | 'phased' | 'maxPhases' | 'installMissingTools'
+>;
+/** Pure Driver wiring — NEVER the frozen contract, never the reducer's decision (the diff scope). */
+export type DriverWiring = Pick<RunConfig, 'diffIgnore' | 'deltaVerify'>;
+
+/** Extract the {@link GatePolicy} fields. Pure; used to re-derive a phase config from the base. */
+export const pickGatePolicy = (c: GatePolicy): GatePolicy => ({
+  autonomous: c.autonomous,
+  maxSealRevisions: c.maxSealRevisions,
+  maxCompileRetries: c.maxCompileRetries,
+  maxPlanRevisions: c.maxPlanRevisions,
+});
+/** Extract the {@link LoopPolicy} fields. Pure. */
+export const pickLoopPolicy = (c: LoopPolicy): LoopPolicy => ({
+  maxIterations: c.maxIterations,
+  stuckPolicy: c.stuckPolicy,
+  budget: c.budget,
+  phased: c.phased,
+  maxPhases: c.maxPhases,
+  installMissingTools: c.installMissingTools,
+});
+/** Extract the {@link DriverWiring} fields. Pure. */
+export const pickDriverWiring = (c: DriverWiring): DriverWiring => ({
+  diffIgnore: c.diffIgnore,
+  deltaVerify: c.deltaVerify,
+});
+
+/**
  * Raw CLI shape, coerced into a `RunConfig`. Kept separate so the boundary between
  * "stringly-typed argv" and the validated domain object is explicit (parse, don't validate).
  */

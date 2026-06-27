@@ -1,5 +1,53 @@
 import { describe, it, expect } from 'vitest';
-import { RunConfig, CliInput, cliInputToRunConfig } from './config';
+import {
+  RunConfig,
+  CliInput,
+  cliInputToRunConfig,
+  pickGatePolicy,
+  pickLoopPolicy,
+  pickDriverWiring,
+} from './config';
+
+describe('RunConfig lifetime views', () => {
+  // The contract-input fields (authored once into the frozen CompiledContract). Kept as an explicit
+  // list (ContractInput has no pick helper — the compiler narrows by TYPE, covariantly).
+  const CONTRACT_INPUT_KEYS = ['goal', 'verifier', 'smoke', 'setupCmd', 'noSetup', 'rubric', 'judge'];
+
+  it('the four views PARTITION RunConfig — every field has exactly one home (no orphan)', () => {
+    // A fully-populated config so every optional field is present too.
+    const full = RunConfig.parse({
+      goal: 'g',
+      verifier: { kind: 'generate', intent: 'i' },
+      smoke: 'node smoke.mjs',
+      setupCmd: 'npm ci',
+      rubric: 'r',
+    });
+    const allKeys = Object.keys(full).sort();
+    const viewKeys = [
+      ...CONTRACT_INPUT_KEYS,
+      ...Object.keys(pickGatePolicy(full)),
+      ...Object.keys(pickLoopPolicy(full)),
+      ...Object.keys(pickDriverWiring(full)),
+    ];
+    // No field is claimed by two views…
+    expect(new Set(viewKeys).size).toBe(viewKeys.length);
+    // …and together the views cover the whole config — so a NEW RunConfig field added without a view
+    // assignment trips this test (it would be orphaned, silently invisible to phaseConfigFor).
+    expect([...new Set(viewKeys)].sort()).toEqual(allKeys);
+  });
+
+  it('the pick helpers copy only their own view', () => {
+    const c = RunConfig.parse({ goal: 'g', verifier: { kind: 'generate' } });
+    expect(pickGatePolicy(c)).toEqual({
+      autonomous: c.autonomous,
+      maxSealRevisions: c.maxSealRevisions,
+      maxCompileRetries: c.maxCompileRetries,
+      maxPlanRevisions: c.maxPlanRevisions,
+    });
+    expect(pickDriverWiring(c)).toEqual({ diffIgnore: c.diffIgnore, deltaVerify: c.deltaVerify });
+    expect(pickLoopPolicy(c)).toMatchObject({ maxIterations: c.maxIterations, phased: c.phased });
+  });
+});
 
 describe('RunConfig', () => {
   it('applies defaults for the optional fields', () => {

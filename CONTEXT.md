@@ -7,6 +7,14 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
 - **Contract** (`CompiledContract`) — the **frozen** definition of "done": an ordered ladder
   of rungs + a rubric + a `contractHash`. Authored once, approved at Seal, never rewritten.
   _avoid:_ the goal; the config; something the worker can edit mid-loop.
+- **Config views** — `RunConfig` is one flat object read by LIFETIME through four `Pick<>` views, so
+  each seam is handed only what it may read: **ContractInput** (authored once into the frozen Contract:
+  goal/verifier/smoke/setupCmd/noSetup/rubric/judge — the compiler takes only this), **GatePolicy**
+  (pre-loop human-gated bounds: autonomous + the Seal/compile/plan revise caps), **LoopPolicy** (the
+  reducer's operational policy: maxIterations/stuckPolicy/budget/phased/maxPhases/installMissingTools),
+  **DriverWiring** (diffIgnore/deltaVerify — never the contract, never the reducer's decision). The four
+  partition the config with no orphan. _avoid:_ reading a loop/wiring knob from the compiler; hashing a
+  wiring field into the contract.
 - **Verifier** — anything satisfying `verify(workspace, goal, rubric) -> Verdict`. Could be an
   exit code, a test run, an LLM quorum, or the Ladder itself. _avoid:_ the approver (separate
   seam); the harness.
