@@ -48,9 +48,10 @@ describe('withSandboxAgent', () => {
       seen = args;
       return agentResult;
     };
-    const wrapped = withSandboxAgent('claude', inner, new BwrapLauncher('/home/me'), {
+    const wrapped = withSandboxAgent('claude', inner, new BwrapLauncher(), {
       workspace: '/w',
       network: 'allow',
+      home: '/home/me',
     });
     await wrapped(['-p', 'hi'], { prompt: 'hi' });
     expect(seen[0]).toBe('bwrap'); // launcher binary is now argv[0]
@@ -82,10 +83,11 @@ describe('withSandboxAgent', () => {
       seen = args;
       return agentResult;
     };
-    const wrapped = withSandboxAgent('claude', inner, new BwrapLauncher('/home/me'), {
+    const wrapped = withSandboxAgent('claude', inner, new BwrapLauncher(), {
       workspace: '/w',
       network: 'allow',
       env: { ANTHROPIC_API_KEY: 'sk-test' },
+      home: '/home/me',
     });
     await wrapped(['-p', 'hi'], { prompt: 'hi' });
     expect(seen).not.toContain('-e');
@@ -127,10 +129,11 @@ describe('withSandboxAgent', () => {
       seen = args;
       return agentResult;
     };
-    const wrapped = withSandboxAgent('claude', inner, new BwrapLauncher('/home/me'), {
+    const wrapped = withSandboxAgent('claude', inner, new BwrapLauncher(), {
       workspace: '/w',
       network: { allowlist: ['api.anthropic.com'] },
       proxy: { port: 7777 },
+      home: '/home/me',
     });
     await wrapped(['-p', 'hi'], { prompt: 'hi' });
     const joined = seen.join(' ');
@@ -168,7 +171,7 @@ describe('withSandboxVerify', () => {
       seen = { cmd, args, shell: opts.shell };
       return execResult;
     };
-    const wrapped = withSandboxVerify(inner, new BwrapLauncher('/home/me'), 'none');
+    const wrapped = withSandboxVerify(inner, new BwrapLauncher(), 'none', undefined, '/home/me');
     // A multi-token / shell-operator command must reach an interpreter inside the jail — NOT be
     // execve'd as a binary literally named 'echo a && echo b'.
     await wrapped('echo a && echo b', [], { cwd: '/w', shell: true });
@@ -198,7 +201,7 @@ describe('withSandboxVerify', () => {
       seen = args;
       return inner(cmd, args, opts);
     };
-    const wrapped = withSandboxVerify(tap, new BwrapLauncher('/home/me'), 'allow');
+    const wrapped = withSandboxVerify(tap, new BwrapLauncher(), 'allow', undefined, '/home/me');
     await wrapped('npm test', [], { cwd: '/w', shell: true });
     expect(seen).not.toContain('--unshare-net');
   });
@@ -211,9 +214,10 @@ describe('withSandboxVerify', () => {
     };
     const wrapped = withSandboxVerify(
       tap,
-      new BwrapLauncher('/home/me'),
+      new BwrapLauncher(),
       { allowlist: ['registry.npmjs.org'] },
       { port: 7777 },
+      '/home/me',
     );
     await wrapped('npm test', [], { cwd: '/w', shell: true });
     const joined = seen.join(' ');

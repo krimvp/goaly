@@ -52,3 +52,8 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
 - **Event** — the resolved result of a Command, fed to the reducer. Persisted write-ahead.
 - **Run Log** — the append-only, write-ahead event stream; the source of truth for replay and
   resume. _avoid:_ a debug log.
+- **SandboxProfile** — the mechanism-agnostic per-seam isolation profile (`{ workspace, denyDirs,
+  network: 'isolated' | 'proxied' | 'open', env?, proxy? }`), resolved ONCE (`resolveProfile`) at the
+  composition edge. A **Launcher** (`bwrap`/`firejail`/`container`/`none`) only *translates* it into
+  its own flag dialect — it decides no policy. _avoid:_ putting per-`$HOME`/network/proxy policy
+  inside a launcher; it lives in the profile.

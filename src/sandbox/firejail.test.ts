@@ -6,12 +6,16 @@ const WS = '/home/me/project';
 const HOME = '/home/me';
 
 function wrap(network: 'none' | 'allow', workspace = WS) {
-  return new FirejailLauncher(HOME).wrap('npm', ['test'], { workspace, network });
+  return new FirejailLauncher().wrap('npm', ['test'], {
+    workspace,
+    denyDirs: DENIED_HOME_SECRETS.map((s) => `${HOME}/${s}`),
+    network: network === 'none' ? 'isolated' : 'open',
+  });
 }
 
 describe('FirejailLauncher.wrap', () => {
   it('spawns firejail and reports its mode', () => {
-    const launcher = new FirejailLauncher(HOME);
+    const launcher = new FirejailLauncher();
     expect(launcher.mode).toBe('firejail');
     expect(launcher.available).toBe(true);
     expect(launcher.identity).toBe(false);
@@ -40,9 +44,10 @@ describe('FirejailLauncher.wrap', () => {
   it('keeps the real /tmp writable (not --private-tmp) when the workspace lives under /tmp', () => {
     // A private tmpfs would shadow a workspace under /tmp and firejail can't re-expose it (it applies
     // fs ops in its own order, unlike bwrap's "bind last"). Keep the real /tmp writable instead.
-    const { args } = new FirejailLauncher(HOME).wrap('sh', ['-c', 'true'], {
+    const { args } = new FirejailLauncher().wrap('sh', ['-c', 'true'], {
       workspace: '/tmp/work-xyz',
-      network: 'none',
+      denyDirs: [],
+      network: 'isolated',
     });
     expect(args).toContain('--read-write=/tmp');
     expect(args).not.toContain('--private-tmp');
@@ -64,9 +69,10 @@ describe('FirejailLauncher.wrap', () => {
   });
 
   it('routes an allowlist through the egress proxy via --env, keeping the network up (issue #39)', () => {
-    const { args } = new FirejailLauncher(HOME).wrap('npm', ['test'], {
+    const { args } = new FirejailLauncher().wrap('npm', ['test'], {
       workspace: WS,
-      network: { allowlist: ['*.npmjs.org'] },
+      denyDirs: [],
+      network: 'proxied',
       proxy: { port: 8123 },
     });
     // Network stays up (no --net=none) so the jail can reach the host-loopback proxy.
@@ -79,9 +85,10 @@ describe('FirejailLauncher.wrap', () => {
 
   it('fails closed when an allowlist is requested without a running proxy (issue #39)', () => {
     expect(() =>
-      new FirejailLauncher(HOME).wrap('npm', ['test'], {
+      new FirejailLauncher().wrap('npm', ['test'], {
         workspace: WS,
-        network: { allowlist: ['x.com'] },
+        denyDirs: [],
+        network: 'proxied',
       }),
     ).toThrow(/no egress-proxy/);
   });
@@ -93,10 +100,11 @@ describe('FirejailLauncher.wrap', () => {
     expect(args.slice(sh)).toEqual(['sh', '-c', FIREJAIL_CHDIR_WRAP, WS, 'npm', 'test']);
   });
 
-  it('omits home blacklisting when $HOME is empty/unset, but still jails the rest', () => {
-    const { args } = new FirejailLauncher('').wrap('sh', ['-c', 'true'], {
+  it('omits home blacklisting when there are no deny dirs, but still jails the rest', () => {
+    const { args } = new FirejailLauncher().wrap('sh', ['-c', 'true'], {
       workspace: WS,
-      network: 'none',
+      denyDirs: [],
+      network: 'isolated',
     });
     expect(args).toContain('--read-only=/');
     expect(args).toContain('--net=none');

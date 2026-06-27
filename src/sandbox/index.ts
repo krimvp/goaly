@@ -17,8 +17,11 @@ export {
   AllowlistHost,
   networkForSeam,
   isAllowlist,
+  resolveProfile,
+  proxyEnv,
   type SandboxSeam,
-  type SandboxRunOpts,
+  type SandboxProfile,
+  type SandboxNetMode,
   type SandboxNetwork,
   type SandboxProxy,
 } from './policy';
@@ -30,8 +33,6 @@ export type MakeLauncherOpts = {
   which?: WhichProbe;
   /** OS platform (default `process.platform`). */
   platform?: NodeJS.Platform;
-  /** `$HOME` for bwrap's secret-masking (default `process.env.HOME`). */
-  home?: string | undefined;
 };
 
 /**
@@ -56,10 +57,10 @@ export function makeLauncher(policy: SandboxPolicy, opts: MakeLauncherOpts = {})
     );
   }
   if (detected.kind === 'bwrap') {
-    return new BwrapLauncher(opts.home);
+    return new BwrapLauncher();
   }
   if (detected.kind === 'firejail') {
-    return new FirejailLauncher(opts.home);
+    return new FirejailLauncher();
   }
   return new ContainerLauncher({
     runtime: detected.runtime,

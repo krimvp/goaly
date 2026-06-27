@@ -27,7 +27,7 @@ describe('composeDeps — sandbox fail-closed (invariant #4)', () => {
   });
 
   it('builds deps normally when a real launcher is available', () => {
-    const deps = composeDeps(makeConfig(), base(new BwrapLauncher('/home/me')));
+    const deps = composeDeps(makeConfig(), base(new BwrapLauncher()));
     expect(deps.harness.name).toBe('claude');
     expect(deps.workspace).toBeDefined();
   });

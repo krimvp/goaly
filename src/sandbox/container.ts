@@ -2,11 +2,8 @@ import type { SandboxLauncher, WrappedCommand } from './launcher';
 import {
   DEFAULT_CONTAINER_IMAGE,
   DEFAULT_CONTAINER_RUNTIME,
-  PROXY_ENV_VARS,
-  PROXY_NO_PROXY,
-  isAllowlist,
-  proxyUrlFor,
-  type SandboxRunOpts,
+  proxyEnv,
+  type SandboxProfile,
   type SandboxRuntime,
 } from './policy';
 
@@ -18,17 +15,18 @@ import {
 export const CONTAINER_HOST_GATEWAY = 'goaly-host-gateway';
 
 /**
- * The portable, cross-platform mechanism (covers macOS via Docker/podman): rewrite a command into
- * a `docker`/`podman run --rm` invocation. PURE string construction — no spawn, no IO — so the
- * exact argv is table-testable.
+ * The portable, cross-platform mechanism (covers macOS via Docker/podman): translate a resolved
+ * {@link SandboxProfile} into a `docker`/`podman run --rm` invocation. PURE string construction —
+ * no spawn, no IO — so the exact argv is table-testable, and all policy is already decided in the
+ * profile.
  *
  * The jail: only the workspace is bind-mounted, READ-WRITE, at the SAME absolute path inside the
  * container (`-v <ws>:<ws>`) and made the cwd (`-w <ws>`) so pinned/relative paths still resolve;
- * the host `$HOME`/credential dirs are simply never mounted; egress is cut with `--network none`
- * when `network:'none'`, or — when `network` is an allowlist (issue #39) — kept up but pinned to the
- * host egress proxy (reached via a `--add-host` gateway alias + `-e HTTP(S)_PROXY`, the proxy
- * denying non-listed hosts); the (already-scrubbed, for the verifier) env is passed through with
- * `-e NAME` per var; then the image and `command args`.
+ * the host `$HOME`/credential dirs are simply never mounted (so `profile.denyDirs` is moot here);
+ * egress is cut with `--network none` when `isolated`, or — when `proxied` (issue #39) — kept up but
+ * pinned to the host egress proxy (reached via a `--add-host` gateway alias + `-e HTTP(S)_PROXY`, the
+ * proxy denying non-listed hosts); the (already-scrubbed, for the verifier) env is passed through
+ * with `-e NAME` per var; then the image and `command args`.
  */
 export class ContainerLauncher implements SandboxLauncher {
   readonly mode = 'container' as const;
@@ -42,36 +40,35 @@ export class ContainerLauncher implements SandboxLauncher {
     this.#image = opts.image ?? DEFAULT_CONTAINER_IMAGE;
   }
 
-  wrap(command: string, args: string[], opts: SandboxRunOpts): WrappedCommand {
+  wrap(command: string, args: string[], profile: SandboxProfile): WrappedCommand {
     const runArgs: string[] = [
       'run', '--rm',
-      '-v', `${opts.workspace}:${opts.workspace}`,
-      '-w', opts.workspace,
+      '-v', `${profile.workspace}:${profile.workspace}`,
+      '-w', profile.workspace,
     ];
-    if (opts.network === 'none') {
+    if (profile.network === 'isolated') {
       runArgs.push('--network', 'none');
-    } else if (isAllowlist(opts.network)) {
-      // Allowlist (issue #39): keep the default bridge network (so the host gateway is reachable)
-      // and map a stable host alias to the runtime's host-gateway. The actual proxy `-e` vars are
-      // appended AFTER the env passthrough below, so they win over any host proxy env carried in.
+    } else if (profile.network === 'proxied') {
+      // Keep the default bridge network (so the host gateway is reachable) and map a stable host
+      // alias to the runtime's host-gateway. The proxy `-e` vars are appended AFTER the env
+      // passthrough below, so they win over any host proxy env carried in.
       runArgs.push('--add-host', `${CONTAINER_HOST_GATEWAY}:host-gateway`);
     }
     // Pass through only the NAMEs (the runtime reads each value from this process's own env), so the
     // already-scrubbed verifier env is mirrored without ever embedding secret values in the argv.
-    if (opts.env !== undefined) {
-      for (const name of Object.keys(opts.env)) {
-        if (opts.env[name] !== undefined) runArgs.push('-e', name);
+    if (profile.env !== undefined) {
+      for (const name of Object.keys(profile.env)) {
+        if (profile.env[name] !== undefined) runArgs.push('-e', name);
       }
     }
     // Pin the proxy env LAST (issue #39): a later `-e NAME=value` overrides an earlier name-only
     // `-e NAME`, so an inherited host `HTTP_PROXY` can't clobber the route to our egress proxy.
-    // Fail-closed if the proxy port is missing (`proxyUrlFor` throws).
-    if (isAllowlist(opts.network)) {
-      const url = proxyUrlFor(CONTAINER_HOST_GATEWAY, opts.proxy);
-      for (const name of PROXY_ENV_VARS) {
-        runArgs.push('-e', `${name}=${url}`);
-      }
-      runArgs.push('-e', `NO_PROXY=${PROXY_NO_PROXY}`, '-e', `no_proxy=${PROXY_NO_PROXY}`);
+    if (profile.network === 'proxied') {
+      proxyEnv(
+        (name, value) => runArgs.push('-e', `${name}=${value}`),
+        CONTAINER_HOST_GATEWAY,
+        profile.proxy,
+      );
     }
     runArgs.push(this.#image, command, ...args);
     return { command: this.#runtime, args: runArgs };
