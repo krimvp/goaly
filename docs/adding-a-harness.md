@@ -6,6 +6,30 @@ CLI's quirks in a single place. This guide shows exactly what to map and how. To
 CLI first, use the [`investigate-harness`](../.claude/skills/investigate-harness/SKILL.md) skill — it
 produces the flag/field/status mapping this guide asks for.
 
+## At a glance
+
+**You write one file** — `src/agent-cli/<name>-codec.ts` — and **add one line** to a registry:
+
+1. **Discover** three things about the CLI: how to run one headless turn, how to read its result,
+   and how to resume a session. (Per-turn streaming is a fourth, optional.)
+2. **Map** them into an `AgentCliCodec`: two argv dialects (write vs read-only), a field extractor,
+   a status mapping, and an optional stream extractor.
+3. **Register** it: add the literal to the `AgentCli` union + one `codecFor` case, and allow it in
+   the arg parsers.
+4. **Test** it: add the adapter to the shared contract matrix, plus codec-level tests; keep
+   `npm run typecheck` and `npm test` green.
+
+**The shared core already owns** the tolerant JSON/JSONL parse, the subprocess dance (timeouts,
+output caps, process-group kill), diff hashing, verifier execution, the streaming tap, and the
+sandbox wrap — all *outside* your codec. So a codec is **just one CLI's quirks**, never plumbing.
+
+**Two roles, one codec.** The same module drives both the write-mode harness (it edits the tree)
+*and* the read-only LLM steps (judge / approver / compiler / planner — which must never edit). The
+only difference is the argv dialect: `harnessArgs` (writable) vs `readonlyArgs` (read-only).
+
+The rest of this guide is the detail behind each step, ending with a copy-paste **skeleton** and a
+**checklist**. In a hurry, skim those two and refer back to the numbered mapping sections as needed.
+
 ## The contract
 
 The orchestrator-facing seam is one method:

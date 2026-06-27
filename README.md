@@ -4,9 +4,10 @@
 [![npm version](https://img.shields.io/npm/v/goaly.svg)](https://www.npmjs.com/package/goaly)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**🌐 [Interactive overview &amp; architecture →](https://krimvp.github.io/goaly/)** — the landing
-page (`docs/`) explains what this is, how the loop works, the internal architecture, and how to add
-a harness, with interactive diagrams.
+**🌐 [Interactive overview →](https://krimvp.github.io/goaly/)** — the landing page (`docs/`) is a
+high-level tour: what this is, how the loop works, and what's possible, with interactive diagrams. It
+links back here and to [`ARCHITECTURE.md`](ARCHITECTURE.md) / [`docs/adding-a-harness.md`](docs/adding-a-harness.md)
+for the depth.
 
 A **harness-agnostic goal-orchestration layer**: run a coding agent repeatedly until a goal is
 *verifiably* achieved, with a deterministic thin layer in control and a **frozen** success

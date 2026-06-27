@@ -175,17 +175,6 @@
   );
   if (ladderRungs.length) setLadder(-1);
 
-  /* =====================================================================
-     Harness comparison tabs
-     ===================================================================== */
-  $$(".tab").forEach((tab) =>
-    tab.addEventListener("click", () => {
-      const id = tab.dataset.tab;
-      $$(".tab").forEach((t) => t.classList.toggle("active", t === tab));
-      $$(".tabpane").forEach((p) => p.classList.toggle("active", p.id === "tab-" + id));
-    })
-  );
-
   /* ----------------------------------------------------------- year stamp */
   const yr = $("#year");
   if (yr) yr.textContent = new Date().getFullYear();
