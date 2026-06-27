@@ -147,8 +147,12 @@ export function runProcess(
       resolve({ stdout, stderr, code: code ?? 1, timedOut, truncated });
     });
 
-    if (options.input !== undefined && child.stdin !== null) {
-      child.stdin.write(options.input);
+    if (child.stdin !== null) {
+      if (options.input !== undefined) child.stdin.write(options.input);
+      // ALWAYS close stdin (even with no input): a headless agent CLI that reads stdin — pi reads it
+      // even in `--print` mode — blocks waiting for EOF on the inherited pipe until the wall-clock
+      // timeout kills it. A CLI that ignores stdin is unaffected. Without this, a `promptOnStdin:false`
+      // codec whose tool reads stdin (pi) hangs every turn.
       child.stdin.end();
     }
   });

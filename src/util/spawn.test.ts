@@ -83,6 +83,16 @@ describe('runProcess', () => {
     expect(r.stdout.length).toBe(8);
   });
 
+  it('closes the child stdin when no input is given, so a stdin-reading child gets EOF (not a hang)', async () => {
+    // A headless agent CLI that reads stdin (e.g. pi, even in --print mode) would block on the
+    // inherited stdin pipe forever if it were left open — every turn would run to the wall-clock
+    // timeout. `cat` reads stdin to EOF then exits; with stdin closed it exits 0 promptly. A short
+    // timeout proves it did NOT hang waiting for input.
+    const r = await runProcess('cat', [], { timeoutMs: 3000 });
+    expect(r.timedOut).toBe(false);
+    expect(r.code).toBe(0);
+  });
+
   it('killGroup + timeout reaps an orphaning shell that backgrounds a child without hanging', async () => {
     // The shell backgrounds a long sleeper that inherits stdout. Without a process-GROUP kill, the
     // sleeper would keep the inherited stdout pipe open and `close` would never fire — the call would
