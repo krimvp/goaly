@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { detectStuck, normalizeDetail } from './stuck';
-import { makeCtx, makeConfig, dh, passVerdict, failVerdict, veto, approve } from '../testing/fakes';
+import { makeCtx, makeConfig, dh } from '../testing/fakes';
+
+// detectStuck is pure over the LoopCtx histories and returns a typed { kind, message } (or null).
+// The IN-FLIGHT fresh-veto excuse (green ladder blocked only by an unseen veto) lives in DECIDE, so
+// it is exercised in decide.test.ts; here we test the history-driven detectors + the history half of
+// the no-diff excuse (timeout/crash).
 
 describe('detectStuck', () => {
   it('returns null when nothing is wrong', () => {
@@ -9,7 +14,9 @@ describe('detectStuck', () => {
 
   describe('no-diff', () => {
     it('fires when the last iteration changed nothing', () => {
-      expect(detectStuck(makeCtx({ lastNoDiff: true, iteration: 1 }))).toContain('no-diff');
+      const reason = detectStuck(makeCtx({ lastNoDiff: true, iteration: 1 }));
+      expect(reason?.kind).toBe('no-diff');
+      expect(reason?.message).toContain('no-diff');
     });
 
     it('does not fire before any iteration completes', () => {
@@ -26,66 +33,42 @@ describe('detectStuck', () => {
     });
   });
 
-  describe('no-diff excused once for a fresh veto / timeout (issue #54)', () => {
-    it('does NOT abort on a no-diff iteration blocked only by a fresh Sign-off veto', () => {
-      // Ladder green, a brand-new veto the agent has not yet seen (feedback still undefined).
-      const ctx = makeCtx({ lastNoDiff: true, iteration: 1, feedback: undefined });
-      const reason = detectStuck(ctx, { ladder: passVerdict(), approval: veto('inert power-ups') });
-      expect(reason).toBeNull();
-    });
-
-    it('DOES abort on a second no-diff once the agent has already seen that veto', () => {
-      // The agent was told the veto last turn (feedback === the veto reason) and still made no edits.
-      const ctx = makeCtx({ lastNoDiff: true, iteration: 2, feedback: 'inert power-ups' });
-      const reason = detectStuck(ctx, { ladder: passVerdict(), approval: veto('inert power-ups') });
-      expect(reason).toContain('no-diff');
-    });
-
-    it('does not excuse no-diff when the ladder is red (a stalled fix is genuinely stuck)', () => {
-      const ctx = makeCtx({ lastNoDiff: true, iteration: 1 });
-      expect(detectStuck(ctx, { ladder: failVerdict(), approval: null })).toContain('no-diff');
-    });
-
-    it('does not excuse no-diff when Sign-off did NOT veto (a passing run is handled as DONE upstream)', () => {
-      const ctx = makeCtx({ lastNoDiff: true, iteration: 1 });
-      expect(detectStuck(ctx, { ladder: passVerdict(), approval: approve() })).toContain('no-diff');
-    });
-
+  describe('no-diff history excuse — timeout / crash (issue #54)', () => {
     it('does not trip no-diff when the previous turn was killed by a timeout', () => {
       const ctx = makeCtx({ lastNoDiff: true, iteration: 1, lastRunStatus: 'timeout' });
-      // Even with no decision context, a timed-out turn never had a fair chance to edit.
+      // A timed-out turn never had a fair chance to edit; the timeout → maxIterations backstop decides.
       expect(detectStuck(ctx)).toBeNull();
     });
 
     it('still trips no-diff when a non-timeout turn made no edits', () => {
       const ctx = makeCtx({ lastNoDiff: true, iteration: 1, lastRunStatus: 'completed' });
-      expect(detectStuck(ctx)).toContain('no-diff');
+      expect(detectStuck(ctx)?.message).toContain('no-diff');
     });
   });
 
   describe('oscillation', () => {
     it('fires on an A,B,A,B diff-hash cycle', () => {
-      expect(detectStuck(makeCtx({ diffHashHistory: dh('a', 'b', 'a', 'b') }))).toContain(
+      expect(detectStuck(makeCtx({ diffHashHistory: dh('a', 'b', 'a', 'b') }))?.message).toContain(
         'oscillation',
       );
     });
 
     it('fires on a period-3 cycle A,B,C,A,B,C', () => {
       expect(
-        detectStuck(makeCtx({ diffHashHistory: dh('a', 'b', 'c', 'a', 'b', 'c') })),
+        detectStuck(makeCtx({ diffHashHistory: dh('a', 'b', 'c', 'a', 'b', 'c') }))?.message,
       ).toContain('oscillation');
     });
 
     it('fires on a period-4 cycle', () => {
       const ctx = makeCtx({ diffHashHistory: dh('a', 'b', 'c', 'd', 'a', 'b', 'c', 'd') });
-      expect(detectStuck(ctx)).toContain('oscillation');
+      expect(detectStuck(ctx)?.message).toContain('oscillation');
     });
 
     it('reports the smallest period when one cycle nests another', () => {
       // a,b,a,b,a,b is period-2, not period-3 — the minimal cycle is reported.
-      expect(detectStuck(makeCtx({ diffHashHistory: dh('a', 'b', 'a', 'b', 'a', 'b') }))).toContain(
-        'period 2',
-      );
+      expect(
+        detectStuck(makeCtx({ diffHashHistory: dh('a', 'b', 'a', 'b', 'a', 'b') }))?.message,
+      ).toContain('period 2');
     });
 
     it('does not fire on monotonic progress', () => {
@@ -117,7 +100,9 @@ describe('detectStuck', () => {
   describe('repeat-failure', () => {
     it('fires after N identical normalized failures', () => {
       const ctx = makeCtx({ verifierDetailHistory: ['same', 'same', 'same'] });
-      expect(detectStuck(ctx)).toContain('repeat-failure');
+      const reason = detectStuck(ctx);
+      expect(reason?.kind).toBe('repeat');
+      expect(reason?.message).toContain('repeat-failure');
     });
 
     it('does not fire below the threshold', () => {
@@ -134,7 +119,7 @@ describe('detectStuck', () => {
         config: makeConfig({ stuckPolicy: { repeatFailureThreshold: 2 } }),
         verifierDetailHistory: ['x', 'x'],
       });
-      expect(detectStuck(ctx)).toContain('repeat-failure');
+      expect(detectStuck(ctx)?.message).toContain('repeat-failure');
     });
 
     it('fires even when the worker changes files every iteration (Fix #3: diff churn must not mask a repeated failure)', () => {
@@ -151,10 +136,10 @@ describe('detectStuck', () => {
         ],
       });
       const reason = detectStuck(ctx);
-      expect(reason).toContain('repeat-failure');
+      expect(reason?.message).toContain('repeat-failure');
       // The abort is typed and names the repeated signature so it's diagnosable.
-      expect(reason).toContain('STUCK_REPEATED_FAILURE');
-      expect(reason).toContain('TS2339');
+      expect(reason?.message).toContain('STUCK_REPEATED_FAILURE');
+      expect(reason?.message).toContain('TS2339');
     });
 
     it('fires when failures differ only by volatile tokens once normalized', () => {
@@ -166,7 +151,7 @@ describe('detectStuck', () => {
           normalizeDetail('FAIL at 2026-06-22T16:00:59Z in /tmp/run-ccc (pid 9012)'),
         ],
       });
-      expect(detectStuck(ctx)).toContain('repeat-failure');
+      expect(detectStuck(ctx)?.message).toContain('repeat-failure');
     });
   });
 
@@ -174,8 +159,9 @@ describe('detectStuck', () => {
     it('fires after the default threshold (2) of consecutive crashes', () => {
       const ctx = makeCtx({ runStatusHistory: ['crashed', 'crashed'] });
       const reason = detectStuck(ctx);
-      expect(reason).toContain('STUCK_HARNESS_CRASH');
-      expect(reason).toContain('exited abnormally');
+      expect(reason?.kind).toBe('crash');
+      expect(reason?.message).toContain('STUCK_HARNESS_CRASH');
+      expect(reason?.message).toContain('exited abnormally');
     });
 
     it('does not fire on a single crash (which may be transient — one retry is allowed)', () => {
@@ -192,7 +178,7 @@ describe('detectStuck', () => {
         runStatusHistory: ['crashed', 'crashed'],
         lastRunOutput: 'claude: command not found',
       });
-      expect(detectStuck(ctx)).toContain('claude: command not found');
+      expect(detectStuck(ctx)?.message).toContain('claude: command not found');
     });
 
     it('honors a custom threshold', () => {
@@ -205,7 +191,7 @@ describe('detectStuck', () => {
         config: makeConfig({ stuckPolicy: { harnessCrashThreshold: 3 } }),
         runStatusHistory: ['crashed', 'crashed', 'crashed'],
       });
-      expect(detectStuck(tripped)).toContain('STUCK_HARNESS_CRASH');
+      expect(detectStuck(tripped)?.message).toContain('STUCK_HARNESS_CRASH');
     });
 
     it('wins over the downstream verifier red a crashed turn leaves (the misdiagnosis fix)', () => {
@@ -217,8 +203,8 @@ describe('detectStuck', () => {
         verifierDetailHistory: ['ImportError', 'ImportError', 'ImportError'],
       });
       const reason = detectStuck(ctx);
-      expect(reason).toContain('STUCK_HARNESS_CRASH');
-      expect(reason).not.toContain('STUCK_REPEATED_FAILURE');
+      expect(reason?.message).toContain('STUCK_HARNESS_CRASH');
+      expect(reason?.message).not.toContain('STUCK_REPEATED_FAILURE');
     });
 
     it('excuses no-diff for a crashed turn so the crash diagnosis wins (not a misleading no-diff)', () => {
@@ -231,7 +217,9 @@ describe('detectStuck', () => {
   describe('budget', () => {
     it('fires when the meter reports exceeded, regardless of iteration', () => {
       const ctx = makeCtx({ iteration: 0, lastBudget: { exceeded: true } });
-      expect(detectStuck(ctx)).toBe('budget exceeded');
+      const reason = detectStuck(ctx);
+      expect(reason?.kind).toBe('budget');
+      expect(reason?.message).toBe('budget exceeded');
     });
 
     it('takes priority over other detectors', () => {
@@ -242,7 +230,7 @@ describe('detectStuck', () => {
         runStatusHistory: ['crashed', 'crashed'],
         lastBudget: { exceeded: true },
       });
-      expect(detectStuck(ctx)).toBe('budget exceeded');
+      expect(detectStuck(ctx)?.message).toBe('budget exceeded');
     });
   });
 });

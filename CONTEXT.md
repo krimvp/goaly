@@ -43,9 +43,12 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
   CONTINUE / DONE / FAILED / ABORTED. _avoid:_ a place that runs effects.
 - **diffHash** — a non-mutating content hash of the working tree, computed by the **Workspace**
   (not the adapter). Drives stuck detection. _avoid:_ a commit; an adapter responsibility.
-- **Stuck** — a pre-`maxIterations` bail with a reason: no-diff, repeat-failure, oscillation,
-  harness-crash (consecutive `crashed` runs → `STUCK_HARNESS_CRASH`), or budget. _avoid:_ a normal
-  failure (that's FAILED).
+- **Stuck** — a pre-`maxIterations` bail with a typed `{ kind, message }` reason — `kind` ∈
+  `no-diff | repeat | oscillation | crash | budget` (`STUCK_HARNESS_CRASH` / `STUCK_REPEATED_FAILURE`
+  in the message). `detectStuck` is pure over the `LoopCtx` histories; **DECIDE** keys the one
+  reason-specific excuse off `kind` (a `no-diff` abort is excused by a fresh, unseen Sign-off veto —
+  the in-flight half it holds the verdict for). _avoid:_ a normal failure (that's FAILED); putting the
+  fresh-veto excuse inside `detectStuck` (it needs the verdict, so it lives in DECIDE).
 - **Autonomous** — the flag that moves **Seal only** (auto-accept). It skips the human pause,
   never the freeze. _avoid:_ "the agent rewrites its own test"; skipping verification.
 - **Command** — data describing an effect the Driver must perform. Never persisted.
