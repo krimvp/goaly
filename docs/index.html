@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>goaly — run a coding agent until the goal is verifiably met</title>
-  <meta name="description" content="goaly runs any coding agent (Claude Code, Codex, Droid, pi, or your own) in a loop until your goal is verifiably done — checked against a frozen success contract the agent can't weaken to pass. Get started in minutes." />
+  <meta name="description" content="goaly runs any coding agent (Claude Code, Codex, Droid, pi, or your own) in a loop until your goal is verifiably done — checked against a frozen success contract the agent can't weaken to pass." />
   <meta name="color-scheme" content="dark" />
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
 
@@ -24,10 +24,7 @@
   <div class="wrap nav-inner">
     <a class="brand" href="#top"><img src="assets/favicon.svg" alt="" />goaly</a>
     <nav class="nav-links" id="navLinks">
-      <a href="#what">What</a>
-      <a href="#start">Get started</a>
       <a href="#how">How it works</a>
-      <a href="#harnesses">Add a harness</a>
       <a href="#docs">Docs</a>
     </nav>
     <a class="nav-cta" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">GitHub ↗</a>
@@ -43,19 +40,23 @@
       <div class="eyebrow">Goal orchestration for coding agents</div>
       <h1>Loop a coding agent until the goal is verifiably met.</h1>
       <p class="hero-lede">
-        goaly runs <b>Claude Code, Codex, Droid, pi</b> — or your own agent — in a loop until your goal is
-        <em>actually done</em>, checked against a success contract the agent can't weaken to pass.
+        goaly runs <b>Claude Code, Codex, Droid, pi</b> — or your own agent — until your goal is
+        <em>actually done</em>, checked against a contract it can't weaken to pass.
       </p>
 
       <div class="spec-strip">
         <span><b>any harness</b></span><span class="sep">/</span>
-        <span><b>one command</b> to start</span><span class="sep">/</span>
         <span><b>two keys</b> for DONE</span><span class="sep">/</span>
         <span>resumable</span>
       </div>
 
+      <div class="code hero-install">
+        <button class="copy-btn" data-clip="npm i -g goaly">copy</button>
+<pre><span class="cmt">$</span> npm i -g goaly</pre>
+      </div>
+
       <div class="btn-row">
-        <a class="btn btn-primary" href="#start">Get started →</a>
+        <a class="btn btn-primary" href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener">Get started →</a>
         <a class="btn btn-ghost" href="#how">How it works</a>
         <a class="btn btn-ghost" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">GitHub ↗</a>
       </div>
@@ -64,166 +65,57 @@
     <div class="hero-art reveal">
       <div class="code" aria-hidden="true">
         <button class="copy-btn" data-clip='goaly -d "add /health endpoint"'>copy</button>
-<pre><span class="cmt">$</span> <span class="fn">goaly</span> -d <span class="str">"add /health endpoint"</span>  <span class="cmt"># just the goal — Claude + generate by default</span>
+<pre><span class="cmt">$</span> <span class="fn">goaly</span> -d <span class="str">"add /health endpoint"</span>  <span class="cmt"># just the goal</span>
 
 <span class="tok">✔ COMPILE</span>  contract frozen   <span class="cmt">┌ sha 9f3c…a2</span>
 <span class="str">● SEAL</span>  auto-accepted     <span class="cmt">(logged loudly)</span>
 <span class="cmt">↻ iter 1</span>  agent → verify <span style="color:var(--red)">✗</span>  <span class="cmt">npm test: 2 failing</span>
 <span class="cmt">↻ iter 2</span>  agent → verify <span class="tok">✓</span>  SIGN-OFF <span style="color:var(--red)">✗</span> veto: returns 500
 <span class="cmt">↻ iter 3</span>  agent → verify <span class="tok">✓</span>  SIGN-OFF <span class="tok">✓</span> no veto
-<span class="tok">✔ DONE</span>   two keys turned · 3 iterations
-<span class="cmt"># exit 0</span></pre>
+<span class="tok">✔ DONE</span>   two keys turned · 3 iterations</pre>
       </div>
     </div>
   </div>
 </section>
 
-<hr class="section-line" />
-
-<!-- ============================== WHAT / WHY ============================== -->
-<section id="what">
+<!-- ============================== PROMISES (3, one line each) ============================== -->
+<section id="why">
   <div class="wrap">
-    <div class="eyebrow reveal">What it is</div>
-    <h2 class="reveal">Tell it the goal. It runs the agent until the goal is really met.</h2>
-    <p class="lede reveal">You point goaly at a goal and a way to check it. It runs your coding agent over and
-      over — feeding back what's still wrong each time — and only stops when the work passes a fixed bar.
-      The trick is that <em>bar can't move</em>: the agent can't quietly weaken its own test to "finish".</p>
-
-    <div class="grid grid-3 reveal" style="margin-top:1.8rem; align-items:start">
-      <div class="card">
-        <h3><span class="pill pass">1</span> Freeze the bar</h3>
-        <p>The success check is written once, hashed, and <b>frozen</b> before the loop starts. No later
-          step can rewrite it — so "until it's done" can't collapse into "until the agent lowers the bar".</p>
-      </div>
-      <div class="card">
-        <h3><span class="pill gate">2</span> Two keys for DONE</h3>
-        <p>A run is done only when <b>both</b> turn: the frozen check passes <em>and</em> an independent
-          reviewer doesn't veto. Gaming one is possible; getting both is much harder.</p>
-      </div>
-      <div class="card">
-        <h3><span class="pill fail">3</span> Fail closed</h3>
-        <p>Anything that errors, crashes, or returns garbage becomes a <b>fail</b> — never a false green.
-          A broken check can never accidentally mark the run complete.</p>
-      </div>
+    <div class="grid grid-3 reveal" style="align-items:start">
+      <div class="card"><h3><span class="pill pass">1</span> Freeze the bar</h3><p>The success check is hashed and <b>frozen</b> before the loop — the agent can't weaken its own test to finish.</p></div>
+      <div class="card"><h3><span class="pill gate">2</span> Two keys for DONE</h3><p>Done means <b>both</b> turn: the frozen check passes <em>and</em> an independent reviewer doesn't veto.</p></div>
+      <div class="card"><h3><span class="pill fail">3</span> Fail closed</h3><p>Anything that errors or returns garbage is a <b>fail</b>, never a false green. The control loop makes zero LLM calls.</p></div>
     </div>
-
-    <p class="lede reveal" style="margin-top:1.6rem">
-      That's the whole point: <b>correctness you can trust when the agent runs unattended.</b> The control
-      loop itself makes <em>zero</em> LLM calls — it's a small, deterministic state machine — so every run
-      is replayable and resumable from a log. <a href="#how" style="color:var(--accent)">See how the loop works ↓</a>
-    </p>
   </div>
 </section>
 
 <hr class="section-line" />
 
-<!-- ============================== GET STARTED ============================== -->
-<section id="start">
-  <div class="wrap">
-    <div class="eyebrow reveal">Get started</div>
-    <h2 class="reveal">From install to your first verified run in a few minutes.</h2>
-
-    <div class="panel reveal" style="padding:1rem 1.3rem; margin:1.4rem 0 1.8rem">
-      <p style="margin:0; font-family:var(--mono); font-size:0.84rem; line-height:1.7; color:var(--fg-dim)">
-        <b style="color:var(--fg)">Before you start:</b> Node ≥ 20 and <code>git</code>, plus at least one agent
-        CLI on your <code>PATH</code> — <code>claude</code>, <code>codex</code>, <code>droid</code>, or <code>pi</code>.
-        (No CLI yet? Use <code>--harness fake</code> to try the loop with zero network.)
-      </p>
-    </div>
-
-    <div class="rows reveal">
-      <div class="row">
-        <span class="rn">01</span>
-        <div class="rt">
-          <b>Install it</b>
-          <p style="margin-bottom:0.7rem">Builds <code>dist/</code> and puts <code>goaly</code> on your PATH.</p>
-          <div class="code">
-            <button class="copy-btn">copy</button>
-<pre><span class="cmt"># clone, then from the repo root:</span>
-make install        <span class="cmt"># == npm install -g .</span>
-goaly help</pre>
-          </div>
-        </div>
-      </div>
-
-      <div class="row">
-        <span class="rn">02</span>
-        <div class="rt">
-          <b>Run against a check you already have</b>
-          <p style="margin-bottom:0.7rem">Point at an existing test command. goaly freezes the contract,
-            asks you to approve it once at <b>Seal</b>, then loops until <code>npm test</code> passes
-            <em>and</em> the reviewer agrees.</p>
-          <div class="code">
-            <button class="copy-btn">copy</button>
-<pre>goaly run --goal <span class="str">"make the parser handle empty input"</span> \
-  --verify-cmd <span class="str">"npm test"</span></pre>
-          </div>
-        </div>
-      </div>
-
-      <div class="row">
-        <span class="rn">03</span>
-        <div class="rt">
-          <b>Or just give it a goal — the agent writes the check too</b>
-          <p style="margin-bottom:0.7rem">The goal is a positional and <code>run</code> is optional. With no
-            <code>--verify-cmd</code>, the LLM authors the verification (<code>--generate</code>) and checks the
-            work, using Claude — all defaults. Add <code>-d</code> (alias <code>--defaults</code>) to run
-            hands-off: it auto-accepts the Seal pause (the contract is still frozen and logged loudly).</p>
-          <div class="code">
-            <button class="copy-btn">copy</button>
-<pre><span class="cmt"># approve the contract once at Seal</span>
-goaly <span class="str">"add a /health endpoint returning 200"</span>
-
-<span class="cmt"># …or fully hands-off</span>
-goaly -d <span class="str">"add a /health endpoint returning 200"</span></pre>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="panel reveal" style="padding:1rem 1.3rem; margin-top:1.6rem">
-      <p style="margin:0; font-family:var(--mono); font-size:0.82rem; line-height:1.7; color:var(--fg-dim)">
-        <b style="color:var(--fg)">Good to know:</b> add <code>.goaly/</code> to <code>.gitignore</code> (it holds run logs).
-        Put repeated flags in a <code>.goalyrc</code> (per-project or <code>~/.goalyrc</code>), then just pass the goal.
-        Exit codes: <span class="pill pass">0 DONE</span> <span class="pill fail">1 FAILED / ABORTED</span> <span class="pill neutral">2 usage</span>
-      </p>
-    </div>
-
-    <p class="lede reveal" style="margin-top:1.4rem">
-      Every flag, the config file, sandboxing, budgets and the per-run spend report are in the
-      <a href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener" style="color:var(--accent)">README →</a>
-    </p>
-  </div>
-</section>
-
-<hr class="section-line" />
-
-<!-- ============================== HOW IT WORKS ============================== -->
+<!-- ============================== HOW IT WORKS (pipeline only) ============================== -->
 <section id="how">
   <div class="wrap">
     <div class="eyebrow reveal">How it works</div>
     <h2 class="reveal">One compile, then a verified loop.</h2>
-    <p class="lede reveal">A single pure, zero-LLM reducer owns all the policy; a thin driver does the work it
-      asks for. There are exactly <b>two gates</b> and <b>three bounded retry edges</b> — nothing else loops.
-      Click any stage to see what it does.</p>
+    <p class="lede reveal">A pure, zero-LLM reducer owns the policy; a thin driver does the work it asks for.
+      Click any stage.</p>
 
     <div class="pipeline-wrap reveal">
       <div class="pipeline">
-        <div class="stage" data-stage="compile"><span class="st-k">COMPILE</span><span class="st-s">author + freeze · 🔁 retry</span></div>
+        <div class="stage" data-stage="compile"><span class="st-k">COMPILE</span><span class="st-s">author + freeze</span></div>
         <span class="arrow">→</span>
-        <div class="stage gate" data-stage="seal"><span class="st-k">SEAL</span><span class="st-s">lock the bar · 🔁 revise</span></div>
+        <div class="stage gate" data-stage="seal"><span class="st-k">SEAL</span><span class="st-s">lock the bar</span></div>
         <span class="arrow">→</span>
-        <div class="stage" data-stage="prepare"><span class="st-k">tools + setup + pre-flight</span><span class="st-s">prep, once</span></div>
+        <div class="stage" data-stage="prepare"><span class="st-k">prepare</span><span class="st-s">once</span></div>
         <span class="arrow">→</span>
         <div class="loop-band">
-          <span class="loop-tag">loop 🔁 ≤ --max-iterations (bails early on STUCK)</span>
-          <div class="stage" data-stage="run"><span class="st-k">RUN_AGENT</span><span class="st-s">one headless turn</span></div>
+          <span class="loop-tag">loop 🔁 ≤ --max-iterations</span>
+          <div class="stage" data-stage="run"><span class="st-k">RUN_AGENT</span><span class="st-s">one turn</span></div>
           <span class="arrow">→</span>
           <div class="stage" data-stage="ladder"><span class="st-k">verify</span><span class="st-s">tests → judge</span></div>
           <span class="arrow">→</span>
-          <div class="stage gate" data-stage="signoff"><span class="st-k">SIGN-OFF</span><span class="st-s">veto-only review</span></div>
+          <div class="stage gate" data-stage="signoff"><span class="st-k">SIGN-OFF</span><span class="st-s">veto-only</span></div>
           <span class="arrow">→</span>
-          <div class="stage" data-stage="decide"><span class="st-k">DECIDE</span><span class="st-s">pure truth table</span></div>
+          <div class="stage" data-stage="decide"><span class="st-k">DECIDE</span><span class="st-s">pure</span></div>
         </div>
         <div class="term-row">
           <div class="term done">DONE ✔</div>
@@ -233,175 +125,52 @@ goaly -d <span class="str">"add a /health endpoint returning 200"</span></pre>
       </div>
       <div class="detail" id="pipeline-detail"></div>
     </div>
-    <p class="lede reveal" style="margin-top:1rem;font-size:.92rem">
-      <b>🔁 marks the only three places goaly loops back</b>, each explicitly bounded: <b>COMPILE</b> re-authors
-      on a correctable miss, <b>SEAL</b> re-authors from your feedback on “revise”, and a red iteration re-runs
-      the agent with the FAIL/veto fed back. Everything else runs once per pass — and the bar sealed at SEAL is
-      never rewritten.</p>
 
-    <!-- Verify ladder — kept because it makes "verifiable" concrete -->
-    <h3 class="reveal" style="margin-top:3rem">Verify cheap-and-ungameable first</h3>
-    <p class="lede reveal" style="margin-bottom:1.2rem">The check is a <b>ladder</b> of rungs run top → bottom.
-      Deterministic rungs (exit codes, tests) come before any LLM judge, and the ladder short-circuits on the
-      first hard fail — so a red test never wastes a judge call. Try failing a rung:</p>
-    <div class="reveal">
-      <div class="ladder-ctrl">
-        <button class="mini-btn on" data-fail="-1">All pass</button>
-        <button class="mini-btn" data-fail="0">Tests fail</button>
-        <button class="mini-btn" data-fail="2">Smoke fails</button>
-        <button class="mini-btn" data-fail="3">Judge fails</button>
-      </div>
-      <div class="ladder" id="ladder">
-        <div class="rung det"><span class="rk">det · 1</span><span class="rbody"><b><code>npm test</code> exits 0</b><p>tests / exit codes — ungameable, hardest to fake</p></span><span class="rstat"></span></div>
-        <div class="rung det"><span class="rk">det · 2</span><span class="rbody"><b><code>npm run lint</code> exits 0</b><p>static checks before any model is consulted</p></span><span class="rstat"></span></div>
-        <div class="rung det"><span class="rk">smoke · 3</span><span class="rbody"><b><code>--smoke "node smoke.mjs"</code> exits 0</b><p>actually <em>runs</em> the built artifact — a second ungameable check</p></span><span class="rstat"></span></div>
-        <div class="rung judge"><span class="rk">judge · 4</span><span class="rbody"><b>LLM quorum vs. the frozen rubric</b><p>only the fuzzy residual — best-of-N, with a confidence floor</p></span><span class="rstat"></span></div>
-      </div>
-      <p class="ladder-note" id="ladder-note"></p>
-    </div>
-
-    <!-- Two keys + autonomous, condensed to three cards -->
-    <h3 class="reveal" style="margin-top:3rem">Two gates, and the one flag that moves only one</h3>
-    <div class="grid grid-3 reveal">
-      <div class="card"><h3><span class="pill gate">Seal</span> The bar</h3><p>Your say over the success check, <b>before</b> the loop: approve it, give feedback to revise it, or reject. <code>--autonomous</code> skips this pause — the contract is still frozen and logged.</p></div>
-      <div class="card"><h3><span class="pill fail">Sign-off</span> The result</h3><p>Every iteration, but only when the check passes. An independent reviewer is <b>veto-only</b> — it can stop a green from becoming DONE, never promote a red.</p></div>
-      <div class="card"><h3><code>--autonomous</code></h3><p>Moves Seal <b>only</b>. It skips the human pause, never the freeze and never verification. The two-key contract is identical either way.</p></div>
-    </div>
-
-    <p class="lede reveal" style="margin-top:1.8rem">
-      Under the hood it's <b>a deep module at every seam</b> — the harness, the verifier ladder, the approver and
-      the compiler each hide a lot of behaviour behind a small interface, so the policy is testable in one place
-      and a new variant is one file. The full picture — the state machine, the DECIDE truth table, stuck
-      detection, the four seams, and the write-ahead log that makes runs replayable — is in the architecture docs.
-      <a href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener" style="color:var(--accent)">Read ARCHITECTURE.md →</a>
+    <p class="lede reveal" style="margin-top:1.4rem; font-size:.95rem">
+      The verify ladder, stuck detection, the four seams and resume are in
+      <a href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener" style="color:var(--accent)">ARCHITECTURE.md →</a>
     </p>
-
-    <!-- ===================== WHAT'S POSSIBLE ===================== -->
-    <h3 class="reveal" style="margin-top:3rem">What else you can turn on</h3>
-    <p class="lede reveal" style="margin-bottom:1.2rem">Defaults get you a verified run with one command. These
-      flags scale it to bigger goals, longer runs and tighter isolation — every one is documented in the README.</p>
-    <div class="grid grid-3 reveal" style="align-items:start">
-      <div class="card"><h3><code>--phased</code> Big goals</h3><p>Decompose one large goal into a <b>frozen plan</b> of small, individually-verified sub-goals, then accept <b>cumulatively</b> on the original — so parts passing can't green a broken whole.</p></div>
-      <div class="card"><h3><code>--delta-verify</code> Long runs</h3><p>Keep the per-iteration judge prompt flat by reviewing only each iteration's delta — while the DONE decision stays cumulative and ungameable.</p></div>
-      <div class="card"><h3><code>--sandbox</code> Isolation</h3><p>Jail the agent <em>and</em> the verifier in an OS sandbox (bubblewrap / container): deny <code>$HOME</code>, control egress. One policy, many launchers.</p></div>
-      <div class="card"><h3><code>--resume run-&lt;id&gt;</code> Recover</h3><p>Continue a crashed run from its write-ahead log — same session, same iteration count, no completed work repeated.</p></div>
-      <div class="card"><h3><code>--stream</code> Observe</h3><p>Watch the agent's turns live — tool calls, messages, token counts — for the run and the LLM steps; persist it for offline replay.</p></div>
-      <div class="card"><h3><code>--budget-tokens</code> Spend</h3><p>Cap the whole run by tokens or time; every run ends with a per-step spend report (add an approximate USD cost on request).</p></div>
-    </div>
   </div>
 </section>
 
 <hr class="section-line" />
 
-<!-- ============================== ADDING A HARNESS ============================== -->
-<section id="harnesses">
-  <div class="wrap">
-    <div class="eyebrow reveal">Extending it</div>
-    <h2 class="reveal">Adding a harness is one small module.</h2>
-    <p class="lede reveal">A "harness" is any coding agent you can drive headlessly. The orchestrator can't tell
-      which one it called — so wrapping a new one changes nothing else in the system. You write one
-      <code>AgentCliCodec</code> that holds everything goaly needs to know about that CLI, and register it with
-      one line. The shared core does the heavy lifting — the tolerant JSON/JSONL parse, the subprocess dance,
-      diff hashing, and verifier execution all live <b>outside</b> your codec.</p>
-
-    <div class="grid grid-3 reveal" style="align-items:start; margin-top:1.6rem">
-      <div class="card"><h3>1 · Run one turn</h3><p>The headless/print flag (<code>-p</code>, <code>exec</code>, <code>--print</code>) and how the prompt is passed.</p></div>
-      <div class="card"><h3>2 · Read the result</h3><p>The machine-readable output shape and which field carries the answer, the session id, and token usage.</p></div>
-      <div class="card"><h3>3 · Resume the session</h3><p>Where the session id appears and which flag replays it (<code>--resume</code>, <code>--session-id</code>, …). Per-turn streaming is optional.</p></div>
-    </div>
-
-    <div class="panel reveal" style="padding:1.4rem 1.5rem; margin-top:1.6rem">
-      <div class="skill-card">
-        <div class="skill-badge">🛠️</div>
-        <div>
-          <h3 style="margin-bottom:0.4rem">The full guide — and an agent that does the probing</h3>
-          <p style="margin:0; font-family:var(--mono); font-size:0.85rem; line-height:1.65; color:var(--fg-dim)">
-            The codec interface, a copy-paste skeleton, the four bundled adapters (claude / codex / droid / pi),
-            and the field / status / stream mapping recipes all live in
-            <a href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener" style="color:var(--accent)">docs/adding-a-harness.md →</a>
-            The repo also ships an <code>investigate-harness</code> skill that probes an unfamiliar CLI safely and
-            emits the filled-in codec plus its two registration edits.
-          </p>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<hr class="section-line" />
-
-<!-- ============================== DOCS HUB ============================== -->
+<!-- ============================== DOCS ============================== -->
 <section id="docs">
   <div class="wrap">
-    <div class="eyebrow reveal">Learn more</div>
+    <div class="eyebrow reveal">Docs</div>
     <h2 class="reveal">Go as deep as you want.</h2>
-    <p class="lede reveal">Everything beyond this page lives in the repo. Start with the README to use it, or the
-      design docs to understand why it's built the way it is.</p>
 
-    <div class="grid grid-2 reveal" style="margin-top:1.8rem; align-items:start">
+    <div class="grid grid-3 reveal" style="margin-top:1.6rem; align-items:start">
       <a class="card" href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener">
         <h3>README <span class="pill pass">start here</span></h3>
-        <p>Install, every CLI flag, the config file, sandboxing, budgets, phased goals, delta-verify, and the per-run spend report. The practical reference.</p>
-      </a>
-      <a class="card" href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener">
-        <h3>Adding a harness</h3>
-        <p>The full authoring guide — real interface signatures, a copy-paste codec skeleton, and the field / status / stream mapping recipes.</p>
-      </a>
-      <a class="card" href="https://github.com/krimvp/goaly/blob/main/DESIGN.md" target="_blank" rel="noopener">
-        <h3>DESIGN.md — what &amp; why</h3>
-        <p>The anti-reward-hacking thesis and the product decisions behind the frozen contract and the two keys.</p>
+        <p>Install, every flag, config, sandboxing, budgets, phased goals — the practical reference.</p>
       </a>
       <a class="card" href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">
-        <h3>ARCHITECTURE.md — how</h3>
-        <p>The pure reducer, the state machine, the DECIDE truth table, the seams and deep modules, phased &amp; delta-verify, and the write-ahead log.</p>
+        <h3>Architecture</h3>
+        <p>The pure reducer, the state machine, the four seams, and the write-ahead log.</p>
       </a>
-      <a class="card" href="https://github.com/krimvp/goaly/blob/main/AGENTS.md" target="_blank" rel="noopener">
-        <h3>AGENTS.md — contributing</h3>
-        <p>The eight invariants any contributor (human or agent) must preserve, conventions, and the directory map.</p>
-      </a>
-      <a class="card" href="https://github.com/krimvp/goaly/tree/main/docs/adr" target="_blank" rel="noopener">
-        <h3>ADRs &amp; glossary</h3>
-        <p>Architecture decision records (e.g. the sandboxing model) and <code>CONTEXT.md</code>, the term-by-term glossary.</p>
+      <a class="card" href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener">
+        <h3>Add a harness</h3>
+        <p>Wrap any headless coding agent in one small codec module — and one line.</p>
       </a>
     </div>
 
-    <div class="btn-row reveal" style="margin-top:1.8rem">
-      <a class="btn btn-primary" href="#start">Get started →</a>
-      <a class="btn btn-ghost" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">View the repository ↗</a>
-    </div>
+    <p class="lede reveal" style="margin-top:1.4rem; font-size:.92rem">
+      Also: <a href="https://github.com/krimvp/goaly/blob/main/DESIGN.md" target="_blank" rel="noopener" style="color:var(--accent)">DESIGN.md</a> (what &amp; why) ·
+      <a href="https://github.com/krimvp/goaly/blob/main/AGENTS.md" target="_blank" rel="noopener" style="color:var(--accent)">AGENTS.md</a> (invariants) ·
+      <a href="https://github.com/krimvp/goaly/tree/main/docs/adr" target="_blank" rel="noopener" style="color:var(--accent)">ADRs</a> ·
+      <a href="https://github.com/krimvp/goaly/blob/main/CONTEXT.md" target="_blank" rel="noopener" style="color:var(--accent)">glossary</a>
+    </p>
   </div>
 </section>
 
 <!-- ============================== FOOTER ============================== -->
 <footer class="footer" id="footer">
   <div class="wrap">
-    <div class="footer-grid">
-      <div>
-        <a class="brand" href="#top" style="margin-bottom:0.6rem"><img src="assets/favicon.svg" alt="" /> goaly</a>
-        <p style="font-family:var(--mono); font-size:0.82rem; max-width:34ch">Run a coding agent until the goal is verifiably met — against a contract it can't weaken.</p>
-      </div>
-      <div>
-        <h5>Use it</h5>
-        <a href="#start">Get started</a>
-        <a href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener">README &amp; flags</a>
-        <a href="https://github.com/krimvp/goaly#install" target="_blank" rel="noopener">Install</a>
-      </div>
-      <div>
-        <h5>Understand it</h5>
-        <a href="https://github.com/krimvp/goaly/blob/main/DESIGN.md" target="_blank" rel="noopener">DESIGN.md — what &amp; why</a>
-        <a href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">ARCHITECTURE.md — how</a>
-        <a href="https://github.com/krimvp/goaly/tree/main/docs/adr" target="_blank" rel="noopener">ADRs — decisions</a>
-      </div>
-      <div>
-        <h5>Extend it</h5>
-        <a href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener">Adding a harness</a>
-        <a href="https://github.com/krimvp/goaly/blob/main/AGENTS.md" target="_blank" rel="noopener">AGENTS.md — invariants</a>
-        <a href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">Repository</a>
-      </div>
-    </div>
-    <div class="legal">
-      <span>MIT · requires Node ≥ 20 &amp; git</span>
-      <span>© <span id="year">2026</span> goaly · built with Claude Code</span>
+    <div class="legal" style="border:0; padding-top:0">
+      <a class="brand" href="#top"><img src="assets/favicon.svg" alt="" /> goaly</a>
+      <span>MIT · Node ≥ 20 &amp; git · © <span id="year">2026</span> · built with Claude Code</span>
     </div>
   </div>
 </footer>

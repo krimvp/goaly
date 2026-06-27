@@ -85,39 +85,39 @@
      ===================================================================== */
   const PIPE_DETAIL = {
     compile: {
-      t: "COMPILE_VERIFIER — author then freeze the contract",
-      d: "The agent finds the test/command you pointed at, or writes new verification, and emits a runnable ladder of rungs + a rubric. The contract is hashed and <b>frozen</b> — no later transition can rewrite it. This is the anti-reward-hacking core. <b>🔁 Retriable:</b> a correctable authoring miss (COMPILE_FAILED) is re-authored with the error fed back, up to <code>--max-compile-retries</code> (default 2).",
-      pills: ['<span class="pill violet">fuzzy / LLM</span>', '<span class="pill pass">→ contractHash</span>', '<span class="pill neutral">🔁 retry ≤ --max-compile-retries</span>'],
+      t: "COMPILE — author & freeze",
+      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. The anti-reward-hacking core.",
+      pills: ['<span class="pill pass">→ contractHash</span>'],
     },
     seal: {
-      t: "SEAL — lock the bar (once, before the loop)",
-      d: "A human approves the frozen contract before the loop starts. With <code>--autonomous</code> it is auto-accepted — but still frozen and logged loudly. SEAL is the only gate the flag moves. <b>🔁 Retriable:</b> instead of approve/reject you can give free-text feedback to <b>revise</b> — goaly re-authors the contract and re-presents it, up to <code>--max-seal-revisions</code> (default 10).",
-      pills: ['<span class="pill gate">human · once</span>', '<span class="pill neutral">or auto-accept</span>', '<span class="pill neutral">🔁 revise ≤ --max-seal-revisions</span>'],
+      t: "SEAL — lock the bar",
+      d: "You approve the frozen contract once, before the loop. <code>--autonomous</code> auto-accepts it — still frozen, still logged.",
+      pills: ['<span class="pill gate">once, before the loop</span>'],
     },
     prepare: {
-      t: "Tools + setup + pre-flight — once, before iteration 1",
-      d: "After SEAL and before the first agent turn, goaly first probes the frozen <b>requiredTools</b> manifest — the external programs the verification assumes on PATH (cargo, python, go…). A missing tool by DEFAULT is handed to the agent to install (goaly skips its own setup, which would only fail on the absent toolchain, and threads the install into the first prompt); <code>--install-missing-tools false</code> opts out with a typed <code>TOOLS_MISSING</code> abort. (The verify PATH is extended with the standard per-user install dirs so an agent-installed toolchain is actually visible.) Then a one-time <b>setup</b> command prepares the tree (e.g. <code>npm ci</code> — authored under <code>--generate</code>, overridable with <code>--setup-cmd</code>); a non-zero exit is a typed <code>SETUP_FAILED</code>. Finally goaly <b>pre-flights</b> the frozen deterministic checks once: a <b>language-agnostic</b> classification (one read-only LLM call) decides a <b>broken</b> frozen verification (can't compile/collect/run) → <code>CONTRACT_UNSOUND</code> abort <b>before any worker token is spent</b>, vs. an honest red (implementation missing) → proceed. It fails <i>open</i> on uncertainty so a false abort never blocks a legitimate run.",
-      pills: ['<span class="pill neutral">tools + setup, once</span>', '<span class="pill fail">TOOLS_MISSING / SETUP_FAILED / CONTRACT_UNSOUND</span>'],
+      t: "Prepare — once",
+      d: "Probe required tools, run setup, and pre-flight the checks — so an unsound contract aborts before any worker token is spent.",
+      pills: ['<span class="pill neutral">tools + setup + pre-flight</span>'],
     },
     run: {
-      t: "RUN_AGENT — one headless turn",
-      d: "The Driver spawns the chosen harness headlessly with the prompt, resuming the session id. Output is parsed tolerantly into a HarnessRunResult. The Workspace captures a tree hash before &amp; after for stuck-detection.",
-      pills: ['<span class="pill neutral">harness adapter</span>', '<span class="pill neutral">+ diffHash</span>'],
+      t: "RUN_AGENT — one turn",
+      d: "Spawn the chosen harness headlessly with the prompt, resuming the session.",
+      pills: ['<span class="pill neutral">harness adapter</span>'],
     },
     ladder: {
-      t: "Verifier ladder — deterministic before judge",
-      d: "Rungs run cheapest-and-hardest-to-game first: exit codes / tests, then any LLM judge. The ladder short-circuits on the first deterministic fail (no judge call wasted) and is <b>fail-closed</b> — a grader that throws is a hard red, never a green.",
-      pills: ['<span class="pill pass">exit codes</span>', '<span class="pill violet">LLM quorum</span>'],
+      t: "Verify — deterministic first",
+      d: "Checks run cheapest-and-hardest-to-game first (tests / exit codes before any LLM judge) and short-circuit on the first fail. Fail-closed.",
+      pills: ['<span class="pill pass">exit codes</span>', '<span class="pill violet">LLM judge</span>'],
     },
     signoff: {
-      t: "SIGN-OFF — independent approver (veto-only)",
-      d: "Runs <b>only</b> when the ladder passes. An independent agent sees goal + frozen rubric + diff + verdicts and can only <b>veto</b>, never promote a red. It defaults to reject on uncertainty. The second of the two keys for DONE.",
-      pills: ['<span class="pill gate">every iteration</span>', '<span class="pill fail">veto-only</span>'],
+      t: "SIGN-OFF — veto-only",
+      d: "Runs only on a green check. An independent reviewer can veto, never promote a red — the second key for DONE.",
+      pills: ['<span class="pill fail">veto-only</span>'],
     },
     decide: {
-      t: "DECIDE — the pure truth table",
-      d: "Zero-LLM. DONE needs <b>two keys</b> (ladder passes AND no veto). Otherwise apply the backstops: stuck → ABORTED, iteration cap → FAILED, else CONTINUE. Stuck has typed reasons — no-diff, <code>STUCK_REPEATED_FAILURE</code> (same verifier signature N×), oscillation, <code>STUCK_HARNESS_CRASH</code> (the agent CLI exited abnormally N× in a row — a harness/environment failure surfaced as such, not looped on), and budget. <b>🔁 Retriable:</b> a red iteration (ladder FAIL or SIGN-OFF veto) loops back to RUN_AGENT with the failure/veto threaded into the next prompt, up to <code>--max-iterations</code> (default 10) or until STUCK.",
-      pills: ['<span class="pill pass">two keys → DONE</span>', '<span class="pill neutral">🔁 else loop ≤ --max-iterations</span>'],
+      t: "DECIDE — pure truth table",
+      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop on STUCK / budget / iteration cap.",
+      pills: ['<span class="pill pass">two keys → DONE</span>'],
     },
   };
 
@@ -134,46 +134,6 @@
     s.addEventListener("click", () => showPipe(s.dataset.stage))
   );
   showPipe("compile");
-
-  /* =====================================================================
-     Verifier ladder — short-circuit demo
-     ===================================================================== */
-  const ladderRungs = $$("#ladder .rung");        // DOM order = execution order (top → bottom)
-  const ladderNote  = $("#ladder-note");
-  function setLadder(failIndex) {
-    ladderRungs.forEach((r, i) => {
-      r.classList.remove("passed", "failed", "skipped");
-      const stat = r.querySelector(".rstat");
-      if (failIndex === -1) {
-        r.classList.add("passed");
-        if (stat) stat.innerHTML = '<span class="pill pass">pass</span>';
-      } else if (i < failIndex) {
-        r.classList.add("passed");
-        if (stat) stat.innerHTML = '<span class="pill pass">pass</span>';
-      } else if (i === failIndex) {
-        r.classList.add("failed");
-        if (stat) stat.innerHTML = '<span class="pill fail">✗ fail</span>';
-      } else {
-        r.classList.add("skipped");
-        if (stat) stat.innerHTML = '<span class="pill neutral">skipped</span>';
-      }
-    });
-    if (ladderNote) {
-      if (failIndex === -1) {
-        ladderNote.innerHTML = "All rungs pass → verdict <b>pass</b>, confidence = min(rung confidences). The two keys can now be checked at Sign-off.";
-      } else {
-        const judgeSkipped = ladderRungs.slice(failIndex + 1).some((r) => r.classList.contains("judge"));
-        ladderNote.innerHTML = "First failing rung short-circuits → verdict <b>fail</b>. " +
-          (judgeSkipped ? "No LLM judge call is spent. " : "") +
-          "The detail is fed back as the next prompt; Sign-off never runs.";
-      }
-    }
-    $$(".ladder-ctrl .mini-btn").forEach((b) => b.classList.toggle("on", Number(b.dataset.fail) === failIndex));
-  }
-  $$(".ladder-ctrl .mini-btn").forEach((b) =>
-    b.addEventListener("click", () => setLadder(Number(b.dataset.fail)))
-  );
-  if (ladderRungs.length) setLadder(-1);
 
   /* ----------------------------------------------------------- year stamp */
   const yr = $("#year");

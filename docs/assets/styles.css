@@ -131,8 +131,7 @@ section { padding: clamp(3.6rem, 7vw, 6.5rem) 0; position: relative; }
 .btn-ghost { background: transparent; color: var(--fg); border-color: var(--line-2); }
 .btn-ghost:hover { border-color: var(--fg-dim); color: var(--fg); }
 
-/* ---------- panels / cards ---------- */
-.panel { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); }
+/* ---------- cards ---------- */
 .card {
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 1.3rem 1.4rem; transition: border-color 0.18s;
@@ -151,18 +150,9 @@ a.card h3 { color: var(--fg); }
 .grid-3 { grid-template-columns: repeat(3, 1fr); }
 .grid-4 { grid-template-columns: repeat(4, 1fr); }
 
-/* ---------- hairline list rows (Factory-style value props) ---------- */
-.rows { border-top: 1px solid var(--line); margin-top: 1.4rem; }
-.row {
-  display: grid; grid-template-columns: 2.2rem 1fr; gap: 1.1rem;
-  padding: 1.25rem 0; border-bottom: 1px solid var(--line); align-items: start;
-}
-.row .rn { font-family: var(--mono); font-size: 0.82rem; color: var(--accent); padding-top: 0.1rem; }
-.row .rt b { display: block; font-family: var(--display); font-weight: 500; font-size: 1.02rem; color: var(--fg); margin-bottom: 0.3rem; letter-spacing: -0.01em; }
-.row .rt p { margin: 0; font-family: var(--mono); font-size: 0.82rem; line-height: 1.65; color: var(--fg-dim); }
-
 /* ---------- code ---------- */
 .code { position: relative; background: #060607; border: 1px solid var(--line); border-radius: var(--radius-sm); font-family: var(--mono); font-size: 0.82rem; color: #cfcfca; overflow: hidden; }
+.hero-install { margin: 1.5rem 0 1.7rem; max-width: 20rem; }
 .code pre { margin: 0; padding: 1rem 1.05rem; overflow: auto; }
 .code .cmt { color: var(--fg-faint); }
 .code .tok { color: var(--accent); }
@@ -261,27 +251,6 @@ a.card h3 { color: var(--fg); }
 .precedence li.hit { color: var(--fg); }
 .precedence li.hit::marker { color: var(--accent); }
 
-/* ---------- verifier ladder ---------- */
-.ladder { display: flex; flex-direction: column; gap: 0.5rem; }
-.rung { display: flex; align-items: center; gap: 0.85rem; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 0.8rem 0.95rem; cursor: pointer; transition: border-color 0.15s; }
-.rung:hover { border-color: var(--line-2); }
-.rung .rk { font-family: var(--mono); font-size: 0.68rem; padding: 0.18rem 0.45rem; border-radius: 5px; flex: 0 0 auto; }
-.rung.det .rk { color: var(--accent); border: 1px solid rgba(197,240,78,0.3); }
-.rung.judge .rk { color: var(--mute-violet); border: 1px solid rgba(170,165,214,0.3); }
-.rung .rbody { flex: 1; }
-.rung .rbody b { font-size: 0.92rem; }
-.rung .rbody p { margin: 0.12rem 0 0; font-family: var(--mono); font-size: 0.78rem; color: var(--fg-dim); }
-.rung .rstat { flex: 0 0 auto; }
-.rung.skipped { opacity: 0.4; }
-.rung.failed { border-color: rgba(239,111,94,0.45); }
-.rung.passed { border-color: rgba(197,240,78,0.35); }
-.ladder-ctrl { display: flex; gap: 0.45rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
-.mini-btn { font-family: var(--mono); font-size: 0.74rem; padding: 0.38rem 0.75rem; border-radius: 7px; cursor: pointer; background: var(--panel); border: 1px solid var(--line-2); color: var(--fg-dim); transition: all 0.15s; }
-.mini-btn:hover { color: var(--fg); }
-.mini-btn.on { color: var(--accent); border-color: var(--accent-dim); }
-.ladder-note { font-family: var(--mono); font-size: 0.78rem; line-height: 1.6; color: var(--fg-faint); margin-top: 0.75rem; }
-.ladder-note b { color: var(--accent); font-weight: 500; }
-
 /* ---------- architecture ---------- */
 .arch-stack { display: flex; flex-direction: column; }
 .arch-layer { border: 1px solid var(--line); border-radius: var(--radius); padding: 1.05rem 1.25rem; background: var(--panel); }
@@ -339,8 +308,6 @@ table.matrix tbody td { color: var(--fg-dim); }
 .inv .i-n { font-family: var(--mono); color: var(--accent); flex: 0 0 auto; font-size: 0.85rem; }
 .inv .t { font-family: var(--mono); font-size: 0.8rem; line-height: 1.55; color: var(--fg-dim); }
 .inv .t b { color: var(--fg); font-weight: 500; }
-.skill-card { display: grid; grid-template-columns: auto 1fr; gap: 1.1rem; align-items: center; }
-.skill-badge { width: 54px; height: 54px; border-radius: 12px; display: grid; place-items: center; font-size: 1.5rem; background: var(--panel-2); border: 1px solid var(--line-2); }
 
 /* footer */
 .footer { border-top: 1px solid var(--line); padding: 3rem 0 3.5rem; }
@@ -370,7 +337,7 @@ table.matrix tbody td { color: var(--fg-dim); }
   .nav-links a { padding: 0.55rem 0.7rem; }
   .nav-cta { display: none; }
   .nav-toggle { display: inline-flex; margin-left: auto; background: transparent; border: 1px solid var(--line-2); color: var(--fg); border-radius: 6px; padding: 0.35rem 0.55rem; cursor: pointer; }
-  .grid-2, .grid-3, .grid-4, .mustcols, .invariants, .seams, .skill-card { grid-template-columns: 1fr; }
+  .grid-2, .grid-3, .grid-4, .mustcols, .invariants, .seams { grid-template-columns: 1fr; }
   .arch-orch { margin: -1px 0; }
   .footer-grid { grid-template-columns: 1fr; gap: 1.3rem; }
 }
