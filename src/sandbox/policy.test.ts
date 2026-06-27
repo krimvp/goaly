@@ -20,7 +20,7 @@ describe('SandboxPolicy schema', () => {
   });
 
   it('accepts every valid mode', () => {
-    for (const mode of ['none', 'auto', 'bwrap', 'container'] as const) {
+    for (const mode of ['none', 'auto', 'bwrap', 'firejail', 'container'] as const) {
       expect(SandboxPolicy.parse({ mode }).mode).toBe(mode);
     }
   });
