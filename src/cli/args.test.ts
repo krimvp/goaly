@@ -205,6 +205,11 @@ describe('parseArgs', () => {
     expect(a.harness).toBe('droid');
   });
 
+  it('accepts the pi harness', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'pi']);
+    expect(a.harness).toBe('pi');
+  });
+
   it('returns help for no args and for the help command', async () => {
     expect((await parseArgs([])).command).toBe('help');
     expect((await parseArgs(['help'])).command).toBe('help');
@@ -419,6 +424,11 @@ describe('parseArgs', () => {
         approverModel: 'opus', compilerModel: 'sonnet',
       });
       expect(a.llmProvider).toBe('codex');
+    });
+
+    it('accepts the pi LLM provider', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--llm-provider', 'pi']);
+      expect(a.llmProvider).toBe('pi');
     });
 
     it('supports the --model=value form', async () => {

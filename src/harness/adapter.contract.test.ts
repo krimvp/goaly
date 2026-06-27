@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { ClaudeCodeAdapter } from './claude-code';
 import { CodexAdapter } from './codex';
 import { DroidAdapter } from './droid';
+import { PiAdapter } from './pi';
 import type { HarnessAdapter } from './adapter';
 import { HarnessRunResult } from '../domain/events';
 import { SessionId } from '../domain/ids';
@@ -31,12 +32,26 @@ const droidOk = JSON.stringify({
   session_id: 'sess-droid-1',
   usage: { input_tokens: 2, output_tokens: 3 },
 });
+// pi emits a JSONL event stream: the `session` line carries the id, the assistant `message_end`
+// carries the text + pi's bare camelCase `usage` (input+output sum to 5 to match the matrix below).
+const piOk = [
+  JSON.stringify({ type: 'session', id: 'sess-pi-1' }),
+  JSON.stringify({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'done' }],
+      usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 5 },
+      stopReason: 'end_turn',
+    },
+  }),
+].join('\n');
 
 function execFor(
-  kind: 'claude' | 'codex' | 'droid',
+  kind: 'claude' | 'codex' | 'droid' | 'pi',
   scenario: string,
 ): (args: string[], input: { prompt: string }) => Promise<CommonExecResult> {
-  const ok = kind === 'claude' ? claudeOk : kind === 'codex' ? codexOk : droidOk;
+  const ok = kind === 'claude' ? claudeOk : kind === 'codex' ? codexOk : kind === 'droid' ? droidOk : piOk;
   return async () => {
     switch (scenario) {
       case 'success':
@@ -59,6 +74,7 @@ const adapters: Array<{ name: string; make: (scenario: string) => HarnessAdapter
   { name: 'claude-code', make: (s) => new ClaudeCodeAdapter({ exec: execFor('claude', s) }) },
   { name: 'codex', make: (s) => new CodexAdapter({ exec: execFor('codex', s) }) },
   { name: 'droid', make: (s) => new DroidAdapter({ exec: execFor('droid', s) }) },
+  { name: 'pi', make: (s) => new PiAdapter({ exec: execFor('pi', s) }) },
 ];
 
 const scenarios = ['success', 'nonzero', 'garbage', 'timeout', 'throw'];

@@ -300,11 +300,21 @@ are handled the same way — `makeHarness` threads both the wall-clock `--harnes
 idle/heartbeat `--harness-idle-timeout-ms` (issue #56) into `AgentCliHarness` (constructor `opts`
 already carry `{ model?, timeoutMs?, idleTimeoutMs?, cwd? }`), and you write no flag parsing for either.
 
+**Provider-agnostic CLIs (e.g. `pi`).** A tool that drives any model from any provider needs to pick
+*both*, but goaly's seam is a single `--model` string — do **not** add a `--provider` flag. If the
+CLI's `--model` accepts a `provider/id` form (pi does: `--model "anthropic/claude-opus-4-8"`), thread
+it through unchanged and the one string selects both; omit it and the tool falls back to its own
+configured default. Credentials stay the operator's responsibility (env / the tool's own config) —
+the same boundary `claude` and `codex` assume. See `pi`'s codec (`src/agent-cli/pi-codec.ts`) for a
+worked example, including the `--continue` headless-resume pattern (a tool with no resume-by-id flag)
+and a `--tools`-based autonomy split (write role keeps `edit`/`write` but not `bash`, so it can't
+`git commit` and empty the diff; the read-only role drops both).
+
 ## Register it (two tiny edits)
 
 ```ts
 // src/cli/args.ts — add the literal to the choice union + parser
-export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'fake' | 'myagent';
+export type HarnessChoice = 'claude-code' | 'codex' | 'droid' | 'pi' | 'fake' | 'myagent';
 // ...allow it in parseHarness(...)
 
 // src/cli/compose.ts — wire your codec into makeHarness(choice, model, timeoutMs?, idleTimeoutMs?)
@@ -352,7 +362,7 @@ or fail closed. The registration just hands it your codec's pieces:
 
 ```ts
 // src/cli/args.ts — add the literal to the provider union + parser
-export type LlmProviderChoice = 'claude' | 'codex' | 'droid' | 'myagent';
+export type LlmProviderChoice = 'claude' | 'codex' | 'droid' | 'pi' | 'myagent';
 // ...allow it in parseLlmProvider(...)
 
 // src/cli/compose.ts — a read-only argv builder (delegating to the codec) + a makeLlmProvider() case

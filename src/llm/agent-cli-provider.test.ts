@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { AgentCliLlmProvider } from './agent-cli-provider';
 import { codexCodec } from '../agent-cli/codex-codec';
 import { droidCodec } from '../agent-cli/droid-codec';
+import { piCodec } from '../agent-cli/pi-codec';
 
 const codexExtractor = codexCodec.fieldExtractor;
 const droidExtractor = droidCodec.fieldExtractor;
+const piExtractor = piCodec.fieldExtractor;
 
 type ExecResult = { stdout: string; stderr: string; code: number; timedOut?: boolean };
 
@@ -50,6 +52,31 @@ describe('AgentCliLlmProvider', () => {
 
     expect((await llm.complete({ prompt: 'p' })).text).toBe('looks good');
     expect(sink[0]).not.toContain('--auto');
+  });
+
+  it('parses pi JSONL output via its codec read-only argv (read-only tools, no edit/write)', async () => {
+    const sink: string[][] = [];
+    const piJsonl = [
+      JSON.stringify({ type: 'session', id: 's-pi' }),
+      JSON.stringify({
+        type: 'message_end',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'the verdict' }], usage: { input: 1, output: 2, totalTokens: 3 } },
+      }),
+    ].join('\n');
+    const llm = new AgentCliLlmProvider({
+      name: piCodec.name,
+      command: piCodec.command,
+      extractor: piExtractor,
+      buildArgs: (p) => piCodec.readonlyArgs({ prompt: p, model: 'ollama/qwen3:8b', stream: false }),
+      exec: fakeExec({ stdout: piJsonl, stderr: '', code: 0 }, sink),
+    });
+
+    const out = await llm.complete({ prompt: 'judge this' });
+    expect(out.text).toBe('the verdict');
+    expect(out.tokensUsed).toBe(3);
+    expect(sink[0]).toContain('read,grep,find,ls');
+    expect(sink[0]).not.toContain('edit');
+    expect(sink[0]).not.toContain('write');
   });
 
   it('throws on a non-zero exit (fail closed)', async () => {

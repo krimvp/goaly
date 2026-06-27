@@ -6,6 +6,7 @@ import {
   buildLadder,
   codexCompletionArgs,
   droidCompletionArgs,
+  piCompletionArgs,
 } from './compose';
 import { makeConfig, InMemoryLogFs } from '../testing/fakes';
 import { asRunId, DiffHash } from '../domain/ids';
@@ -31,6 +32,21 @@ describe('LLM provider completion argv (read-only)', () => {
     expect(args).toEqual(['exec', '--output-format', 'json', '--model', 'm1', 'p']);
     expect(args).not.toContain('--auto');
   });
+
+  it('pi runs read-only tools only (no edit/write/bash), model before the prompt positional', () => {
+    const args = piCompletionArgs('judge this', 'anthropic/claude-opus-4-8');
+    expect(args).toEqual([
+      '--print', '--mode', 'json', '--tools', 'read,grep,find,ls', '--model', 'anthropic/claude-opus-4-8', 'judge this',
+    ]);
+    expect(args).not.toContain('edit');
+    expect(args).not.toContain('write');
+  });
+
+  it('pi omits --model when none is set', () => {
+    expect(piCompletionArgs('p', undefined)).toEqual([
+      '--print', '--mode', 'json', '--tools', 'read,grep,find,ls', 'p',
+    ]);
+  });
 });
 
 describe('makeLlmProvider', () => {
@@ -38,6 +54,7 @@ describe('makeLlmProvider', () => {
     expect(makeLlmProvider('claude', undefined).name).toBe('cli:claude');
     expect(makeLlmProvider('codex', undefined).name).toBe('codex');
     expect(makeLlmProvider('droid', undefined).name).toBe('droid');
+    expect(makeLlmProvider('pi', undefined).name).toBe('pi');
   });
 });
 
