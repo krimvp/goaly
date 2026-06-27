@@ -347,6 +347,18 @@ goaly runs show run-&lt;id&gt;</pre>
       while the approver baseline advances only at phase boundaries — so each phase's Sign-off still reviews
       that phase's whole cumulative diff.</p>
 
+    <h3 class="reveal" style="margin-top:3rem">Under the hood: a deep module at every seam</h3>
+    <p class="lede reveal" style="margin-bottom:1.2rem">Each moving part is a small interface over a lot of
+      behaviour — so the policy is testable in one place and a new variant is one file.</p>
+    <div class="grid grid-3 reveal">
+      <div class="card"><h3>One codec, both roles</h3><p>A single <code>codecFor()</code> registry maps a CLI to its <code>AgentCliCodec</code>. The write-role harness <b>and</b> the read-only judge / approver / compiler resolve through it — so a CLI is one codec module + one line, never wiring repeated in three places.</p></div>
+      <div class="card"><h3>Sandbox policy, resolved once</h3><p>The per-seam isolation policy (<code>$HOME</code> denial, egress, proxy) is resolved into one <code>SandboxProfile</code>; each launcher — bwrap / firejail / container — only <b>translates</b> it into its flag dialect, so no policy is duplicated across mechanisms.</p></div>
+      <div class="card"><h3>Config by lifetime</h3><p>One <code>RunConfig</code>, read through four typed views — <code>ContractInput</code> (frozen), <code>GatePolicy</code>, <code>LoopPolicy</code>, <code>DriverWiring</code> — so the compiler <b>cannot</b> read a loop knob into the frozen contract, and wiring can't reach the reducer.</p></div>
+      <div class="card"><h3>The diff scope, owned</h3><p>A <code>Baseline</code> module owns what the judge vs the Sign-off approver each diff against, and when to checkpoint under <code>--delta-verify</code> — in one place, not threaded through the loop by hand.</p></div>
+      <div class="card"><h3>Typed stuck reasons</h3><p>Stuck detection stays pure over the loop histories and returns a typed <code>{ kind, message }</code>; the one reason-specific excuse — a fresh, unseen Sign-off veto pardons a no-diff once — lives in DECIDE, which holds the verdict.</p></div>
+      <div class="card"><h3>Pure reducer, real seams</h3><p>The same shape throughout: a small interface, a fake + a real adapter behind it, the policy in a synchronous reducer the Driver feeds. Leverage for callers, locality for changes, testability for everyone.</p></div>
+    </div>
+
     <p class="lede reveal" style="margin-top:1.6rem">
       The full picture — the state machine, the DECIDE truth table, stuck-detection, the four seams, the
       write-ahead log and resume — is in the architecture docs.
