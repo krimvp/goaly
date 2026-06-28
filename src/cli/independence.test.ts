@@ -38,4 +38,44 @@ describe('independenceWarnings', () => {
     expect(w.some((s) => s.includes('judge'))).toBe(false);
     expect(w.some((s) => s.includes('coding agent'))).toBe(true);
   });
+
+  describe('--generate --autonomous self-judge escalation (follow-on H)', () => {
+    it('escalates when worker, judge, and approver all collapse onto one model', () => {
+      const resolved = resolveModels({ model: 'claude-x' });
+      const w = independenceWarnings(resolved, 'claude', 'claude', { generate: true, autonomous: true });
+      // The escalated warning leads and names the self-judge risk + the remedy.
+      expect(w[0]).toContain('SELF-JUDGE RISK');
+      expect(w[0]).toContain('--approver-model');
+      expect(w[0]).toContain('claude-x');
+      // The plain advisories still follow it (escalation augments, never replaces).
+      expect(w.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('does NOT escalate without --generate (a user-supplied --verify-cmd is not self-authored)', () => {
+      const resolved = resolveModels({ model: 'claude-x' });
+      const w = independenceWarnings(resolved, 'claude', 'claude', { generate: false, autonomous: true });
+      expect(w.some((s) => s.includes('SELF-JUDGE RISK'))).toBe(false);
+    });
+
+    it('does NOT escalate without --autonomous (a human reviews the frozen bar at Seal)', () => {
+      const resolved = resolveModels({ model: 'claude-x' });
+      const w = independenceWarnings(resolved, 'claude', 'claude', { generate: true, autonomous: false });
+      expect(w.some((s) => s.includes('SELF-JUDGE RISK'))).toBe(false);
+    });
+
+    it('does NOT escalate once the approver is on its own model (the collapse is broken)', () => {
+      const resolved = resolveModels({ model: 'claude-x', approverModel: 'other' });
+      const w = independenceWarnings(resolved, 'claude', 'claude', { generate: true, autonomous: true });
+      expect(w).toEqual([]);
+    });
+
+    it('does NOT escalate when the worker is a different vendor than the approver', () => {
+      // codex harness + claude llm-provider: judge↔approver still collapse, but the worker does not —
+      // so it is not the all-three self-judge case, only the judge↔approver advisory.
+      const resolved = resolveModels({ model: 'm' });
+      const w = independenceWarnings(resolved, 'codex', 'claude', { generate: true, autonomous: true });
+      expect(w.some((s) => s.includes('SELF-JUDGE RISK'))).toBe(false);
+      expect(w.some((s) => s.includes('judge'))).toBe(true);
+    });
+  });
 });

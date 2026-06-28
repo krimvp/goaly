@@ -116,6 +116,7 @@ export async function main(argv: string[]): Promise<number> {
         ...(parsed.planFile !== undefined ? { planFile: parsed.planFile } : {}),
         logLevel: parsed.logLevel,
         timeouts: parsed.timeouts,
+        ...(parsed.maxAgentTurns !== undefined ? { goalyCodeMaxTurns: parsed.maxAgentTurns } : {}),
         sandbox: parsed.sandbox,
         ...(egressProxy !== undefined ? { egressProxy } : {}),
         ...(parsed.logFile !== undefined ? { logFile: parsed.logFile } : {}),

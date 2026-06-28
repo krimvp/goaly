@@ -746,4 +746,31 @@ describe('parseArgs', () => {
       ).rejects.toThrow(UsageError);
     });
   });
+
+  describe('--max-agent-turns (follow-on E)', () => {
+    it('parses a positive integer turn cap', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--max-agent-turns', '120']);
+      expect(a.maxAgentTurns).toBe(120);
+    });
+
+    it('defaults to undefined so the harness keeps its built-in cap', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.maxAgentTurns).toBeUndefined();
+    });
+
+    it('rejects a non-positive value (fails closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--max-agent-turns', '0']),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('rejects a non-integer value (fails closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--max-agent-turns', '1.5']),
+      ).rejects.toThrow(UsageError);
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--max-agent-turns', 'lots']),
+      ).rejects.toThrow(UsageError);
+    });
+  });
 });

@@ -128,6 +128,32 @@ export function referencesOutOfRepoPath(command: string): boolean {
   return /(?:^|[\s='"(`])(?:\/tmp|\/var\/tmp|\/var\/folders)(?:\/|\b)/.test(command);
 }
 
+/**
+ * Detect a timeout-shaped error from the verification-authoring LLM call (follow-on G). The CLI
+ * providers throw `LLM CLI <name> timed out`; the OpenAI client surfaces a timed-out request as an
+ * aborted fetch. Conservative: only timeout/abort phrasing, so a normal authoring error (bad JSON,
+ * vacuous command) is untouched and keeps its own message.
+ */
+export function looksLikeLlmTimeout(message: string): boolean {
+  return /\btimed\s*out\b|\btimeout\b|operation was aborted/i.test(message);
+}
+
+/** The actionable remedy folded into a timeout-`COMPILE_FAILED` (mirrors prepare.ts's exit-127 hint). */
+const LLM_TIMEOUT_HINT =
+  'Hint: the verification-authoring LLM call timed out — raise --llm-timeout-ms (current default ' +
+  '600000) for large/parallel --generate authoring, or reduce concurrent load. Re-issuing the same ' +
+  'heavy call will keep timing out, so bumping the timeout is the remedy, not more --max-compile-retries.';
+
+/**
+ * Wrap a timed-out authoring error with the raise-`--llm-timeout-ms` hint so it flows into the
+ * COMPILE_FAILED reason; any non-timeout error is rethrown unchanged (its own message is the signal).
+ */
+function withTimeoutHint(e: unknown): Error {
+  const message = e instanceof Error ? e.message : String(e);
+  if (!looksLikeLlmTimeout(message)) return e instanceof Error ? e : new Error(message);
+  return new Error(`AgentCompiler: ${message}\n\n${LLM_TIMEOUT_HINT}`);
+}
+
 function parseGenerated(raw: string): GeneratedVerification {
   const json = extractBalancedJson(raw);
   if (json === undefined) {
@@ -243,11 +269,20 @@ export class AgentCompiler implements VerifierCompiler {
     }
     guidanceParts.push('Author verification as JSON only.');
 
-    const { text: raw } = await this.#llm.complete({
-      system: SYSTEM_PROMPT,
-      prompt: guidanceParts.join('\n'),
-      temperature: 0,
-    });
+    let raw: string;
+    try {
+      ({ text: raw } = await this.#llm.complete({
+        system: SYSTEM_PROMPT,
+        prompt: guidanceParts.join('\n'),
+        temperature: 0,
+      }));
+    } catch (e) {
+      // A timed-out authoring call is still a fail-closed COMPILE_FAILED (invariant #4), but re-issuing
+      // the same heavy call burns compile-retries on a transient infra limit, not a model mistake
+      // (follow-on G: sonnet's 3× COMPILE_FAILED were LLM timeouts 10 min apart = the default
+      // --llm-timeout-ms). Surface the cause + remedy so the user raises the timeout instead.
+      throw withTimeoutHint(e);
+    }
 
     const generated = parseGenerated(raw);
 

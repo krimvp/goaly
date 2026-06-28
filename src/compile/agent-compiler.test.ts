@@ -1,8 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import { ContractHash } from '../domain/ids';
-import { FakeLlm } from '../llm/provider';
+import { FakeLlm, type LlmCompletion, type LlmProvider } from '../llm/provider';
 import { makeConfig } from '../testing/fakes';
-import { AgentCompiler, isVacuousCommand, referencesOutOfRepoPath } from './agent-compiler';
+import {
+  AgentCompiler,
+  isVacuousCommand,
+  looksLikeLlmTimeout,
+  referencesOutOfRepoPath,
+} from './agent-compiler';
+
+/** An LLM whose authoring call always rejects — to exercise the timeout-hint path (follow-on G). */
+class ThrowingLlm implements LlmProvider {
+  readonly name = 'throwing';
+  constructor(private readonly error: Error) {}
+  complete(): Promise<LlmCompletion> {
+    return Promise.reject(this.error);
+  }
+}
 
 describe('AgentCompiler — existing verifier', () => {
   it('builds one deterministic rung equal to the ref and a valid contractHash', async () => {
@@ -343,6 +357,38 @@ describe('AgentCompiler — rubric guardrails (issue #55)', () => {
     await compiler.compile(makeConfig({ verifier: { kind: 'generate' } }));
 
     expect(llm.requests[0]?.prompt).toContain("'test/'");
+  });
+});
+
+describe('looksLikeLlmTimeout (follow-on G)', () => {
+  it('matches CLI-provider and HTTP-abort timeout phrasings', () => {
+    expect(looksLikeLlmTimeout('LLM CLI cli:claude timed out')).toBe(true);
+    expect(looksLikeLlmTimeout('chat-completions failed after 3 attempts: The operation was aborted')).toBe(true);
+    expect(looksLikeLlmTimeout('request timeout')).toBe(true);
+  });
+
+  it('does not match ordinary authoring errors', () => {
+    expect(looksLikeLlmTimeout('LLM response contained no JSON object')).toBe(false);
+    expect(looksLikeLlmTimeout('HTTP 401: unauthorized')).toBe(false);
+  });
+});
+
+describe('AgentCompiler — authoring timeout hint (follow-on G)', () => {
+  it('appends a raise --llm-timeout-ms hint when the authoring LLM call times out', async () => {
+    const compiler = new AgentCompiler({ llm: new ThrowingLlm(new Error('LLM CLI cli:claude timed out')) });
+    const config = makeConfig({ verifier: { kind: 'generate' } });
+    // The reason flows verbatim into COMPILE_FAILED (driver: errorMessage(e)); assert on the message.
+    await expect(compiler.compile(config)).rejects.toThrow(/--llm-timeout-ms/);
+    await expect(compiler.compile(config)).rejects.toThrow(/timed out/);
+  });
+
+  it('leaves a non-timeout authoring error unchanged (no spurious timeout hint)', async () => {
+    const compiler = new AgentCompiler({ llm: new ThrowingLlm(new Error('HTTP 401: unauthorized')) });
+    const config = makeConfig({ verifier: { kind: 'generate' } });
+    const err = await compiler.compile(config).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('401');
+    expect((err as Error).message).not.toContain('--llm-timeout-ms');
   });
 });
 

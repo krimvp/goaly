@@ -116,7 +116,7 @@
     },
     decide: {
       t: "DECIDE — pure truth table",
-      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop on STUCK / budget / iteration cap.",
+      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop on STUCK / budget / iteration cap. A no-diff turn is excused when the run was cut short (timeout, crash, or truncated at its turn cap) — it gets another iteration instead of a premature stuck abort.",
       pills: ['<span class="pill pass">two keys → DONE</span>'],
     },
   };

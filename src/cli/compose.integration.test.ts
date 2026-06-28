@@ -6,8 +6,35 @@ import { composeDeps } from './compose';
 import { drive } from '../driver/driver';
 import { makeConfig } from '../testing/fakes';
 import { FakeLlm } from '../llm/provider';
-import { asRunId } from '../domain/ids';
+import { asRunId, coerceSessionId, type SessionId } from '../domain/ids';
+import type { HarnessAdapter } from '../harness/adapter';
+import type { HarnessRunResult } from '../domain/events';
 import { runProcess } from '../util/spawn';
+
+/**
+ * A harness that mimics the glm/kimi failure (follow-ons E/F): iteration 1 hits the turn cap and
+ * makes NO edit (status `truncated`, no diff); iteration 2 writes the implementation and `completed`s.
+ * Proves a truncated no-diff is not read as "stuck" and the run gets its next, productive iteration.
+ */
+class TruncateThenBuildHarness implements HarnessAdapter {
+  readonly name = 'truncate-then-build';
+  #call = 0;
+  constructor(
+    private readonly dir: string,
+    private readonly implFile: string,
+  ) {}
+  async run(_prompt: string, sessionId?: SessionId): Promise<HarnessRunResult> {
+    this.#call += 1;
+    const id = sessionId ?? coerceSessionId('scripted-session', 'scripted-session');
+    if (this.#call === 1) {
+      // Hit the turn cap mid-work before producing a usable diff (glm/kimi: status=truncated changed=false).
+      return { output: 'ran out of turns before finishing', sessionId: id, status: 'truncated' };
+    }
+    // Iteration 2: actually build the thing — a net diff that satisfies the deterministic rung.
+    await writeFile(path.join(this.dir, this.implFile), 'built\n');
+    return { output: 'wrote the implementation', sessionId: id, status: 'completed' };
+  }
+}
 
 async function initRepo(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), 'goaly-cli-'));
@@ -191,5 +218,57 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
     const diff = await based.workspace.diff();
     expect(diff).toContain('README.md');
     expect(diff).toContain('fixture v2');
+  });
+
+  it('from-scratch --generate --autonomous converges after a truncated no-diff iteration (A+B+E+F synergy)', async () => {
+    dir = await initRepo();
+    // An autonomous, self-authored from-scratch run: the compiler authors a setup + a deterministic
+    // build/test rung + a judge rung. The shared FakeLlm answers, in order: compiler authoring → the
+    // judge rung (iteration 2 only — iteration 1's deterministic rung is red and short-circuits the
+    // ladder) → the Sign-off approver. The authored setup fails on the empty tree (no go.mod), which,
+    // being COMPILER-authored, degrades to best-effort proceed (Fix A) instead of a fatal SETUP_FAILED;
+    // the deterministic pre-flight is red on the from-scratch tree but proceeds rather than aborting
+    // CONTRACT_UNSOUND (Fix B).
+    const config = makeConfig({
+      goal: 'build it from scratch',
+      verifier: { kind: 'generate', intent: 'make impl.txt' },
+      rubric: 'is it built',
+      autonomous: true,
+      judge: { quorum: 1 },
+      maxIterations: 5,
+    });
+    const runId = asRunId('run-cli-truncate-converge');
+    const base = composeDeps(config, {
+      harness: 'fake',
+      workspaceRoot: dir,
+      runId,
+      noLogConsole: true,
+      llm: new FakeLlm([
+        // compiler: a build/test bar (red until impl.txt exists) + a from-scratch-failing authored setup.
+        '{"command":"test -f impl.txt","rubric":"is it built","setup":"test -f go.mod"}',
+        // judge rung (only reached on iteration 2, once the deterministic rung is green).
+        '{"pass":true,"confidence":1,"failing_criteria":[]}',
+        // Sign-off approver: the second key does not veto.
+        '{"veto":false}',
+      ]),
+    });
+    // Swap in the scripted worker: NoopHarness can't model truncated-then-build.
+    const deps = { ...base, harness: new TruncateThenBuildHarness(dir, 'impl.txt') };
+
+    const outcome = await drive(deps, config, runId);
+
+    // Not killed in prepare (A/B), not aborted at the iteration-1 truncated no-diff (F): it took the
+    // second iteration to actually build, then reached DONE within --max-iterations.
+    expect(outcome.status).toBe('DONE');
+    expect(outcome.iterations).toBe(2);
+    expect(outcome.contractHash).not.toBeNull();
+
+    // The log shows iteration 1 was a truncated run that changed nothing, yet the run continued.
+    const stored = await deps.runlog.read();
+    const firstRun = stored?.entries.find((e) => e.event.tag === 'AGENT_RAN');
+    expect(firstRun?.event.tag).toBe('AGENT_RAN');
+    if (firstRun?.event.tag === 'AGENT_RAN') {
+      expect(firstRun.event.run.status).toBe('truncated');
+    }
   });
 });
