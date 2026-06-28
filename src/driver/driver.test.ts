@@ -121,7 +121,7 @@ describe('drive() — full loop with zero IO', () => {
     expect(prepared?.event).toMatchObject({ tag: 'WORKSPACE_PREPARED', setupRan: true });
   });
 
-  it('a failing setup command → FAILED (SETUP_FAILED) before any worker turn (Fix #1)', async () => {
+  it('a failing USER --setup-cmd → FAILED (SETUP_FAILED) before any worker turn (Fix #1)', async () => {
     const setupContract = makeFakeContract({ goal: 'make the thing work', setup: 'npm ci' });
     // First workspace.run (the setup command) exits non-zero → SETUP_FAILED, loop never starts.
     const workspace = new FakeWorkspace('0000000', 'a fake diff', [
@@ -134,12 +134,85 @@ describe('drive() — full loop with zero IO', () => {
       verdicts: [],
     });
 
-    const outcome = await drive(deps, makeConfig({ goal: 'make the thing work' }), runId);
+    // A user-supplied --setup-cmd (config.setupCmd set) is enforced fatally — setupAuthored=false.
+    const outcome = await drive(
+      deps,
+      makeConfig({ goal: 'make the thing work', setupCmd: 'npm ci' }),
+      runId,
+    );
 
     expect(outcome.status).toBe('FAILED');
     expect(outcome.reason).toContain('SETUP_FAILED');
     expect(outcome.iterations).toBe(0);
     expect(harness.prompts).toHaveLength(0); // never handed the worker a broken tree
+  });
+
+  it('a failing AUTHORED setup is best-effort: proceeds to the loop with a setup-note prompt (Fix A)', async () => {
+    const setupContract = makeFakeContract({ goal: 'make the thing work', setup: 'go mod download' });
+    // The authored setup exits non-zero (from-scratch: no go.mod yet), then the pre-flight rung is red,
+    // then the agent's run makes the workspace change and verification passes.
+    const workspace = new FakeWorkspace('0000000', 'a fake diff', [
+      { exitCode: 1, stdout: '', stderr: 'go.mod file not found in current directory' },
+      { exitCode: 1, stdout: '', stderr: 'build failed' }, // pre-flight rung (red — honest)
+    ]);
+    const { deps, harness, runlog } = wire({
+      workspace,
+      compiler: new FakeCompiler(setupContract),
+      scripts: [{ postHash: '0000001' }],
+      verdicts: [passVerdict()],
+      approvals: [approve()],
+    });
+
+    // No --setup-cmd ⇒ setupAuthored=true ⇒ the failure degrades to proceed instead of SETUP_FAILED.
+    const outcome = await drive(deps, makeConfig({ goal: 'make the thing work' }), runId);
+
+    expect(outcome.status).toBe('DONE');
+    expect(harness.prompts).toHaveLength(1);
+    // The first prompt carries the setup note so the agent scaffolds + runs setup itself.
+    expect(harness.prompts[0]).toContain('go mod download');
+    expect(harness.prompts[0]).toContain('Setup note');
+    // The prepare phase still proceeded (best-effort), not a typed abort.
+    const prepared = runlog.entries.find((e) => e.event.tag === 'WORKSPACE_PREPARED');
+    expect(prepared?.event).toMatchObject({
+      tag: 'WORKSPACE_PREPARED',
+      setupRan: true,
+      prepared: { status: 'proceed' },
+    });
+  });
+
+  it('from-scratch --generate --autonomous with BOTH an authored setup and a build rung reaches the loop → DONE (Fix A+B1)', async () => {
+    // This is the §1 Round-B failure: the compiler authors `go mod download` (setup) AND `go build`
+    // (deterministic rung); on the empty starting tree both are red, which used to kill the run at
+    // iteration 0 via SETUP_FAILED / CONTRACT_UNSOUND. With Fix A (authored setup best-effort) + Fix B1
+    // (from-scratch skips the soundness pre-flight) the run must reach the agent loop instead.
+    const contractFromScratch = makeFakeContract({
+      goal: 'build a Go MCP server',
+      setup: 'go mod download',
+      rungs: [{ kind: 'deterministic', command: 'go build ./...' }],
+      generatedFiles: [{ path: 'verify/server_test.go', sha256: 'a'.repeat(64) }],
+    });
+    const workspace = new FakeWorkspace('0000000', 'a fake diff', [
+      // The authored setup is red on the empty tree (no go.mod yet) — best-effort, non-fatal.
+      { exitCode: 1, stdout: '', stderr: 'go.mod file not found in current directory' },
+    ]);
+    workspace.setEmptyOfSource(true); // from-scratch ⇒ the soundness pre-flight is skipped entirely
+    const { deps, harness } = wire({
+      workspace,
+      compiler: new FakeCompiler(contractFromScratch),
+      scripts: [{ postHash: '0000001' }], // the agent writes the implementation
+      verdicts: [passVerdict()],
+      approvals: [approve()],
+    });
+
+    const outcome = await drive(
+      deps,
+      makeConfig({ goal: 'build a Go MCP server', autonomous: true, verifier: { kind: 'generate' } }),
+      runId,
+    );
+
+    expect(outcome.status).toBe('DONE');
+    expect(harness.prompts).toHaveLength(1); // it reached the agent loop (no iteration-0 death)
+    expect(harness.prompts[0]).toContain('Setup note'); // the authored-setup failure surfaced as a hint
   });
 
   it('a missing required tool + --install-missing-tools false → FAILED (TOOLS_MISSING) before any worker turn', async () => {

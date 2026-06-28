@@ -118,6 +118,29 @@ describe('step() transitions', () => {
       expect(cmds[0]).toMatchObject({ tag: 'PREPARE_WORKSPACE', installMissingTools: false });
     });
 
+    it('an authored setup (no --setup-cmd) marks setupAuthored:true on PREPARE_WORKSPACE (Fix A)', () => {
+      // makeConfig has no setupCmd ⇒ the compiler authored the setup ⇒ best-effort.
+      const [s1] = step(initial(makeConfig())[0], { tag: 'CONTRACT_COMPILED', contract: setupContract });
+      const [, cmds] = step(s1, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } });
+      expect(cmds[0]).toMatchObject({ tag: 'PREPARE_WORKSPACE', setupAuthored: true });
+    });
+
+    it('a user --setup-cmd marks setupAuthored:false on PREPARE_WORKSPACE (stays fatal)', () => {
+      const cfg = makeConfig({ setupCmd: 'npm ci' });
+      const [s1] = step(initial(cfg)[0], { tag: 'CONTRACT_COMPILED', contract: setupContract });
+      const [, cmds] = step(s1, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } });
+      expect(cmds[0]).toMatchObject({ tag: 'PREPARE_WORKSPACE', setupAuthored: false });
+    });
+
+    it('a contract with no setup (generatedFiles only) marks setupAuthored:false', () => {
+      const filesContract = makeFakeContract({
+        generatedFiles: [{ path: 'verify/x.test.ts', sha256: 'a'.repeat(64) }],
+      });
+      const [s1] = step(initial(makeConfig())[0], { tag: 'CONTRACT_COMPILED', contract: filesContract });
+      const [, cmds] = step(s1, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } });
+      expect(cmds[0]).toMatchObject({ tag: 'PREPARE_WORKSPACE', setupAuthored: false });
+    });
+
     it('Seal approval with authored generatedFiles also pre-flights (PREPARING)', () => {
       const withFiles = makeFakeContract({
         generatedFiles: [{ path: 'verify/x.test.ts', sha256: 'a'.repeat(64) }],
@@ -159,6 +182,22 @@ describe('step() transitions', () => {
         expect(cmds[0].prompt).toContain('Bootstrap required first');
         expect(cmds[0].prompt).toContain('cargo, rustup');
         expect(cmds[0].prompt).toContain('npm ci'); // the skipped setup is handed to the agent
+      }
+    });
+
+    it('proceed carrying a setupHint → first prompt includes the setup note (Fix A)', () => {
+      const [s, cmds] = step(preparing(), {
+        tag: 'WORKSPACE_PREPARED',
+        prepared: {
+          status: 'proceed',
+          setupHint: 'A one-time setup command was attempted: `go mod download`. Create scaffolding…',
+        },
+        setupRan: true,
+      });
+      expect(s.tag).toBe('RUNNING_AGENT');
+      if (cmds[0]?.tag === 'RUN_AGENT') {
+        expect(cmds[0].prompt).toContain('Setup note');
+        expect(cmds[0].prompt).toContain('go mod download');
       }
     });
 

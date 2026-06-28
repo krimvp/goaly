@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { prepareWorkspace } from './prepare';
-import { makeFakeContract, FakeWorkspace } from '../testing/fakes';
+import { makeFakeContract, FakeWorkspace, recordingLogger } from '../testing/fakes';
 import { FakeLlm } from '../llm/provider';
 import type { CommandResult } from '../workspace/workspace';
 
@@ -78,6 +78,107 @@ describe('prepareWorkspace — setup (Fix #1)', () => {
     const result = await prepareWorkspace({ workspace: ws }, contract);
     expect(result.setupRan).toBe(false);
     expect(ws.commands).toEqual(['npm test']);
+  });
+});
+
+describe('prepareWorkspace — authored setup is best-effort (Fix A)', () => {
+  it('an AUTHORED setup that fails degrades to proceed with a threaded setupHint (not setup-failed)', async () => {
+    // setup fails (from-scratch: no go.mod yet), then the pre-flight rung is red (honest) → proceed.
+    const ws = new ScriptedWorkspace([
+      { exitCode: 1, stdout: '', stderr: 'go.mod file not found in current directory' },
+      { exitCode: 1, stdout: '', stderr: 'build failed' },
+    ]);
+    const contract = makeFakeContract({
+      setup: 'go mod download',
+      rungs: [{ kind: 'deterministic', command: 'go build ./...' }],
+    });
+    const { logger, records } = recordingLogger();
+    const result = await prepareWorkspace({ workspace: ws, setupAuthored: true, logger }, contract);
+
+    expect(result.prepared.status).toBe('proceed');
+    expect(result.setupRan).toBe(true);
+    if (result.prepared.status === 'proceed') {
+      expect(result.prepared.setupHint).toContain('go mod download');
+      expect(result.prepared.setupHint).toContain('scaffolding');
+    }
+    // It logged loudly (warn), not silently.
+    expect(records.some((r) => r.level === 'warn' && /authored setup/i.test(r.msg))).toBe(true);
+  });
+
+  it('a USER setup (setupAuthored:false) that fails is still a fatal setup-failed (regression)', async () => {
+    const ws = new ScriptedWorkspace([{ exitCode: 1, stdout: '', stderr: 'cannot resolve deps' }]);
+    const contract = makeFakeContract({
+      setup: 'npm ci',
+      rungs: [{ kind: 'deterministic', command: 'npm test' }],
+    });
+    const result = await prepareWorkspace({ workspace: ws, setupAuthored: false }, contract);
+    expect(result.prepared.status).toBe('setup-failed');
+    expect(ws.commands).toEqual(['npm ci']); // short-circuited before pre-flight
+  });
+
+  it('omitting setupAuthored defaults to fatal (fail-closed) on a failed setup', async () => {
+    const ws = new ScriptedWorkspace([{ exitCode: 1, stdout: '', stderr: 'boom' }]);
+    const contract = makeFakeContract({ setup: 'npm ci' });
+    const result = await prepareWorkspace({ workspace: ws }, contract); // no setupAuthored
+    expect(result.prepared.status).toBe('setup-failed');
+  });
+
+  it('an AUTHORED setup that SUCCEEDS proceeds with no setupHint', async () => {
+    const ws = new ScriptedWorkspace([ok, ok]);
+    const contract = makeFakeContract({
+      setup: 'go mod download',
+      rungs: [{ kind: 'deterministic', command: 'go build ./...' }],
+    });
+    const result = await prepareWorkspace({ workspace: ws, setupAuthored: true }, contract);
+    expect(result.prepared.status).toBe('proceed');
+    if (result.prepared.status === 'proceed') expect(result.prepared.setupHint).toBeUndefined();
+  });
+});
+
+describe('prepareWorkspace — from-scratch tree skips the soundness pre-flight (Fix B1)', () => {
+  const generatedFiles = [{ path: 'verify/x.test.ts', sha256: 'a'.repeat(64) }];
+
+  it('from-scratch + red deterministic rung → proceed WITHOUT consulting the classifier', async () => {
+    // isEmptyOfSource=true ⇒ the rung is red by definition; the classifier must never be called.
+    const ws = new ScriptedWorkspace([{ exitCode: 1, stdout: '', stderr: 'go.mod not found' }]);
+    ws.setEmptyOfSource(true);
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'go build ./...' }],
+      generatedFiles,
+    });
+    const llm = new FakeLlm([JSON.stringify({ brokenVerification: true })]); // would abort — must not run
+    const result = await prepareWorkspace({ workspace: ws, llm }, contract);
+    expect(result.prepared.status).toBe('proceed');
+    expect(llm.requests).toEqual([]); // classifier was NOT consulted
+    expect(ws.commands).toEqual([]); // the rung was not even run (red by definition)
+  });
+
+  it('an EXISTING project (isEmptyOfSource false) + red rung + broken:true → still contract-unsound', async () => {
+    const ws = new ScriptedWorkspace([
+      { exitCode: 2, stdout: '', stderr: "verify/x.test.ts(3,5): error TS2339" },
+    ]);
+    ws.setEmptyOfSource(false); // explicit: a populated tree
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'npm run typecheck' }],
+      generatedFiles,
+    });
+    const llm = new FakeLlm([JSON.stringify({ brokenVerification: true, reason: 'TS2339 in the authored test' })]);
+    const result = await prepareWorkspace({ workspace: ws, llm }, contract);
+    expect(result.prepared.status).toBe('contract-unsound');
+    expect(llm.requests).toHaveLength(1); // the classifier WAS consulted (not from-scratch)
+  });
+
+  it('an EXISTING project + red rung + broken:false → proceed (honest red)', async () => {
+    const ws = new ScriptedWorkspace([{ exitCode: 1, stdout: '', stderr: 'src/parser.ts: not implemented' }]);
+    ws.setEmptyOfSource(false);
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'npm test' }],
+      generatedFiles,
+    });
+    const llm = new FakeLlm([JSON.stringify({ brokenVerification: false })]);
+    const result = await prepareWorkspace({ workspace: ws, llm }, contract);
+    expect(result.prepared.status).toBe('proceed');
+    expect(llm.requests).toHaveLength(1);
   });
 });
 

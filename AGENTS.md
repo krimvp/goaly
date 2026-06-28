@@ -40,6 +40,14 @@ These are the product. A change that violates one is wrong even if tests pass �
 4. **Fail-closed everywhere.** Any verifier/rung/approver/adapter/workspace that errors or returns
    unparseable output becomes a FAIL / VETO / crashed-run — never a green, never an unhandled
    throw. Adapters and `drive()` must never reject.
+   *Prepare-phase carve-out (not a violation — see [ADR 0010](docs/adr/0010-prepare-from-scratch.md)):*
+   the one-time prepare phase is a pre-loop **bootstrap**, not a verification seam. A failing
+   **compiler-authored** `setup` is **best-effort** (degrades to `proceed` with a recovery hint in the
+   first prompt) because on a from-scratch `--generate` build it presupposes scaffolding the agent
+   hasn't written yet; a failing **user `--setup-cmd`** stays fatal `SETUP_FAILED`. The soundness
+   pre-flight is **fail-open** by design (a wrong "broken" would abort a legitimate run; a wrong "sound"
+   only proceeds) and is skipped entirely on a from-scratch tree. None of this can produce a wrong
+   green: the frozen ladder + veto-only approver still gate DONE every iteration.
 5. **`--autonomous` moves Seal only.** It auto-accepts the contract but still freezes it and logs
    it loudly. It never skips verification or the freeze.
 6. **Parse at every seam (Zod).** CLI args, config, harness stdout (tolerant), judge/approver output

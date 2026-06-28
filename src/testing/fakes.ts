@@ -213,6 +213,8 @@ export class FakeWorkspace implements Workspace {
   #diffText: string;
   readonly #cmdResults: CommandResult[];
   readonly #fileHashes: Map<string, string> = new Map();
+  /** What {@link isEmptyOfSource} reports (Fix B1). Defaults to false — an existing (not from-scratch) tree. */
+  #emptyOfSource = false;
   /** Every baseline `setBaseline()`/`checkpoint()` adopted, in order — for asserting resume wiring. */
   readonly baselineCalls: string[] = [];
   /** The effective baseline each `diff()` call resolved to, in order — for asserting delta-verify (#49). */
@@ -266,6 +268,13 @@ export class FakeWorkspace implements Workspace {
   }
   async fileHash(relPath: string): Promise<string | null> {
     return this.#fileHashes.get(relPath) ?? null;
+  }
+  /** Toggle the from-scratch signal the prepare phase reads (Fix B1). */
+  setEmptyOfSource(empty: boolean): void {
+    this.#emptyOfSource = empty;
+  }
+  async isEmptyOfSource(): Promise<boolean> {
+    return this.#emptyOfSource;
   }
 }
 

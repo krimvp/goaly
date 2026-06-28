@@ -27,6 +27,28 @@ export type ExecFn = (
 /** Conventional `timeout(1)` exit code; surfaced when we kill a command for exceeding `timeoutMs`. */
 const TIMEOUT_EXIT_CODE = 124;
 
+/** Normalize a repo-relative path for set comparison: trim, drop a leading `./`. */
+function normalizeRel(p: string): string {
+  const t = p.trim();
+  return t.startsWith('./') ? t.slice(2) : t;
+}
+
+/**
+ * Docs / repo metadata that never count as implementation source for {@link GitWorkspace.isEmptyOfSource}
+ * (Fix B1). Deliberately small + conservative: only a from-scratch seed README/LICENSE, any Markdown,
+ * and git's own dotfiles (`.gitignore`, `.gitattributes`, …). Anything else — a `*.go`, `package.json`,
+ * a `src/` file — is a candidate source file, so the tree is NOT treated as from-scratch.
+ */
+function isDocOrMeta(relPath: string): boolean {
+  const base = relPath.slice(relPath.lastIndexOf('/') + 1);
+  return (
+    /^README/i.test(base) ||
+    /^LICENSE/i.test(base) ||
+    /\.md$/i.test(base) ||
+    base.startsWith('.git')
+  );
+}
+
 /** Counter to keep temporary index file names unique within a process. */
 let tmpIndexCounter = 0;
 
@@ -278,6 +300,36 @@ export class GitWorkspace implements Workspace {
     } catch {
       // Missing/unreadable file is fail-closed: the guard reports it as a moved/deleted bar.
       return null;
+    }
+  }
+
+  /**
+   * From-scratch detector (Fix B1). List every candidate file via `git ls-files --cached --others
+   * --exclude-standard` (tracked + untracked-not-ignored, respecting the existing `#pathspec()`
+   * excludes, e.g. `.goaly`), then subtract the compiler's authored verification (`generatedFiles`)
+   * and a small doc/meta allowlist. If NOTHING remains, the tree carries no implementation source yet
+   * → from-scratch. Conservative + fail-safe: a non-zero git exit or a throw yields `false` (treated
+   * as "not from-scratch"), so a glitch never wrongly skips the soundness pre-flight.
+   */
+  async isEmptyOfSource(generatedFiles: readonly string[]): Promise<boolean> {
+    try {
+      const listed = await this.#exec(
+        'git',
+        ['-C', this.#root, 'ls-files', '--cached', '--others', '--exclude-standard', ...this.#pathspec()],
+        { cwd: this.#root },
+      );
+      if (listed.code !== 0) return false; // can't enumerate ⇒ conservatively not from-scratch
+      const authored = new Set(generatedFiles.map(normalizeRel));
+      const candidates = listed.stdout
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0)
+        .map(normalizeRel)
+        .filter((f) => !authored.has(f))
+        .filter((f) => !isDocOrMeta(f));
+      return candidates.length === 0;
+    } catch {
+      return false;
     }
   }
 

@@ -10,9 +10,13 @@ import { noopLogger, type Logger } from '../log/logger';
  * Language-agnostic pre-flight soundness classifier (replaces the old text/exit-code heuristic).
  *
  * The pre-flight runs the frozen deterministic verifier ONCE against the STARTING tree (before any
- * implementation exists), so it is red either because (a) the authored verification itself cannot run
- * — a syntax/compile/collection/import defect the agent can NEVER fix, since the verification files are
- * frozen — or (b) the implementation is simply missing, the expected HONEST red the loop fixes.
+ * implementation exists), so it is red either because (a) a defect lives INSIDE the frozen verification
+ * files themselves — a syntax/compile/collection/import error the agent can NEVER fix, since those files
+ * are frozen — or (b) the work the agent still has to do is not done yet: the implementation is missing,
+ * OR project scaffolding the implementation must create (a dependency manifest like go.mod/package.json,
+ * uninstalled deps, an unresolved import of a not-yet-written module) is absent. Case (b) is the expected
+ * HONEST red the loop fixes — agent-fixable, NOT a broken verifier. (A fully empty from-scratch tree is
+ * short-circuited to proceed upstream in `prepare.ts` before this classifier is ever consulted — Fix B1.)
  *
  * Telling those apart from the failure text is inherently language-specific (pytest exit 1 vs 2-5, but
  * `cargo` exits 101 for both a compile error AND a failing test; `go test` uses 1 vs 2; tsc 2 vs …) — a
@@ -30,15 +34,23 @@ const SYSTEM_PROMPT = [
   'A frozen, auto-authored VERIFICATION (test files / a check command) was just run ONCE against the',
   'STARTING codebase — before the implementation has been written. It failed (a red). Your ONLY job is',
   'to decide WHY it is red, choosing exactly one:',
-  ' - brokenVerification=true: the VERIFICATION ITSELF cannot run — a syntax error, a compile/type',
-  '   error, a collection/import error, a usage error, or a missing tool/dependency that prevents the',
-  '   checks from ever executing. These originate in the authored verification, which is frozen and',
-  '   cannot be fixed by writing implementation code.',
-  ' - brokenVerification=false: the verification RAN correctly and is failing only because the',
-  '   implementation does not exist yet (missing files/functions, assertion failures, expected red).',
-  '   This is the normal starting state and the loop will fix it.',
-  'When in doubt, answer false — a verifier that merely names a not-yet-created file in its output is',
-  'almost always a healthy red, not a broken verifier.',
+  ' - brokenVerification=true: the defect is INSIDE THE FROZEN VERIFICATION FILES THEMSELVES — a',
+  '   syntax error, a compile/type error, a collection/import error, or a usage error in an authored',
+  '   test/check file. Because those files are frozen, NO amount of implementation code can fix it.',
+  ' - brokenVerification=false: the verification RAN correctly and is failing only because the work the',
+  '   AGENT still has to do is not done yet. This is the normal starting state and the loop will fix it.',
+  '   It includes BOTH: (a) the implementation does not exist yet — missing files/functions, assertion',
+  '   failures; AND (b) project scaffolding the IMPLEMENTATION is expected to create is not present yet',
+  '   — a missing dependency manifest/module the agent must author (go.mod, package.json, Cargo.toml,',
+  '   pyproject.toml, requirements.txt, tsconfig.json), uninstalled project dependencies, or an',
+  '   unresolved import of a not-yet-written module. All of those are AGENT-FIXABLE, so answer false.',
+  'Worked example: `go build ./...` failing with "no required module provides package X; go.mod not',
+  '   found" → false (the agent will create go.mod and write the package). By contrast,',
+  '   "verify/x.test.ts(3,5): error TS2339: Property \'foo\' does not exist" inside the FROZEN authored',
+  '   test → true (the defect lives in the verification the agent cannot change).',
+  'When in doubt, answer false — a verifier that merely names a not-yet-created file, a not-yet-created',
+  'manifest, or a not-yet-installed dependency in its output is almost always a healthy red. Reserve',
+  'true for a defect you can point to INSIDE the authored verification files listed below.',
   'Respond with ONLY a single JSON object of the form {"brokenVerification": boolean, "reason": string}.',
   'No prose, no markdown, no code fences — JSON only.',
   UNTRUSTED_SYSTEM_CLAUSE,

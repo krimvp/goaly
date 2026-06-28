@@ -56,4 +56,33 @@ describe('classifyPreflightSoundness', () => {
     expect(req?.prompt).toContain('UNIQUE_FAILURE_MARKER');
     expect(req?.temperature).toBe(0);
   });
+
+  // Fix B2: a missing dependency manifest/module the IMPLEMENTATION is expected to create (go.mod,
+  // package.json, …) is agent-fixable — broken=false. A defect INSIDE the frozen authored test is
+  // broken=true. The classifier is LLM-driven, so the refinement lives in the system prompt: assert
+  // the prompt encodes both clauses, plus the round-trip on representative details.
+  it('a "missing go.mod / package not in std" red classifies as an honest red (broken=false)', async () => {
+    const detail = 'no required module provides package example.com/mine; go.mod file not found';
+    const llm = new FakeLlm([JSON.stringify({ brokenVerification: false, reason: 'go.mod not created yet' })]);
+    const v = await classifyPreflightSoundness({ llm }, contract, detail);
+    expect(v.broken).toBe(false);
+  });
+
+  it('a real syntax/import error INSIDE the authored test classifies as broken (broken=true)', async () => {
+    const detail = 'test_pi.py:1: in <module>\n    import nonexistent_helper\nE   ImportError';
+    const llm = new FakeLlm([JSON.stringify({ brokenVerification: true, reason: 'ImportError in the frozen test' })]);
+    const v = await classifyPreflightSoundness({ llm }, contract, detail);
+    expect(v.broken).toBe(true);
+  });
+
+  it('the system prompt instructs that a missing dependency manifest is NOT a broken verifier (B2)', async () => {
+    const llm = new FakeLlm([JSON.stringify({ brokenVerification: false })]);
+    await classifyPreflightSoundness({ llm }, contract, 'boom');
+    const system = llm.requests[0]?.system ?? '';
+    // The carve-out (agent-fixable scaffolding) and an example manifest are spelled out…
+    expect(system).toContain('go.mod');
+    expect(system).toMatch(/manifest/i);
+    // …and the broken=true case is reserved for a defect inside the frozen verification files.
+    expect(system).toMatch(/FROZEN VERIFICATION FILES/i);
+  });
 });

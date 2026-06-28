@@ -31,6 +31,9 @@ function spyWorkspace(result: CommandResult): {
     async fileHash() {
       return null;
     },
+    async isEmptyOfSource() {
+      return false;
+    },
   };
   return { workspace, calls };
 }

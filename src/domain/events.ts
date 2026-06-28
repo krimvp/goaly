@@ -59,6 +59,15 @@ export const PreparedOutcome = z.discriminatedUnion('status', [
      * bootstrap instruction. Absent/empty when every required tool was already present.
      */
     installTools: z.array(z.string()).optional(),
+    /**
+     * Set when a COMPILER-AUTHORED setup command (not a user `--setup-cmd`) failed and was degraded to
+     * best-effort `proceed` instead of a fatal `SETUP_FAILED` (Fix A): on a from-scratch `--generate`
+     * build the authored `go mod download`/`npm ci` presupposes scaffolding the agent has not written
+     * yet, so a non-zero exit is expected, not fatal. Carries an actionable note (the failed command +
+     * how to recover) threaded into the first prompt the way {@link installTools} is, so the agent
+     * scaffolds and runs setup itself. Absent when setup ran clean, was absent, or was user-supplied.
+     */
+    setupHint: z.string().optional(),
   }),
   z.object({ status: z.literal('setup-failed'), detail: z.string() }),
   z.object({ status: z.literal('contract-unsound'), detail: z.string() }),
@@ -176,7 +185,19 @@ export type Command =
   | { tag: 'CHECKPOINT_AND_ADVANCE' }
   | { tag: 'COMPILE_VERIFIER'; config: RunConfig; feedback?: string }
   | { tag: 'REQUEST_SEAL'; contract: CompiledContract }
-  | { tag: 'PREPARE_WORKSPACE'; contract: CompiledContract; installMissingTools: boolean }
+  | {
+      tag: 'PREPARE_WORKSPACE';
+      contract: CompiledContract;
+      installMissingTools: boolean;
+      /**
+       * True when this contract's `setup` was COMPILER-AUTHORED (under `--generate`) rather than
+       * user-supplied (`--setup-cmd`). Pure wiring derived in the reducer — NOT part of the frozen
+       * contract (that would churn `contractHash`); it mirrors `installMissingTools` as "how to
+       * prepare," not "what done means." An authored setup that fails is best-effort (degrades to
+       * proceed); a user setup that fails stays fatal `SETUP_FAILED` (Fix A).
+       */
+      setupAuthored: boolean;
+    }
   | { tag: 'RUN_AGENT'; prompt: string; sessionId: SessionId | undefined }
   | { tag: 'RUN_VERIFIER'; contract: CompiledContract }
   | { tag: 'REQUEST_SIGNOFF'; goal: string; rubric: string; verdicts: Verdict[] };
