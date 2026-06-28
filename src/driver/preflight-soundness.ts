@@ -15,8 +15,12 @@ import { noopLogger, type Logger } from '../log/logger';
  * are frozen — or (b) the work the agent still has to do is not done yet: the implementation is missing,
  * OR project scaffolding the implementation must create (a dependency manifest like go.mod/package.json,
  * uninstalled deps, an unresolved import of a not-yet-written module) is absent. Case (b) is the expected
- * HONEST red the loop fixes — agent-fixable, NOT a broken verifier. (A fully empty from-scratch tree is
- * short-circuited to proceed upstream in `prepare.ts` before this classifier is ever consulted — Fix B1.)
+ * HONEST red the loop fixes — agent-fixable, NOT a broken verifier. On a from-scratch tree (no
+ * implementation source yet) case (b) is the overwhelmingly likely cause, so the caller threads an
+ * `emptyOfSource` signal into the prompt to bias the classifier even harder toward "honest red" — but the
+ * rung is still run and classified, so a non-compiling AUTHORED verifier (case (a)) is caught even there
+ * (issue #78: the old Fix B1 short-circuited the rung entirely on a from-scratch tree, letting a frozen,
+ * agent-unfixable broken verifier render the whole run un-completable).
  *
  * Telling those apart from the failure text is inherently language-specific (pytest exit 1 vs 2-5, but
  * `cargo` exits 101 for both a compile error AND a failing test; `go test` uses 1 vs 2; tsc 2 vs …) — a
@@ -66,11 +70,22 @@ export type SoundnessVerdict = { broken: boolean; reason: string };
 
 export type ClassifyDeps = { llm: LlmProvider; logger?: Logger };
 
-function buildPrompt(contract: CompiledContract, detail: string): string {
+function buildPrompt(contract: CompiledContract, detail: string, emptyOfSource: boolean): string {
   const authored = contract.generatedFiles.map((f) => `  - ${f.path}`).join('\n');
+  // On a from-scratch tree the implementation does not exist yet, so an implementation-missing /
+  // scaffolding-missing red is the expected starting state. Bias the classifier hard toward "honest red"
+  // there — reserve brokenVerification=true for a defect you can point to INSIDE the frozen files.
+  const fromScratch = emptyOfSource
+    ? 'CONTEXT: the starting tree is EMPTY OF IMPLEMENTATION SOURCE (a from-scratch build) — no ' +
+      'implementation files exist yet, so an implementation-missing or scaffolding-missing red is the ' +
+      'expected, overwhelmingly likely cause. Answer brokenVerification=true ONLY if you can point to a ' +
+      'defect INSIDE the frozen verification files themselves (a syntax/compile/collection/import/usage ' +
+      'error those frozen files would hit no matter what implementation is written).'
+    : null;
   return [
     `GOAL:\n${contract.goal}`,
     `AUTHORED VERIFICATION FILES (frozen — the agent cannot change these):\n${authored}`,
+    ...(fromScratch !== null ? [fromScratch] : []),
     `VERIFICATION OUTPUT ON THE STARTING TREE (it failed):\n${wrapUntrusted(detail, { label: 'OUTPUT' })}`,
     'Is the verification itself broken (cannot run), or is this an expected red because the implementation is missing?',
     'Reply with ONLY the JSON {"brokenVerification": boolean, "reason": string}.',
@@ -81,18 +96,24 @@ function buildPrompt(contract: CompiledContract, detail: string): string {
  * Ask the model whether a failing pre-flight deterministic rung means the FROZEN verification is broken
  * (→ CONTRACT_UNSOUND) or is an honest red (→ proceed). Fail-open to NOT broken on any LLM error or
  * unparseable response (see the module doc): the runtime ladder + repeat-failure detection are the real
- * fail-closed backstop, and a false abort is the worse outcome.
+ * fail-closed backstop, and a false abort is the worse outcome. `emptyOfSource` (from-scratch tree) is
+ * threaded into the prompt to bias even harder toward "honest red" — see the module doc and issue #78.
  */
 export async function classifyPreflightSoundness(
   deps: ClassifyDeps,
   contract: CompiledContract,
   detail: string,
+  emptyOfSource: boolean,
 ): Promise<SoundnessVerdict> {
   const log = deps.logger ?? noopLogger;
   let raw: string;
   try {
     raw = (
-      await deps.llm.complete({ system: SYSTEM_PROMPT, prompt: buildPrompt(contract, detail), temperature: 0 })
+      await deps.llm.complete({
+        system: SYSTEM_PROMPT,
+        prompt: buildPrompt(contract, detail, emptyOfSource),
+        temperature: 0,
+      })
     ).text;
   } catch (e) {
     log.warn('pre-flight soundness check: LLM call failed — proceeding (honest red assumed)', {

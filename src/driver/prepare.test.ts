@@ -135,22 +135,49 @@ describe('prepareWorkspace — authored setup is best-effort (Fix A)', () => {
   });
 });
 
-describe('prepareWorkspace — from-scratch tree skips the soundness pre-flight (Fix B1)', () => {
+describe('prepareWorkspace — from-scratch tree still runs + classifies the soundness pre-flight (Fix B1, issue #78)', () => {
   const generatedFiles = [{ path: 'verify/x.test.ts', sha256: 'a'.repeat(64) }];
 
-  it('from-scratch + red deterministic rung → proceed WITHOUT consulting the classifier', async () => {
-    // isEmptyOfSource=true ⇒ the rung is red by definition; the classifier must never be called.
+  it('from-scratch + red rung judged honest (impl missing) → proceed (rung run, classifier consulted)', async () => {
+    // isEmptyOfSource=true no longer short-circuits: the rung still runs and the classifier decides.
     const ws = new ScriptedWorkspace([{ exitCode: 1, stdout: '', stderr: 'go.mod not found' }]);
     ws.setEmptyOfSource(true);
     const contract = makeFakeContract({
       rungs: [{ kind: 'deterministic', command: 'go build ./...' }],
       generatedFiles,
     });
-    const llm = new FakeLlm([JSON.stringify({ brokenVerification: true })]); // would abort — must not run
+    const llm = new FakeLlm([JSON.stringify({ brokenVerification: false, reason: 'go.mod not created yet' })]);
     const result = await prepareWorkspace({ workspace: ws, llm }, contract);
     expect(result.prepared.status).toBe('proceed');
-    expect(llm.requests).toEqual([]); // classifier was NOT consulted
-    expect(ws.commands).toEqual([]); // the rung was not even run (red by definition)
+    expect(ws.commands).toEqual(['go build ./...']); // the rung WAS run
+    expect(llm.requests).toHaveLength(1); // the classifier WAS consulted
+    // …and it was told this is a from-scratch tree, so it biases toward "honest red".
+    expect(llm.requests[0]?.prompt).toMatch(/EMPTY OF IMPLEMENTATION SOURCE/i);
+  });
+
+  // The issue #78 regression: a from-scratch tree whose FROZEN authored verifier cannot even run/compile
+  // (a defect the agent can never fix, because the file is frozen) must be caught as contract-unsound up
+  // front — not loop to STUCK_REPEATED_FAILURE. The old B1 skipped the rung entirely and missed this.
+  it('from-scratch + broken frozen verifier → contract-unsound (was: un-completable, issue #78)', async () => {
+    const ws = new ScriptedWorkspace([
+      { exitCode: 2, stdout: '', stderr: 'verify/check.sh: 1: Syntax error: "(" unexpected' },
+    ]);
+    ws.setEmptyOfSource(true); // a from-scratch tree — the old code would have skipped the check
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'sh verify/check.sh' }],
+      generatedFiles: [{ path: 'verify/check.sh', sha256: 'a'.repeat(64) }],
+    });
+    const llm = new FakeLlm([
+      JSON.stringify({ brokenVerification: true, reason: 'shell syntax error in the frozen verify/check.sh' }),
+    ]);
+    const result = await prepareWorkspace({ workspace: ws, llm }, contract);
+    expect(result.prepared.status).toBe('contract-unsound');
+    if (result.prepared.status === 'contract-unsound') {
+      expect(result.prepared.detail).toContain('verify/check.sh'); // the raw verifier output
+      expect(result.prepared.detail).toContain('frozen'); // the classifier's reason
+    }
+    expect(ws.commands).toEqual(['sh verify/check.sh']); // the rung WAS run before classifying
+    expect(llm.requests).toHaveLength(1);
   });
 
   it('an EXISTING project (isEmptyOfSource false) + red rung + broken:true → still contract-unsound', async () => {

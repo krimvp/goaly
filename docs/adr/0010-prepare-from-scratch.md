@@ -48,12 +48,24 @@ default when provenance is unknown) keeps today's fatal `SETUP_FAILED`.
 ### B. Don't (mis)abort the soundness pre-flight on a from-scratch tree
 - **B1 (structural, primary):** a new conservative, language-agnostic `Workspace.isEmptyOfSource(
   generatedFiles)` reports "no implementation source yet — only docs + the authored verification."
-  `preflightDeterministic` checks it first and, on a from-scratch tree, **proceeds without running the
-  rung or the classifier** (a red there is *definitionally* "implementation missing"). The `GitWorkspace`
-  impl lists `git ls-files --cached --others --exclude-standard` (respecting the `.goaly` excludes),
-  subtracts `generatedFiles` and a small doc/meta allowlist (`README*`, `LICENSE*`, `*.md`, `.git*`), and
-  returns `true` only when **zero** candidate source files remain — so an existing project is never
-  mistaken for from-scratch. Fail-safe to `false` on any git error.
+  `preflightDeterministic` checks it and, on a from-scratch tree, biases the soundness call toward
+  "implementation missing." The `GitWorkspace` impl lists `git ls-files --cached --others
+  --exclude-standard` (respecting the `.goaly` excludes), subtracts `generatedFiles` and a small doc/meta
+  allowlist (`README*`, `LICENSE*`, `*.md`, `.git*`), and returns `true` only when **zero** candidate
+  source files remain — so an existing project is never mistaken for from-scratch. Fail-safe to `false` on
+  any git error.
+
+  > **Amendment (issue #78).** B1 originally **short-circuited entirely** — on a from-scratch tree it
+  > proceeded *without running the rung or the classifier*. That conflated two reds: "implementation
+  > missing" (honest) and "the **frozen authored verifier itself** can't run/compile" (broken, and
+  > **agent-unfixable** because the file is frozen). The second slipped through, leaving the deterministic
+  > rung red every iteration with the worker blocked from editing the frozen file by `GeneratedFilesGuard`
+  > — the run could **never reach DONE** and burned its budget to `STUCK_REPEATED_FAILURE` (fail-closed,
+  > but un-completable). Fix: on a from-scratch tree still **run the rung and consult the classifier**,
+  > threading the `emptyOfSource` signal into the classifier prompt to bias hard toward "honest red." The
+  > classifier already fails *open*, so the empty-tree honest-red path is preserved, while a non-compiling
+  > authored verifier is now caught as `CONTRACT_UNSOUND` up front (with `--max-compile-retries > 0` it can
+  > feed a re-author). B1 is now a *signal into* the classifier rather than a skip *around* it.
 - **B2 (classifier refinement, complementary):** the classifier `SYSTEM_PROMPT` now scopes
   `brokenVerification=true` to a defect **inside the frozen verification files themselves**, and
   explicitly classifies a **missing dependency manifest/module the implementation is expected to create**
@@ -72,8 +84,9 @@ default when provenance is unknown) keeps today's fatal `SETUP_FAILED`.
   correctness is still governed by the fail-closed ladder every iteration — a degraded prepare can only
   cost iterations, never produce a wrong green. The pre-flight was already advisory / fail-**open** by
   design (a wrong "broken" aborts a legitimate run; a wrong "sound" only proceeds), and a genuinely
-  broken frozen verifier is still caught generically by `STUCK_REPEATED_FAILURE`. So skipping the
-  pre-flight on a from-scratch tree can never turn a real defect green.
+  broken frozen verifier is still caught generically by `STUCK_REPEATED_FAILURE`. So the from-scratch
+  pre-flight (which can only ever *proceed* on an honest red) can never turn a real defect green; per the
+  B1 amendment (issue #78) it now also catches a non-compiling frozen verifier up front instead of late.
 - **#5 `--autonomous` moves only Seal.** Unchanged.
 - **#6 parse at every seam.** The `PREPARE_WORKSPACE` command and `WORKSPACE_PREPARED` /
   `PreparedOutcome` (now carrying an optional `setupHint`) round-trip through Zod.

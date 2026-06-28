@@ -138,10 +138,12 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   way a human would is what keeps this generic — pytest, `cargo`, `go test` and tsc all encode "couldn't
   run" vs "ran and failed" differently, so no exit-code/regex rule could be both correct and
   cross-language.) On a **from-scratch tree** (no implementation source yet — only docs + the authored
-  verification) the soundness pre-flight is **skipped entirely**: the bar is red *by definition* until the
-  agent scaffolds, so there is nothing sound to check. It fails *open* to proceed on any
-  uncertainty — a genuinely broken frozen verifier is still caught at runtime by repeat-failure stuck
-  detection, so a false abort never blocks a legitimate run. The setup command is frozen into the contract
+  verification) the bar is red *by definition* until the agent scaffolds, so a red there is almost always
+  an honest "implementation missing"; the rung is still **run and classified**, but the from-scratch
+  signal is threaded into the classifier so an honest red proceeds while a frozen verifier that *itself*
+  can't run/compile (which the agent can never fix) is still caught as `CONTRACT_UNSOUND` up front. It
+  fails *open* to proceed on any uncertainty — a genuinely broken frozen verifier is also caught at
+  runtime by repeat-failure stuck detection, so a false abort never blocks a legitimate run. The setup command is frozen into the contract
   (shown at SEAL) so it can't drift. A plain `--verify-cmd` run with no authored files skips the check.
 - **Two keys for DONE:** the frozen verifier passes *and* the independent approver (Sign-off, veto-only)
   doesn't veto.
