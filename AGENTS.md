@@ -48,8 +48,13 @@ These are the product. A change that violates one is wrong even if tests pass â€
    pre-flight is **fail-open** by design (a wrong "broken" would abort a legitimate run; a wrong "sound"
    only proceeds); on a from-scratch tree it still runs the rung and classifies, but threads the
    from-scratch signal into the classifier so an honest "implementation missing" red proceeds while a
-   frozen verifier that can't even run/compile is still caught as `CONTRACT_UNSOUND` (issue #78). None of
-   this can produce a wrong green: the frozen ladder + veto-only approver still gate DONE every iteration.
+   frozen verifier that can't even run/compile is still caught as `CONTRACT_UNSOUND` (issue #78). The
+   GREEN mirror is caught the same fail-open way: an **authored** verifier that **already passes on a
+   from-scratch tree** (the compiler authored the solution into the frozen set, or the bar is vacuous â€”
+   either deadlocks the worker) is classified `CONTRACT_UNSOUND` **only** on an LLM-confirmed positive
+   (no LLM / error / "the goal is genuinely already met" all proceed), so a not-yet-created file is never
+   mistaken for it. None of this can produce a wrong green: the frozen ladder + veto-only approver still
+   gate DONE every iteration.
 5. **`--autonomous` moves Seal only.** It auto-accepts the contract but still freezes it and logs
    it loudly. It never skips verification or the freeze.
 6. **Parse at every seam (Zod).** CLI args, config, harness stdout (tolerant), judge/approver output

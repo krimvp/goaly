@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyPreflightSoundness } from './preflight-soundness';
+import { classifyPreflightSoundness, classifyVacuousContract } from './preflight-soundness';
 import { makeFakeContract } from '../testing/fakes';
 import { FakeLlm } from '../llm/provider';
 
@@ -105,5 +105,47 @@ describe('classifyPreflightSoundness', () => {
     const llm = new FakeLlm([JSON.stringify({ brokenVerification: true, reason: 'syntax error in test_pi.py' })]);
     const v = await classifyPreflightSoundness({ llm }, contract, 'SyntaxError: ( unexpected', true);
     expect(v.broken).toBe(true);
+  });
+});
+
+describe('classifyVacuousContract (green pre-flight on a from-scratch tree)', () => {
+  it('returns broken=true (unsound) when the model says the bar tests nothing the agent wrote', async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({ unsound: true, reason: 'the bar passes off the frozen csv.js, not agent work' }),
+    ]);
+    const v = await classifyVacuousContract({ llm }, contract, 'All tests passed');
+    expect(v.broken).toBe(true);
+    expect(v.reason).toContain('frozen');
+  });
+
+  it('returns broken=false when the model says the goal is genuinely already satisfied', async () => {
+    const llm = new FakeLlm([JSON.stringify({ unsound: false, reason: 'goal already met by the starting tree' })]);
+    const v = await classifyVacuousContract({ llm }, contract, 'All tests passed');
+    expect(v.broken).toBe(false);
+  });
+
+  it('frames the prompt as a PASSED bar on a from-scratch tree', async () => {
+    const llm = new FakeLlm([JSON.stringify({ unsound: false })]);
+    await classifyVacuousContract({ llm }, contract, 'ok');
+    expect(llm.requests[0]?.prompt).toMatch(/PASSED/);
+    expect(llm.requests[0]?.prompt).toMatch(/EMPTY OF IMPLEMENTATION SOURCE/i);
+  });
+
+  it('fails OPEN (broken=false) on an unparseable response', async () => {
+    const v = await classifyVacuousContract({ llm: new FakeLlm(['no json here']) }, contract, 'ok');
+    expect(v.broken).toBe(false);
+  });
+
+  it('fails OPEN (broken=false) when the LLM call throws', async () => {
+    const llm = new (class extends FakeLlm {
+      constructor() {
+        super(['unused']);
+      }
+      override async complete(): ReturnType<FakeLlm['complete']> {
+        throw new Error('network down');
+      }
+    })();
+    const v = await classifyVacuousContract({ llm }, contract, 'ok');
+    expect(v.broken).toBe(false);
   });
 });

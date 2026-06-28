@@ -41,6 +41,12 @@ const SYSTEM_PROMPT =
   '"requiredTools"?: string[], "files"?: Array<{ "path": string, "content": string }> }. ' +
   'The command must exit 0 exactly when the goal is achieved.\n' +
   'Guardrails for a RUNNABLE bar (issue #55):\n' +
+  '- The files you author are VERIFICATION ONLY — test files, fixtures, or a check script. NEVER ' +
+  'author the implementation/solution itself (the source the goal asks for): writing that code is the ' +
+  "WORKER's job, and the files you author are FROZEN (an anti-tamper guard pins them), so authoring " +
+  'the solution into them deadlocks the worker — it cannot change a frozen file, and its real work ' +
+  'then registers as no change. Your command MUST therefore FAIL on the CURRENT tree (the ' +
+  'implementation does not exist yet) and pass only once the worker has written it.\n' +
   "- Author the command over the repo's EXISTING tooling (its test / build / lint runner). Do not " +
   'require ad-hoc shell scripts, nor `grep`/structural source checks as the bar.\n' +
   '- Write any helper or test file INSIDE the workspace using a RELATIVE path; never reference an ' +

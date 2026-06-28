@@ -141,9 +141,17 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   verification) the bar is red *by definition* until the agent scaffolds, so a red there is almost always
   an honest "implementation missing"; the rung is still **run and classified**, but the from-scratch
   signal is threaded into the classifier so an honest red proceeds while a frozen verifier that *itself*
-  can't run/compile (which the agent can never fix) is still caught as `CONTRACT_UNSOUND` up front. It
-  fails *open* to proceed on any uncertainty — a genuinely broken frozen verifier is also caught at
-  runtime by repeat-failure stuck detection, so a false abort never blocks a legitimate run. The setup command is frozen into the contract
+  can't run/compile (which the agent can never fix) is still caught as `CONTRACT_UNSOUND` up front. The
+  **green mirror** is caught the same way: an authored verifier that *already passes* on a from-scratch
+  tree means the bar isn't actually testing the goal — the compiler authored the **solution itself** into
+  the frozen set (which the anti-tamper guard then pins, deadlocking the worker), or the bar is vacuous —
+  so a second read-only call, asked to rule in "the goal is genuinely already satisfied," classifies a
+  confident `CONTRACT_UNSOUND` before any worker token. Both directions fail *open* to proceed on any
+  uncertainty (no LLM, an error, or a "sound" verdict all proceed; a genuinely broken frozen verifier is
+  also caught at runtime by repeat-failure stuck detection) — so a not-yet-created file or a false signal
+  never blocks a legitimate run. The compiler is also instructed up front that authored files are
+  **verification only** (never the implementation) and the bar must be **red on an empty tree**, heading
+  the deadlock off at authoring time. The setup command is frozen into the contract
   (shown at SEAL) so it can't drift. A plain `--verify-cmd` run with no authored files skips the check.
 - **Two keys for DONE:** the frozen verifier passes *and* the independent approver (Sign-off, veto-only)
   doesn't veto.
@@ -463,6 +471,10 @@ goaly run --goal "..." --verify-cmd "npm test" --stream
 # Persist that same stream durably for offline replay (.goaly/<runId>/stream.jsonl), any harness:
 goaly run --goal "..." --verify-cmd "npm test" --stream-transcript
 
+# Narrate the run in plain language — what "done" means, why each ladder run passed/failed, why it
+# ended — with an opt-in, read-only side-LLM explainer (off by default; costs one extra call/checkpoint):
+goaly run --goal "..." --verify-cmd "npm test" --explain --explain-model haiku
+
 # Cap how long each step may run (subprocess kill-timeouts, in ms):
 goaly run --goal "..." --verify-cmd "npm test" \
              --harness-timeout-ms 900000 --llm-timeout-ms 120000 --verify-timeout-ms 60000
@@ -692,7 +704,8 @@ or stdin (`--goal -`). Giving a field more than one source is a usage error.
 
 **Model selection** is optional and never enters the frozen contract — it's pure wiring. `--model`
 is the global default (the harness *and* the LLM steps); `--llm-model` overrides all LLM steps; and
-`--judge-model` / `--approver-model` / `--compiler-model` override a single step. Precedence per LLM
+`--judge-model` / `--approver-model` / `--compiler-model` (and `--explain-model` for the optional
+`--explain` observer) override a single step. Precedence per LLM
 step: per-step flag → `--llm-model` → `--model` → the tool's own default. `--llm-provider`
 (`claude` default, or `codex` / `droid` / `pi` / `openai`) picks which provider runs those steps —
 handy when the harness and the LLM steps should share a model namespace. Omit them all and every tool
@@ -771,6 +784,22 @@ or `tool` line would corrupt an offline cost report), and read back with the exp
 Crucially it is **NOT** the replay log: it is observational, so resume stays a pure fold over
 `OrchestratorEvent` only, and a transcript write failure degrades to "no transcript", never a changed
 outcome (fail-closed). `--stream-file <path>` overrides the location. Opt-in; off by default.
+
+**Plain-language narration** (`--explain`) is a different layer from streaming. Where `--stream`
+surfaces the agent's *raw* turns tool-by-tool, `--explain` turns on a **read-only side-LLM
+"observer"** that **synthesizes** what happened, in plain language, at three checkpoints: the
+**frozen contract at Seal** ("what does *done* mean for this run, and the agent can't weaken it"),
+**each verifier-ladder run** (passed/failed and why, plus what the approver said), and the
+**terminal outcome** (why it ended — especially a *stuck* stop: no-diff / repeated-failure /
+oscillation / harness-crash / budget). Summaries print to **stderr**, prefixed `[explain] `. It is
+**strictly advisory**: it reuses the internal read-only `LlmProvider` seam and can **never**
+influence the frozen contract, the verifier ladder, DECIDE, or the two-key DONE — it is an
+explainer, not a decision-maker. It is **fail-closed** (an observer error degrades to "no summary",
+never a changed outcome), its summaries are **never** written to the run log (resume stays a fold
+over `OrchestratorEvent`), and its spend is deliberately **not metered into the run budget** so the
+narrator can never starve or perturb the loop. **Off by default** — it costs one extra LLM call per
+checkpoint; `--explain-model <m>` selects its model (cascading `--explain-model → --llm-model →
+--model`). Embedders can inject their own observer via `composeDeps({ observer })`.
 
 ### Inspecting past runs
 

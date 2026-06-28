@@ -99,6 +99,12 @@ export type ParsedArgs = {
   noLogFile: boolean;
   /** Stream the agent run AND the LLM steps' intermediate turns live to stderr (opt-in). */
   stream: boolean;
+  /**
+   * Enable the read-only `--explain` observer (issue #8): a side-LLM that narrates the frozen
+   * contract, each verifier-ladder run, and the terminal outcome in plain language. Off by default;
+   * strictly advisory (never influences the contract, ladder, DECIDE, or the two-key DONE).
+   */
+  explain: boolean;
   /** Persist the canonical stream as JSONL to `<workspace>/.goaly/<runId>/stream.jsonl` (opt-in). */
   streamTranscript: boolean;
   /** Override the stream-transcript path (implies `--stream-transcript`). */
@@ -162,7 +168,7 @@ Usage:
                [--cost-table <path>] [--baseline <ref>] [--delta-verify] [--workspace <dir>] [--resume <runId>]
                [--from-run <runId> [--inherit-session]]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
-               [--stream] [--stream-transcript] [--stream-file <path>]
+               [--stream] [--stream-transcript] [--stream-file <path>] [--explain] [--explain-model <m>]
 
   goaly runs list [--workspace <dir>]
   goaly runs show <runId> [--workspace <dir>]
@@ -279,6 +285,7 @@ Model selection (all optional; default = each tool's own default):
   --approver-model <m>  model for the Sign-off approver only
   --compiler-model <m>  model for the verification compiler only
   --planner-model <m>   model for the phased planner only (issue #48)
+  --explain-model <m>   model for the --explain observer only (issue #8)
   --llm-provider <p>    which provider runs the LLM steps: claude (default) | codex | droid | pi |
                         openai. 'openai' calls an OpenAI-compatible chat endpoint directly (no coding
                         CLI installed) — pair it with --base-url and a resolved --llm-model/--model.
@@ -397,6 +404,18 @@ Live streaming & transcript (opt-in observability — issues #23 / #28):
   --stream-file <p> write the transcript to <p> instead of the default path (implies
                     --stream-transcript).
 
+Plain-language run narration (opt-in observability — issue #8):
+  --explain         turn on a read-only side-LLM "observer" that narrates the run in plain language
+                    at three checkpoints: the frozen contract at Seal (what "done" means), each
+                    verifier-ladder run (passed/failed and why), and the terminal outcome (why it
+                    ended — especially a stuck stop). Strictly advisory: it reuses the read-only LLM
+                    seam and can NEVER influence the frozen contract, the verifier ladder, DECIDE, or
+                    the two-key DONE. Fail-closed (an observer error degrades to "no summary", never a
+                    changed outcome) and OFF by default — it costs an extra LLM call per checkpoint.
+                    Summaries print to stderr (prefixed "[explain] "), separate from --stream.
+  --explain-model <m>  model for the --explain observer only (cascades like the other LLM-step
+                    models: --explain-model → --llm-model → --model).
+
 Follow-up after a run ends (build on a finished run — keeps every invariant by construction):
   --from-run <runId>  start a NEW run whose contract is authored AWARE of a finished run: a concise,
                       deterministic COMPACTION of the prior run (its goal, frozen bar, outcome) is fed
@@ -446,6 +465,7 @@ const VALUELESS_FLAGS = new Set([
   'delta-verify',
   'no-log-file',
   'stream',
+  'explain',
   'stream-transcript',
   'defaults',
   'inherit-session',
@@ -665,6 +685,7 @@ export async function parseArgs(
     logFile: str(flags, 'log-file'),
     noLogFile: flags['no-log-file'] !== undefined,
     stream: flags['stream'] !== undefined,
+    explain: flags['explain'] !== undefined,
     streamTranscript: flags['stream-transcript'] !== undefined || str(flags, 'stream-file') !== undefined,
     streamFile: str(flags, 'stream-file'),
     timeouts: parseTimeouts(flags),
@@ -826,6 +847,7 @@ function parseModels(flags: RawFlags): ModelSelection {
   add('approverModel', 'approver-model');
   add('compilerModel', 'compiler-model');
   add('plannerModel', 'planner-model');
+  add('explainModel', 'explain-model');
   try {
     return ModelSelection.parse(raw);
   } catch (e) {
@@ -912,6 +934,7 @@ function baseArgs(
     logFile: undefined,
     noLogFile: false,
     stream: false,
+    explain: false,
     streamTranscript: false,
     streamFile: undefined,
     timeouts: {},

@@ -5,42 +5,50 @@ describe('resolveModels (cascade)', () => {
   it('no flags → every seam at its tool default', () => {
     expect(resolveModels(ModelSelection.parse({}))).toEqual({
       harness: undefined, compiler: undefined, judge: undefined, approver: undefined, planner: undefined,
+      explain: undefined,
     });
   });
 
   it('--model cascades to the harness AND every LLM step', () => {
     expect(resolveModels(ModelSelection.parse({ model: 'm' }))).toEqual({
-      harness: 'm', compiler: 'm', judge: 'm', approver: 'm', planner: 'm',
+      harness: 'm', compiler: 'm', judge: 'm', approver: 'm', planner: 'm', explain: 'm',
     });
   });
 
   it('--llm-model overrides all LLM steps but not the harness', () => {
     expect(resolveModels(ModelSelection.parse({ model: 'm', llmModel: 'L' }))).toEqual({
-      harness: 'm', compiler: 'L', judge: 'L', approver: 'L', planner: 'L',
+      harness: 'm', compiler: 'L', judge: 'L', approver: 'L', planner: 'L', explain: 'L',
     });
   });
 
   it('a per-step flag overrides only that step; others fall back to --llm-model', () => {
     expect(resolveModels(ModelSelection.parse({ model: 'm', llmModel: 'L', judgeModel: 'J' }))).toEqual({
-      harness: 'm', compiler: 'L', judge: 'J', approver: 'L', planner: 'L',
+      harness: 'm', compiler: 'L', judge: 'J', approver: 'L', planner: 'L', explain: 'L',
     });
   });
 
   it('a per-step flag with only --model set: others fall back to --model', () => {
     expect(resolveModels(ModelSelection.parse({ model: 'm', approverModel: 'A' }))).toEqual({
-      harness: 'm', compiler: 'm', judge: 'm', approver: 'A', planner: 'm',
+      harness: 'm', compiler: 'm', judge: 'm', approver: 'A', planner: 'm', explain: 'm',
     });
   });
 
   it('--planner-model overrides only the planner step (issue #48)', () => {
     expect(resolveModels(ModelSelection.parse({ model: 'm', llmModel: 'L', plannerModel: 'P' }))).toEqual({
-      harness: 'm', compiler: 'L', judge: 'L', approver: 'L', planner: 'P',
+      harness: 'm', compiler: 'L', judge: 'L', approver: 'L', planner: 'P', explain: 'L',
+    });
+  });
+
+  it('--explain-model overrides only the explain observer step (issue #8)', () => {
+    expect(resolveModels(ModelSelection.parse({ model: 'm', llmModel: 'L', explainModel: 'E' }))).toEqual({
+      harness: 'm', compiler: 'L', judge: 'L', approver: 'L', planner: 'L', explain: 'E',
     });
   });
 
   it('per-step only (no --model/--llm-model) leaves the rest at tool default', () => {
     expect(resolveModels(ModelSelection.parse({ judgeModel: 'J' }))).toEqual({
       harness: undefined, compiler: undefined, judge: 'J', approver: undefined, planner: undefined,
+      explain: undefined,
     });
   });
 });

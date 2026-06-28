@@ -9,6 +9,7 @@ const models: ResolvedModels = {
   judge: 'llm-model',
   approver: 'llm-model',
   planner: 'llm-model',
+  explain: 'llm-model',
 };
 
 const report = (overrides: Partial<UsageReport> = {}): UsageReport => ({

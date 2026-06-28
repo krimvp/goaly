@@ -36,6 +36,7 @@ import type { Logger, LogLevel } from '../log/logger';
 import type { LogFs } from '../log/sinks';
 import { AgentCliLlmProvider } from '../llm/agent-cli-provider';
 import { OpenAiLlmProvider } from '../llm/openai-provider';
+import { LlmObserver, type Observer } from '../observe/observer';
 import { OpenAiClient, type FetchLike } from '../llm-client/openai-client';
 import { GoalyCodeHarness } from '../goaly-code/harness';
 import { NodeToolHost, type ShellExec } from '../goaly-code/fs-host';
@@ -146,6 +147,17 @@ export type ComposeOptions = {
   streamTranscript?: boolean;
   /** Override the stream-transcript path (implies {@link streamTranscript}). Default next to the run log. */
   streamFile?: string;
+  /**
+   * Enable the read-only `--explain` observer (issue #8): a side-LLM that narrates the frozen
+   * contract, each verifier-ladder run, and the terminal outcome in plain language. Opt-in; off by
+   * default. Strictly advisory — built on an UNMETERED read-only provider so its spend never enters
+   * the run budget and it can never influence the contract, the ladder, DECIDE, or the two-key DONE.
+   */
+  explain?: boolean;
+  /** Override where the observer writes its summaries (tests capture it; default `process.stderr`). */
+  explainWrite?: (text: string) => void;
+  /** Inject the observer directly (tests); bypasses building one from {@link explain}. */
+  observer?: Observer;
   /**
    * OpenAI-compatible endpoint base URL for `--harness goaly-code` / `--llm-provider openai`. Required for
    * those targets; absent ⇒ they fail closed at composition (a typed {@link EndpointConfigError}).
@@ -306,6 +318,28 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       }
     : undefined;
 
+  // The optional `--explain` observer (issue #8). Built ONLY when requested (or injected), so a
+  // default run pays nothing. Its read-only provider is deliberately NOT wrapped with the run's
+  // `llmMeter` and NOT stream-tapped: the narrator's spend must never enter the run budget or
+  // influence the loop — it is a strictly advisory side channel (the issue's core constraint). An
+  // injected `options.llm` (tests) still overrides the provider; an injected `options.observer`
+  // bypasses construction entirely.
+  const observer: Observer | undefined =
+    options.observer ??
+    (options.explain === true
+      ? new LlmObserver({
+          llm:
+            options.llm ??
+            makeLlmProvider(provider, models.explain, {
+              ...(timeouts.llmMs !== undefined ? { timeoutMs: timeouts.llmMs } : {}),
+              ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
+              ...(options.llmApiKey !== undefined ? { apiKey: options.llmApiKey } : {}),
+              ...(options.llmFetch !== undefined ? { fetch: options.llmFetch } : {}),
+            }),
+          write: options.explainWrite ?? ((text) => void process.stderr.write(text)),
+        })
+      : undefined);
+
   return {
     compiler: seedCompiler(
       new AgentCompiler({
@@ -347,6 +381,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       ...(timeouts.verifyMs !== undefined ? { verifyMs: timeouts.verifyMs } : {}),
     },
     ...(streamSink !== undefined ? { onStreamEvent: streamSink } : {}),
+    ...(observer !== undefined ? { observer } : {}),
   };
 }
 

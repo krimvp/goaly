@@ -4,7 +4,7 @@ import type { Verdict } from '../domain/verdict';
 import type { Workspace } from '../workspace/workspace';
 import type { LlmProvider } from '../llm/provider';
 import { DeterministicVerifier } from '../verify/deterministic';
-import { classifyPreflightSoundness } from './preflight-soundness';
+import { classifyPreflightSoundness, classifyVacuousContract } from './preflight-soundness';
 import { isProbeSafe } from '../compile/required-tools';
 import { noopLogger, type Logger } from '../log/logger';
 import { errorMessage } from '../util/errors';
@@ -237,6 +237,7 @@ async function preflightDeterministic(
   // caught up front. Fail-safe to false on any git error (an existing tree is never mistaken for empty).
   const emptyOfSource = await deps.workspace.isEmptyOfSource(contract.generatedFiles.map((f) => f.path));
 
+  let lastPassDetail = '';
   for (const rung of deterministic) {
     if (rung.kind !== 'deterministic') continue; // narrow (filtered above)
     let verdict: Verdict;
@@ -249,7 +250,10 @@ async function preflightDeterministic(
       });
       return { status: 'proceed' };
     }
-    if (verdict.pass) continue;
+    if (verdict.pass) {
+      lastPassDetail = verdict.detail;
+      continue;
+    }
 
     // First failing deterministic rung: is the AUTHORED verification broken (it could not even run its
     // checks), or is this an honest red because the implementation is simply missing? Only a contract
@@ -272,6 +276,49 @@ async function preflightDeterministic(
     }
     log.info('pre-flight: deterministic rung fails as an honest red (implementation missing) — proceeding', {});
     return { status: 'proceed' };
+  }
+
+  // Every deterministic rung already PASSED before the first agent turn. On a FROM-SCRATCH tree with an
+  // AUTHORED verifier (generatedFiles) that is the compiler-authored-the-solution deadlock: the bar can
+  // only be green because the implementation was authored INTO the frozen verification set (the
+  // anti-tamper guard then pins it, and the worker's real edits register as no-diff → a spurious abort),
+  // or the bar is vacuous. Catch it here, before any worker token is spent, as a typed CONTRACT_UNSOUND.
+  //
+  // FAIL-OPEN by construction — it must NEVER abort a legitimate run (a file that is simply not created
+  // yet stays an honest red, handled above; it can never reach this branch). It fires ONLY on the
+  // high-confidence positive signal AND an LLM confirmation: an authored verifier + a confidently
+  // from-scratch tree (`isEmptyOfSource` fail-safes to FALSE on any git error, so an existing or
+  // undetectable tree proceeds) + a model that, asked to rule in "the goal is genuinely already
+  // satisfied", confidently judges the contract unsound instead. No LLM, an LLM error, an unparseable
+  // verdict, or any "sound"/uncertain answer all PROCEED. So neither a not-yet-created nor an
+  // undetected file can ever become a failure here — only an authored bar that passes off nothing.
+  if (contract.generatedFiles.length > 0 && emptyOfSource && deps.llm !== undefined) {
+    const green = await classifyVacuousContract(
+      { llm: deps.llm, ...(deps.logger !== undefined ? { logger: deps.logger } : {}) },
+      contract,
+      lastPassDetail,
+    );
+    if (green.broken) {
+      log.error(
+        'pre-flight: an authored verifier already passes on a from-scratch tree before the first agent ' +
+          'turn (→ CONTRACT_UNSOUND) — the compiler likely authored the implementation into the frozen ' +
+          'verification set, or the bar is vacuous',
+        {},
+      );
+      const reason = green.reason.length > 0 ? `${green.reason}\n\n` : '';
+      const remedy =
+        'The frozen verifier passes on a from-scratch tree before the worker wrote anything, so it is not ' +
+        'actually testing the goal — the compiler likely authored the implementation into the frozen ' +
+        'verification set (the anti-tamper guard then pins it, deadlocking the worker), or the bar is ' +
+        'vacuous. Re-author with a stronger --compiler-model, review/revise the contract at Seal (avoid ' +
+        '--autonomous with a weak authoring model), or supply your own --verify-cmd so you own the bar.';
+      return { status: 'contract-unsound', detail: `${reason}${remedy}`.slice(0, DETAIL_LIMIT) };
+    }
+    log.info(
+      'pre-flight: bar passes on a from-scratch tree but the classifier judged the goal already ' +
+        'satisfied — proceeding',
+      {},
+    );
   }
 
   log.info('pre-flight: deterministic checks already pass before the first agent turn — proceeding', {});
