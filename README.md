@@ -10,16 +10,21 @@ links back here and to [`ARCHITECTURE.md`](ARCHITECTURE.md) / [`docs/adding-a-ha
 for the depth.
 
 A **harness-agnostic goal-orchestration layer**: run a coding agent repeatedly until a goal is
-*verifiably* achieved, with a deterministic thin layer in control and a **frozen** success
+*verifiably* achieved, with a deterministic thin layer in control and a [**frozen**](#g-frozen) success
 criterion the agent can't weaken mid-loop.
 
-> The anti-reward-hacking core: "until the goal is achieved" must not collapse into "until the
+> The [anti-reward-hacking](#g-reward-hacking) core: "until the goal is achieved" must not collapse into "until the
 > agent weakens its own test." goaly compiles the success contract **once**, freezes it, and
-> requires **two independent keys** — a frozen verifier *and* an independent approver — before
+> requires [**two independent keys**](#g-two-keys) — a frozen verifier *and* an independent approver — before
 > declaring a run DONE.
 
 See [`DESIGN.md`](DESIGN.md) (what & why), [`ARCHITECTURE.md`](ARCHITECTURE.md) (how),
 [`CONTEXT.md`](CONTEXT.md) (glossary), and [`docs/adr/`](docs/adr) (decisions).
+
+> **New to the vocabulary?** Terms like *[fail-closed](#g-fail-closed)*, *[fail-open](#g-fail-open)*,
+> *[two keys](#g-two-keys)*, *[reward-hacking](#g-reward-hacking)*, and *[frozen contract](#g-frozen)*
+> are all defined in plain language — with links to read more — in the **[Glossary](#appendix-glossary)**
+> at the end. The first use of each below also links straight to its entry.
 
 ## Quick start
 
@@ -45,6 +50,7 @@ Exit codes: `0` DONE · `1` FAILED/ABORTED · `2` usage error. See [Usage](#usag
 - [Install](#install) · [Usage](#usage) — every flag and mode
 - [Phased goals](#phased-goals---phased) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
 - [Develop](#develop) · [Embedding](#embedding) — contributing and the library API
+- [Glossary](#appendix-glossary) — every project-specific term & idiom, plain-language
 
 ## How it works
 
@@ -86,9 +92,9 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
 - The **control flow has zero LLM calls.** A pure reducer `step(state, event) -> [state, Command[]]`
   owns all policy; an imperative Driver performs the effects it requests. Everything stochastic
   (running the agent, judging, approving) hides behind boolean/value interfaces at four real seams.
-- The **verifier ladder** runs cheapest-and-hardest-to-game first: deterministic checks (exit codes,
+- The [**verifier ladder**](#g-ladder) runs cheapest-and-hardest-to-game first: deterministic checks (exit codes,
   tests) before any LLM judge, short-circuiting on the first deterministic fail. A rung that errors is
-  **fail-closed** — a malformed grader is never a green. When goaly **authored** the verification
+  [**fail-closed**](#g-fail-closed) — a malformed grader is never a green. When goaly **authored** the verification
   (`--generate`), an integrity **guard rung runs first** and fails closed if any generated test file
   was changed since the contract froze — the worker can't quietly rewrite the bar the frozen command
   measures.
@@ -146,7 +152,7 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   tree means the bar isn't actually testing the goal — the compiler authored the **solution itself** into
   the frozen set (which the anti-tamper guard then pins, deadlocking the worker), or the bar is vacuous —
   so a second read-only call, asked to rule in "the goal is genuinely already satisfied," classifies a
-  confident `CONTRACT_UNSOUND` before any worker token. Both directions fail *open* to proceed on any
+  confident `CONTRACT_UNSOUND` before any worker token. Both directions [fail *open*](#g-fail-open) to proceed on any
   uncertainty (no LLM, an error, or a "sound" verdict all proceed; a genuinely broken frozen verifier is
   also caught at runtime by repeat-failure stuck detection) — so a not-yet-created file or a false signal
   never blocks a legitimate run. The compiler is also instructed up front that authored files are
@@ -160,7 +166,7 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   `--max-compile-retries` (default 2; `0` disables), before the run fails — so one bad compile output
   no longer discards a valid plan. Exhausting the budget is still a typed `FAILED`, never a skipped
   check. (Mirrors the Seal revise loop; the reducer stays pure.)
-- **Stuck detection** bails before `maxIterations` with a reason: no-diff, repeat-failure (volatile
+- [**Stuck detection**](#g-stuck) bails before `maxIterations` with a reason: no-diff, repeat-failure (volatile
   tokens like timestamps / PIDs / temp paths are normalized away first, so a noisy-but-identical
   failure still trips it — keyed on the **verifier-failure signature, independent of the diff hash**, so
   a worker that churns unrelated files every turn while the same error repeats is still caught as a typed
@@ -196,7 +202,7 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   `--phased`**: per-iteration deltas feed the judge *within* a phase, while the approver stays pinned
   to each *phase's* start (so it reviews that phase's whole cumulative diff) — and `--phased` is still
   the right tool to bound the cumulative diff for a huge monolithic change.
-- **Write-ahead run log** under `.goaly/<runId>/` makes every run replayable, **resumable**, and
+- [**Write-ahead run log**](#g-write-ahead) under `.goaly/<runId>/` makes every run replayable, **resumable**, and
   **inspectable** after the fact (`goaly runs list` / `goaly runs show`).
 - **Per-run spend report:** every run ends with a token breakdown by layer — the **harness** vs. the
   **LLM steps** (compiler / judge / approver) — and against any `--budget-tokens` cap. Totals count
@@ -971,6 +977,169 @@ ladder as reward), and **Slice 5** (a productionized, bench-gated `goaly-coder-v
 `--harness goaly-code --base-url <endpoint> --model goaly-coder-vN` — the harness code does not change,
 only the endpoint/model). See [`docs/adr/0008`](docs/adr/0008-goaly-code-harness.md) and
 [`docs/adr/0009`](docs/adr/0009-training-data-pipeline.md).
+
+## Appendix: Glossary
+
+Plain-language definitions of the project-specific terms and idioms used throughout this README and
+the codebase — so none of the jargon is load-bearing-but-unexplained. **Standard** concepts that are
+just easy to miss link out to a canonical reference; **project-specific** ones link to where they're
+specified in depth. (For the terse contributor *"one term, one meaning, and what it is **not**"* noun
+list, see [`CONTEXT.md`](CONTEXT.md) — the ubiquitous-language reference.)
+
+### Core idioms
+
+- <a id="g-fail-closed"></a>**Fail-closed** — when anything errors, returns garbage, or can't be
+  parsed, it resolves to the *safe* answer — a FAIL / VETO / aborted run, **never a false green**. A
+  malformed grader is a failure, not a pass. This is invariant #4 and the spine of the design.
+  ↪ [AGENTS.md → the eight invariants](AGENTS.md), [Fail-safe (Wikipedia)](https://en.wikipedia.org/wiki/Fail-safe).
+- <a id="g-fail-open"></a>**Fail-open** — the deliberate *opposite*, used **only** where a wrong
+  "block" is worse than a wrong "proceed": an advisory check that is uncertain **proceeds** instead of
+  aborting, because the real fail-closed gates (the frozen ladder + the approver) still govern the
+  outcome downstream. Example: the pre-flight soundness classifier — a wrong "broken" would kill a
+  legitimate run, a wrong "sound" only lets the loop run (and be caught later). ↪ [ADR 0010](docs/adr/0010-prepare-from-scratch.md).
+- <a id="g-reward-hacking"></a>**Reward-hacking** (a.k.a. *specification gaming*) — reaching the
+  *measured* goal ("the test passes") without meeting the *actual* goal — e.g. by weakening the test
+  it's graded against. Preventing this is goaly's entire reason to exist. ↪ [DESIGN.md](DESIGN.md), [Hardening against reward-hacking](#hardening-against-reward-hacking).
+- <a id="g-frozen"></a>**Frozen / freeze / `contractHash`** — the success contract is authored
+  **once**, hashed, and locked before the loop; no later step can rewrite it, and the hash is logged
+  every iteration to prove the bar never moved. "Freezing" is the act of locking it at **Seal**.
+  ↪ [How it works](#how-it-works), invariant #2 in [AGENTS.md](AGENTS.md).
+- <a id="g-two-keys"></a>**Two keys (for DONE)** — a run is DONE only when **both** independent keys
+  turn: the frozen **verifier ladder** passes **and** the independent **approver** doesn't veto.
+  "Tests pass" is not "done". ↪ [How it works](#how-it-works), invariant #3.
+- <a id="g-seam"></a>**Seam** — a boundary where a real implementation and a fake are interchangeable,
+  so policy can be tested with zero IO. goaly has **four real seams** (harness, verifier/ladder,
+  approver, clock+budget) and one **internal seam** (the read-only `LlmProvider` behind the
+  judge/approver/compiler). ↪ [ARCHITECTURE.md](ARCHITECTURE.md), [Adding a harness](#adding-a-harness).
+
+### The loop & its gates
+
+- **Reducer / Orchestrator** — the **pure**, synchronous `step(state, event) -> [state, Command[]]`
+  that owns all policy and makes **zero** LLM/IO calls (invariant #1). "Pure" = output depends only on
+  inputs, no side effects. ↪ [Pure function (Wikipedia)](https://en.wikipedia.org/wiki/Pure_function), [ARCHITECTURE.md](ARCHITECTURE.md).
+- **Driver** — the imperative half: it performs the `Command`s the reducer asks for (run the agent,
+  judge, approve, persist) and feeds the resulting `Event`s back. The only place that touches a clock,
+  process, budget, or disk. ↪ [ARCHITECTURE.md](ARCHITECTURE.md).
+- **DECIDE** — the pure truth table that maps `(ladder verdict, approval, stuck, iteration)` to one of
+  `CONTINUE / DONE / FAILED / ABORTED`. ↪ [CONTEXT.md](CONTEXT.md).
+- **Seal** — the **contract** gate: once, before the loop, a human (or `--autonomous` auto-accept)
+  approves the frozen contract. Not per-iteration. ↪ [How it works](#how-it-works).
+- **Sign-off / Approver** — the **result** gate: an independent reviewer that runs every iteration and
+  is **veto-only** — it can stop a green from becoming DONE but can **never** promote a red.
+- **Compiler / `COMPILE_FAILED`** — the read-only LLM step that *authors* the verification under
+  `--generate`. A correctable authoring miss is a bounded retry (`COMPILE_FAILED`, re-author with the
+  error fed back), not an immediate failure.
+- **`--autonomous`** — moves the **human pauses only** (auto-accepts at Seal). It never skips the
+  freeze or any verification. ↪ invariant #5.
+- **`--generate`** — goaly's compiler authors the verification (and a one-time setup) for you, instead
+  of you supplying `--verify-cmd`.
+- **Phased / Plan / `planHash`** — `--phased` decomposes one big goal into a **frozen, ordered plan**
+  of small sub-goals, each run as its own two-key contract, ending in a cumulative acceptance on the
+  original goal. The plan is frozen just like a contract. ↪ [Phased goals](#phased-goals---phased).
+
+### Verification vocabulary
+
+- <a id="g-ladder"></a>**Verifier ladder / rung** — the composite check, run **cheapest-and-hardest-to-game
+  first**: **deterministic** rungs (exit codes, tests) before any **judge** (LLM) rung, short-circuiting
+  on the first deterministic fail. A **rung** is one step of the ladder. ↪ [How it works](#how-it-works).
+- **Deterministic rung** — an ungameable shell check: `pass = exit 0`, `confidence = 1`. **Judge rung**
+  — an LLM-quorum check for fuzzy criteria. **Smoke rung** (`--smoke`) — an extra deterministic rung
+  that *runs the built artifact* to prove it works at runtime.
+- **Verdict** — the unified `{ pass, confidence, detail }` every verifier returns; the reducer can't
+  tell which kind of check produced it.
+- **Quorum / confidence floor** — a judge rung samples the model **quorum** times and passes only if
+  enough samples agree above the **confidence floor**. ↪ [Quorum (Wikipedia)](https://en.wikipedia.org/wiki/Quorum_(distributed_computing)).
+- **Rubric** — the *frozen* judging criteria for a judge rung (never regenerated per iteration).
+- **Integrity guard / anti-tamper / generated files** — files goaly authors for `--generate` are
+  pinned by content hash inside the frozen contract; a **guard rung** re-checks them every iteration
+  and **fails closed** on any change, so the worker can't rewrite the bar it's measured against.
+- **Vacuous bar** — an authored check that trivially passes without measuring anything (`true`, `:`,
+  `exit 0`). Rejected at compile time. ↪ [Hardening against reward-hacking](#hardening-against-reward-hacking).
+- **Untrusted-data fencing / prompt-injection defense** — the judge/approver receive the
+  worker-controlled diff inside a nonce-delimited envelope and are told never to obey instructions
+  hidden in it. ↪ [Prompt injection (Wikipedia)](https://en.wikipedia.org/wiki/Prompt_injection).
+- **Independence / self-judge risk** — the two keys should not collapse onto **one model** (which would
+  share blind spots). goaly warns loudly, and escalates under `--generate --autonomous` when the agent,
+  judge, and approver are all the same model. ↪ [Hardening against reward-hacking](#hardening-against-reward-hacking).
+
+### The prepare phase & soundness
+
+- **Prepare phase / setup / `SETUP_FAILED`** — a one-time, pre-loop **bootstrap** (run setup, prepare
+  the tree) after Seal and before iteration 1. A failing **user** `--setup-cmd` is a fatal
+  `SETUP_FAILED`; a failing **compiler-authored** setup is best-effort. ↪ [ADR 0010](docs/adr/0010-prepare-from-scratch.md).
+- **Pre-flight** — running the frozen deterministic checks **once** before the first agent turn, to
+  prove the bar can actually run.
+- **Soundness / `CONTRACT_UNSOUND`** — a typed abort (before any worker token) when the frozen
+  verification is itself defective rather than the implementation: it can't run/compile, **or** it
+  already passes vacuously on a from-scratch tree (the compiler authored the solution into the frozen
+  set). The classifier is **[fail-open](#g-fail-open)**. ↪ [ADR 0010](docs/adr/0010-prepare-from-scratch.md).
+- **From-scratch / empty-of-source** — a tree with no implementation source yet (only docs + the
+  authored verification). The bar is red *by definition* there until the agent scaffolds, so the
+  soundness check biases toward "honest red, proceed."
+
+### Failure & stuck vocabulary
+
+- <a id="g-stuck"></a>**Stuck detection** — bailing **before** `--max-iterations` with a typed reason,
+  because the loop is making no progress. Kinds: **no-diff** (the tree didn't change), **repeat-failure**
+  (`STUCK_REPEATED_FAILURE`, the same verifier-failure signature recurs), **oscillation** (period-N
+  cycling), **harness-crash** (`STUCK_HARNESS_CRASH`, the agent CLI keeps exiting abnormally), and
+  **budget**. ↪ [How it works](#how-it-works), [CONTEXT.md](CONTEXT.md).
+- **Terminal statuses** — **DONE** (both keys turned), **FAILED** (a typed failure: stuck, budget, out
+  of iterations, a fatal prepare abort), **ABORTED** (Seal-reject / a no-diff stuck / driver error),
+  and **INCOMPLETE** (a run that never finished, e.g. a crash before a terminal state — seen in
+  `goaly runs list`).
+
+### Persistence & resumption
+
+- <a id="g-write-ahead"></a>**Write-ahead log / run log** — the append-only event stream under
+  `.goaly/<runId>/`, written **before** the state advances. It is the single source of truth for
+  replay and resume (≠ the human diagnostics log). ↪ [Write-ahead logging (Wikipedia)](https://en.wikipedia.org/wiki/Write-ahead_logging), invariant #7.
+- **Replay / resume** — rebuilding run state is a pure **fold** over the logged events; `--resume`
+  replays then continues, repeating no completed iteration.
+- **At-least-once / idempotent** — durability is at-least-once: a crash may re-run exactly one effect
+  on resume; the harness's session-resume makes that re-run **idempotent** (same result, no double
+  effect). ↪ [Idempotence (Wikipedia)](https://en.wikipedia.org/wiki/Idempotence).
+- **Command vs Event** — a **Command** is data describing an effect the Driver must perform (never
+  persisted); an **Event** is its resolved result, fed to the reducer and persisted write-ahead.
+- **`diffHash`** — a non-mutating content hash of the working tree (computed by the Workspace, not the
+  adapter) that drives stuck detection. Not a commit.
+- **Baseline / `--delta-verify` / checkpoint** — the git ref a diff is computed **against**. The
+  **judge** baseline can advance per-iteration (`--delta-verify`, via an internal **checkpoint** — a
+  private `git write-tree` snapshot, no commit) to keep its prompt flat, while the **approver**
+  baseline stays pinned to the run/phase start so Sign-off always reviews the **whole** cumulative
+  change. ↪ [Diff baseline](#diff-baseline---baseline), [Per-iteration delta diffs](#per-iteration-delta-diffs---delta-verify).
+
+### Architecture & wiring
+
+- **Harness / Adapter / Codec** — a **harness** is a coding agent run headlessly (Claude Code, Codex,
+  Droid, pi, or goaly's own `goaly-code`). The **adapter** is its one-method `run(prompt, sessionId?)`
+  wrapper; a **codec** holds one CLI's quirks (argv dialects, output parsing, status mapping) in one
+  module. ↪ [Adding a harness](#adding-a-harness), [docs/adding-a-harness.md](docs/adding-a-harness.md).
+- **LLM provider (internal seam)** — the read-only seam the compiler / judge / approver / observer call
+  for completions. "Internal" because it varies *inside* those steps, never across the four real seams.
+- **Composition root (`compose`)** — the one place real implementations are wired to the seams (the
+  CLI `compose.ts`); embedders can swap any seam here. ↪ [Embedding](#embedding).
+- **Sandbox / jail / launcher / egress proxy** — opt-in OS isolation (`--sandbox`) of the two
+  untrusted execs (agent + verify command). A **launcher** (`bwrap`/`firejail`/`container`) translates
+  a per-seam **profile** into its flags; an **egress proxy** enforces a host **allowlist**. ↪ [Sandboxing](#sandboxing), [ADR 0007](docs/adr/0007-sandboxing-model.md).
+
+### Observability & sessions
+
+- **Stream / `AgentStreamEvent` / transcript** — `--stream` renders the agent's **raw** intermediate
+  turns live (tool calls, messages, tokens), mapped onto one tool-neutral event taxonomy;
+  `--stream-transcript` persists that same stream as JSONL for offline replay. Pure observability —
+  never written to the run log. ↪ [Live streaming](#usage).
+- **Observer / `--explain`** — an opt-in, **read-only** side-LLM that *synthesizes* the run in plain
+  language at three checkpoints (contract at Seal, each ladder run, the outcome). Strictly advisory
+  and **fail-closed** to "no summary"; can never influence the contract, ladder, DECIDE, or DONE.
+  ↪ [Plain-language narration](#usage).
+- **Spend report / token metering / `estimated` / `tokensUnknown`** — every run ends with a token
+  breakdown by layer (harness vs. LLM steps). When a provider reports no usage, goaly **estimates**
+  from streamed turns, or marks the layer `unknown` (loudly) — never a silent zero. ↪ [Per-run spend report](#per-run-spend-report).
+- **Session / follow-up (`--from-run` / `--inherit-session`)** — a `sessionId` is the harness's handle
+  to a continued CLI conversation. `--from-run` starts a **new, re-verified** goal that knows what the
+  prior run did (seeds the new contract's authoring); `--inherit-session` also resumes the agent's
+  working memory. ↪ [Following up after a run ends](#following-up-after-a-run-ends---from-run).
 
 ## License
 
