@@ -37,6 +37,15 @@ export type PrepareDeps = {
    * `RunConfig.installMissingTools`.
    */
   installMissingTools?: boolean;
+  /**
+   * Whether `contract.setup` was COMPILER-AUTHORED (`--generate`) rather than user-supplied
+   * (`--setup-cmd`) — derived in the reducer and carried on the `PREPARE_WORKSPACE` command (Fix A).
+   * `true` makes a failing setup best-effort: log loudly and proceed with a `setupHint` instead of a
+   * fatal `SETUP_FAILED` (a from-scratch `go mod download` presupposes scaffolding the agent has yet to
+   * write). Anything else (the default) keeps the fatal behavior — a user `--setup-cmd` failing is a
+   * real configuration error and must fail closed.
+   */
+  setupAuthored?: boolean;
 };
 
 export type PrepareResult = { prepared: PreparedOutcome; setupRan: boolean };
@@ -81,14 +90,52 @@ export async function prepareWorkspace(
   }
 
   let setupRan = false;
+  // A failed AUTHORED setup degrades to best-effort: we capture a hint for the first prompt instead of
+  // aborting, then still pre-flight (B1/B2 keep the now-red bar from being misread as broken).
+  let setupHint: string | undefined;
   if (contract.setup !== undefined) {
     setupRan = true;
     const setupFailure = await runSetup(deps.workspace, contract.setup, deps.timeouts?.setupMs, log);
-    if (setupFailure !== null) return { prepared: setupFailure, setupRan };
+    if (setupFailure !== null) {
+      if (deps.setupAuthored === true) {
+        // Authored (compiler-guessed) setup: a non-zero exit on an empty/from-scratch tree is expected
+        // — the bootstrap it ran (`go mod download`, `npm ci`) presupposes scaffolding the agent has
+        // not written yet. Degrade to proceed; the agent + the fail-closed runtime ladder still govern
+        // correctness, so no wrong-green is possible (Fix A).
+        log.warn('authored setup command failed — degrading to best-effort proceed (the agent must scaffold + run setup itself)', {
+          command: contract.setup,
+        });
+        setupHint = buildSetupHint(contract.setup);
+      } else {
+        // User `--setup-cmd` (or unknown provenance): keep the fatal, fail-closed behavior.
+        return { prepared: setupFailure, setupRan };
+      }
+    }
   }
 
   const prepared = await preflightDeterministic(deps, contract, log);
+  // Fold the authored-setup hint into a proceed so the first prompt can surface it. A non-proceed
+  // (contract-unsound) abort drops the hint — it never reaches an agent turn anyway.
+  if (prepared.status === 'proceed' && setupHint !== undefined) {
+    return { prepared: { ...prepared, setupHint }, setupRan };
+  }
   return { prepared, setupRan };
+}
+
+/**
+ * Build the first-prompt hint for an authored setup command that failed (Fix A). Kept actionable and
+ * short: name the command that was attempted and steer the agent to scaffold the project (create the
+ * dependency manifest the bootstrap presupposes) and run setup itself. The raw failure output is not
+ * dumped — the agent has shell access and can re-run the command to see it.
+ */
+function buildSetupHint(setup: string): string {
+  return (
+    `A one-time setup command was attempted before your turn but exited non-zero: \`${setup}\`. ` +
+    'This is expected on a from-scratch build — that command presupposes project scaffolding (a ' +
+    'dependency manifest such as go.mod / package.json / Cargo.toml / pyproject.toml) that does not ' +
+    'exist yet. Create the scaffolding the project needs and run the setup yourself as part of ' +
+    'implementing the goal.'
+  );
 }
 
 /**
@@ -178,6 +225,17 @@ async function preflightDeterministic(
   const deterministic = contract.rungs.filter((r) => r.kind === 'deterministic');
   if (deterministic.length === 0) return { status: 'proceed' };
   const verifyMs = deps.timeouts?.verifyMs;
+
+  // Fix B1 (structural, primary): on a FROM-SCRATCH tree the deterministic bar is red *by definition* —
+  // there is no implementation source yet, so the agent must scaffold first. A red there is always
+  // "implementation missing," never "broken verifier," so skip running the rung AND the classifier and
+  // proceed. Conservative (the Workspace returns true only when zero candidate source files remain) and
+  // can only ever *proceed*, so it cannot turn a real defect green — the runtime ladder runs fail-closed
+  // every iteration and a genuinely broken frozen verifier is still caught by STUCK_REPEATED_FAILURE.
+  if (await deps.workspace.isEmptyOfSource(contract.generatedFiles.map((f) => f.path))) {
+    log.info('pre-flight: from-scratch tree (no implementation source yet) — skipping soundness check, proceeding', {});
+    return { status: 'proceed' };
+  }
 
   for (const rung of deterministic) {
     if (rung.kind !== 'deterministic') continue; // narrow (filtered above)

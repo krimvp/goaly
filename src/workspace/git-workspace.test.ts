@@ -400,4 +400,67 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(await refResolves(root, sha)).toBe(true);
     expect(await refResolves(root, 'no-such-ref')).toBe(false);
   });
+
+  describe('isEmptyOfSource (from-scratch detection, Fix B1)', () => {
+    let scratch: string;
+
+    beforeEach(async () => {
+      // A FRESH repo with no committed source — the from-scratch starting tree.
+      scratch = await mkdtemp(join(tmpdir(), 'goaly-gw-scratch-'));
+      git(scratch, 'init', '-q');
+      git(scratch, 'config', 'user.email', 'test@example.com');
+      git(scratch, 'config', 'user.name', 'Test User');
+    });
+
+    afterEach(async () => {
+      await rm(scratch, { recursive: true, force: true });
+    });
+
+    it('true for a README-only tree (docs do not count as source)', async () => {
+      await writeFile(join(scratch, 'README.md'), '# My project\n');
+      const ws = new GitWorkspace(scratch);
+      expect(await ws.isEmptyOfSource([])).toBe(true);
+    });
+
+    it('true when only docs + the compiler-authored verification files remain', async () => {
+      await writeFile(join(scratch, 'README'), 'seed\n');
+      await mkdir(join(scratch, 'verify'));
+      await writeFile(join(scratch, 'verify', 'x.test.ts'), '// authored test\n');
+      const ws = new GitWorkspace(scratch);
+      // The authored file is subtracted as generatedFiles ⇒ nothing left ⇒ from-scratch.
+      expect(await ws.isEmptyOfSource(['verify/x.test.ts'])).toBe(true);
+    });
+
+    it('ignores .gitignore and the excluded .goaly state dir', async () => {
+      await writeFile(join(scratch, 'README.md'), '# seed\n');
+      await writeFile(join(scratch, '.gitignore'), 'node_modules/\n');
+      await mkdir(join(scratch, '.goaly'));
+      await writeFile(join(scratch, '.goaly', 'state.json'), '{}\n');
+      const ws = new GitWorkspace(scratch);
+      expect(await ws.isEmptyOfSource([])).toBe(true);
+    });
+
+    it('false once a real *.go source file exists (untracked)', async () => {
+      await writeFile(join(scratch, 'README.md'), '# seed\n');
+      await writeFile(join(scratch, 'main.go'), 'package main\n');
+      const ws = new GitWorkspace(scratch);
+      expect(await ws.isEmptyOfSource([])).toBe(false);
+    });
+
+    it('false once a real *.ts source file exists (committed)', async () => {
+      await writeFile(join(scratch, 'src.ts'), 'export const x = 1;\n');
+      git(scratch, 'add', '-A');
+      git(scratch, 'commit', '-q', '-m', 'add source');
+      const ws = new GitWorkspace(scratch);
+      // The .ts file is not in generatedFiles, so it is a candidate source ⇒ not from-scratch.
+      expect(await ws.isEmptyOfSource([])).toBe(false);
+    });
+
+    it('false when an authored file is present but a NON-authored source file also exists', async () => {
+      await writeFile(join(scratch, 'verify.test.ts'), '// authored\n');
+      await writeFile(join(scratch, 'impl.ts'), 'export const y = 2;\n');
+      const ws = new GitWorkspace(scratch);
+      expect(await ws.isEmptyOfSource(['verify.test.ts'])).toBe(false);
+    });
+  });
 });

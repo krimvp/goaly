@@ -53,4 +53,16 @@ export interface Workspace {
    * verification. A `null` is treated fail-closed (a missing pinned file is a FAIL).
    */
   fileHash(relPath: string): Promise<string | null>;
+  /**
+   * True when the tree has no implementation source yet — only docs + the compiler's authored files.
+   * The from-scratch signal the prepare phase uses (Fix B1) to skip the soundness pre-flight: on an
+   * empty tree the deterministic bar is red *by definition* (the agent must scaffold first), so a red
+   * there means "implementation missing," never "broken verifier." `generatedFiles` are the
+   * compiler-authored verification paths to subtract (they are not implementation). Conservative: it
+   * returns `true` only when ZERO candidate source files remain after subtracting `generatedFiles`
+   * and a small doc/meta allowlist (README*, LICENSE*, *.md, .git*), so an existing project is never
+   * mistaken for from-scratch (which would wrongly skip a legitimate soundness check). Fail-safe to
+   * `false` (not from-scratch) on any error, so a glitch never skips the check.
+   */
+  isEmptyOfSource(generatedFiles: readonly string[]): Promise<boolean>;
 }

@@ -120,17 +120,26 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   goaly runs a single **setup** command to prepare the tree (install deps, etc.) and then **pre-flights**
   the frozen deterministic checks once. Under `--generate` the compiler *authors* the setup command for
   you (e.g. `npm ci`) — delegated like the contract itself; `--setup-cmd` overrides it and `--no-setup`
-  disables it. A non-zero setup exit is a typed, fail-closed **`SETUP_FAILED`** — the worker never starts
-  on a broken tree (which is what drives an agent to hand-roll brittle workarounds for missing deps); an
-  exit `127` (a toolchain like `rustup`/`cargo`/`go` simply isn't installed here, which goaly can't
-  bootstrap for you) adds an actionable hint pointing at `--setup-cmd` / `--no-setup`. The
+  disables it. **Setup failure is provenance-aware (from-scratch-aware).** A failing **user `--setup-cmd`**
+  is a typed, fail-closed **`SETUP_FAILED`** — the worker never starts on a broken tree (which is what
+  drives an agent to hand-roll brittle workarounds for missing deps); an exit `127` (a toolchain like
+  `rustup`/`cargo`/`go` simply isn't installed here, which goaly can't bootstrap for you) adds an
+  actionable hint pointing at `--setup-cmd` / `--no-setup`. A failing **compiler-authored** setup, by
+  contrast, is **best-effort**: on a from-scratch `--generate` build an authored `go mod download` / `npm
+  ci` presupposes scaffolding (a `go.mod`/`package.json`) the agent hasn't written yet, so a non-zero exit
+  is *expected*, not fatal — goaly logs it loudly, threads a recovery note into the first prompt, and
+  proceeds to the loop. The
   pre-flight then proves the authored verification can actually *run*: when a deterministic check fails, a
   single **language-agnostic** classification (one read-only LLM call) decides whether the frozen
-  verification is **broken** (it can't compile/collect/run — a defect the agent can never fix) → a typed
-  **`CONTRACT_UNSOUND`** abort **before any worker token is spent**, vs. an honest red (the implementation
-  is simply missing) → proceed to the loop. (Reading the failure the way a human would is what keeps this
-  generic — pytest, `cargo`, `go test` and tsc all encode "couldn't run" vs "ran and failed" differently,
-  so no exit-code/regex rule could be both correct and cross-language.) It fails *open* to proceed on any
+  verification is **broken** (a defect *inside the frozen verification files* — it can't
+  compile/collect/run, which the agent can never fix) → a typed **`CONTRACT_UNSOUND`** abort **before any
+  worker token is spent**, vs. an honest red (the implementation — or scaffolding the implementation must
+  create, like a dependency manifest — is simply missing) → proceed to the loop. (Reading the failure the
+  way a human would is what keeps this generic — pytest, `cargo`, `go test` and tsc all encode "couldn't
+  run" vs "ran and failed" differently, so no exit-code/regex rule could be both correct and
+  cross-language.) On a **from-scratch tree** (no implementation source yet — only docs + the authored
+  verification) the soundness pre-flight is **skipped entirely**: the bar is red *by definition* until the
+  agent scaffolds, so there is nothing sound to check. It fails *open* to proceed on any
   uncertainty — a genuinely broken frozen verifier is still caught at runtime by repeat-failure stuck
   detection, so a false abort never blocks a legitimate run. The setup command is frozen into the contract
   (shown at SEAL) so it can't drift. A plain `--verify-cmd` run with no authored files skips the check.

@@ -258,7 +258,14 @@ function stepAwaitSeal(
       if (needsPreparation(contract)) {
         return [
           { tag: 'PREPARING', config, contract, ...(phase !== undefined ? { phase } : {}) },
-          [{ tag: 'PREPARE_WORKSPACE', contract, installMissingTools: config.installMissingTools }],
+          [
+            {
+              tag: 'PREPARE_WORKSPACE',
+              contract,
+              installMissingTools: config.installMissingTools,
+              setupAuthored: setupIsAuthored(config, contract),
+            },
+          ],
         ];
       }
       const ctx = initialCtx(config, contract, phase);
@@ -323,6 +330,18 @@ function needsPreparation(contract: CompiledContract): boolean {
 }
 
 /**
+ * Was this contract's `setup` COMPILER-AUTHORED (under `--generate`) rather than user-supplied via
+ * `--setup-cmd`? Pure wiring derived from config + contract (Fix A) — NOT stored in the frozen contract
+ * (that would churn `contractHash`). A setup exists AND the user did not supply `--setup-cmd` ⇒ the
+ * compiler authored it, so a failure is best-effort. A user `--setup-cmd` (which the compiler freezes
+ * verbatim into `contract.setup`) stays fatal. Holds across all paths: a phased sub-goal config never
+ * carries `setupCmd` (always authored), while the acceptance phase inherits it from the base config.
+ */
+function setupIsAuthored(config: RunConfig, contract: CompiledContract): boolean {
+  return contract.setup !== undefined && config.setupCmd === undefined;
+}
+
+/**
  * The prepare phase resolved (Fix #1 / #2). The Driver already ran setup once and pre-flighted the
  * deterministic rungs; the reducer only routes the typed outcome:
  *  - `proceed`          → start iteration 1 (setup was clean / absent; pre-flight passed or failed as
@@ -342,7 +361,11 @@ function stepPreparing(
   switch (prepared.status) {
     case 'proceed': {
       const ctx = initialCtx(config, contract, phase);
-      return startIteration(ctx, buildInitialPrompt(contract, prepared.installTools), undefined);
+      return startIteration(
+        ctx,
+        buildInitialPrompt(contract, prepared.installTools, prepared.setupHint),
+        undefined,
+      );
     }
     case 'tools-missing':
       return [
@@ -529,12 +552,17 @@ function describeRungs(rungs: readonly Rung[]): string {
     .join('\n');
 }
 
-function buildInitialPrompt(contract: CompiledContract, installTools?: readonly string[]): string {
+function buildInitialPrompt(
+  contract: CompiledContract,
+  installTools?: readonly string[],
+  setupHint?: string,
+): string {
   return [
     '# Goal',
     contract.goal,
     '',
     buildBootstrapSection(contract, installTools),
+    buildSetupNoteSection(setupHint),
     '# Frozen success contract (you cannot modify it)',
     'Your work is accepted only when ALL of the following pass:',
     describeRungs(contract.rungs),
@@ -566,6 +594,17 @@ function buildBootstrapSection(
     'Only then implement the goal — the verification cannot pass until the toolchain is present.',
     '',
   ].join('\n');
+}
+
+/**
+ * The setup note prepended to the first prompt when a COMPILER-AUTHORED setup command failed and the
+ * prepare phase degraded to best-effort proceed (Fix A). It tells the agent the bootstrap was attempted,
+ * presupposes scaffolding that does not exist yet, and must be scaffolded + run by the agent. Empty when
+ * there is no such hint (setup ran clean, was absent, or was a fatal user `--setup-cmd`).
+ */
+function buildSetupNoteSection(setupHint?: string): string {
+  if (setupHint === undefined || setupHint.length === 0) return '';
+  return ['# Setup note', setupHint, ''].join('\n');
 }
 
 function buildLoopPrompt(

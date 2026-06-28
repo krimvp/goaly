@@ -119,6 +119,9 @@ describe('buildLadder — verify timeout threading', () => {
       async fileHash() {
         return null;
       },
+      async isEmptyOfSource() {
+        return false;
+      },
     };
     return { workspace, calls };
   }
