@@ -19,8 +19,16 @@ export type HarnessChoice = AgentCli | 'fake' | 'goaly-code';
  */
 export type LlmProviderChoice = AgentCli | 'openai';
 
-/** The read-only run-inspection subcommand (`goaly runs list` / `goaly runs show <id>`). */
-export type RunsCommand = { readonly kind: 'list' } | { readonly kind: 'show'; readonly runId: string };
+/**
+ * The read-only run-inspection subcommand (`goaly runs list` / `goaly runs show <id>` /
+ * `goaly runs resume-cmd <id>`). `resume-cmd` (Capability A) prints how to continue the run's
+ * underlying CLI session; `harness` is an optional fallback for a log written before the header
+ * recorded the harness identity.
+ */
+export type RunsCommand =
+  | { readonly kind: 'list' }
+  | { readonly kind: 'show'; readonly runId: string }
+  | { readonly kind: 'resume-cmd'; readonly runId: string; readonly harness: string | undefined };
 
 /**
  * Per-step subprocess kill-timeouts in milliseconds (pure wiring — never enters the contract).
@@ -70,6 +78,19 @@ export type ParsedArgs = {
    */
   planFile: string | undefined;
   resumeRunId: string | undefined;
+  /**
+   * Follow-up as a new verifiable goal (Capability C): the PRIOR run id whose compaction seeds the
+   * new run's contract authoring. The follow-up runs in the same workspace and compiles its OWN
+   * frozen, two-key contract. Absent ⇒ a normal fresh run. Distinct from `--resume`, which re-enters
+   * an INCOMPLETE run's loop; `--from-run` starts a NEW run that builds on a finished one.
+   */
+  fromRunId: string | undefined;
+  /**
+   * With `--from-run`, also resume the prior harness session on the follow-up's first turn so the
+   * agent keeps its working memory (the new frozen contract still solely governs DONE). Only valid
+   * with the same harness; ignored under `--phased`. Default false.
+   */
+  inheritSession: boolean;
   /** Minimum diagnostic log level (default `info`). Pure wiring — never enters the contract. */
   logLevel: LogLevel;
   /** Override the diagnostics file path (default `<workspace>/.goaly/<runId>/goaly.log`). */
@@ -139,11 +160,13 @@ Usage:
                [--sandbox-net none|allow|allow:<host,…>]
                [--sandbox-image <ref>] [--sandbox-runtime docker|podman]
                [--cost-table <path>] [--baseline <ref>] [--delta-verify] [--workspace <dir>] [--resume <runId>]
+               [--from-run <runId> [--inherit-session]]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
                [--stream] [--stream-transcript] [--stream-file <path>]
 
   goaly runs list [--workspace <dir>]
   goaly runs show <runId> [--workspace <dir>]
+  goaly runs resume-cmd <runId> [--harness <name>] [--workspace <dir>]
 
   goaly help
 
@@ -374,12 +397,31 @@ Live streaming & transcript (opt-in observability — issues #23 / #28):
   --stream-file <p> write the transcript to <p> instead of the default path (implies
                     --stream-transcript).
 
+Follow-up after a run ends (build on a finished run — keeps every invariant by construction):
+  --from-run <runId>  start a NEW run whose contract is authored AWARE of a finished run: a concise,
+                      deterministic COMPACTION of the prior run (its goal, frozen bar, outcome) is fed
+                      into the new run's compile-phase feedback, so the follow-up knows what just
+                      happened. It runs in the SAME workspace (the prior outcome is already on disk),
+                      compiles its OWN frozen, two-key contract, and is otherwise an ordinary run —
+                      composes with every flag (--harness, --generate, --autonomous, --phased,
+                      --baseline). Distinct from --resume (which re-enters an INCOMPLETE run's loop);
+                      --from-run starts a fresh, re-verified run that builds on a terminal one.
+  --inherit-session   with --from-run, also resume the prior harness session on the follow-up's FIRST
+                      turn so the agent keeps its working memory. The NEW frozen contract still SOLELY
+                      governs DONE — inheritance only seeds the agent's memory, never the bar. Only
+                      valid with the same --harness as the prior run (session ids are harness-specific);
+                      ignored under --phased. Default off (fresh session + the compaction).
+
 Run history & inspection (read-only — pure replay of the write-ahead run log, no re-running):
   goaly runs list           a table of past runs under <workspace>/.goaly: id, status, iterations,
                             tokens, started/ended, goal. Corrupt logs are flagged, never dropped.
   goaly runs show <runId>   the frozen contract (+ hash), Seal outcome, the per-iteration
                             verifier-ladder results and Sign-off verdicts, the stuck/failure reason,
                             and totals — reconstructed by the same replay-fold that --resume uses.
+  goaly runs resume-cmd <runId>  print the command to CONTINUE the run's underlying CLI session in its
+                            OWN interactive mode (e.g. 'claude --resume <id>', 'codex resume <id>').
+                            Read-only; for a goaly-code run it routes you to --from-run --inherit-session.
+                            --harness <name>  fallback when the log predates harness recording.
   --workspace <dir>         where to look for the .goaly run-log directory (default: cwd).`;
 
 export type RawFlags = Record<string, string | boolean>;
@@ -406,6 +448,7 @@ const VALUELESS_FLAGS = new Set([
   'stream',
   'stream-transcript',
   'defaults',
+  'inherit-session',
 ]);
 
 /**
@@ -616,6 +659,8 @@ export async function parseArgs(
     verifyDir: str(flags, 'verify-dir'),
     planFile: str(flags, 'plan-file'),
     resumeRunId: str(flags, 'resume'),
+    fromRunId: str(flags, 'from-run'),
+    inheritSession: flags['inherit-session'] !== undefined,
     logLevel: parseLogLevel(str(flags, 'log-level')),
     logFile: str(flags, 'log-file'),
     noLogFile: flags['no-log-file'] !== undefined,
@@ -810,7 +855,20 @@ function parseRunsCommand(rest: string[]): { runs: RunsCommand; workspace: strin
     }
     return { runs: { kind: 'show', runId }, workspace: runsWorkspace(subRest.slice(1)) };
   }
-  throw new UsageError(`unknown runs subcommand: ${sub ?? '(none)'} (expected list | show)`);
+  if (sub === 'resume-cmd') {
+    const runId = subRest[0];
+    if (runId === undefined || runId.startsWith('--')) {
+      throw new UsageError('runs resume-cmd requires a <runId> (e.g. goaly runs resume-cmd run-1234)');
+    }
+    const flags = parseFlags(subRest.slice(1)).flags;
+    return {
+      runs: { kind: 'resume-cmd', runId, harness: str(flags, 'harness') },
+      workspace: str(flags, 'workspace') ?? process.cwd(),
+    };
+  }
+  throw new UsageError(
+    `unknown runs subcommand: ${sub ?? '(none)'} (expected list | show | resume-cmd)`,
+  );
 }
 
 function runsWorkspace(tokens: string[]): string {
@@ -848,6 +906,8 @@ function baseArgs(
     verifyDir: undefined,
     planFile: undefined,
     resumeRunId: undefined,
+    fromRunId: undefined,
+    inheritSession: false,
     logLevel: 'info',
     logFile: undefined,
     noLogFile: false,

@@ -8,6 +8,7 @@ import { SessionId as SessionIdSchema } from '../domain/ids';
 import type { HarnessAdapter } from '../harness/adapter';
 import type { HarnessRunResult } from '../domain/events';
 import type { Verifier } from '../verify/verifier';
+import type { VerifierCompiler } from '../compile/compiler';
 import type { LlmProvider } from '../llm/provider';
 import { Ladder } from '../verify/ladder';
 import { DeterministicVerifier } from '../verify/deterministic';
@@ -15,6 +16,7 @@ import { GeneratedFilesGuard } from '../verify/generated-guard';
 import { JudgeVerifier } from '../verify/judge';
 import { AgentApprover } from '../verify/agent-approver';
 import { AgentCompiler } from '../compile/agent-compiler';
+import { SeededCompiler, SeededPlanner } from '../followup/seeded';
 import { AutoSealGate, HumanSealGate } from '../compile/seal-gates';
 import { AgentPlanner } from '../plan/agent-planner';
 import { StaticPlanner } from '../plan/static-planner';
@@ -155,6 +157,13 @@ export type ComposeOptions = {
   llmFetch?: FetchLike;
   /** Override the goaly-code harness per-run turn cap. */
   goalyCodeMaxTurns?: number;
+  /**
+   * Follow-up seed (Capability C, `--from-run`): a deterministic COMPACTION of a prior run, woven
+   * into the compiler's (and, when phased, the planner's) authoring `feedback` so the new run's
+   * frozen contract is authored AWARE of what just happened. Pure wiring at the seam — the freeze is
+   * unaffected (every attempt is still frozen + Sealed on its own). Absent ⇒ a normal fresh run.
+   */
+  followupSeed?: string;
 };
 
 /**
@@ -170,6 +179,16 @@ export const STATE_DIR = '.goaly';
 /** The default (off) sandbox policy: identity passthrough, behavior byte-for-byte unchanged. */
 function defaultPolicy(): SandboxPolicy {
   return { mode: 'none', network: 'none' };
+}
+
+/** Wrap the compiler with the follow-up seed (Capability C) when present; identity otherwise. */
+function seedCompiler(inner: VerifierCompiler, seed: string | undefined): VerifierCompiler {
+  return seed !== undefined ? new SeededCompiler(inner, seed) : inner;
+}
+
+/** Wrap the planner with the follow-up seed (Capability C) when present; identity otherwise. */
+function seedPlanner(inner: Planner, seed: string | undefined): Planner {
+  return seed !== undefined ? new SeededPlanner(inner, seed) : inner;
 }
 
 /**
@@ -270,12 +289,17 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   // run never emits a PLAN command, so building them would be dead wiring + a spurious LLM provider).
   // `--plan-file` selects the StaticPlanner; otherwise the AgentPlanner authors the plan. `--autonomous`
   // moves the plan Seal pause too (still frozen + logged loudly).
+  const seed = options.followupSeed;
   const phasedSeams: { planner: Planner; planGate: PlanGate } | undefined = config.phased
     ? {
-        planner:
+        // A phased follow-up authors its plan AWARE of the prior run too: the seed rides the planner's
+        // authoring feedback (SeededPlanner), exactly as it rides the compiler below.
+        planner: seedPlanner(
           options.planFile !== undefined
             ? new StaticPlanner({ path: options.planFile })
             : new AgentPlanner({ llm: llmFor(models.planner, 'plan') }),
+          seed,
+        ),
         planGate: config.autonomous
           ? new AutoPlanGate()
           : new HumanPlanGate({ allowRevise: config.maxPlanRevisions > 0 }),
@@ -283,11 +307,14 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     : undefined;
 
   return {
-    compiler: new AgentCompiler({
-      llm: llmFor(models.compiler, 'compile'),
-      writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
-      ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
-    }),
+    compiler: seedCompiler(
+      new AgentCompiler({
+        llm: llmFor(models.compiler, 'compile'),
+        writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
+        ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
+      }),
+      seed,
+    ),
     seal: config.autonomous
       ? new AutoSealGate()
       : new HumanSealGate({ allowRevise: config.maxSealRevisions > 0 }),

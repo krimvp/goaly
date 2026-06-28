@@ -105,6 +105,16 @@ export interface AgentCliCodec {
    * (claude/droid share {@link classifyFlatRun}; codex keeps its inverted mapping). Never throws.
    */
   classify(input: CodecClassifyInput): HarnessRunResult;
+
+  /**
+   * The command to CONTINUE this CLI's own INTERACTIVE session after a goaly run ends (Capability A,
+   * `goaly runs resume-cmd`). Each CLI's interactive-resume phrasing differs from the headless
+   * `harnessArgs` goaly drives, so it lives per-codec (locality). Returns the command string and an
+   * optional honest `caveat` (e.g. codex's interactive form differs from `exec`; pi resumes the
+   * latest cwd session only). Pure string-building — no IO. Optional: a codec without an interactive
+   * resume simply omits it (the resume-hint then degrades to a typed "none").
+   */
+  interactiveResume?(id: SessionId): { command: string; caveat?: string };
 }
 
 /**

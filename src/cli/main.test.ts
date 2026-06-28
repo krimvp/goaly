@@ -5,9 +5,12 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { formatOutcome, main } from './main';
 import { formatUsage } from './usage-format';
+import { STATE_DIR } from './compose';
+import { FileRunLog } from '../runlog/file-runlog';
+import { makeConfig, makeFakeContract } from '../testing/fakes';
 import type { RunOutcome } from '../domain/events';
 import type { UsageReport } from '../domain/usage';
-import { RunId, ContractHash } from '../domain/ids';
+import { RunId, ContractHash, DiffHash, SessionId } from '../domain/ids';
 import type { CostView } from './cost';
 
 const usage = (overrides: Partial<UsageReport> = {}): UsageReport => ({
@@ -164,5 +167,101 @@ describe('main() — --baseline validation (issue #47)', () => {
     );
     expect(code).toBe(2);
     expect(err).toContain('--baseline no-such-ref');
+  });
+});
+
+describe('main() — follow-up (Capability C) guards & resume-cmd (Capability A)', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'goaly-main-followup-'));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function captureStderr(fn: () => Promise<number>): Promise<{ code: number; err: string }> {
+    const writes: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((s: string | Uint8Array): boolean => {
+      writes.push(typeof s === 'string' ? s : Buffer.from(s).toString());
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      return { code: await fn(), err: writes.join('') };
+    } finally {
+      process.stderr.write = orig;
+    }
+  }
+
+  async function captureStdout(fn: () => Promise<number>): Promise<{ code: number; out: string }> {
+    const writes: string[] = [];
+    const orig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((s: string | Uint8Array): boolean => {
+      writes.push(typeof s === 'string' ? s : Buffer.from(s).toString());
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      return { code: await fn(), out: writes.join('') };
+    } finally {
+      process.stdout.write = orig;
+    }
+  }
+
+  it('exits 2 when --from-run points at a non-existent run', async () => {
+    const { code, err } = await captureStderr(() =>
+      main(['run', 'follow up', '--harness', 'fake', '--autonomous', '--workspace', root,
+        '--from-run', 'run-nope']),
+    );
+    expect(code).toBe(2);
+    expect(err).toContain('--from-run run-nope');
+    expect(err).toContain('no such run');
+  });
+
+  it('exits 2 when --inherit-session is used without --from-run', async () => {
+    const { code, err } = await captureStderr(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--inherit-session']),
+    );
+    expect(code).toBe(2);
+    expect(err).toContain('--inherit-session requires --from-run');
+  });
+
+  it('runs resume-cmd prints the harness-correct command from a recorded run (Capability A)', async () => {
+    // Write a VALID run log (compile → seal → agent turn) with a recorded harness + real session id.
+    const runId = 'run-A';
+    const contract = makeFakeContract({ goal: 'g' });
+    const log = new FileRunLog(join(root, STATE_DIR, runId));
+    await log.writeHeader({
+      runId: RunId.parse(runId),
+      startedAt: 1_700_000_000_000,
+      config: makeConfig({ goal: 'g' }),
+      harness: 'claude',
+    });
+    const mk = (seq: number, event: Parameters<typeof log.append>[0]['event']) => ({
+      runId: RunId.parse(runId),
+      seq,
+      ts: 1_700_000_000_000 + seq,
+      contractHash: null,
+      event,
+      stateTagAfter: 'x',
+    });
+    await log.append(mk(1, { tag: 'CONTRACT_COMPILED', contract }));
+    await log.append(mk(2, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }));
+    await log.append(
+      mk(3, {
+        tag: 'AGENT_RAN',
+        run: { output: '', sessionId: SessionId.parse('claude-real-1'), status: 'completed' },
+        prevDiffHash: DiffHash.parse('0000000'),
+        diffHash: DiffHash.parse('0000001'),
+        budget: { exceeded: false },
+      }),
+    );
+
+    const { code, out } = await captureStdout(() =>
+      main(['runs', 'resume-cmd', runId, '--workspace', root]),
+    );
+    expect(code).toBe(0);
+    expect(out).toContain('claude --resume claude-real-1');
   });
 });

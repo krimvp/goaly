@@ -11,6 +11,7 @@ import {
   type RunSummary,
 } from '../runlog/inspect';
 import { formatUsage } from './usage-format';
+import { resumeHint, renderResumeHint } from './resume-cmd';
 
 /**
  * Render the read-only `goaly runs` subcommands (issue #14). A pure presentation layer over the
@@ -24,6 +25,7 @@ export async function runRuns(
   err: (s: string) => void,
 ): Promise<number> {
   if (cmd.kind === 'list') return runsList(stateDir, out);
+  if (cmd.kind === 'resume-cmd') return runsResumeCmd(cmd.runId, cmd.harness, stateDir, out, err);
   return runsShow(cmd.runId, stateDir, out, err);
 }
 
@@ -53,6 +55,33 @@ async function runsShow(
     return 1;
   }
   out(`${renderRunDetail(result.detail)}\n`);
+  return 0;
+}
+
+/**
+ * `goaly runs resume-cmd <runId>` (Capability A) — print how to CONTINUE the run's underlying CLI
+ * session interactively. Recovers `(harness, sessionId)` from the run log (the `--harness` flag is a
+ * fallback for a log written before the harness was recorded), then maps it to the per-codec hint.
+ * Pure read-only; a missing/corrupt run is an error, a session-less run a clear note.
+ */
+async function runsResumeCmd(
+  runId: string,
+  harnessOverride: string | undefined,
+  stateDir: string,
+  out: (s: string) => void,
+  err: (s: string) => void,
+): Promise<number> {
+  const result = await readRun(stateDir, runId);
+  if (result === null) {
+    err(`no such run: ${runId} (looked in ${stateDir})\n`);
+    return 1;
+  }
+  if (!result.ok) {
+    err(`run ${runId} is corrupt: ${result.error}\n`);
+    return 1;
+  }
+  const hint = resumeHint(result.detail.harness ?? harnessOverride, result.detail.sessionId, runId);
+  out(`${renderResumeHint(hint, { verbose: true }).join('\n')}\n`);
   return 0;
 }
 

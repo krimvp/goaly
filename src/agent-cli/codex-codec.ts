@@ -290,4 +290,10 @@ export const codexCodec: AgentCliCodec = {
         : {}),
     });
   },
+  interactiveResume(id) {
+    return {
+      command: `codex resume ${id}`,
+      caveat: "codex's interactive resume differs from the headless `codex exec` goaly drives",
+    };
+  },
 };

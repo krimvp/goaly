@@ -131,6 +131,23 @@
       The verify ladder, stuck detection, the four seams and resume are in
       <a href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener" style="color:var(--accent)">ARCHITECTURE.md →</a>
     </p>
+
+    <div class="grid grid-2 reveal" style="margin-top:1.8rem; align-items:start">
+      <div class="card">
+        <h3>Follow up after it ends</h3>
+        <p><code>goaly "now also handle empty input" --from-run &lt;id&gt;</code> starts a <b>new,
+        re-verified</b> goal that knows what just happened: a compaction of the prior run seeds the
+        new contract's authoring, and it runs in the same workspace. Every invariant holds — new
+        freeze, new two-key gate. Add <code>--inherit-session</code> to keep the agent's memory too.</p>
+      </div>
+      <div class="card">
+        <h3>Or jump back into the CLI</h3>
+        <p><code>goaly runs resume-cmd &lt;id&gt;</code> prints how to continue the run's underlying
+        session in its own interactive mode — <code>claude --resume &lt;id&gt;</code>,
+        <code>codex resume &lt;id&gt;</code>, and so on. The end-of-run banner shows it too, so the
+        next step is one copy-paste away.</p>
+      </div>
+    </div>
   </div>
 </section>
 

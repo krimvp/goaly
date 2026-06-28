@@ -79,6 +79,8 @@ describe('renderRunDetail', () => {
       status: 'DONE',
       stateTag: 'DONE',
       reason: undefined,
+      harness: undefined,
+      sessionId: undefined,
       startedAt: 1_700_000_000_000,
       endedAt: 1_700_000_050_000,
       iterations: 2,
@@ -101,8 +103,8 @@ describe('renderRunDetail', () => {
       seal: [{ kind: 'approve' }],
       prepare: undefined,
       iterationsDetail: [
-        { index: 1, runStatus: 'completed', changed: true, tokensSpent: 10, verdict: failVerdict('red'), signoff: undefined, phase: undefined },
-        { index: 2, runStatus: 'completed', changed: true, tokensSpent: 25, verdict: passVerdict('green'), signoff: approve(), phase: undefined },
+        { index: 1, runStatus: 'completed', changed: true, tokensSpent: 10, sessionId: SessionId.parse('s1'), verdict: failVerdict('red'), signoff: undefined, phase: undefined },
+        { index: 2, runStatus: 'completed', changed: true, tokensSpent: 25, sessionId: SessionId.parse('s1'), verdict: passVerdict('green'), signoff: approve(), phase: undefined },
       ],
       ...over,
     };
@@ -115,8 +117,8 @@ describe('renderRunDetail', () => {
         plan,
         planSeal: [{ kind: 'approve' }],
         iterationsDetail: [
-          { index: 1, runStatus: 'completed', changed: true, tokensSpent: 10, verdict: passVerdict('g'), signoff: approve(), phase: 0 },
-          { index: 2, runStatus: 'completed', changed: true, tokensSpent: 20, verdict: passVerdict('g'), signoff: approve(), phase: 2 },
+          { index: 1, runStatus: 'completed', changed: true, tokensSpent: 10, sessionId: SessionId.parse('s1'), verdict: passVerdict('g'), signoff: approve(), phase: 0 },
+          { index: 2, runStatus: 'completed', changed: true, tokensSpent: 20, sessionId: SessionId.parse('s1'), verdict: passVerdict('g'), signoff: approve(), phase: 2 },
         ],
       }),
     );
@@ -277,6 +279,64 @@ describe('runRuns dispatch', () => {
       const code = await runRuns({ kind: 'show', runId: 'run-bad' }, stateDir, c.out, c.err);
       expect(code).toBe(1);
       expect(c.stderr()).toContain('corrupt');
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resume-cmd: prints the harness-correct interactive resume command (Capability A)', async () => {
+    const stateDir = await freshDir();
+    try {
+      // A run whose header records the harness, and whose last agent turn has a real session id.
+      const runId = 'run-resume';
+      seq = 0;
+      const log = new FileRunLog(join(stateDir, runId));
+      await log.writeHeader({
+        runId: RunId.parse(runId),
+        startedAt: 1_700_000_000_000,
+        config: makeConfig({ goal: 'g' }),
+        harness: 'claude',
+      });
+      await log.append(e(runId, { tag: 'CONTRACT_COMPILED', contract }));
+      await log.append(e(runId, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }));
+      await log.append(
+        e(runId, {
+          tag: 'AGENT_RAN',
+          run: { output: '', sessionId: SessionId.parse('real-claude-session'), status: 'completed' },
+          prevDiffHash: DiffHash.parse('0000000'),
+          diffHash: DiffHash.parse('0000001'),
+          budget: { exceeded: false },
+        }),
+      );
+      const c = capture();
+      const code = await runRuns({ kind: 'resume-cmd', runId, harness: undefined }, stateDir, c.out, c.err);
+      expect(code).toBe(0);
+      expect(c.stdout()).toContain('claude --resume real-claude-session');
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resume-cmd: falls back to --harness when the log predates harness recording', async () => {
+    const stateDir = await freshDir();
+    try {
+      await writeDoneRun(stateDir, 'run-old'); // header has no `harness`
+      const c = capture();
+      const code = await runRuns({ kind: 'resume-cmd', runId: 'run-old', harness: 'codex' }, stateDir, c.out, c.err);
+      expect(code).toBe(0);
+      expect(c.stdout()).toContain('codex resume s1');
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resume-cmd: exits 1 with an error on an unknown run', async () => {
+    const stateDir = await freshDir();
+    try {
+      const c = capture();
+      const code = await runRuns({ kind: 'resume-cmd', runId: 'run-nope', harness: undefined }, stateDir, c.out, c.err);
+      expect(code).toBe(1);
+      expect(c.stderr()).toContain('no such run');
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

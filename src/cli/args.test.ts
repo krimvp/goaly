@@ -299,6 +299,42 @@ describe('parseArgs', () => {
       await expect(parseArgs(['runs', 'delete'])).rejects.toThrow(UsageError);
       await expect(parseArgs(['runs'])).rejects.toThrow(UsageError);
     });
+
+    it('parses "runs resume-cmd <id>" with an optional --harness fallback (Capability A)', async () => {
+      const a = await parseArgs(['runs', 'resume-cmd', 'run-1234', '--workspace', '/tmp/ws']);
+      expect(a.command).toBe('runs');
+      expect(a.runs).toEqual({ kind: 'resume-cmd', runId: 'run-1234', harness: undefined });
+      expect(a.workspace).toBe('/tmp/ws');
+      const b = await parseArgs(['runs', 'resume-cmd', 'run-1234', '--harness', 'codex']);
+      expect(b.runs).toEqual({ kind: 'resume-cmd', runId: 'run-1234', harness: 'codex' });
+    });
+
+    it('throws UsageError when "runs resume-cmd" is missing the run id', async () => {
+      await expect(parseArgs(['runs', 'resume-cmd'])).rejects.toThrow(UsageError);
+      await expect(parseArgs(['runs', 'resume-cmd', '--harness', 'claude'])).rejects.toThrow(UsageError);
+    });
+  });
+
+  describe('--from-run / --inherit-session (Capability C)', () => {
+    const base = ['run', '--goal', 'g', '--verify-cmd', 'true'];
+
+    it('defaults to no follow-up', async () => {
+      const a = await parseArgs([...base]);
+      expect(a.fromRunId).toBeUndefined();
+      expect(a.inheritSession).toBe(false);
+    });
+
+    it('captures --from-run and --inherit-session', async () => {
+      const a = await parseArgs([...base, '--from-run', 'run-prior', '--inherit-session']);
+      expect(a.fromRunId).toBe('run-prior');
+      expect(a.inheritSession).toBe(true);
+    });
+
+    it('treats --inherit-session as a valueless boolean (does not swallow the goal positional)', async () => {
+      const a = await parseArgs(['--inherit-session', 'do the thing', '--from-run', 'run-prior']);
+      expect(a.config.goal).toBe('do the thing');
+      expect(a.inheritSession).toBe(true);
+    });
   });
 
   it('throws UsageError on an unknown harness', async () => {

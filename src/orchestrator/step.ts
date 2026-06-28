@@ -269,7 +269,9 @@ function stepAwaitSeal(
         ];
       }
       const ctx = initialCtx(config, contract, phase);
-      return startIteration(ctx, buildInitialPrompt(contract), undefined);
+      // `ctx.sessionId` is the inherited seed (Capability C) when set, else undefined (the unchanged
+      // fresh-session start). After turn 1 the real returned id takes over (stepRunningAgent).
+      return startIteration(ctx, buildInitialPrompt(contract), ctx.sessionId);
     }
     case 'reject':
       return [
@@ -361,10 +363,12 @@ function stepPreparing(
   switch (prepared.status) {
     case 'proceed': {
       const ctx = initialCtx(config, contract, phase);
+      // Carry the inherited session seed (Capability C) into the first turn when set; else undefined
+      // (unchanged). After turn 1 the real returned id takes over (stepRunningAgent).
       return startIteration(
         ctx,
         buildInitialPrompt(contract, prepared.installTools, prepared.setupHint),
-        undefined,
+        ctx.sessionId,
       );
     }
     case 'tools-missing':

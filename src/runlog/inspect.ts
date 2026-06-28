@@ -2,7 +2,7 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CompiledContract } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
-import type { ContractHash, RunId } from '../domain/ids';
+import type { ContractHash, RunId, SessionId } from '../domain/ids';
 import type { HarnessRunResult } from '../domain/events';
 import type { UsageReport } from '../domain/usage';
 import type { Verdict, ApprovalVerdict, SealDecision } from '../domain/verdict';
@@ -12,6 +12,7 @@ import { FileRunLog } from './file-runlog';
 import type { RunLogHeader, RunLogEntry } from './runlog';
 import { replay } from './replay';
 import { summarizeUsage } from './usage';
+import { lastRealSessionId } from './session-id';
 
 /**
  * READ-ONLY run-log inspection (issue #14). Everything here is a pure projection over the
@@ -47,6 +48,8 @@ export type IterationDetail = {
   /** Whether the agent run changed the working tree (prev vs post diff hash). */
   readonly changed: boolean;
   readonly tokensSpent: number | undefined;
+  /** The harness session id this iteration's agent run returned (may be a synthesized sentinel). */
+  readonly sessionId: SessionId;
   /** The frozen verifier-ladder verdict for this iteration (undefined if not reached). */
   verdict: Verdict | undefined;
   /** The Sign-off approver verdict (present only when the ladder passed). */
@@ -66,6 +69,18 @@ export type RunDetail = {
   readonly stateTag: OrchestratorState['tag'];
   /** Terminal failure / abort reason (e.g. a stuck detector), when the run ended in one. */
   readonly reason: string | undefined;
+  /**
+   * Which harness produced the run (from the log header), or undefined for a log written before the
+   * field existed. Paired with {@link sessionId} to print the harness-correct interactive-resume
+   * command (Capability A) and to guard same-harness session inheritance (Capability C).
+   */
+  readonly harness: string | undefined;
+  /**
+   * The last REAL (non-sentinel) harness session id the run produced, or undefined when none was
+   * ever recovered. The handle a follow-up resumes — `claude --resume <id>` (A) or
+   * `--from-run --inherit-session` (C). Walks `AGENT_RAN` backwards past synthesized sentinels.
+   */
+  readonly sessionId: SessionId | undefined;
   readonly startedAt: number;
   readonly endedAt: number | undefined;
   readonly iterations: number;
@@ -133,6 +148,8 @@ export function runDetail(header: RunLogHeader, entries: readonly RunLogEntry[])
     status: statusOf(state),
     stateTag: state.tag,
     reason: terminalReason(state),
+    harness: header.harness,
+    sessionId: lastRealSessionId(entries),
     startedAt: header.startedAt,
     endedAt: last?.ts,
     iterations: iterationCount(state),
@@ -230,6 +247,7 @@ function collectIterations(entries: readonly RunLogEntry[]): IterationDetail[] {
         runStatus: ev.run.status,
         changed: ev.prevDiffHash !== ev.diffHash,
         tokensSpent: ev.budget.tokensSpent,
+        sessionId: ev.run.sessionId,
         verdict: undefined,
         signoff: undefined,
         phase: phased ? phaseIndex : undefined,

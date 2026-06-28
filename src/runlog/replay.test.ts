@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { drive, type DriverDeps } from '../driver/driver';
-import { RunId, DiffHash } from '../domain/ids';
+import { RunId, DiffHash, SessionId } from '../domain/ids';
 import type { RunLogEntry } from './runlog';
+import type { OrchestratorEvent } from '../domain/events';
 import {
   FakeHarness,
   FakeVerifier,
@@ -72,6 +73,52 @@ describe('replay()', () => {
     expect(state.tag).toBe('COMPILING');
     expect(c).toBeNull();
     expect(contractHash).toBeNull();
+  });
+
+  // ---- session inheritance (Capability C) — resume == replay stays exact -----
+
+  it('reconstructs the SEEDED first RUN_AGENT from config.seedSessionId', () => {
+    const mk = (event: OrchestratorEvent): RunLogEntry => ({
+      runId,
+      seq: 0,
+      ts: 0,
+      contractHash: null,
+      event,
+      stateTagAfter: 'x',
+    });
+    const config = makeConfig({ goal: 'g', seedSessionId: 'prior-sess' as never });
+    const { state, commands } = replay(config, [
+      mk({ tag: 'CONTRACT_COMPILED', contract }),
+      mk({ tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }),
+    ]);
+    // The reducer replayed the inherited seed onto the first turn's command.
+    expect(state.tag).toBe('RUNNING_AGENT');
+    expect(commands[0]).toMatchObject({ tag: 'RUN_AGENT', sessionId: 'prior-sess' });
+  });
+
+  it('overwrites the seed with the REAL returned session id after turn 1', () => {
+    const mk = (event: OrchestratorEvent): RunLogEntry => ({
+      runId,
+      seq: 0,
+      ts: 0,
+      contractHash: null,
+      event,
+      stateTagAfter: 'x',
+    });
+    const config = makeConfig({ goal: 'g', seedSessionId: 'prior-sess' as never });
+    const { state } = replay(config, [
+      mk({ tag: 'CONTRACT_COMPILED', contract }),
+      mk({ tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }),
+      mk({
+        tag: 'AGENT_RAN',
+        run: { output: '', sessionId: SessionId.parse('real-sess'), status: 'completed' },
+        prevDiffHash: DiffHash.parse('0000000'),
+        diffHash: DiffHash.parse('0000001'),
+        budget: { exceeded: false },
+      }),
+    ]);
+    expect(state.tag).toBe('VERIFYING');
+    if (state.tag === 'VERIFYING') expect(state.ctx.sessionId).toBe('real-sess');
   });
 
   // ---- diff-baseline checkpoints (issue #47) ------------------------------

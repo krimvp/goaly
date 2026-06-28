@@ -93,6 +93,14 @@ describe('step() transitions', () => {
     if (cmds[0]?.tag === 'RUN_AGENT') expect(cmds[0].prompt).toContain(contract.goal);
   });
 
+  it('seeds the FIRST RUN_AGENT session from config.seedSessionId (Capability C inheritance)', () => {
+    const config = makeConfig({ seedSessionId: 'prior-session-xyz' as never });
+    const [s0] = initial(config);
+    const [s1] = step(s0, { tag: 'CONTRACT_COMPILED', contract });
+    const [, cmds] = step(s1, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } });
+    expect(cmds[0]).toMatchObject({ tag: 'RUN_AGENT', sessionId: 'prior-session-xyz' });
+  });
+
   describe('prepare phase (Fix #1 setup + Fix #2 pre-flight)', () => {
     const setupContract = makeFakeContract({ setup: 'npm ci' });
 

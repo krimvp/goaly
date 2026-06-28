@@ -70,4 +70,7 @@ export const claudeCodec: AgentCliCodec = {
       estimator: input.estimator,
     });
   },
+  interactiveResume(id) {
+    return { command: `claude --resume ${id}` };
+  },
 };
