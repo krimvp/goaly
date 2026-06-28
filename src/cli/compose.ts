@@ -239,7 +239,11 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   // the caller injects its own `llm` — then the resolved per-seam models are not what runs, so the
   // wiring warning would be misleading (and noisy in tests/embedders).
   if (options.llm === undefined) {
-    for (const warning of independenceWarnings(models, options.harness, provider)) {
+    const independenceCtx = {
+      generate: config.verifier.kind === 'generate',
+      autonomous: config.autonomous,
+    };
+    for (const warning of independenceWarnings(models, options.harness, provider, independenceCtx)) {
       logger.warn('model independence', { detail: warning });
     }
   }

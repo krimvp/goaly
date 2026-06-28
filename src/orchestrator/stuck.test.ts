@@ -33,14 +33,22 @@ describe('detectStuck', () => {
     });
   });
 
-  describe('no-diff history excuse — timeout / crash (issue #54)', () => {
+  describe('no-diff history excuse — timeout / crash / truncated (issue #54 + follow-on F)', () => {
     it('does not trip no-diff when the previous turn was killed by a timeout', () => {
       const ctx = makeCtx({ lastNoDiff: true, iteration: 1, lastRunStatus: 'timeout' });
       // A timed-out turn never had a fair chance to edit; the timeout → maxIterations backstop decides.
       expect(detectStuck(ctx)).toBeNull();
     });
 
-    it('still trips no-diff when a non-timeout turn made no edits', () => {
+    it('does not trip no-diff when the previous turn was truncated by the turn cap (follow-on F)', () => {
+      // glm/kimi-style: the agent hit its per-run turn cap mid-work, so a no-diff on that capped
+      // iteration is "ran out of room," not "stuck" — it gets another iteration, bounded by
+      // maxIterations / budget rather than a premature no-diff abort.
+      const ctx = makeCtx({ lastNoDiff: true, iteration: 1, lastRunStatus: 'truncated' });
+      expect(detectStuck(ctx)).toBeNull();
+    });
+
+    it('still trips no-diff when a completed turn made no edits (regression)', () => {
       const ctx = makeCtx({ lastNoDiff: true, iteration: 1, lastRunStatus: 'completed' });
       expect(detectStuck(ctx)?.message).toContain('no-diff');
     });

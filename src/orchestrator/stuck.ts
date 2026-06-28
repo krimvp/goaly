@@ -53,15 +53,26 @@ export function normalizeDetail(detail: string): string {
 }
 
 /**
- * Issue #54 — the HISTORY-based half of the no-diff excuse: a no-diff iteration is excused when the
- * previous turn was killed by a harness TIMEOUT or CRASHED — it never got a fair chance to edit, so a
- * misleading "no-diff" must not mask that the harness died (let the timeout → maxIterations backstop /
- * crash → harness-crash streak make the call). Pure over `LoopCtx`. The OTHER half of the excuse — a
- * green ladder blocked only by a FRESH Sign-off veto — needs the in-flight verdict/approval and so
- * lives in DECIDE (`decide.ts`), which holds them; this keeps `detectStuck` purely history-driven.
+ * Issue #54 (+ follow-on F) — the HISTORY-based half of the no-diff excuse: a no-diff iteration is
+ * excused when the previous turn never got a fair chance to edit, namely when it was
+ *  - killed by a harness TIMEOUT (wall-clock cap), or
+ *  - CRASHED (the agent CLI exited abnormally without completing a turn), or
+ *  - TRUNCATED (the agent hit its per-run turn cap mid-work — same spirit as a timeout: the work was
+ *    cut off, not finished, so a no-diff on that iteration is "ran out of room," not "stuck").
+ * In all three a misleading "no-diff" must not mask that the run was cut short — let the
+ * timeout/truncated → maxIterations/budget backstop, or the crash → harness-crash streak, make the
+ * call. A model that is *perpetually* truncated-with-no-diff still terminates at maxIterations/budget,
+ * the correct backstop, rather than a premature no-diff abort on the first capped iteration. Pure over
+ * `LoopCtx`. The OTHER half of the excuse — a green ladder blocked only by a FRESH Sign-off veto —
+ * needs the in-flight verdict/approval and so lives in DECIDE (`decide.ts`), which holds them; this
+ * keeps `detectStuck` purely history-driven.
  */
 function noDiffExcusedByRun(ctx: LoopCtx): boolean {
-  return ctx.lastRunStatus === 'timeout' || ctx.lastRunStatus === 'crashed';
+  return (
+    ctx.lastRunStatus === 'timeout' ||
+    ctx.lastRunStatus === 'crashed' ||
+    ctx.lastRunStatus === 'truncated'
+  );
 }
 
 export function detectStuck(ctx: LoopCtx): StuckReason | null {

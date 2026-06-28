@@ -84,6 +84,12 @@ export type ParsedArgs = {
   streamFile: string | undefined;
   /** Per-step subprocess timeouts (pure wiring; each absent ⇒ that step keeps its default). */
   timeouts: StepTimeouts;
+  /**
+   * Per-run turn cap for the `goaly-code` agent loop (follow-on E). Pure wiring — never enters the
+   * frozen contract; only the goaly-code harness consumes it (codec harnesses manage their own turn
+   * budgets). Absent ⇒ the harness default (50). A hard from-scratch task may want 100–200.
+   */
+  maxAgentTurns: number | undefined;
   /** Opt-in OS-isolation policy (issue #9). Default `mode: 'none'` ⇒ behavior byte-for-byte unchanged. */
   sandbox: SandboxPolicy;
   /** Optional `--cost-table` JSON path: prices the token report (USD per 1M tokens). Default off. */
@@ -124,7 +130,8 @@ Usage:
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
                [--stuck-oscillation true|false] [--stuck-crash-threshold N]
-               [--harness claude|codex|droid|pi|goaly-code] [--model <m>] [--llm-model <m>]
+               [--harness claude|codex|droid|pi|goaly-code] [--max-agent-turns N] [--model <m>]
+               [--llm-model <m>]
                [--llm-provider claude|codex|droid|pi|openai] [--harness-timeout-ms N]
                [--base-url <url>] [--llm-api-key-env <NAME>]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
@@ -266,6 +273,11 @@ goaly-code harness / OpenAI-compatible endpoint (--harness goaly-code, --llm-pro
                         http://localhost:11434/v1 (ollama). '/chat/completions' is appended.
   --llm-api-key-env <NAME>  env var holding the bearer token (default OPENAI_API_KEY). A keyless local
                         endpoint needs no token — leave the var unset and no Authorization is sent.
+  --max-agent-turns N  cap the goaly-code agent loop at N model turns per run (default 50). A run that
+                        hits the cap ends as 'truncated' (not a failure) and gets another iteration.
+                        Raise it (100–200) for a hard from-scratch task whose long self-authored
+                        contract eats turns. ONLY the goaly-code harness reads this — the codec
+                        harnesses (claude / codex / droid / pi) manage their own turn budgets.
 
 Seal (contract approval):
   default                     print the frozen contract and prompt for one of:
@@ -611,6 +623,7 @@ export async function parseArgs(
     streamTranscript: flags['stream-transcript'] !== undefined || str(flags, 'stream-file') !== undefined,
     streamFile: str(flags, 'stream-file'),
     timeouts: parseTimeouts(flags),
+    maxAgentTurns: parseMaxAgentTurns(flags),
     sandbox: parseSandbox(flags),
     costTablePath: str(flags, 'cost-table'),
     configSources,
@@ -646,6 +659,21 @@ function parseTimeouts(flags: RawFlags): StepTimeouts {
     ...(verifyMs !== undefined ? { verifyMs } : {}),
     ...(setupMs !== undefined ? { setupMs } : {}),
   };
+}
+
+/**
+ * Validate `--max-agent-turns N` at the seam (follow-on E): a positive integer turn cap for the
+ * goaly-code agent loop, fail-closed on anything else (invariant #6). Absent ⇒ undefined so the
+ * harness keeps its built-in default (50).
+ */
+function parseMaxAgentTurns(flags: RawFlags): number | undefined {
+  const v = str(flags, 'max-agent-turns');
+  if (v === undefined) return undefined;
+  const parsed = z.coerce.number().int().positive().safeParse(v);
+  if (!parsed.success) {
+    throw new UsageError(`--max-agent-turns: expected a positive integer, got '${v}'`);
+  }
+  return parsed.data;
 }
 
 /** Validate --log-level at the seam (fails closed on an unknown level). Default `info`. */
@@ -827,6 +855,7 @@ function baseArgs(
     streamTranscript: false,
     streamFile: undefined,
     timeouts: {},
+    maxAgentTurns: undefined,
     sandbox: SandboxPolicy.parse({}),
     costTablePath: undefined,
     configSources: [],

@@ -162,11 +162,13 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   with `--stuck-no-diff`, `--stuck-repeat-threshold`, `--stuck-oscillation`, `--stuck-crash-threshold`.
   Use `--diff-ignore` to
   keep verifier-produced artifacts (coverage dirs, `__pycache__`, build output) out of the tree hash
-  so they can't make a no-op agent look like it changed something. A no-diff iteration is **excused
-  once** when the agent never had a fair chance to act — the previous turn timed out, or the ladder is
-  green and a **fresh Sign-off veto** is the only blocker — so a correct, actionable critique isn't
-  thrown away before the worker gets one real turn to respond to it (a *second* unproductive no-diff
-  still aborts).
+  so they can't make a no-op agent look like it changed something. A no-diff iteration is **excused**
+  when the agent never had a fair chance to act — the previous turn **timed out**, **crashed**, or was
+  **truncated** (it hit its turn/wall-clock cap mid-work), or the ladder is green and a **fresh Sign-off
+  veto** is the only blocker — so a correct, actionable critique (or a run that simply ran out of room)
+  isn't thrown away before the worker gets one real turn to make progress. A perpetually
+  truncated-with-no-diff run still terminates — at `--max-iterations` / budget, the correct backstop,
+  rather than a premature no-diff abort on the first capped iteration.
 - **Diff baseline** — the worker's diff (what the Sign-off approver reviews) is computed against `HEAD`
   by default, but `--baseline <ref>` points it at any git ref/SHA instead. Chain a multi-step build by
   pointing each run at where the last one finished, so every run reviews only its own delta —
@@ -253,7 +255,13 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   rejected bar feeds the bounded compile-retry loop above, so the compiler can self-correct.
 - **Independence is checked, not assumed.** goaly warns loudly when the "two independent keys" collapse
   onto one model (e.g. a bare `--model X`, which would make the approver share the worker's/judge's
-  blind spots); pass `--approver-model` (or a different `--llm-provider`) to separate them.
+  blind spots); pass `--approver-model` (or a different `--llm-provider`) to separate them. Under
+  **`--generate --autonomous`** specifically, the warning **escalates** when the coding agent, the judge
+  rung, *and* the Sign-off approver all resolve to one model: that is the self-author + self-judge case,
+  where the model writes a bar it then grades itself against with no human in the loop — the most
+  deadlock-prone setup (it can stall authoring a bar it cannot satisfy or recognize as satisfied). For
+  autonomous `--generate`, prefer `--approver-model` (and/or `--judge-model`) on a **different
+  model/provider** so the second key is a genuinely independent skeptic.
 - **The verify command runs with a credential-scrubbed environment.** The verifier executes
   worker/model-authored code on your host every iteration; goaly strips credential-looking variables
   (`*_TOKEN`, `*_KEY`, `*SECRET*`, `AWS_*`, `GITHUB_*`, …) from its environment so they can't be
@@ -544,6 +552,14 @@ A verify command that exceeds its timeout is SIGKILL'd and reported as a **non-z
 verifier FAIL, never a green** (fail-closed, invariant #4). Each value must be a positive integer
 number of milliseconds.
 
+**Heavy/parallel `--generate` authoring may need a larger `--llm-timeout-ms`.** The compiler authors
+the whole frozen contract in one LLM call; for a large goal — or many runs sharing one endpoint — that
+call can exceed the default 10-min step cap and surface as a `COMPILE_FAILED` whose reason says the
+authoring call timed out. Re-issuing the same heavy call just times out again (it burns
+`--max-compile-retries` on a transient infra limit, not a model mistake), so the fix is to **raise
+`--llm-timeout-ms`** (or reduce concurrent load) — goaly appends exactly that hint to a timeout
+`COMPILE_FAILED` so the remedy is visible.
+
 **Idle vs wall-clock harness timeout.** The default 10-min wall-clock cap is tuned for small tasks;
 real multi-file builds routinely exceed it mid-edit, truncating progressing turns and blinding the
 token budget for that turn (it reports `tokensUnknown`). `--harness-idle-timeout-ms N` instead kills
@@ -680,6 +696,13 @@ with the bearer token read from **`--llm-api-key-env <NAME>`** (default `OPENAI_
 local endpoint like ollama needs none). `--harness goaly-code` requires a resolved `--model`; pair it with
 `--llm-provider openai` to run the read-only LLM steps through the same endpoint. Both fail closed
 (refuse to start) if the base URL or model is missing.
+
+**`--max-agent-turns N`** caps the `goaly-code` agent loop at *N* model turns per run (default 50). A
+run that hits the cap ends as `truncated` — not a failure — and the loop gives it another iteration
+(bounded by `--max-iterations` / budget), so a long self-authored contract that eats turns gets more
+runway. Raise it to **100–200** for a hard from-scratch task. Only the `goaly-code` harness reads it;
+the codec harnesses (`claude` / `codex` / `droid` / `pi`) manage their own turn budgets, so it is a
+no-op for them.
 
 At **Seal** (unless `--autonomous`), goaly prints the frozen contract and prompts:
 

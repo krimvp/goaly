@@ -66,6 +66,7 @@ const ConfigFileSchema = z
     'harness-idle-timeout-ms': FlagValue.optional(),
     'llm-timeout-ms': FlagValue.optional(),
     'verify-timeout-ms': FlagValue.optional(),
+    'max-agent-turns': FlagValue.optional(),
     harness: FlagValue.optional(),
     model: FlagValue.optional(),
     'llm-model': FlagValue.optional(),
