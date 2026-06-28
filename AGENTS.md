@@ -46,8 +46,10 @@ These are the product. A change that violates one is wrong even if tests pass â€
    first prompt) because on a from-scratch `--generate` build it presupposes scaffolding the agent
    hasn't written yet; a failing **user `--setup-cmd`** stays fatal `SETUP_FAILED`. The soundness
    pre-flight is **fail-open** by design (a wrong "broken" would abort a legitimate run; a wrong "sound"
-   only proceeds) and is skipped entirely on a from-scratch tree. None of this can produce a wrong
-   green: the frozen ladder + veto-only approver still gate DONE every iteration.
+   only proceeds); on a from-scratch tree it still runs the rung and classifies, but threads the
+   from-scratch signal into the classifier so an honest "implementation missing" red proceeds while a
+   frozen verifier that can't even run/compile is still caught as `CONTRACT_UNSOUND` (issue #78). None of
+   this can produce a wrong green: the frozen ladder + veto-only approver still gate DONE every iteration.
 5. **`--autonomous` moves Seal only.** It auto-accepts the contract but still freezes it and logs
    it loudly. It never skips verification or the freeze.
 6. **Parse at every seam (Zod).** CLI args, config, harness stdout (tolerant), judge/approver output

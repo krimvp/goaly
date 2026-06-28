@@ -226,16 +226,16 @@ async function preflightDeterministic(
   if (deterministic.length === 0) return { status: 'proceed' };
   const verifyMs = deps.timeouts?.verifyMs;
 
-  // Fix B1 (structural, primary): on a FROM-SCRATCH tree the deterministic bar is red *by definition* —
-  // there is no implementation source yet, so the agent must scaffold first. A red there is always
-  // "implementation missing," never "broken verifier," so skip running the rung AND the classifier and
-  // proceed. Conservative (the Workspace returns true only when zero candidate source files remain) and
-  // can only ever *proceed*, so it cannot turn a real defect green — the runtime ladder runs fail-closed
-  // every iteration and a genuinely broken frozen verifier is still caught by STUCK_REPEATED_FAILURE.
-  if (await deps.workspace.isEmptyOfSource(contract.generatedFiles.map((f) => f.path))) {
-    log.info('pre-flight: from-scratch tree (no implementation source yet) — skipping soundness check, proceeding', {});
-    return { status: 'proceed' };
-  }
+  // Fix B1 (revised — issue #78): is this a FROM-SCRATCH tree (no implementation source yet)? On such a
+  // tree the deterministic bar is red *by definition*, and that red is almost always "implementation
+  // missing" (an honest red the loop fixes) — but it can ALSO be a defect INSIDE the frozen verification
+  // files that NO implementation can fix (e.g. a non-compiling authored test). The original B1 skipped
+  // running the rung AND the classifier on a from-scratch tree, which let that second case slip through
+  // and render the run un-completable (the worker can't touch the frozen file → STUCK_REPEATED_FAILURE).
+  // So we still RUN the rung and CLASSIFY; the from-scratch signal is threaded into the classifier (which
+  // fails open) so an implementation-missing red is read as honest while a broken frozen verifier is
+  // caught up front. Fail-safe to false on any git error (an existing tree is never mistaken for empty).
+  const emptyOfSource = await deps.workspace.isEmptyOfSource(contract.generatedFiles.map((f) => f.path));
 
   for (const rung of deterministic) {
     if (rung.kind !== 'deterministic') continue; // narrow (filtered above)
@@ -263,6 +263,7 @@ async function preflightDeterministic(
       { llm: deps.llm, ...(deps.logger !== undefined ? { logger: deps.logger } : {}) },
       contract,
       verdict.detail,
+      emptyOfSource,
     );
     if (soundness.broken) {
       log.error('pre-flight: frozen verification judged broken (→ CONTRACT_UNSOUND)', {});
