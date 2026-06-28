@@ -73,6 +73,28 @@ default when provenance is unknown) keeps today's fatal `SETUP_FAILED`.
   uninstalled deps, or an unresolved import of a not-yet-written module as `brokenVerification=false`
   (agent-fixable). A worked example is included. B1 + B2 ship together.
 
+### C. The GREEN mirror — an authored verifier that already PASSES on a from-scratch tree
+A second deadlock class surfaced under `--generate --autonomous` with a weak self-authoring model: the
+compiler authored the **solution file itself** into the frozen `generatedFiles` set (not just the test).
+Because generated files are **excluded from the diff** *and* pinned by `GeneratedFilesGuard`, the worker
+is trapped — editing the file it was told to implement either trips the integrity guard (a deterministic
+red) or registers as **no change** (a spurious `no-diff` abort). The pre-flight was *already green* before
+the first worker turn (the compiler's own solution satisfied its own test) and silently **proceeded** into
+the trap.
+- **C1 (classifier, symmetric to B):** when **every** deterministic rung already **passes** at pre-flight
+  on a **from-scratch** tree **with** an authored verifier, a second read-only classifier
+  (`classifyVacuousContract`) is asked to rule in the one legitimate alternative — "the goal is genuinely
+  already satisfied by the starting tree" — vs. an **unsound** contract (the implementation was authored
+  into the frozen set, or the bar is vacuous). A confident `unsound` ⇒ `CONTRACT_UNSOUND` before any
+  worker token; otherwise proceed. **Fail-open exactly like B:** no LLM, an LLM error, an unparseable
+  verdict, or a "sound" answer all proceed. It fires **only** on the high-confidence positive signal
+  (authored verifier + `isEmptyOfSource` + LLM-confirmed), so a **not-yet-created or undetected file can
+  never become a failure** — that path is a *red*, handled by B.
+- **C2 (author-time prevention, complementary):** the compiler `SYSTEM_PROMPT` now states that authored
+  files are **verification only** (never the implementation) and the bar **must be red on an empty tree**,
+  heading the deadlock off at authoring time. C1 + C2 ship together; C1 is the structural backstop for a
+  model that ignores C2.
+
 ## Honoring the invariants (why no wrong-green is possible)
 - **#1 zero-LLM reducer.** `setupAuthored` is derived synchronously from config + contract; the new
   signal and the effects live in the driver/workspace seams. The reducer stays pure.

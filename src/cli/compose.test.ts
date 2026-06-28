@@ -90,6 +90,47 @@ describe('composeDeps — phased wiring (issue #48)', () => {
   });
 });
 
+describe('composeDeps — --explain observer wiring (issue #8)', () => {
+  const opts = (over: Record<string, unknown> = {}) => ({
+    harness: 'fake' as const,
+    workspaceRoot: '/tmp/x',
+    runId: asRunId('run-explain'),
+    llm: new FakeLlm(['a summary']),
+    noLogConsole: true,
+    logFs: new InMemoryLogFs(),
+    ...over,
+  });
+
+  it('builds an observer ONLY when --explain is set (off by default)', () => {
+    expect(composeDeps(makeConfig(), opts()).observer).toBeUndefined();
+    expect(composeDeps(makeConfig(), opts({ explain: true })).observer).toBeDefined();
+  });
+
+  it('an injected observer takes precedence over building one', () => {
+    const injected = { onEvent: async () => {}, onOutcome: async () => {} };
+    const deps = composeDeps(makeConfig(), opts({ explain: true, observer: injected }));
+    expect(deps.observer).toBe(injected);
+  });
+
+  it('the built observer narrates through the injected provider + explainWrite sink', async () => {
+    const lines: string[] = [];
+    const llm = new FakeLlm(['the run finished cleanly']);
+    const deps = composeDeps(
+      makeConfig(),
+      opts({ explain: true, llm, explainWrite: (s: string) => lines.push(s) }),
+    );
+    await deps.observer!.onOutcome({
+      status: 'DONE',
+      iterations: 2,
+      contractHash: null,
+      runId: asRunId('run-explain'),
+    });
+    // The provider was prompted and the summary reached the capturing writer (full compose wiring).
+    expect(llm.requests).toHaveLength(1);
+    expect(lines).toEqual(['[explain] the run finished cleanly\n']);
+  });
+});
+
 describe('buildLadder — verify timeout threading', () => {
   /** A workspace that records the opts passed to `run`. */
   function spyWorkspace(): {

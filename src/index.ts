@@ -257,6 +257,11 @@ export {
   type StreamRendererOptions,
 } from './cli/stream-render';
 
+// Plain-language run narrator (issue #8): the optional, read-only `--explain` observer. Strictly
+// advisory — it can never influence the contract, the ladder, DECIDE, or the two-key DONE. Exported
+// so embedders can inject their own (`composeDeps({ observer })` / `DriverDeps.observer`).
+export { LlmObserver, type Observer, type ObserverWriter } from './observe/observer';
+
 // Durable, standardized cross-agent stream transcript (issue #28): the canonical stream persisted
 // per-run as JSONL for offline replay — a SEPARATE file from the write-ahead run log, never the
 // state source. `readStreamTranscript` is the embedder-facing offline reader; the sink is exported

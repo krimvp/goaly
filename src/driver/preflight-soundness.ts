@@ -131,3 +131,92 @@ export async function classifyPreflightSoundness(
 
   return { broken: parsed.data.brokenVerification, reason: parsed.data.reason ?? '' };
 }
+
+/**
+ * The GREEN-case mirror of {@link classifyPreflightSoundness}: the frozen, auto-authored verifier
+ * PASSES on a from-scratch tree BEFORE the worker has written anything. On a tree with no
+ * implementation source, that can only mean the contract is UNSOUND — either the compiler authored
+ * the implementation INTO the frozen verification set (so the bar tests code the worker didn't write,
+ * and the anti-tamper guard then deadlocks the worker against a no-diff abort) or the bar is vacuous
+ * (it doesn't actually exercise the goal). The caller fires this ONLY when there is an authored
+ * verifier AND the tree is confidently from-scratch, so the rare legitimate alternative — "the goal
+ * is genuinely already satisfied by the starting tree" — is what the model is asked to rule in.
+ *
+ * Fail-OPEN to NOT unsound (proceed), exactly like the red classifier and for the same reason: a
+ * wrong "unsound" aborts a legitimate run at zero iterations, whereas a wrong "sound" only proceeds
+ * (the real ladder + the two-key gate still govern every iteration). So an LLM error, an unparseable
+ * response, or any uncertainty proceeds — only a confident `unsound: true` aborts (CONTRACT_UNSOUND).
+ */
+const GREEN_SYSTEM_PROMPT = [
+  'You are a pre-flight soundness checker in an automated goal-orchestration loop.',
+  'A frozen, auto-authored VERIFICATION (test files / a check command) was just run ONCE against a',
+  'FROM-SCRATCH starting tree — there is NO implementation source yet, the worker has written nothing.',
+  'It PASSED (a green). On an empty tree a real bar for the goal should be RED, so a green is suspicious.',
+  'Decide, choosing exactly one:',
+  ' - unsound=true: the contract is NOT actually testing the goal. Either the IMPLEMENTATION was',
+  '   authored into the frozen verification set itself (the bar passes off code the worker did not',
+  '   write — and since those files are frozen, the worker is deadlocked), OR the bar is VACUOUS /',
+  "   trivially true (e.g. it checks nothing that depends on the goal's implementation).",
+  ' - unsound=false: the goal is GENUINELY already satisfied by the pre-existing starting tree (rare on',
+  '   a from-scratch build), so passing is legitimate and the loop should proceed.',
+  'When in doubt, answer false — only a confident "the bar is not exercising the goal" is unsound.',
+  'Respond with ONLY a single JSON object {"unsound": boolean, "reason": string}. No prose, no markdown.',
+  UNTRUSTED_SYSTEM_CLAUSE,
+].join(' ');
+
+const GreenClassification = z.object({
+  unsound: z.boolean(),
+  reason: z.string().optional(),
+});
+
+function buildGreenPrompt(contract: CompiledContract, detail: string): string {
+  const authored = contract.generatedFiles.map((f) => `  - ${f.path}`).join('\n');
+  return [
+    `GOAL:\n${contract.goal}`,
+    `AUTHORED VERIFICATION FILES (frozen — the worker cannot change these):\n${authored}`,
+    'CONTEXT: the starting tree is EMPTY OF IMPLEMENTATION SOURCE (a from-scratch build) — the worker ' +
+      'has written nothing yet, so a bar that genuinely exercises the goal should be RED here.',
+    `VERIFICATION OUTPUT ON THE STARTING TREE (it PASSED):\n${wrapUntrusted(detail, { label: 'OUTPUT' })}`,
+    'Is the contract unsound (the bar is not actually testing the goal — the implementation was ' +
+      'authored into the frozen files, or the bar is vacuous), or is the goal genuinely already satisfied?',
+    'Reply with ONLY the JSON {"unsound": boolean, "reason": string}.',
+  ].join('\n\n');
+}
+
+/**
+ * Ask the model whether a frozen verifier that ALREADY PASSES on a from-scratch tree means the
+ * contract is unsound (→ CONTRACT_UNSOUND) or the goal is genuinely already met (→ proceed). Reuses
+ * {@link SoundnessVerdict} (`broken` = unsound). Fail-open to NOT unsound on any LLM error or
+ * unparseable response — see the doc above.
+ */
+export async function classifyVacuousContract(
+  deps: ClassifyDeps,
+  contract: CompiledContract,
+  detail: string,
+): Promise<SoundnessVerdict> {
+  const log = deps.logger ?? noopLogger;
+  let raw: string;
+  try {
+    raw = (
+      await deps.llm.complete({
+        system: GREEN_SYSTEM_PROMPT,
+        prompt: buildGreenPrompt(contract, detail),
+        temperature: 0,
+      })
+    ).text;
+  } catch (e) {
+    log.warn('pre-flight green-soundness check: LLM call failed — proceeding (assumed sound)', {
+      reason: errorMessage(e),
+    });
+    return { broken: false, reason: `green-soundness check could not run: ${errorMessage(e)}` };
+  }
+
+  const extracted = extractJson(raw);
+  const parsed = extracted === null ? null : GreenClassification.safeParse(extracted);
+  if (parsed === null || !parsed.success) {
+    log.warn('pre-flight green-soundness check: unparseable response — proceeding (assumed sound)', {});
+    return { broken: false, reason: 'green-soundness check produced no parseable verdict' };
+  }
+
+  return { broken: parsed.data.unsound, reason: parsed.data.reason ?? '' };
+}

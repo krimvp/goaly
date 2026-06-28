@@ -558,6 +558,7 @@ describe('parseArgs', () => {
       expect(a.logFile).toBeUndefined();
       expect(a.noLogFile).toBe(false);
       expect(a.stream).toBe(false);
+      expect(a.explain).toBe(false);
       expect(a.streamTranscript).toBe(false);
       expect(a.streamFile).toBeUndefined();
     });
@@ -565,6 +566,18 @@ describe('parseArgs', () => {
     it('parses --stream as an opt-in boolean', async () => {
       const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--stream']);
       expect(a.stream).toBe(true);
+    });
+
+    it('parses --explain as an opt-in boolean (issue #8)', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--explain']);
+      expect(a.explain).toBe(true);
+    });
+
+    it('parses --explain-model into the model cascade (issue #8)', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--explain', '--explain-model', 'haiku',
+      ]);
+      expect(a.models.explainModel).toBe('haiku');
     });
 
     it('parses --stream-transcript as an opt-in boolean (issue #28)', async () => {

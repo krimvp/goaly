@@ -144,6 +144,18 @@ describe('AgentCompiler — generate verifier', () => {
     expect(llm.requests[0]?.temperature).toBe(0);
   });
 
+  it('instructs the author that generated files are verification-only and the bar must fail on an empty tree', async () => {
+    // Guard against the compiler authoring the SOLUTION into the frozen verification set (the deadlock:
+    // the worker can't edit a frozen file, and its real work then reads as no-diff).
+    const llm = new FakeLlm([JSON.stringify({ command: 'npm test', rubric: '' })]);
+    const compiler = new AgentCompiler({ llm });
+    await compiler.compile(makeConfig({ verifier: { kind: 'generate' } }));
+    const system = llm.requests[0]?.system ?? '';
+    expect(system).toMatch(/VERIFICATION ONLY/);
+    expect(system).toMatch(/NEVER author the implementation/i);
+    expect(system).toMatch(/FAIL on the CURRENT tree/);
+  });
+
   it('freezes the LLM-authored requiredTools manifest into the contract', async () => {
     const llm = new FakeLlm([
       JSON.stringify({ command: 'cargo test', rubric: '', requiredTools: ['cargo', 'rustup'] }),

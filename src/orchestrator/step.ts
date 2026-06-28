@@ -349,8 +349,11 @@ function setupIsAuthored(config: RunConfig, contract: CompiledContract): boolean
  *  - `proceed`          → start iteration 1 (setup was clean / absent; pre-flight passed or failed as
  *                         an honest red — the implementation is simply missing, which the loop fixes).
  *  - `setup-failed`     → FAILED (typed SETUP_FAILED) — never hand the worker a broken environment.
- *  - `contract-unsound` → FAILED (typed CONTRACT_UNSOUND) — the frozen verification can't even run, so
- *                         no worker tokens are spent chasing a contract defect.
+ *  - `contract-unsound` → FAILED (typed CONTRACT_UNSOUND) — the frozen verification is defective, not
+ *                         the implementation: it either can't even run (a broken authored verifier) or
+ *                         already passes vacuously on a from-scratch tree (the compiler authored the
+ *                         solution into the frozen set / the bar tests nothing). No worker tokens are
+ *                         spent chasing a contract defect.
  */
 function stepPreparing(
   config: RunConfig,
@@ -403,8 +406,8 @@ function stepPreparing(
           tag: 'FAILED',
           reason: phaseReason(
             phase,
-            'CONTRACT_UNSOUND: the frozen verification could not run against the prepared tree ' +
-              `(the error originates in the authored verification, not the implementation) — ${prepared.detail}`,
+            'CONTRACT_UNSOUND: the frozen verification is unsound — the defect is in the authored ' +
+              `verification, not the implementation — ${prepared.detail}`,
           ),
           iterations: 0,
           contractHash: contract.contractHash,

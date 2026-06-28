@@ -409,3 +409,83 @@ describe('prepareWorkspace — pre-flight (Fix #2)', () => {
     expect(ws.commands).toEqual(['npm test']); // only the deterministic rung ran
   });
 });
+
+// The compiler-authored-the-solution deadlock: an AUTHORED verifier that is ALREADY GREEN on a
+// from-scratch tree (the implementation was authored into the frozen set, or the bar is vacuous).
+// Caught here, before any worker token, as a typed CONTRACT_UNSOUND — but STRICTLY fail-open: only
+// an authored verifier + a confidently-from-scratch tree + an LLM that confidently judges the
+// contract unsound aborts. Anything else proceeds (a not-yet-created or undetected file can never
+// become a failure here — that path is a red, handled by the soundness classifier above).
+describe('prepareWorkspace — green pre-flight on a from-scratch tree (compiler-authored-solution guard)', () => {
+  const generatedFiles = [{ path: 'csv.js', sha256: 'a'.repeat(64) }];
+  /** A FakeLlm whose single response is the green-classifier verdict. */
+  const greenLlm = (unsound: boolean, reason = ''): FakeLlm =>
+    new FakeLlm([JSON.stringify({ unsound, reason })]);
+
+  it('from-scratch + authored verifier + green + classifier says UNSOUND → contract-unsound', async () => {
+    const ws = new ScriptedWorkspace([ok]); // the deterministic rung passes before any agent turn
+    ws.setEmptyOfSource(true);
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'node test.js' }],
+      generatedFiles,
+    });
+    const llm = greenLlm(true, 'the bar passes off csv.js, which is itself a frozen authored file');
+    const result = await prepareWorkspace({ workspace: ws, llm }, contract);
+
+    expect(result.prepared.status).toBe('contract-unsound');
+    if (result.prepared.status === 'contract-unsound') {
+      expect(result.prepared.detail).toMatch(/--compiler-model/);
+      expect(result.prepared.detail).toMatch(/Seal/);
+    }
+    expect(ws.commands).toEqual(['node test.js']); // the rung WAS run
+    expect(llm.requests).toHaveLength(1); // the green classifier WAS consulted
+    expect(llm.requests[0]?.prompt).toMatch(/PASSED/); // and told the bar passed on an empty tree
+  });
+
+  it('FAIL-OPEN: classifier says the goal is genuinely already satisfied → proceed', async () => {
+    const ws = new ScriptedWorkspace([ok]);
+    ws.setEmptyOfSource(true);
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'node test.js' }],
+      generatedFiles,
+    });
+    const result = await prepareWorkspace({ workspace: ws, llm: greenLlm(false) }, contract);
+    expect(result.prepared.status).toBe('proceed');
+  });
+
+  it('FAIL-OPEN: no LLM wired → proceed (the guard never fires without a classifier)', async () => {
+    const ws = new ScriptedWorkspace([ok]);
+    ws.setEmptyOfSource(true);
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'node test.js' }],
+      generatedFiles,
+    });
+    const result = await prepareWorkspace({ workspace: ws }, contract);
+    expect(result.prepared.status).toBe('proceed');
+  });
+
+  it('FAIL-OPEN: an EXISTING tree (not from-scratch) that is green → proceed, classifier NOT consulted', async () => {
+    const ws = new ScriptedWorkspace([ok]); // emptyOfSource defaults to false
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'node test.js' }],
+      generatedFiles,
+    });
+    const llm = greenLlm(true); // even if it WOULD say unsound, it must not be asked
+    const result = await prepareWorkspace({ workspace: ws, llm }, contract);
+    expect(result.prepared.status).toBe('proceed');
+    expect(llm.requests).toHaveLength(0);
+  });
+
+  it('FAIL-OPEN: from-scratch + green but NO authored verifier (user --verify-cmd) → proceed', async () => {
+    const ws = new ScriptedWorkspace([ok]);
+    ws.setEmptyOfSource(true);
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'node test.js' }],
+      generatedFiles: [], // no compiler-authored files → not the deadlock class
+    });
+    const llm = greenLlm(true);
+    const result = await prepareWorkspace({ workspace: ws, llm }, contract);
+    expect(result.prepared.status).toBe('proceed');
+    expect(llm.requests).toHaveLength(0);
+  });
+});

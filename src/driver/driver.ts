@@ -26,6 +26,7 @@ import { lastRealSessionId } from '../runlog/session-id';
 import type { RunLog } from '../runlog/runlog';
 import { noopLogger, type Logger } from '../log/logger';
 import type { PhasedStreamSink } from '../agent-cli/stream';
+import type { Observer } from '../observe/observer';
 import { errorMessage } from '../util/errors';
 import { prepareWorkspace, type PrepareTimeouts } from './prepare';
 import { Baseline, recordCheckpoint, type CheckpointDeps } from './baseline';
@@ -95,6 +96,15 @@ export type DriverDeps = {
    * the replay log, so resume stays a fold over `OrchestratorEvent` only.
    */
   onStreamEvent?: PhasedStreamSink;
+  /**
+   * Optional `--explain` observer (issue #8): a strictly read-only side-LLM narrator fed the SAME
+   * lifecycle events the Driver already sees, fired at the contract / verifier / outcome checkpoints.
+   * Advisory only — it can never influence the frozen contract, the ladder, DECIDE, or the two-key
+   * DONE, and its summaries are written to a sink, never to the replay log. Internally fail-closed;
+   * the Driver also guards every call so even a programming error here can never reject `drive()`.
+   * Absent ⇒ no narration (the default).
+   */
+  observer?: Observer;
 };
 
 export type DriveOptions = {
@@ -230,6 +240,12 @@ export async function drive(
         contractHash,
         nextTag: next.tag,
       });
+
+      // `--explain` narration (issue #8) — AFTER the write-ahead append, so a slow side-LLM never
+      // sits on the durability path. Strictly advisory and off the critical path: the observer is
+      // internally fail-closed, and this extra guard means even a throw here degrades to "no
+      // summary" rather than touching the run's outcome.
+      await observe(deps.observer, (o) => o.onEvent(event), log);
     }
   } catch (e) {
     // Last-resort safety net: every effectful seam is individually fail-closed, but an unexpected
@@ -255,11 +271,33 @@ export async function drive(
     iterations: outcome.iterations,
     ...(extras.usage !== undefined ? { tokensTotal: extras.usage.total.tokens } : {}),
   });
-  return {
+  const finalOutcome: RunOutcome = {
     ...outcome,
     ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
     ...(extras.sessionId !== undefined ? { sessionId: extras.sessionId } : {}),
   };
+  // Final `--explain` checkpoint (issue #8): narrate the terminal outcome — especially a stuck
+  // ABORTED. Same advisory, fail-closed contract as the per-iteration narration above.
+  await observe(deps.observer, (o) => o.onOutcome(finalOutcome), log);
+  return finalOutcome;
+}
+
+/**
+ * Run one observer call, fully guarded (issue #8). The {@link Observer} is already internally
+ * fail-closed, but `drive()` must NEVER reject — so a no-op when absent and a swallowed throw here
+ * keep the read-only narrator strictly off the run's control flow (invariant #4).
+ */
+async function observe(
+  observer: Observer | undefined,
+  call: (o: Observer) => Promise<void>,
+  log: Logger,
+): Promise<void> {
+  if (observer === undefined) return;
+  try {
+    await call(observer);
+  } catch (e) {
+    log.debug('explain observer error (ignored)', { reason: errorMessage(e) });
+  }
 }
 
 /**

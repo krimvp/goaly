@@ -196,6 +196,7 @@ export async function main(argv: string[]): Promise<number> {
         ...(parsed.logFile !== undefined ? { logFile: parsed.logFile } : {}),
         ...(parsed.noLogFile ? { noLogFile: true } : {}),
         ...(parsed.stream ? { stream: true } : {}),
+        ...(parsed.explain ? { explain: true } : {}),
         ...(parsed.streamTranscript ? { streamTranscript: true } : {}),
         ...(parsed.streamFile !== undefined ? { streamFile: parsed.streamFile } : {}),
       });
