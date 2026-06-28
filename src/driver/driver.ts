@@ -2,7 +2,7 @@ import type { Command, OrchestratorEvent, RunOutcome } from '../domain/events';
 import { OrchestratorEvent as OrchestratorEventSchema } from '../domain/events';
 import type { RunConfig } from '../domain/config';
 import type { CompiledContract } from '../domain/contract';
-import type { ContractHash, RunId } from '../domain/ids';
+import type { ContractHash, RunId, SessionId } from '../domain/ids';
 import { DiffHash, coerceSessionId } from '../domain/ids';
 import type { Verdict } from '../domain/verdict';
 import type { TokenUsage, UsageReport } from '../domain/usage';
@@ -22,6 +22,7 @@ import type { Clock } from './clock';
 import type { BudgetMeter } from './budget';
 import { LlmTokenMeter, deltaToUsage } from './llm-meter';
 import { summarizeUsage } from '../runlog/usage';
+import { lastRealSessionId } from '../runlog/session-id';
 import type { RunLog } from '../runlog/runlog';
 import { noopLogger, type Logger } from '../log/logger';
 import type { PhasedStreamSink } from '../agent-cli/stream';
@@ -99,6 +100,12 @@ export type DriverDeps = {
 export type DriveOptions = {
   /** Resume from an existing run log instead of starting fresh. */
   resume?: boolean;
+  /**
+   * Which harness (coding-agent CLI) backs this run — recorded once in the run-log header so the
+   * follow-up resume-hint (Capability A) can print the harness-correct `--resume` command. Pure
+   * wiring, never the frozen contract; absent ⇒ the header omits it (old behavior unchanged).
+   */
+  harness?: string;
 };
 
 /**
@@ -165,7 +172,12 @@ export async function drive(
   } else {
     [state, commands] = initial(config);
     seq = 0;
-    await deps.runlog.writeHeader({ runId, startedAt: deps.clock.now(), config });
+    await deps.runlog.writeHeader({
+      runId,
+      startedAt: deps.clock.now(),
+      config,
+      ...(options.harness !== undefined ? { harness: options.harness } : {}),
+    });
   }
 
   try {
@@ -224,42 +236,52 @@ export async function drive(
     // throw (corrupt log on append, invalid transition) must still resolve to a terminal outcome
     // rather than reject — so the caller always gets a RunOutcome.
     log.error('driver error (fail-closed → ABORTED)', { reason: errorMessage(e) });
-    const usage = await buildUsageReport(deps);
+    const extras = await buildOutcomeExtras(deps);
     return {
       status: 'ABORTED',
       reason: `driver error: ${errorMessage(e)}`,
       iterations: iterationCount(state),
       contractHash: contractHash ?? null,
       runId,
-      ...(usage !== undefined ? { usage } : {}),
+      ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
+      ...(extras.sessionId !== undefined ? { sessionId: extras.sessionId } : {}),
     };
   }
 
   const outcome = buildOutcome(state, runId);
-  const usage = await buildUsageReport(deps);
+  const extras = await buildOutcomeExtras(deps);
   log.info('run finished', {
     status: outcome.status,
     iterations: outcome.iterations,
-    ...(usage !== undefined ? { tokensTotal: usage.total.tokens } : {}),
+    ...(extras.usage !== undefined ? { tokensTotal: extras.usage.total.tokens } : {}),
   });
-  return { ...outcome, ...(usage !== undefined ? { usage } : {}) };
+  return {
+    ...outcome,
+    ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
+    ...(extras.sessionId !== undefined ? { sessionId: extras.sessionId } : {}),
+  };
 }
 
 /**
- * Fold the persisted event log into the per-run spend report (issue #17). Best-effort and
- * fail-closed: a log that cannot be read degrades the report to absent — it NEVER breaks the
- * outcome. Reading the log (the source of truth) means the report is identical fresh or resumed.
+ * Fold the persisted event log into the per-run spend report (issue #17) AND recover the run's last
+ * real harness session id (Capability A) in the same read. Best-effort and fail-closed: a log that
+ * cannot be read degrades both to absent — it NEVER breaks the outcome. Reading the log (the source
+ * of truth) means the extras are identical fresh or resumed.
  */
-async function buildUsageReport(deps: DriverDeps): Promise<UsageReport | undefined> {
+async function buildOutcomeExtras(
+  deps: DriverDeps,
+): Promise<{ usage?: UsageReport; sessionId?: SessionId }> {
   try {
     const stored = await deps.runlog.read();
-    if (stored === null) return undefined;
-    return summarizeUsage(
+    if (stored === null) return {};
+    const usage = summarizeUsage(
       stored.entries.map((entry) => entry.event),
       stored.header.config.budget,
     );
+    const sessionId = lastRealSessionId(stored.entries);
+    return { usage, ...(sessionId !== undefined ? { sessionId } : {}) };
   } catch {
-    return undefined;
+    return {};
   }
 }
 

@@ -78,6 +78,9 @@ export function makeDroidCodec(auto: AutonomyLevel = DEFAULT_AUTONOMY): AgentCli
         estimator: input.estimator,
       });
     },
+    interactiveResume(id) {
+      return { command: `droid --session-id ${id}` };
+    },
   };
 }
 

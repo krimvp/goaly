@@ -182,7 +182,10 @@ export function initialCtx(
     config,
     contract,
     iteration: 0,
-    sessionId: undefined,
+    // Follow-up session inheritance (Capability C): seed the FIRST turn's session from the config
+    // when set (so the agent resumes its prior working memory), else undefined — the unchanged
+    // fresh-session behavior. After turn 1, `stepRunningAgent` overwrites it with the real id.
+    sessionId: config.seedSessionId,
     diffHashHistory: [],
     verifierDetailHistory: [],
     lastNoDiff: false,

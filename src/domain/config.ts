@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SessionId } from './ids';
 
 /**
  * How the user wants the goal verified (the input to the compile phase):
@@ -143,6 +144,17 @@ export const RunConfig = z.object({
       confidenceFloor: z.number().min(0).max(1).default(0.66),
     })
     .default({}),
+  /**
+   * Follow-up session inheritance (Capability C, `--from-run … --inherit-session`). When set, the
+   * follow-up's FIRST agent turn resumes this prior harness session so the agent keeps its working
+   * memory; after turn 1 the real returned session id overwrites it. The NEW frozen contract still
+   * SOLELY governs DONE — inheritance only seeds the agent's memory, never the bar (invariants #2/#3).
+   * Pure DATA in `LoopCtx` (read by `initialCtx`) — no new transition; because it lives in the
+   * RunConfig (header + replay), resume == replay stays exact. Deliberately OUTSIDE the lifetime
+   * views (`GatePolicy`/`LoopPolicy`/`DriverWiring`): it is a one-time, run-level seed, NOT an
+   * operational knob a phased sub-goal should inherit (the classic single-contract loop only).
+   */
+  seedSessionId: SessionId.optional(),
 });
 export type RunConfig = z.infer<typeof RunConfig>;
 export type RunConfigInput = z.input<typeof RunConfig>;

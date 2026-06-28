@@ -79,6 +79,10 @@ interface AgentCliCodec {
 
   parse(stdout: string): AgentOutput | null;        // tolerant final-result parse; never throws
   classify(input: CodecClassifyInput): HarnessRunResult;  // process outcome → status (§2)
+
+  // OPTIONAL (§4): how to CONTINUE this CLI's own interactive session after a goaly run ends —
+  // `goaly runs resume-cmd <id>` and the end-of-run banner. Returns the command + an optional caveat.
+  interactiveResume?(id: SessionId): { command: string; caveat?: string };
 }
 ```
 
@@ -263,6 +267,29 @@ The **final-result parse is unchanged** — `fieldExtractor` still recovers the 
 stream's closing line, so a non-streaming caller sees byte-identical behavior. See
 `src/llm/streaming.test.ts` and `src/agent-cli/codec.test.ts` for the test pattern.
 
+### 4. Interactive-resume hint — `interactiveResume(id)` *(optional, Capability A)*
+
+After a goaly run ends, `goaly runs resume-cmd <id>` (and the end-of-run banner) prints how to
+**continue that run's session in the CLI's OWN interactive mode**. Each CLI's interactive-resume
+phrasing differs from the headless `harnessArgs` goaly drives, so it lives per-codec (locality). Add
+`interactiveResume(id)` returning the command string and, when honest, a `caveat`:
+
+```ts
+interactiveResume(id) {
+  return { command: `myagent --resume ${id}` };
+  // ...or, when the interactive form differs / is approximate, add a caveat:
+  // return { command: `myagent resume ${id}`, caveat: 'interactive resume differs from headless exec' };
+}
+```
+
+The four bundled codecs map it as: claude → `claude --resume <id>`; codex → `codex resume <id>`
+(caveat: differs from `exec`); droid → `droid --session-id <id>`; pi → `pi --continue` (caveat: it
+resumes the latest *cwd* session only, so the id is not addressable). It is **optional** — a codec
+that omits it makes `resume-cmd` report a typed "no resume command" for that harness. The
+`HarnessChoice`→codec bridge and the typed result live in `src/cli/resume-cmd.ts` (`resumeHint`);
+goaly-code (no external CLI) is routed there to the follow-up path instead (`--from-run
+--inherit-session`).
+
 ## Skeleton (copy `src/agent-cli/claude-codec.ts` and adapt)
 
 ```ts
@@ -308,6 +335,9 @@ export const myagentCodec: AgentCliCodec = {
       unknownSession: UNKNOWN_SESSION,
       estimator: input.estimator,                // issue #24: estimate spend from streamed turns
     });
+  },
+  interactiveResume(id) {                          // §4 (optional): continue the CLI session
+    return { command: `myagent --resume ${id}` };
   },
 };
 ```

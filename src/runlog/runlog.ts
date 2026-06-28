@@ -6,11 +6,19 @@ import { OrchestratorEvent } from '../domain/events';
 /**
  * One-time header: the full RunConfig for the run. The frozen contract is captured in the
  * CONTRACT_COMPILED event (logged loudly), so resume reconstructs it by replay.
+ *
+ * `harness` records WHICH coding-agent CLI produced the run (claude / codex / droid / pi /
+ * goaly-code / fake). Harness identity is a compose-time wiring concern, deliberately kept OUT of
+ * `RunConfig` (it never enters the frozen contract), so it is captured here instead — the one place
+ * that knows it after the run ends. It is OPTIONAL so logs written before this field existed still
+ * parse (invariant #6, fail-closed on read). Read by the follow-up resume-hint (Capability A) to
+ * print the harness-correct interactive-resume command.
  */
 export const RunLogHeader = z.object({
   runId: RunId,
   startedAt: z.number(),
   config: RunConfig,
+  harness: z.string().min(1).optional(),
 });
 export type RunLogHeader = z.infer<typeof RunLogHeader>;
 

@@ -35,6 +35,7 @@ export {
   type RawFlags,
 } from './cli/args';
 export { runRuns, renderRunsTable, renderRunDetail } from './cli/runs';
+export { resumeHint, renderResumeHint, type ResumeHint } from './cli/resume-cmd';
 export {
   ModelSelection,
   resolveModels,
@@ -91,6 +92,16 @@ export {
   type RunListItem,
   type RunReadResult,
 } from './runlog/inspect';
+export {
+  lastRealSessionId,
+  isSentinelSession,
+  SENTINEL_SESSION_IDS,
+} from './runlog/session-id';
+
+// Follow-up after a run ends (Capability C): the pure prior-run COMPACTION + the seam-level
+// decorators that weave it into the compiler/planner authoring feedback (the freeze is unaffected).
+export { compactRun } from './followup/compaction';
+export { SeededCompiler, SeededPlanner, combineFeedback } from './followup/seeded';
 export type { LlmProvider, LlmRequest, LlmCompletion } from './llm/provider';
 export { FakeLlm } from './llm/provider';
 

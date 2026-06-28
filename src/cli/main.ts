@@ -9,6 +9,10 @@ import { drive } from '../driver/driver';
 import { refResolves } from '../workspace/git-workspace';
 import { asRunId, type RunId } from '../domain/ids';
 import type { RunOutcome } from '../domain/events';
+import type { RunConfig } from '../domain/config';
+import { readRun } from '../runlog/inspect';
+import { compactRun } from '../followup/compaction';
+import { resumeHint, renderResumeHint, type ResumeHint } from './resume-cmd';
 import { resolveModels } from './models';
 import { parsePriceTable, computeCost, type CostView, type PriceTable } from './cost';
 import { formatUsage } from './usage-format';
@@ -24,6 +28,69 @@ function startupFields(parsed: ParsedArgs): Record<string, string> {
   if (m.compilerModel !== undefined) fields.compilerModel = m.compilerModel;
   if (parsed.llmProvider !== 'claude') fields.llmProvider = parsed.llmProvider;
   return fields;
+}
+
+/**
+ * Resolve the follow-up wiring (Capability C, `--from-run`). Returns the run config (possibly with an
+ * inherited session seed) and the prior-run compaction to feed the compiler, or a fail-closed exit
+ * code after writing a clear message. A normal run (no `--from-run`) passes through unchanged.
+ */
+type FollowupResolution =
+  | { readonly ok: true; readonly config: RunConfig; readonly followupSeed: string | undefined }
+  | { readonly ok: false; readonly code: number };
+
+async function resolveFollowup(
+  parsed: ParsedArgs,
+  warn: (s: string) => void,
+): Promise<FollowupResolution> {
+  if (parsed.fromRunId === undefined) {
+    // --inherit-session is meaningless without --from-run; fail closed rather than silently ignore.
+    if (parsed.inheritSession) {
+      warn('goaly: --inherit-session requires --from-run <runId>\n');
+      return { ok: false, code: 2 };
+    }
+    return { ok: true, config: parsed.config, followupSeed: undefined };
+  }
+  if (parsed.resumeRunId !== undefined) {
+    warn('goaly: --from-run starts a NEW run and cannot be combined with --resume\n');
+    return { ok: false, code: 2 };
+  }
+
+  const stateDir = path.join(parsed.workspace, STATE_DIR);
+  const prior = await readRun(stateDir, parsed.fromRunId);
+  if (prior === null) {
+    warn(`goaly: --from-run ${parsed.fromRunId}: no such run in ${stateDir}\n`);
+    return { ok: false, code: 2 };
+  }
+  if (!prior.ok) {
+    warn(`goaly: --from-run ${parsed.fromRunId}: run log is corrupt: ${prior.error}\n`);
+    return { ok: false, code: 2 };
+  }
+  const followupSeed = compactRun(prior.detail);
+
+  // Session inheritance (opt-in). Cross-harness is invalid (session ids are harness-specific) → hard
+  // error; a no-op under --phased; a prior run with no recoverable session degrades to fresh (the
+  // compaction still applies). Otherwise seed the new config so the first turn resumes the prior session.
+  let config = parsed.config;
+  if (parsed.inheritSession) {
+    if (parsed.config.phased) {
+      warn('goaly: --inherit-session is ignored under --phased (using fresh session + compaction)\n');
+    } else if (prior.detail.harness !== undefined && prior.detail.harness !== parsed.harness) {
+      warn(
+        `goaly: --inherit-session needs the same harness as the prior run ` +
+          `(prior=${prior.detail.harness}, now=${parsed.harness}); session ids are harness-specific\n`,
+      );
+      return { ok: false, code: 2 };
+    } else if (prior.detail.sessionId === undefined) {
+      warn(
+        'goaly: --inherit-session: the prior run recorded no resumable session — ' +
+          'starting fresh (the compaction still applies)\n',
+      );
+    } else {
+      config = { ...parsed.config, seedSessionId: prior.detail.sessionId };
+    }
+  }
+  return { ok: true, config, followupSeed };
 }
 
 /**
@@ -82,6 +149,12 @@ export async function main(argv: string[]): Promise<number> {
     }
   }
 
+  // Capability C (`--from-run`): recover the prior run, build its compaction, and (with
+  // --inherit-session) seed the session. A normal run passes through unchanged.
+  const followup = await resolveFollowup(parsed, (s) => process.stderr.write(s));
+  if (!followup.ok) return followup.code;
+  const runConfig = followup.config;
+
   const resuming = parsed.resumeRunId !== undefined;
   const runId: RunId =
     parsed.resumeRunId !== undefined ? asRunId(parsed.resumeRunId) : asRunId(`run-${randomUUID()}`);
@@ -103,12 +176,13 @@ export async function main(argv: string[]): Promise<number> {
 
     let deps;
     try {
-      deps = composeDeps(parsed.config, {
+      deps = composeDeps(runConfig, {
         harness: parsed.harness,
         models: parsed.models,
         llmProvider: parsed.llmProvider,
         workspaceRoot: parsed.workspace,
         runId,
+        ...(followup.followupSeed !== undefined ? { followupSeed: followup.followupSeed } : {}),
         ...(parsed.baseUrl !== undefined ? { baseUrl: parsed.baseUrl } : {}),
         ...(llmApiKey !== undefined ? { llmApiKey } : {}),
         ...(parsed.baseline !== undefined ? { baseline: parsed.baseline } : {}),
@@ -151,7 +225,7 @@ export async function main(argv: string[]): Promise<number> {
       ...startupFields(parsed),
     });
 
-    const outcome = await drive(deps, parsed.config, runId, { resume: resuming });
+    const outcome = await drive(deps, runConfig, runId, { resume: resuming, harness: parsed.harness });
 
     // Surface the egress audit trail: any denied host:port the jail tried to reach (issue #39).
     if (egressProxy !== undefined && egressProxy.denied.length > 0) {
@@ -165,14 +239,17 @@ export async function main(argv: string[]): Promise<number> {
       priceTable !== undefined && outcome.usage !== undefined
         ? computeCost(outcome.usage, resolveModels(parsed.models), priceTable)
         : undefined;
-    process.stdout.write(`${formatOutcome(outcome, cost)}\n`);
+    // Capability A: append "Continue this session:" with the harness-correct interactive-resume
+    // command (or the goaly-code → --from-run route). Stays quiet when there is no real session.
+    const hint = resumeHint(parsed.harness, outcome.sessionId, runId);
+    process.stdout.write(`${formatOutcome(outcome, cost, hint)}\n`);
     return outcome.status === 'DONE' ? 0 : 1;
   } finally {
     await egressProxy?.close();
   }
 }
 
-export function formatOutcome(o: RunOutcome, cost?: CostView): string {
+export function formatOutcome(o: RunOutcome, cost?: CostView, resume?: ResumeHint): string {
   const lines = [
     '',
     `── goaly run ${o.runId} ──`,
@@ -182,5 +259,13 @@ export function formatOutcome(o: RunOutcome, cost?: CostView): string {
   ];
   if (o.reason !== undefined) lines.push(`reason:      ${o.reason}`);
   if (o.usage !== undefined) lines.push(...formatUsage(o.usage, cost));
+  // Capability A end-of-run banner: only printed when there is something useful to continue with
+  // (a real interactive-resume command, or the goaly-code follow-up route). Quiet otherwise.
+  if (resume !== undefined) {
+    const hintLines = renderResumeHint(resume);
+    if (hintLines.length > 0) {
+      lines.push('', 'Continue this session:', ...hintLines.map((l) => `  ${l}`));
+    }
+  }
   return lines.join('\n');
 }

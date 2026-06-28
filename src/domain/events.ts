@@ -212,5 +212,11 @@ export const RunOutcome = z.object({
   runId: RunId,
   /** Per-run token spend, folded from the event log. Absent only if the log could not be read. */
   usage: UsageReport.optional(),
+  /**
+   * The run's last REAL (non-sentinel) harness session id (Capability A) — the handle to continue the
+   * underlying CLI session, surfaced for the end-of-run banner and embedders. Absent when no real id
+   * was recovered (e.g. a compile-time failure, or the fake harness).
+   */
+  sessionId: SessionId.optional(),
 });
 export type RunOutcome = z.infer<typeof RunOutcome>;

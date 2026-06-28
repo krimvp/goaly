@@ -311,4 +311,12 @@ export const piCodec: AgentCliCodec = {
       estimator: input.estimator,
     });
   },
+  interactiveResume() {
+    // pi has no resume-by-id flag; the headless harness uses `--continue` (latest session for the
+    // current cwd). The id is not addressable, so it is intentionally unused — print the honest caveat.
+    return {
+      command: 'pi --continue',
+      caveat: 'pi resumes the LATEST session for the current directory only — run it from this workspace',
+    };
+  },
 };

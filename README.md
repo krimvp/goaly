@@ -421,6 +421,12 @@ goaly run --goal "..." --verify-cmd "pytest -q" --harness codex --max-iterations
              --budget-tokens 500000 --workspace ./myrepo
 goaly run --goal "..." --resume run-<id> --workspace ./myrepo
 
+# Follow up on a FINISHED run: a new, re-verified goal that knows what just happened (it seeds the
+# new contract's authoring with a compaction of the prior run, and runs in the same workspace):
+goaly "now also handle empty input" --from-run run-<id>
+# ...keep the agent's working memory too (same harness only): resume the prior session on turn 1:
+goaly "now also handle empty input" --from-run run-<id> --inherit-session
+
 # Diff against a baseline instead of HEAD — keep a multi-step build's diff small with no commits:
 goaly run --goal "step 2 of the build" --verify-cmd "npm test" --baseline <ref-or-sha>
 
@@ -487,6 +493,7 @@ goaly "make the parser handle empty input"
 # Inspect past runs (read-only — replays the run log, re-runs nothing):
 goaly runs list
 goaly runs show run-<id>
+goaly runs resume-cmd run-<id>   # print how to continue the run's CLI session (e.g. claude --resume <id>)
 ```
 
 ### Config file
@@ -767,13 +774,14 @@ outcome (fail-closed). `--stream-file <path>` overrides the location. Opt-in; of
 
 ### Inspecting past runs
 
-The write-ahead run log is also queryable after the fact, with two **read-only** subcommands that
+The write-ahead run log is also queryable after the fact, with **read-only** subcommands that
 **re-run nothing** — they replay the persisted event stream with the *same* fold `--resume` uses, so
 what they render is exactly the state the Driver computed:
 
 ```bash
 goaly runs list                  # a table of past runs under ./.goaly
 goaly runs show run-<id>         # full detail for one run
+goaly runs resume-cmd run-<id>   # how to continue this run's CLI session interactively
 goaly runs list --workspace ./myrepo   # look elsewhere for the .goaly directory
 ```
 
@@ -783,10 +791,44 @@ goaly runs list --workspace ./myrepo   # look elsewhere for the .goaly directory
 - **`goaly runs show <runId>`** — the **frozen contract** (and its hash), the **Seal** outcome,
   every iteration's **verifier-ladder verdict** and **Sign-off** approver decision, the
   stuck/failure **reason**, and the totals.
+- **`goaly runs resume-cmd <runId>`** — print the command to continue the run's underlying CLI
+  session in its **own interactive mode** (e.g. `claude --resume <id>`, `codex resume <id>`,
+  `droid --session-id <id>`, `pi --continue`), recovered from the log's recorded harness + last real
+  session id. For a `goaly-code` run (no external CLI) it routes you to `--from-run --inherit-session`.
+  Pass `--harness <name>` as a fallback when the log predates harness recording.
 
-Both parse the log with **Zod on read** and **fail closed**: a corrupt run is *flagged* (`CORRUPT`
-in the table; a non-zero exit for `show`), never silently treated as green or dropped (invariants
-#6/#7). `runs show` exits `1` for an unknown or corrupt run, `0` otherwise.
+Both `list` and `show` parse the log with **Zod on read** and **fail closed**: a corrupt run is
+*flagged* (`CORRUPT` in the table; a non-zero exit for `show`), never silently treated as green or
+dropped (invariants #6/#7). `runs show` exits `1` for an unknown or corrupt run, `0` otherwise.
+
+### Following up after a run ends (`--from-run`)
+
+A finished run is one-shot no more. To act on the result — *"good, but also handle empty input"*, or
+*"the test you wrote is too loose"* — start a **new, re-verified run that builds on it**:
+
+```bash
+goaly "now also handle empty input" --from-run run-<id>                    # fresh session + compaction
+goaly "now also handle empty input" --from-run run-<id> --inherit-session  # also keep the agent's memory
+```
+
+`--from-run <runId>` is a flag on the normal run path, so it composes with every other flag
+(`--harness`, `--generate`, `--autonomous`, `--phased`, `--baseline`). It:
+
+- runs in the **same workspace**, so the prior outcome is already on disk — the new run literally
+  builds on it;
+- seeds the new run's **contract authoring** with a concise, deterministic **compaction** of the
+  prior run (its goal, the frozen bar it met, how it ended), woven into the compile-phase feedback —
+  so the follow-up knows what just happened **without copying or weakening** the old contract;
+- compiles its **own** frozen, two-key contract and is otherwise an ordinary `drive()` run — **every
+  invariant is preserved by construction** (new Seal, new freeze, new two-key gate).
+
+This is distinct from `--resume`, which re-enters an *incomplete* run's loop; `--from-run` starts a
+**new** run that builds on a *terminal* one. `--inherit-session` additionally resumes the prior
+harness session on the follow-up's **first turn** so the agent keeps its working memory — the **new
+frozen contract still solely governs DONE**; inheritance only seeds the agent's memory, never the
+bar. It is valid only with the same `--harness` as the prior run (session ids are harness-specific)
+and is ignored under `--phased`. The end-of-run banner also prints a **"Continue this session:"**
+hint (the same mapping as `runs resume-cmd`) so the next step is one copy-paste away.
 
 ### Adding a harness
 
@@ -805,6 +847,7 @@ interface AgentCliCodec {
   readonlyArgs(opts): string[];                                   // read-only argv (judge/approver)
   parse(stdout): AgentOutput | null;                              // tolerant, never throws
   classify(input): HarnessRunResult;                              // process outcome → status
+  interactiveResume?(id): { command: string; caveat? };          // optional: continue the CLI session (A)
 }
 ```
 
