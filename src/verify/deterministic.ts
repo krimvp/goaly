@@ -1,69 +1,31 @@
 import type { Verdict } from '../domain/verdict';
 import type { Verifier } from './verifier';
-import type { Workspace } from '../workspace/workspace';
+import type { Workspace, CommandResult } from '../workspace/workspace';
 
 /** Max chars of failure output (stderr or stdout) folded into the verdict detail. */
 const DETAIL_OUTPUT_LIMIT = 2000;
 
 /**
- * Exit codes that mean the verify command could not be RUN (rather than ran and reported a real
- * failure), so a non-zero with one of these is an unevaluable verdict, not a genuine red:
- *   124  the conventional `timeout(1)` code goaly surfaces when it kills a command for exceeding
- *        `--verify-timeout-ms` (see git-workspace `realExec`) — the check never finished.
- *   126  the command was found but is not executable (a permission / not-a-program error).
- *   127  command not found / a spawn error goaly maps to 127 (git-workspace catch path).
- *   137  SIGKILL (128+9) — killed (OOM / forced kill), so the check did not complete.
- *   143  SIGTERM (128+15) — terminated before completing.
- * These are the RELIABLE, structural half of the classification; the textual signatures below are a
- * conservative best-effort for the common case where a fetch/resolve failure still exits 1.
+ * Decide whether a non-zero deterministic result is a could-not-EVALUATE error (the command never
+ * produced a real pass/fail) rather than a genuine red (the command ran and the bar isn't met).
+ *
+ * Deliberately NOT a heuristic: we do not pattern-match exit codes or scrape error strings (those
+ * rot and misfire). We classify only on facts goaly OWNS for certain — it imposed the timeout, and
+ * it caught the spawn failure (see {@link import('../workspace/workspace').CommandResult}). Any other
+ * non-zero exit is treated as a genuine, evaluable red. Other could-not-run causes are handled where
+ * they actually belong, not by re-deriving them here: a missing toolchain is caught BEFORE the loop
+ * by the `requiredTools` pre-flight (installed or a typed `TOOLS_MISSING` abort), and a verify
+ * command that fetches from the network at run time is prevented at the source — the compiler authors
+ * offline commands (install once in `setup`, invoke the local binary in the command).
+ *
+ * Returns a short reason when unevaluable, else null. Pure. See {@link Verdict.evaluable}: an
+ * unevaluable verdict is still fail-closed (`pass: false`) — this only changes a red's CLASSIFICATION
+ * so a persistent could-not-run surfaces as `CONTRACT_UNEVALUABLE` instead of a misleading
+ * no-diff/repeat abort that discards possibly-correct work.
  */
-const EXECUTION_ERROR_EXIT_CODES: ReadonlySet<number> = new Set([124, 126, 127, 137, 143]);
-
-/**
- * Conservative output signatures that indicate the verify COMMAND itself could not run — the tool,
- * a dependency, or a network fetch of one failed — as opposed to the command running and an
- * assertion failing. Deliberately narrow: each is a launch/resolution/fetch error that almost never
- * appears as the substance of a legitimate test failure. We intentionally OMIT generic transport
- * errors like ECONNREFUSED/ETIMEDOUT (those are plausibly the subject of a real network-code test);
- * the streak threshold ({@link import('../domain/config').StuckPolicy.unevaluableThreshold}) is the
- * real safety net, and misclassifying only costs a re-run, never a wrong green (fail-closed holds).
- */
-const EXECUTION_ERROR_SIGNATURES: readonly RegExp[] = [
-  /\bcommand not found\b/i,
-  /: not found\b/,
-  /\bno such file or directory\b/i,
-  /\bcannot find module\b/i,
-  /\bcannot find package\b/i,
-  /\bERR_MODULE_NOT_FOUND\b/,
-  /\bMODULE_NOT_FOUND\b/,
-  /\bgetaddrinfo\b/i,
-  /\bENOTFOUND\b/,
-  /\bEAI_AGAIN\b/,
-  /\bregistry\.npmjs\.org\b/i,
-  /\bnpm error code E(?:NOTFOUND|AI_AGAIN|NETWORK)\b/i,
-  /\bERR_PNPM_/,
-  /\b407 (?:proxy|authentication required)\b/i,
-  /\bunable to get local issuer certificate\b/i,
-  /\bSELF_SIGNED_CERT_IN_CHAIN\b/,
-  /\bUNABLE_TO_VERIFY_LEAF_SIGNATURE\b/,
-  /\bno test files? found\b/i,
-  /\[goaly\] command timed out\b/i,
-];
-
-/**
- * Decide whether a non-zero deterministic result is a could-not-EVALUATE error (the command failed
- * to run) rather than a genuine red (the command ran and the bar isn't met). Returns a short reason
- * when it is unevaluable, else null. Pure. See {@link Verdict.evaluable}: an unevaluable verdict is
- * still fail-closed (`pass: false`) — this only changes a red's CLASSIFICATION so a persistent
- * could-not-run surfaces as `CONTRACT_UNEVALUABLE` instead of a misleading no-diff/repeat abort.
- */
-export function executionErrorReason(exitCode: number, output: string): string | null {
-  if (EXECUTION_ERROR_EXIT_CODES.has(exitCode)) {
-    return `the verify command could not run (exit ${exitCode})`;
-  }
-  if (EXECUTION_ERROR_SIGNATURES.some((re) => re.test(output))) {
-    return 'the verify command could not run (a missing tool, dependency, or network fetch failed)';
-  }
+export function executionErrorReason(result: CommandResult): string | null {
+  if (result.timedOut === true) return 'the verify command timed out before it could finish';
+  if (result.spawnFailed === true) return 'the verify command could not be started';
   return null;
 }
 
@@ -92,13 +54,12 @@ export class DeterministicVerifier implements Verifier {
     if (pass) {
       return { pass: true, confidence: 1, detail: `${name}: exit 0` };
     }
-    const fullOutput = r.stderr || r.stdout;
-    const output = fullOutput.slice(0, DETAIL_OUTPUT_LIMIT);
+    const output = (r.stderr || r.stdout).slice(0, DETAIL_OUTPUT_LIMIT);
     // Distinguish "the command ran and the bar isn't met" (a genuine red) from "the command could
     // not run" (an environment failure goaly should surface as CONTRACT_UNEVALUABLE, never blame on
-    // the worker's code). The error reason is scanned over the FULL output so a signature past the
-    // detail truncation still counts. Still fail-closed: `pass` stays false either way.
-    const errorReason = executionErrorReason(r.exitCode, fullOutput);
+    // the worker's code). Classified ONLY from facts goaly owns (it timed the command out / could not
+    // start it), never guessed from the exit code or output. Still fail-closed: `pass` stays false.
+    const errorReason = executionErrorReason(r);
     return {
       pass: false,
       confidence: 1,

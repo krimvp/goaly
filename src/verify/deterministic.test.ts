@@ -136,42 +136,40 @@ describe('DeterministicVerifier', () => {
     expect(verdict.detail).toBe(`check: exit 1\n${'x'.repeat(2000)}`);
   });
 
-  describe('could-not-evaluate classification (verifier ERROR vs FAIL)', () => {
-    it('flags exit 127 (command not found) as unevaluable, not a genuine red', async () => {
+  describe('could-not-evaluate classification — only on facts goaly OWNS (no heuristics)', () => {
+    it('flags a timed-out command (goaly killed it) as unevaluable, not a genuine red', async () => {
       const workspace = new FakeWorkspace('0000000', '', [
-        { exitCode: 127, stdout: '', stderr: 'sh: 1: vitest: not found' },
+        { exitCode: 124, stdout: '', stderr: '[goaly] command timed out after 1000ms', timedOut: true },
       ]);
-      const verdict = await new DeterministicVerifier('vitest run').verify(workspace, 'g', 'r');
+      const verdict = await new DeterministicVerifier('npm test').verify(workspace, 'g', 'r');
 
       expect(verdict.pass).toBe(false); // still fail-closed
-      expect(verdict.evaluable).toBe(false); // but a could-not-run, not "your code is wrong"
-      expect(verdict.detail).toContain('could not run');
+      expect(verdict.evaluable).toBe(false); // but a could-not-evaluate, not "your code is wrong"
+      expect(verdict.detail).toContain('timed out');
     });
 
-    it('flags the 124 timeout exit as unevaluable', async () => {
+    it('flags a spawn failure (goaly could not start the command) as unevaluable', async () => {
       const workspace = new FakeWorkspace('0000000', '', [
-        { exitCode: 124, stdout: '', stderr: '[goaly] command timed out after 1000ms' },
+        { exitCode: 127, stdout: '', stderr: 'spawn sh ENOENT', spawnFailed: true },
       ]);
       const verdict = await new DeterministicVerifier('npm test').verify(workspace, 'g', 'r');
 
       expect(verdict.pass).toBe(false);
       expect(verdict.evaluable).toBe(false);
+      expect(verdict.detail).toContain('could not be started');
     });
 
-    it('flags a network/package-manager fetch failure (the npx-egress incident) as unevaluable', async () => {
-      // The exact case from the run: `npx --yes vitest` fails to resolve behind a restricted proxy,
-      // exiting 1 — but the output names a DNS/registry fetch error, so it could-not-RUN, not a red.
+    it('does NOT guess from the exit code or output — a bare exit 127 stays a genuine red', async () => {
+      // A command that RAN and exited 127 (e.g. a missing sub-command inside a test script) is a real
+      // red, not a could-not-evaluate. Missing TOOLCHAIN is caught earlier by the requiredTools
+      // pre-flight; we deliberately do not re-derive "couldn't run" from the exit code here.
       const workspace = new FakeWorkspace('0000000', '', [
-        {
-          exitCode: 1,
-          stdout: '',
-          stderr: 'npm error code EAI_AGAIN\nnpm error request to https://registry.npmjs.org failed, reason: getaddrinfo EAI_AGAIN',
-        },
+        { exitCode: 127, stdout: '', stderr: 'foo: command not found' },
       ]);
-      const verdict = await new DeterministicVerifier('npx --yes vitest run').verify(workspace, 'g', 'r');
+      const verdict = await new DeterministicVerifier('npm test').verify(workspace, 'g', 'r');
 
       expect(verdict.pass).toBe(false);
-      expect(verdict.evaluable).toBe(false);
+      expect(verdict.evaluable).toBeUndefined();
     });
 
     it('does NOT flag a genuine assertion failure as unevaluable (a real red stays a real red)', async () => {
@@ -185,24 +183,19 @@ describe('DeterministicVerifier', () => {
     });
   });
 
-  describe('executionErrorReason (pure classifier)', () => {
-    it('returns a reason for the structural could-not-run exit codes', () => {
-      for (const code of [124, 126, 127, 137, 143]) {
-        expect(executionErrorReason(code, '')).not.toBeNull();
-      }
+  describe('executionErrorReason (pure classifier — owned facts only)', () => {
+    it('returns a reason for a timeout and for a spawn failure', () => {
+      expect(executionErrorReason({ exitCode: 124, stdout: '', stderr: '', timedOut: true })).not.toBeNull();
+      expect(executionErrorReason({ exitCode: 127, stdout: '', stderr: '', spawnFailed: true })).not.toBeNull();
     });
 
-    it('returns null for a plain non-zero exit with assertion-failure output', () => {
-      expect(executionErrorReason(1, 'AssertionError: expected 3 to equal 4')).toBeNull();
-      expect(executionErrorReason(2, 'lint: 5 problems')).toBeNull();
-    });
-
-    it('matches conservative infra signatures but not generic transport errors', () => {
-      expect(executionErrorReason(1, 'Error: Cannot find module "vitest"')).not.toBeNull();
-      expect(executionErrorReason(1, 'getaddrinfo ENOTFOUND registry.npmjs.org')).not.toBeNull();
-      expect(executionErrorReason(1, 'No test files found, exiting with code 1')).not.toBeNull();
-      // ECONNREFUSED is intentionally NOT a signature — it may be the subject of a real network test.
-      expect(executionErrorReason(1, 'expected connect to succeed but got ECONNREFUSED')).toBeNull();
+    it('returns null for any plain non-zero exit, regardless of exit code or output', () => {
+      expect(executionErrorReason({ exitCode: 1, stdout: '', stderr: 'AssertionError' })).toBeNull();
+      // No heuristics: a network-looking error or a 127 with no owned flag is NOT reclassified.
+      expect(
+        executionErrorReason({ exitCode: 1, stdout: '', stderr: 'getaddrinfo ENOTFOUND registry.npmjs.org' }),
+      ).toBeNull();
+      expect(executionErrorReason({ exitCode: 127, stdout: '', stderr: 'vitest: not found' })).toBeNull();
     });
   });
 });

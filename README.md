@@ -191,11 +191,14 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   **`STUCK_HARNESS_CRASH`** that surfaces the harness's own error and points at the environment, so a
   crashing CLI is diagnosed as such instead of looping on the stale verifier red an unfinished turn
   leaves behind), **contract-unevaluable** (the frozen ladder could not be *evaluated* N times in a
-  row — the verify command itself failed to run [a missing tool, a network / package-manager error, a
-  timeout/kill] or the LLM judge errored / overflowed — a typed **`CONTRACT_UNEVALUABLE`** that
-  distinguishes a verification-**environment** failure from a real red: it says the tree may be
-  correct-but-**unverified** instead of letting a misleading no-diff/repeat abort blame and discard
-  possibly-correct work — still fail-closed, never a green), and budget. Tune it
+  row — the verify command **timed out** or could not be **started**, or the LLM judge errored /
+  overflowed — a typed **`CONTRACT_UNEVALUABLE`** that distinguishes a verification-**environment**
+  failure from a real red: it says the tree may be correct-but-**unverified** instead of letting a
+  misleading no-diff/repeat abort blame and discard possibly-correct work — still fail-closed, never a
+  green. It keys only on facts goaly *owns* — never heuristic exit-code/error-string guessing — and is
+  prevented at the source: the compiler authors **offline** verify commands [install once in `setup`,
+  invoke the local binary], and a missing toolchain is caught **before** the loop by the
+  `requiredTools` pre-flight), and budget. Tune it
   with `--stuck-no-diff`, `--stuck-repeat-threshold`, `--stuck-oscillation`, `--stuck-crash-threshold`,
   `--stuck-unevaluable-threshold`.
   Use `--diff-ignore` to

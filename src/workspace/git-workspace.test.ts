@@ -150,8 +150,29 @@ describe('GitWorkspace (integration, real git)', () => {
     const result = await ws.run('sleep 10', { timeoutMs: 100 });
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain('timed out');
+    // The owned structured fact: goaly killed it for timing out (not guessed from the exit code).
+    expect(result.timedOut).toBe(true);
     // It must return promptly (well under the 10s sleep), proving the SIGKILL fired.
     expect(Date.now() - start).toBeLessThan(5000);
+  });
+
+  it('run reports spawnFailed when the command cannot be started (the exec throws)', async () => {
+    const boom: ExecFn = async () => {
+      throw new Error('spawn sh ENOENT');
+    };
+    const ws = new GitWorkspace(root, boom);
+    const result = await ws.run('npm test');
+    expect(result.exitCode).toBe(127);
+    expect(result.spawnFailed).toBe(true);
+    expect(result.timedOut).toBeUndefined();
+  });
+
+  it('a normal non-zero exit sets neither owned flag (a genuine, evaluable red)', async () => {
+    const ws = new GitWorkspace(root);
+    const result = await ws.run('exit 1');
+    expect(result.exitCode).toBe(1);
+    expect(result.timedOut).toBeUndefined();
+    expect(result.spawnFailed).toBeUndefined();
   });
 
   it('run without a timeout still completes normally', async () => {

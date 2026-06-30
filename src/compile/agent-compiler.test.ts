@@ -7,6 +7,7 @@ import {
   isVacuousCommand,
   looksLikeLlmTimeout,
   referencesOutOfRepoPath,
+  referencesNetworkFetch,
 } from './agent-compiler';
 
 /** An LLM whose authoring call always rejects — to exercise the timeout-hint path (follow-on G). */
@@ -340,6 +341,50 @@ describe('referencesOutOfRepoPath (issue #55)', () => {
   });
 });
 
+describe('referencesNetworkFetch (offline verify command)', () => {
+  it('flags verify commands that fetch/install at run time', () => {
+    for (const cmd of [
+      'npx --yes vitest run test/x.test.ts',
+      'npx -y jest',
+      'uvx ruff check',
+      'pipx run pytest',
+      'npm ci && npm test',
+      'pip install -r requirements.txt && pytest',
+      'go mod download && go test ./...',
+      'cargo install cargo-nextest; cargo nextest run',
+    ]) {
+      expect(referencesNetworkFetch(cmd)).toBe(true);
+    }
+  });
+
+  it('passes offline runner invocations through (a locally-installed bar)', () => {
+    for (const cmd of [
+      'npm test',
+      'npx --no-install vitest run test/x.test.ts',
+      'npx vitest run', // npx of a locally-installed pkg is offline
+      'node ./node_modules/.bin/vitest run',
+      'pytest -q',
+      'go test ./...',
+      'cargo test',
+      'make check',
+    ]) {
+      expect(referencesNetworkFetch(cmd)).toBe(false);
+    }
+  });
+});
+
+describe('AgentCompiler — network-fetching generated command', () => {
+  it('refuses to freeze a verify command that fetches at run time (→ self-correctable COMPILE_FAILED)', async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({ command: 'npx --yes vitest run verification/x.test.ts', rubric: 'r' }),
+    ]);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({ verifier: { kind: 'generate' } });
+
+    await expect(compiler.compile(config)).rejects.toThrow(/fetches\/installs at verify time/);
+  });
+});
+
 describe('AgentCompiler — rubric guardrails (issue #55)', () => {
   it('carries the runnable-bar guardrails in the authoring system prompt', async () => {
     const llm = new FakeLlm([JSON.stringify({ command: 'npm test', rubric: '' })]);
@@ -350,6 +395,7 @@ describe('AgentCompiler — rubric guardrails (issue #55)', () => {
     expect(system).toContain('EXISTING tooling');
     expect(system).toContain('/tmp');
     expect(system).toContain('RELATIVE path');
+    expect(system).toContain('OFFLINE');
   });
 
   it('refuses (fail-closed) an authored command that references an out-of-repo path', async () => {
