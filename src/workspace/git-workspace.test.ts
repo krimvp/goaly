@@ -313,6 +313,46 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(cumulative).not.toContain('first step'); // the intermediate step is gone from the final tree
   });
 
+  it('diff() surfaces a git-excluded authored bar after setDiffIncludes (false-veto deadlock fix)', async () => {
+    // Reproduces the deadlock found by running goaly on a from-scratch --generate build: the compiler
+    // authors `expr.test.mjs` and registers it in `.git/info/exclude` (issue #52) so it stays out of
+    // the user's `git status`. `ls-files --others --exclude-standard` then HONORS that exclude, so the
+    // authored test file vanishes from the diff the judge reviews — the judge sees its rubric's test
+    // file as "absent / never created" and false-vetoes a correct run. setDiffIncludes must put the
+    // authored bar's CONTENT back into the diff so the two keys can see it.
+    const ws = new GitWorkspace(root);
+    await writeFile(join(root, 'expr.test.mjs'), "import { test } from 'node:test';\ntest('ok', () => {});\n");
+    await writeFile(join(root, 'expr.mjs'), 'export const evaluate = () => 42;\n');
+    // Exclude the authored bar exactly as goaly does (issue #52), so it's hidden from git.
+    await mkdir(join(root, '.git', 'info'), { recursive: true });
+    await writeFile(join(root, '.git', 'info', 'exclude'), '/expr.test.mjs\n');
+
+    // Before the fix: the excluded test file is absent from the diff (the bug).
+    const without = await ws.diff();
+    expect(without).toContain('expr.mjs'); // the worker's implementation IS visible
+    expect(without).not.toContain('expr.test.mjs'); // ...but the authored bar is hidden — the false-veto cause
+
+    // After registering it as a forced include: its content is rendered for the judge/approver.
+    ws.setDiffIncludes(['expr.test.mjs']);
+    const withBar = await ws.diff();
+    expect(withBar).toContain('expr.test.mjs');
+    expect(withBar).toContain("test('ok'"); // the CONTENT, not just the name
+    expect(withBar).toContain('authored verification files'); // its labeled section
+  });
+
+  it('setDiffIncludes skips a not-yet-authored file (no phantom) and never double-lists a visible one', async () => {
+    const ws = new GitWorkspace(root);
+    // A normal untracked file (NOT git-excluded) that is also force-included must appear exactly once.
+    await writeFile(join(root, 'visible.mjs'), 'export const x = 1;\n');
+    ws.setDiffIncludes(['visible.mjs', 'never-written.mjs']);
+    const out = await ws.diff();
+    expect(out).toContain('visible.mjs');
+    expect(out).not.toContain('never-written.mjs'); // missing on disk ⇒ skipped, never a phantom name
+    // Rendered once (as a normal untracked file), not duplicated into the authored-bar section.
+    expect(out.match(/visible\.mjs/g)?.length ?? 0).toBeGreaterThan(0);
+    expect(out).not.toContain('authored verification files'); // nothing forced-in beyond what's visible
+  });
+
   it('diff(baseline) keeps the empty-tree fallback when the baseline is HEAD on an unborn branch (#49)', async () => {
     const bare = await mkdtemp(join(tmpdir(), 'goaly-gw-unborn-base-'));
     try {

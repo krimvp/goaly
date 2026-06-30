@@ -21,6 +21,7 @@ function spyWorkspace(result: CommandResult): {
       return DiffHash.parse('0'.repeat(40));
     },
     setBaseline() {},
+    setDiffIncludes() {},
     currentBaseline() {
       return 'HEAD';
     },
