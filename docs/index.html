@@ -84,7 +84,7 @@
   <div class="wrap">
     <div class="grid grid-3 reveal" style="align-items:start">
       <div class="card"><h3><span class="pill pass">1</span> Freeze the bar</h3><p>The success check is hashed and <b>frozen</b> before the loop — the agent can't weaken its own test to finish.</p></div>
-      <div class="card"><h3><span class="pill gate">2</span> Two keys for DONE</h3><p>Done means <b>both</b> turn: the frozen check passes <em>and</em> an independent reviewer doesn't veto.</p></div>
+      <div class="card"><h3><span class="pill gate">2</span> Two keys for DONE</h3><p>Done means <b>both</b> turn: the frozen check passes <em>and</em> an independent reviewer doesn't veto. The reviewer can be a multi-vote panel (<code>--approver-quorum N</code>) that greens only on a strict supermajority and counts any failure as a veto.</p></div>
       <div class="card"><h3><span class="pill fail">3</span> Fail closed</h3><p>Anything that errors or returns garbage is a <b>fail</b>, never a false green. The control loop makes zero LLM calls.</p></div>
     </div>
   </div>

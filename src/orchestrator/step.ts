@@ -179,6 +179,8 @@ function phaseConfigFor(phase: PhaseCtx): RunConfig {
     verifier,
     noSetup: base.noSetup,
     judge: base.judge,
+    // (The Sign-off panel — issue #84 — rides in via pickDriverWiring(base): it's pure wiring, not
+    // frozen into the contract, so each phase's Sign-off uses the same panel.)
     ...(sub.rubric !== undefined ? { rubric: sub.rubric } : {}),
     phased: false,
   };

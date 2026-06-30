@@ -158,7 +158,7 @@ Usage:
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
                [--stuck-oscillation true|false] [--stuck-crash-threshold N]
                [--harness claude|codex|droid|pi|goaly-code] [--max-agent-turns N] [--model <m>]
-               [--llm-model <m>]
+               [--llm-model <m>] [--approver-quorum N] [--approver-diversity-temp T]
                [--llm-provider claude|codex|droid|pi|openai] [--harness-timeout-ms N]
                [--base-url <url>] [--llm-api-key-env <NAME>]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
@@ -283,6 +283,17 @@ Model selection (all optional; default = each tool's own default):
   --llm-model <m>       model for all LLM steps (judge / approver / compiler)
   --judge-model <m>     model for the LLM-judge rung only
   --approver-model <m>  model for the Sign-off approver only
+  --approver-quorum N   run Sign-off as an N-reviewer PANEL behind the unchanged approver seam
+                        (default 1 = the single call, byte-for-byte unchanged). The panel greens
+                        ONLY on a strict supermajority of no-veto votes (noVetoCount*2 > N) AND only
+                        when every counted reviewer parsed; a reviewer that throws / times out /
+                        returns unparseable output counts as a VETO, and zero parseable ⇒ veto — so
+                        a panel is never weaker than the single veto. The reducer/driver still see
+                        exactly one verdict. A quorum on ONE model is variance reduction, not
+                        perspective independence — pair it with --approver-model on a DIFFERENT
+                        model/provider for a genuinely independent second key.
+  --approver-diversity-temp T  sampling temperature for an --approver-quorum > 1 panel (default 0.5,
+                        in [0,2]); applied ONLY when the quorum is > 1 (a single reviewer stays at 0).
   --compiler-model <m>  model for the verification compiler only
   --planner-model <m>   model for the phased planner only (issue #48)
   --explain-model <m>   model for the --explain observer only (issue #8)
@@ -663,6 +674,12 @@ export async function parseArgs(
       : {}),
     ...(str(flags, 'diff-ignore') !== undefined ? { diffIgnore: str(flags, 'diff-ignore') } : {}),
     ...(flags['delta-verify'] !== undefined ? { deltaVerify: true } : {}),
+    ...(parseApproverQuorum(flags) !== undefined
+      ? { approverQuorum: parseApproverQuorum(flags) }
+      : {}),
+    ...(parseApproverDiversityTemp(flags) !== undefined
+      ? { approverDiversityTemp: parseApproverDiversityTemp(flags) }
+      : {}),
   });
 
   const harness = parseHarness(str(flags, 'harness'));
@@ -738,6 +755,36 @@ function parseMaxAgentTurns(flags: RawFlags): number | undefined {
   const parsed = z.coerce.number().int().positive().safeParse(v);
   if (!parsed.success) {
     throw new UsageError(`--max-agent-turns: expected a positive integer, got '${v}'`);
+  }
+  return parsed.data;
+}
+
+/**
+ * Validate `--approver-quorum N` at the seam (issue #84): a positive integer reviewer count for the
+ * Sign-off panel, fail-closed on anything else (invariant #6). Absent ⇒ undefined so the
+ * approver-block default (1 ⇒ the single-call approver) applies.
+ */
+function parseApproverQuorum(flags: RawFlags): number | undefined {
+  const v = str(flags, 'approver-quorum');
+  if (v === undefined) return undefined;
+  const parsed = z.coerce.number().int().positive().safeParse(v);
+  if (!parsed.success) {
+    throw new UsageError(`--approver-quorum: expected a positive integer, got '${v}'`);
+  }
+  return parsed.data;
+}
+
+/**
+ * Validate `--approver-diversity-temp T` at the seam (issue #84): a sampling temperature in [0,2]
+ * applied ONLY when the panel has `quorum > 1`, fail-closed on anything else. Absent ⇒ undefined so
+ * the approver-block default (0.5) applies.
+ */
+function parseApproverDiversityTemp(flags: RawFlags): number | undefined {
+  const v = str(flags, 'approver-diversity-temp');
+  if (v === undefined) return undefined;
+  const parsed = z.coerce.number().min(0).max(2).safeParse(v);
+  if (!parsed.success) {
+    throw new UsageError(`--approver-diversity-temp: expected a number in [0,2], got '${v}'`);
   }
   return parsed.data;
 }

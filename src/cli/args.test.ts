@@ -96,6 +96,45 @@ describe('parseArgs', () => {
     expect(a.verifyDir).toBe('test');
   });
 
+  describe('--approver-quorum / --approver-diversity-temp (issue #84)', () => {
+    it('defaults the approver quorum to 1 when the flag is absent', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.config.approver.quorum).toBe(1);
+      expect(a.config.approver.diversityTemperature).toBe(0.5);
+    });
+
+    it('parses a positive --approver-quorum', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-quorum', '3']);
+      expect(a.config.approver.quorum).toBe(3);
+    });
+
+    it('parses --approver-diversity-temp', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true',
+        '--approver-quorum', '3', '--approver-diversity-temp', '0.7',
+      ]);
+      expect(a.config.approver.diversityTemperature).toBe(0.7);
+    });
+
+    it('rejects a non-positive --approver-quorum (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-quorum', '0']),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('rejects a non-integer --approver-quorum (fail-closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-quorum', '2.5']),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('rejects an out-of-range --approver-diversity-temp (fail-closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-diversity-temp', '3']),
+      ).rejects.toThrow(UsageError);
+    });
+  });
+
   it('parses the phased flags (issue #48)', async () => {
     const a = await parseArgs([
       'run', '--goal', 'big', '--generate', '--phased',
@@ -663,6 +702,16 @@ describe('parseArgs', () => {
       expect(a.harness).toBe('codex');
       expect(a.config.maxIterations).toBe(5);
       expect(a.config.verifier).toEqual({ kind: 'existing', ref: 'true' });
+    });
+
+    it('reads the approver panel from the config file (issue #84)', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-quorum": 3, "approver-diversity-temp": 0.7 }' }),
+      );
+      expect(a.config.approver.quorum).toBe(3);
+      expect(a.config.approver.diversityTemperature).toBe(0.7);
     });
 
     it('reads per-step timeouts from the config file', async () => {

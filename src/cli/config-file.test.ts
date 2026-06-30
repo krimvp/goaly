@@ -54,6 +54,14 @@ describe('overlayFromConfig', () => {
     expect(overlay).toEqual({ 'budget-tokens': '500000', 'max-seal-revisions': '0' });
   });
 
+  it('accepts the approver panel keys (issue #84)', () => {
+    const overlay = overlayFromConfig(
+      { 'approver-quorum': 3, 'approver-diversity-temp': 0.7 },
+      '.goalyrc',
+    );
+    expect(overlay).toEqual({ 'approver-quorum': '3', 'approver-diversity-temp': '0.7' });
+  });
+
   it('rejects an unknown key (fails closed)', () => {
     expect(() => overlayFromConfig({ bogus: 'x' }, '.goalyrc')).toThrow(UsageError);
   });

@@ -78,4 +78,27 @@ describe('independenceWarnings', () => {
       expect(w.some((s) => s.includes('judge'))).toBe(true);
     });
   });
+
+  describe('--approver-quorum on one model = variance reduction (issue #84)', () => {
+    it('notes a multi-vote panel that shares a model with the judge/worker', () => {
+      const resolved = resolveModels({ model: 'claude-x' });
+      const w = independenceWarnings(resolved, 'claude', 'claude', { approverQuorum: 3 });
+      const note = w.find((s) => s.includes('VARIANCE REDUCTION'));
+      expect(note).toBeDefined();
+      expect(note).toContain('3-reviewer quorum');
+      expect(note).toContain('--approver-model');
+    });
+
+    it('does NOT add the note at quorum 1 (the single-call approver)', () => {
+      const resolved = resolveModels({ model: 'claude-x' });
+      const w = independenceWarnings(resolved, 'claude', 'claude', { approverQuorum: 1 });
+      expect(w.some((s) => s.includes('VARIANCE REDUCTION'))).toBe(false);
+    });
+
+    it('does NOT add the note when the panel is on its own --approver-model (already independent)', () => {
+      const resolved = resolveModels({ model: 'claude-x', approverModel: 'other-model' });
+      const w = independenceWarnings(resolved, 'claude', 'claude', { approverQuorum: 3 });
+      expect(w.some((s) => s.includes('VARIANCE REDUCTION'))).toBe(false);
+    });
+  });
 });

@@ -72,6 +72,8 @@ const ConfigFileSchema = z
     'llm-model': FlagValue.optional(),
     'judge-model': FlagValue.optional(),
     'approver-model': FlagValue.optional(),
+    'approver-quorum': FlagValue.optional(),
+    'approver-diversity-temp': FlagValue.optional(),
     'compiler-model': FlagValue.optional(),
     'llm-provider': FlagValue.optional(),
     'log-level': FlagValue.optional(),

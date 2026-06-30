@@ -278,6 +278,18 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   deadlock-prone setup (it can stall authoring a bar it cannot satisfy or recognize as satisfied). For
   autonomous `--generate`, prefer `--approver-model` (and/or `--judge-model`) on a **different
   model/provider** so the second key is a genuinely independent skeptic.
+- **The second key can be a multi-vote panel.** `--approver-quorum N` (default `1`) runs the Sign-off
+  approver as an **N-reviewer panel** behind the unchanged seam — the reducer and driver still see
+  exactly one verdict. The panel **greens only on a strict supermajority** of no-veto votes
+  (`noVetoCount * 2 > N`) *and* only when **every** counted reviewer parsed; any reviewer that throws,
+  times out, or returns unparseable output counts as a **veto**, and zero parseable reviewers is a
+  veto — so a panel is **never weaker** than the single veto. At `N > 1` the reviewers sample at a
+  small diversity temperature (`--approver-diversity-temp`, default `0.5`) and are cycled through a
+  small default lens taxonomy (correctness / security / goal-actually-met / prompt-injection) for
+  perspective spread; `N = 1` is **byte-for-byte** the historical single call (temperature 0, no
+  lens). A quorum on **one** model is **variance reduction, not perspective independence** — goaly
+  warns when a multi-vote panel shares a model with the judge or the worker; pair `--approver-quorum`
+  with `--approver-model` on a different model/provider for a genuinely independent second key.
 - **The verify command runs with a credential-scrubbed environment.** The verifier executes
   worker/model-authored code on your host every iteration; goaly strips credential-looking variables
   (`*_TOKEN`, `*_KEY`, `*SECRET*`, `AWS_*`, `GITHUB_*`, …) from its environment so they can't be
@@ -714,7 +726,10 @@ is the global default (the harness *and* the LLM steps); `--llm-model` overrides
 `--explain` observer) override a single step. Precedence per LLM
 step: per-step flag → `--llm-model` → `--model` → the tool's own default. `--llm-provider`
 (`claude` default, or `codex` / `droid` / `pi` / `openai`) picks which provider runs those steps —
-handy when the harness and the LLM steps should share a model namespace. Omit them all and every tool
+handy when the harness and the LLM steps should share a model namespace. **`--approver-quorum N`**
+(default `1`) turns the Sign-off approver into an N-reviewer panel (see *Two keys for DONE* above),
+with **`--approver-diversity-temp T`** (default `0.5`, applied only when `N > 1`) tuning the panel's
+sampling spread; both are pure wiring and never enter the frozen contract. Omit them all and every tool
 uses its own default.
 
 **Harness selection.** `--harness` (`claude` default, or `codex` / `droid` / `pi` / `goaly-code`) picks the

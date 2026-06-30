@@ -43,6 +43,13 @@ export type IndependenceContext = {
   generate?: boolean;
   /** Seal (and the plan) are auto-accepted (`--autonomous`) — no human reviews the frozen bar. */
   autonomous?: boolean;
+  /**
+   * Sign-off approver panel size (issue #84). A `> 1` quorum on ONE model is VARIANCE REDUCTION, not
+   * perspective independence — it does not break the judge↔/worker↔approver collapse below. Surfaced
+   * so a multi-vote panel on the same model isn't mistaken for a genuinely independent second key.
+   * Default 1 ⇒ the single-call approver (no extra note).
+   */
+  approverQuorum?: number;
 };
 
 /**
@@ -93,6 +100,21 @@ export function independenceWarnings(
     warnings.push(
       `the coding agent and the Sign-off approver share the same model (${label(resolved.approver)}); ` +
         'pass --approver-model (or a different --llm-provider) so the approver stays an independent skeptic',
+    );
+  }
+
+  // A multi-vote approver panel (issue #84) on ONE model is variance reduction, not perspective
+  // independence — it samples the SAME model N times, so it does not break either collapse above. Note
+  // it only when the panel is actually multi-vote AND it shares a model with the judge or the worker
+  // (a panel on a genuinely separate --approver-model already is the independent second key).
+  const quorum = context.approverQuorum ?? 1;
+  if (quorum > 1 && (judgeApproverCollapse || workerApproverCollapse)) {
+    warnings.push(
+      `the Sign-off approver runs a ${quorum}-reviewer quorum on a SINGLE model ` +
+        `(${label(resolved.approver)}) that it shares with the judge rung and/or the coding agent — ` +
+        'that is VARIANCE REDUCTION, not perspective independence (the panel re-samples one model). ' +
+        'For a genuinely independent second key, pair --approver-quorum with --approver-model on a ' +
+        'DIFFERENT model/provider.',
     );
   }
 

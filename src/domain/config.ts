@@ -145,6 +145,20 @@ export const RunConfig = z.object({
     })
     .default({}),
   /**
+   * Sign-off (second-key) approver panel (issue #84). `quorum` reviewers behind the unchanged
+   * Approver seam: with `quorum === 1` (the default) Sign-off is byte-for-byte the historical single
+   * call. `quorum > 1` runs a perspective-diverse panel that greens ONLY on a strict supermajority of
+   * no-veto votes (every counted reviewer must parse) and otherwise vetoes — never weaker than the
+   * single veto. `diversityTemperature` is applied ONLY when `quorum > 1`. Pure WIRING — never frozen
+   * into the contract (it's how the second key is produced, not part of what "done" means).
+   */
+  approver: z
+    .object({
+      quorum: z.number().int().min(1).default(1),
+      diversityTemperature: z.number().min(0).max(2).default(0.5),
+    })
+    .default({}),
+  /**
    * Follow-up session inheritance (Capability C, `--from-run … --inherit-session`). When set, the
    * follow-up's FIRST agent turn resumes this prior harness session so the agent keeps its working
    * memory; after turn 1 the real returned session id overwrites it. The NEW frozen contract still
@@ -182,7 +196,7 @@ export type LoopPolicy = Pick<
   'maxIterations' | 'stuckPolicy' | 'budget' | 'phased' | 'maxPhases' | 'installMissingTools'
 >;
 /** Pure Driver wiring — NEVER the frozen contract, never the reducer's decision (the diff scope). */
-export type DriverWiring = Pick<RunConfig, 'diffIgnore' | 'deltaVerify'>;
+export type DriverWiring = Pick<RunConfig, 'diffIgnore' | 'deltaVerify' | 'approver'>;
 
 /** Extract the {@link GatePolicy} fields. Pure; used to re-derive a phase config from the base. */
 export const pickGatePolicy = (c: GatePolicy): GatePolicy => ({
@@ -204,6 +218,7 @@ export const pickLoopPolicy = (c: LoopPolicy): LoopPolicy => ({
 export const pickDriverWiring = (c: DriverWiring): DriverWiring => ({
   diffIgnore: c.diffIgnore,
   deltaVerify: c.deltaVerify,
+  approver: c.approver,
 });
 
 /**
@@ -243,6 +258,10 @@ export const CliInput = z.object({
   stuckRepeatThreshold: z.coerce.number().int().min(2).optional(),
   stuckOscillation: z.boolean().optional(),
   stuckCrashThreshold: z.coerce.number().int().min(2).optional(),
+  /** Sign-off approver panel (issue #84): a positive-int reviewer quorum (default 1). */
+  approverQuorum: z.coerce.number().int().positive().optional(),
+  /** Diversity temperature for a `> 1` approver panel (issue #84); ignored at quorum 1. */
+  approverDiversityTemp: z.coerce.number().min(0).max(2).optional(),
 });
 export type CliInput = z.infer<typeof CliInput>;
 
@@ -276,6 +295,14 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
   if (input.stuckCrashThreshold !== undefined)
     stuckPolicy.harnessCrashThreshold = input.stuckCrashThreshold;
 
+  // Sign-off approver panel (issue #84): override only the fields the user set; the rest keep their
+  // schema defaults (quorum 1 ⇒ byte-for-byte the single-call approver). Omitted entirely when no
+  // flag was given so the approver-block default applies.
+  const approver: { quorum?: number; diversityTemperature?: number } = {};
+  if (input.approverQuorum !== undefined) approver.quorum = input.approverQuorum;
+  if (input.approverDiversityTemp !== undefined)
+    approver.diversityTemperature = input.approverDiversityTemp;
+
   return RunConfig.parse({
     goal: input.goal,
     verifier,
@@ -303,5 +330,6 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     ...(diffIgnore.length > 0 ? { diffIgnore } : {}),
     ...(input.deltaVerify !== undefined ? { deltaVerify: input.deltaVerify } : {}),
     ...(Object.keys(stuckPolicy).length > 0 ? { stuckPolicy } : {}),
+    ...(Object.keys(approver).length > 0 ? { approver } : {}),
   } satisfies RunConfigInput);
 }

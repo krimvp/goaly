@@ -273,6 +273,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     const independenceCtx = {
       generate: config.verifier.kind === 'generate',
       autonomous: config.autonomous,
+      approverQuorum: config.approver.quorum,
     };
     for (const warning of independenceWarnings(models, options.harness, provider, independenceCtx)) {
       logger.warn('model independence', { detail: warning });
@@ -370,7 +371,15 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       workspace.setDiffIncludes(contract.generatedFiles.map((f) => f.path));
       return buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs);
     },
-    approver: new AgentApprover({ llm: llmFor(models.approver, 'approve') }),
+    // Sign-off (second key, issue #84): a single reviewer by default (quorum 1 ⇒ byte-for-byte the
+    // historical call). `--approver-quorum N` runs a perspective-diverse panel behind the UNCHANGED
+    // Approver seam; the diversity temperature is applied only when quorum > 1, and the default lens
+    // taxonomy is cycled (no explicit lenses are exposed on the CLI in v1).
+    approver: new AgentApprover({
+      llm: llmFor(models.approver, 'approve'),
+      quorum: config.approver.quorum,
+      diversityTemperature: config.approver.diversityTemperature,
+    }),
     // Pre-flight soundness classifier (Fix #2): a read-only call that decides whether a failing
     // deterministic pre-flight rung is a broken frozen verifier or an honest red. Reuses the judge
     // model — it is a verification judgment — and is metered through the same shared meter.

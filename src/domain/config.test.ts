@@ -44,7 +44,11 @@ describe('RunConfig lifetime views', () => {
       maxCompileRetries: c.maxCompileRetries,
       maxPlanRevisions: c.maxPlanRevisions,
     });
-    expect(pickDriverWiring(c)).toEqual({ diffIgnore: c.diffIgnore, deltaVerify: c.deltaVerify });
+    expect(pickDriverWiring(c)).toEqual({
+      diffIgnore: c.diffIgnore,
+      deltaVerify: c.deltaVerify,
+      approver: c.approver,
+    });
     expect(pickLoopPolicy(c)).toMatchObject({ maxIterations: c.maxIterations, phased: c.phased });
   });
 });
