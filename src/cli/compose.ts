@@ -362,7 +362,14 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
             policy: options.sandbox ?? defaultPolicy(),
             ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
           }),
-    makeLadder: (contract) => buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs),
+    makeLadder: (contract) => {
+      // Surface the frozen authored bar (`generatedFiles`) in the diff the two LLM keys review, even
+      // though it's git-excluded (issue #52) from the user's `git status`. Without this the judge sees
+      // the rubric's test file as "absent from the diff" and false-vetoes a correct run into a
+      // deadlock with the integrity guard. Re-set per phase so each phase shows its own authored files.
+      workspace.setDiffIncludes(contract.generatedFiles.map((f) => f.path));
+      return buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs);
+    },
     approver: new AgentApprover({ llm: llmFor(models.approver, 'approve') }),
     // Pre-flight soundness classifier (Fix #2): a read-only call that decides whether a failing
     // deterministic pre-flight rung is a broken frozen verifier or an honest red. Reuses the judge

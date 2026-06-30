@@ -1,4 +1,4 @@
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { DiffHash } from '../domain/ids';
@@ -99,6 +99,8 @@ export class GitWorkspace implements Workspace {
   /** What `diff()` compares the working tree against. Defaults to `HEAD`; advanced by `checkpoint()`
    *  or pointed elsewhere by `setBaseline()` (the `--baseline` flag / `--resume` reconstruction). */
   #baseline = 'HEAD';
+  /** Paths `diff()` must always surface even when git-excluded (the authored verification bar). */
+  #diffIncludes: readonly string[] = [];
 
   /**
    * @param excludes paths kept out of diffHash/diff so the orchestrator's own state dir
@@ -144,6 +146,14 @@ export class GitWorkspace implements Workspace {
 
   currentBaseline(): string {
     return this.#baseline;
+  }
+
+  /**
+   * Register the authored verification paths `diff()` must always surface (see {@link Workspace.setDiffIncludes}).
+   * Normalized + deduped so the render below is exact and never double-lists a path.
+   */
+  setDiffIncludes(paths: readonly string[]): void {
+    this.#diffIncludes = [...new Set(paths.map(normalizeRel))];
   }
 
   /**
@@ -258,7 +268,39 @@ export class GitWorkspace implements Workspace {
         sections.push(await this.#untrackedDiff(file));
       }
     }
+
+    // Force-include the authored verification bar (`generatedFiles`). It is git-excluded (issue #52)
+    // so `ls-files --exclude-standard` above never lists it, which would hide the very files the
+    // judge/approver rubric is about — a false "no tests written" veto the worker cannot fix without
+    // tripping the integrity guard. Render only paths that (a) exist on disk (a not-yet-authored file
+    // is skipped, never a phantom) and (b) weren't already surfaced as a normal untracked file.
+    const alreadyShown = new Set(untrackedFiles.map(normalizeRel));
+    const forced: string[] = [];
+    for (const rel of this.#diffIncludes) {
+      if (alreadyShown.has(rel)) continue;
+      if (!(await this.#fileExists(rel))) continue;
+      forced.push(rel);
+    }
+    if (forced.length > 0) {
+      sections.push(`\n--- authored verification files (frozen bar) ---\n`);
+      for (const file of forced) {
+        sections.push(await this.#untrackedDiff(file));
+      }
+    }
     return sections.join('');
+  }
+
+  /** True when `rel` resolves under the root and exists on disk (used to skip not-yet-authored includes). */
+  async #fileExists(rel: string): Promise<boolean> {
+    const rootResolved = resolve(this.#root);
+    const resolved = resolve(rootResolved, rel);
+    if (resolved !== rootResolved && !resolved.startsWith(rootResolved + sep)) return false;
+    try {
+      await stat(resolved);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**

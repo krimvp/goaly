@@ -179,4 +179,23 @@ describe('sdkStreamExtractor (Anthropic agent-SDK envelope)', () => {
     expect(extract({ type: 'user', message: 42 })).toEqual([]);
     expect(extract({ type: 'mystery' })).toEqual([]);
   });
+
+  it('emits a session event for the init system line', () => {
+    expect(extract({ type: 'system', subtype: 'init', session_id: 's-1' })).toEqual([
+      { kind: 'session', sessionId: 's-1' },
+    ]);
+  });
+
+  it('suppresses non-init system subtypes that just repeat the session id (live-view flood fix)', () => {
+    // Claude Code emits these mid-turn carrying the same session_id; mapping each to a `session`
+    // event drowned the real turns in the --stream view (observed ~75% of agent stream lines).
+    expect(extract({ type: 'system', subtype: 'thinking_tokens', session_id: 's-1' })).toEqual([]);
+    expect(extract({ type: 'system', subtype: 'post_turn_summary', session_id: 's-1' })).toEqual([]);
+  });
+
+  it('still emits a session for a subtype-less system line (other SDK tools, forward-compat)', () => {
+    expect(extract({ type: 'system', session_id: 's-2' })).toEqual([
+      { kind: 'session', sessionId: 's-2' },
+    ]);
+  });
 });

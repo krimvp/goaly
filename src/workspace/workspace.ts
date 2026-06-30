@@ -42,6 +42,18 @@ export interface Workspace {
    */
   setBaseline(ref: string): void;
   /**
+   * Register workspace-relative paths that {@link diff} must ALWAYS surface (rendered as added-file
+   * diffs) even when git hides them. The compiler-authored verification files (`generatedFiles`) are
+   * registered in `.git/info/exclude` (issue #52) so they never pollute the user's `git status` — but
+   * `diff()` lists untracked files with `--exclude-standard`, which *honors* that exclude, so the
+   * authored bar would vanish from the very diff the two LLM keys review. Since the judge/approver
+   * rubric is *about* those files ("all assertions in foo.test.mjs pass"), their absence reads as
+   * "no tests were written" → a false veto the worker cannot fix without tripping the integrity guard
+   * (an unwinnable deadlock). Forcing them back into `diff()` keeps the authored bar visible to the
+   * keys while still hidden from the user's git. Idempotent; replaces any prior set.
+   */
+  setDiffIncludes(paths: readonly string[]): void;
+  /**
    * Run a shell command in the workspace root. An optional `timeoutMs` kills the command (SIGKILL)
    * after that many ms and reports it as a non-zero exit, so a hung verify command fails closed
    * instead of stalling the loop forever.

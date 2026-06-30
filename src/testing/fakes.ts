@@ -240,6 +240,11 @@ export class FakeWorkspace implements Workspace {
   setBaseline(ref: string): void {
     this.baselineCalls.push(ref);
   }
+  /** The authored-verification paths registered via {@link setDiffIncludes}, for resume/wiring asserts. */
+  readonly diffIncludes: string[] = [];
+  setDiffIncludes(paths: readonly string[]): void {
+    this.diffIncludes.splice(0, this.diffIncludes.length, ...paths);
+  }
   /** Stub the diff text returned when `diff()` resolves to `baseline` (overrides the default text). */
   setDiffFor(baseline: string, text: string): void {
     this.#diffByBaseline.set(baseline, text);

@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { composeDeps, makeLlmProvider, buildLadder } from './compose';
 import { codexCodec } from '../agent-cli/codex-codec';
 import { droidCodec } from '../agent-cli/droid-codec';
 import { piCodec } from '../agent-cli/pi-codec';
-import { makeConfig, InMemoryLogFs } from '../testing/fakes';
+import { makeConfig, makeFakeContract, InMemoryLogFs } from '../testing/fakes';
+import { sha256Hex } from '../util/hash';
 import { asRunId, DiffHash } from '../domain/ids';
 import { freezeContract } from '../util/hash';
 import { FakeLlm } from '../llm/provider';
@@ -90,6 +94,62 @@ describe('composeDeps — phased wiring (issue #48)', () => {
   });
 });
 
+describe('composeDeps — makeLadder surfaces the authored bar in the judge/approver diff', () => {
+  // End-to-end wiring pin for the false-veto deadlock fix: makeLadder(contract) must register the
+  // frozen authored verification files on the real wired workspace so the diff the two LLM keys
+  // review includes the bar — even though it's git-excluded (issue #52) from the user's git status.
+  function gitInit(cwd: string): void {
+    for (const args of [
+      ['init', '-q'],
+      ['config', 'user.email', 'test@example.com'],
+      ['config', 'user.name', 'Test User'],
+    ]) {
+      const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+    }
+  }
+
+  it('a generated contract makes its git-excluded test file visible to diff() after makeLadder', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'goaly-compose-bar-'));
+    try {
+      gitInit(root);
+      const testContent = "import { test } from 'node:test';\ntest('ok', () => {});\n";
+      await writeFile(path.join(root, 'expr.test.mjs'), testContent);
+      await writeFile(path.join(root, 'expr.mjs'), 'export const evaluate = () => 42;\n');
+      // Exclude the authored bar from git exactly as goaly does (issue #52).
+      await mkdir(path.join(root, '.git', 'info'), { recursive: true });
+      await writeFile(path.join(root, '.git', 'info', 'exclude'), '/expr.test.mjs\n');
+
+      const deps = composeDeps(
+        makeConfig(),
+        {
+          harness: 'fake' as const,
+          workspaceRoot: root,
+          runId: asRunId('run-bar'),
+          llm: new FakeLlm(['{}']),
+          noLogConsole: true,
+          logFs: new InMemoryLogFs(),
+        },
+      );
+
+      // Before makeLadder: the excluded bar is hidden (the false-veto cause).
+      expect(await deps.workspace.diff()).not.toContain('expr.test.mjs');
+
+      // makeLadder with a contract that authored the test file must surface it.
+      const contract = makeFakeContract({
+        generatedFiles: [{ path: 'expr.test.mjs', sha256: sha256Hex(testContent) }],
+      });
+      deps.makeLadder(contract);
+
+      const diff = await deps.workspace.diff();
+      expect(diff).toContain('expr.test.mjs');
+      expect(diff).toContain("test('ok'"); // the CONTENT the judge needs, not just the name
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('composeDeps — --explain observer wiring (issue #8)', () => {
   const opts = (over: Record<string, unknown> = {}) => ({
     harness: 'fake' as const,
@@ -150,6 +210,7 @@ describe('buildLadder — verify timeout threading', () => {
         return DiffHash.parse('0'.repeat(40));
       },
       setBaseline() {},
+      setDiffIncludes() {},
       currentBaseline() {
         return 'HEAD';
       },
