@@ -150,7 +150,7 @@ Usage:
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
                [--smoke "<cmd>"] [--setup-cmd "<cmd>" | --no-setup] [--setup-timeout-ms N]
                [--install-missing-tools true|false]
-               [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
+               [--rubric "<rubric>"] [--autonomous] [--max-iterations N] [--candidates N]
                [--phased [--max-phases N] [--max-plan-revisions N] [--plan-file <p>]
                          [--planner-model <m>]]
                [--max-seal-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
@@ -270,6 +270,22 @@ Phased decomposition (issue #48 — split one big goal into a frozen plan of sma
   --max-plan-revisions N  cap the free-text plan-Seal revise rounds (default 10; 0 disables revision).
   --planner-model <m> model for the planner step only (cascades like the other LLM-step models).
   --autonomous        also auto-accepts the plan AND each phase contract — still frozen + logged loudly.
+
+Best-of-N parallel worker (issue #85 — tournament-select candidates against the frozen ladder):
+  --candidates N      (alias --best-of N) run N independent worker attempts EACH loop iteration in
+                      ISOLATED git worktrees off the current baseline tree, score each against the SAME
+                      frozen verifier ladder, keep the BEST candidate's tree, and advance. Default 1 ⇒
+                      the classic single attempt, byte-for-byte unchanged. The whole tournament is
+                      Driver-side: the reducer sees exactly ONE winning agent run and never learns N
+                      existed (the pure state machine is untouched). Ranking: a candidate that PASSES the
+                      frozen ladder beats any failing one; ties break to lower token cost, then lowest
+                      candidate index. If all N fail it's a normal red iteration (least-cost failing
+                      candidate) that loops as usual. A candidate that crashes/times out scores a hard
+                      red and can't win on merit. Composes with --phased (each sub-goal inherits N),
+                      --delta-verify (the judge still sees the winner's delta), and --sandbox (each of
+                      the N execs goes through the same jail). Needs a committed HEAD: on a repo with no
+                      resolvable HEAD (unborn branch) a --candidates > 1 run refuses to start (fail-closed)
+                      — make an initial commit or run with --candidates 1.
 
 Compile resilience (issue #51):
   --max-compile-retries N    on a COMPILE_FAILED, re-author the verification with the error as
@@ -643,6 +659,7 @@ export async function parseArgs(
     ...(str(flags, 'max-iterations') !== undefined
       ? { maxIterations: str(flags, 'max-iterations') }
       : {}),
+    ...(candidatesFlag(flags) !== undefined ? { candidates: candidatesFlag(flags) } : {}),
     ...(flags['phased'] !== undefined ? { phased: true } : {}),
     ...(str(flags, 'max-phases') !== undefined ? { maxPhases: str(flags, 'max-phases') } : {}),
     ...(str(flags, 'max-plan-revisions') !== undefined
@@ -742,6 +759,26 @@ function parseTimeouts(flags: RawFlags): StepTimeouts {
     ...(verifyMs !== undefined ? { verifyMs } : {}),
     ...(setupMs !== undefined ? { setupMs } : {}),
   };
+}
+
+/**
+ * Resolve `--candidates N` (alias `--best-of N`) at the seam (issue #85): a positive integer best-of-N
+ * candidate count, fail-closed on anything else (invariant #6). The two spellings are aliases; giving
+ * both is a conflict. Absent ⇒ undefined so the schema default (1) applies.
+ */
+function candidatesFlag(flags: RawFlags): string | undefined {
+  const primary = str(flags, 'candidates');
+  const alias = str(flags, 'best-of');
+  if (primary !== undefined && alias !== undefined) {
+    throw new UsageError('use one of --candidates / --best-of, not both');
+  }
+  const value = primary ?? alias;
+  if (value === undefined) return undefined;
+  const parsed = z.coerce.number().int().positive().safeParse(value);
+  if (!parsed.success) {
+    throw new UsageError(`--candidates: expected a positive integer, got '${value}'`);
+  }
+  return value;
 }
 
 /**

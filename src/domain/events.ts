@@ -162,6 +162,44 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     /** The git tree SHA snapshotted as the new diff baseline. */
     tree: DiffHash,
   }),
+  /**
+   * One best-of-N candidate finished (issue #85). When `--candidates N` (N>1), the Driver fans out K
+   * isolated worker attempts in linked git worktrees, scores each against the SAME frozen ladder, and
+   * appends ONE of these markers per candidate AS IT COMPLETES (write-ahead). Like CHECKPOINTED it is a
+   * Driver-side MARKER, NEVER fed to `step()` (replay skips it): the reducer only ever folds the
+   * winner's `AGENT_RAN` and never learns K existed (invariant #1). On `--resume` these markers let the
+   * tournament replay deterministically — already-logged candidate indices are read back, never re-run.
+   */
+  z.object({
+    tag: z.literal('CANDIDATE_RAN'),
+    /** The 1-based loop iteration this candidate belongs to (a candidate set per iteration). */
+    iteration: z.number().int().nonnegative(),
+    /** This candidate's index within the fan-out (0-based, stable; the final selection tie-break). */
+    index: z.number().int().nonnegative(),
+    /** The candidate's post-run tree SHA — promoted into the canonical workspace if it wins. */
+    tree: DiffHash,
+    /** The candidate's budget snapshot — its token cost is the second-key selection tie-break. */
+    budget: BudgetSnapshot,
+    /** Whether this candidate PASSED the frozen ladder (a passing candidate beats any failing one). */
+    pass: z.boolean(),
+    /** The candidate's harness run result (status + session id), re-fed as the winner's AGENT_RAN. */
+    run: HarnessRunResult,
+  }),
+  /**
+   * The best-of-N tournament selected its winner (issue #85). Appended write-ahead BEFORE the winning
+   * tree is promoted and BEFORE the winner's `AGENT_RAN`, so `--resume` knows the selection was already
+   * made (and which tree to adopt) even if a crash lands between the choice and the promotion. Also a
+   * Driver-side MARKER, never fed to `step()` (replay skips it).
+   */
+  z.object({
+    tag: z.literal('CANDIDATE_SELECTED'),
+    /** The 1-based loop iteration this selection belongs to. */
+    iteration: z.number().int().nonnegative(),
+    /** The winning candidate's index within the fan-out. */
+    winner: z.number().int().nonnegative(),
+    /** The winning candidate's tree SHA (promoted into the canonical workspace). */
+    tree: DiffHash,
+  }),
 ]);
 export type OrchestratorEvent = z.infer<typeof OrchestratorEvent>;
 
@@ -199,6 +237,15 @@ export type Command =
       setupAuthored: boolean;
     }
   | { tag: 'RUN_AGENT'; prompt: string; sessionId: SessionId | undefined }
+  /**
+   * Best-of-N tournament (issue #85). Emitted by `startIteration` INSTEAD of `RUN_AGENT` when
+   * `config.candidates > 1` — decided PURELY from config so the reducer stays pure and still emits
+   * EXACTLY ONE command per non-terminal state (the Driver `commands.length === 1` invariant). The
+   * Driver performs the WHOLE tournament (K isolated worktrees, score each against the frozen ladder,
+   * promote the winner's tree) and feeds back the EXISTING `AGENT_RAN` event for the winner — so
+   * `stepRunningAgent` is unchanged and the reducer never learns K existed (invariant #1).
+   */
+  | { tag: 'RUN_AGENT_BEST_OF'; prompt: string; sessionId: SessionId | undefined; candidates: number }
   | { tag: 'RUN_VERIFIER'; contract: CompiledContract }
   | { tag: 'REQUEST_SIGNOFF'; goal: string; rubric: string; verdicts: Verdict[] };
 

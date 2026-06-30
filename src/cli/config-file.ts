@@ -48,6 +48,8 @@ const ConfigFileSchema = z
     rubric: FlagValue.optional(),
     autonomous: FlagValue.optional(),
     'max-iterations': FlagValue.optional(),
+    candidates: FlagValue.optional(),
+    'best-of': FlagValue.optional(),
     phased: FlagValue.optional(),
     'max-phases': FlagValue.optional(),
     'max-plan-revisions': FlagValue.optional(),

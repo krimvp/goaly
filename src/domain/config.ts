@@ -99,6 +99,16 @@ export const RunConfig = z.object({
   maxCompileRetries: z.number().int().nonnegative().default(2),
   maxIterations: z.number().int().positive().default(10),
   /**
+   * Best-of-N parallel worker (issue #85). When > 1, each loop iteration fans out K independent worker
+   * attempts in ISOLATED git worktrees off the current baseline tree, scores each against the SAME
+   * frozen verifier ladder, keeps the best candidate's tree, and feeds the reducer exactly ONE winning
+   * AGENT_RAN event (it never learns K existed). The whole tournament is Driver-side; the reducer only
+   * picks RUN_AGENT_BEST_OF over RUN_AGENT purely from this number. Default 1 ⇒ the classic single
+   * attempt, byte-for-byte unchanged (no markers, RUN_AGENT exactly as before). An operational LOOP
+   * knob (it inherits into a --phased sub-goal via the LoopPolicy view), never the frozen contract.
+   */
+  candidates: z.number().int().positive().default(1),
+  /**
    * Phased decomposition (issue #48). When true the run starts with a PLAN phase that turns the goal
    * into a frozen, ordered plan of sub-goals; each sub-goal runs as its own frozen, two-key contract
    * (with a checkpoint between phases), finished by a cumulative ACCEPT contract on the ORIGINAL goal.
@@ -193,7 +203,13 @@ export type GatePolicy = Pick<
 /** Operational loop policy the pure reducer reads: iteration cap, stuck, budget, phasing, tools. */
 export type LoopPolicy = Pick<
   RunConfig,
-  'maxIterations' | 'stuckPolicy' | 'budget' | 'phased' | 'maxPhases' | 'installMissingTools'
+  | 'maxIterations'
+  | 'candidates'
+  | 'stuckPolicy'
+  | 'budget'
+  | 'phased'
+  | 'maxPhases'
+  | 'installMissingTools'
 >;
 /** Pure Driver wiring — NEVER the frozen contract, never the reducer's decision (the diff scope). */
 export type DriverWiring = Pick<RunConfig, 'diffIgnore' | 'deltaVerify' | 'approver'>;
@@ -208,6 +224,7 @@ export const pickGatePolicy = (c: GatePolicy): GatePolicy => ({
 /** Extract the {@link LoopPolicy} fields. Pure. */
 export const pickLoopPolicy = (c: LoopPolicy): LoopPolicy => ({
   maxIterations: c.maxIterations,
+  candidates: c.candidates,
   stuckPolicy: c.stuckPolicy,
   budget: c.budget,
   phased: c.phased,
@@ -243,6 +260,8 @@ export const CliInput = z.object({
   maxSealRevisions: z.coerce.number().int().nonnegative().optional(),
   maxCompileRetries: z.coerce.number().int().nonnegative().optional(),
   maxIterations: z.coerce.number().int().positive().optional(),
+  /** Best-of-N parallel worker (issue #85): a positive-int candidate count (default 1). */
+  candidates: z.coerce.number().int().positive().optional(),
   /** Phased decomposition (issue #48). */
   phased: z.coerce.boolean().optional(),
   maxPhases: z.coerce.number().int().positive().optional(),
@@ -321,6 +340,7 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
       ? { maxCompileRetries: input.maxCompileRetries }
       : {}),
     ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
+    ...(input.candidates !== undefined ? { candidates: input.candidates } : {}),
     ...(input.phased !== undefined ? { phased: input.phased } : {}),
     ...(input.maxPhases !== undefined ? { maxPhases: input.maxPhases } : {}),
     ...(input.maxPlanRevisions !== undefined

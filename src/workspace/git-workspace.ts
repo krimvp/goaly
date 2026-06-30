@@ -60,7 +60,7 @@ let tmpIndexCounter = 0;
  * forever. A timeout is surfaced as the conventional `timeout(1)` exit code with a loud marker, so a
  * hung verify command becomes a fail-closed verifier FAIL. Never rejects.
  */
-const realExec: ExecFn = async (cmd, args, opts) => {
+export const realExec: ExecFn = async (cmd, args, opts) => {
   const r = await runProcess(cmd, args, {
     cwd: opts.cwd,
     ...(opts.env !== undefined ? { env: opts.env } : {}),

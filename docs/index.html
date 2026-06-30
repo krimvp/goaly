@@ -110,7 +110,7 @@
         <span class="arrow">→</span>
         <div class="loop-band">
           <span class="loop-tag">loop 🔁 ≤ --max-iterations</span>
-          <div class="stage" data-stage="run"><span class="st-k">RUN_AGENT</span><span class="st-s">one turn</span></div>
+          <div class="stage" data-stage="run"><span class="st-k">RUN_AGENT</span><span class="st-s">one turn · best-of-N</span></div>
           <span class="arrow">→</span>
           <div class="stage" data-stage="ladder"><span class="st-k">verify</span><span class="st-s">tests → judge</span></div>
           <span class="arrow">→</span>
@@ -133,6 +133,15 @@
     </p>
 
     <div class="grid grid-2 reveal" style="margin-top:1.8rem; align-items:start">
+      <div class="card">
+        <h3>Best-of-N parallel worker</h3>
+        <p><code>--candidates N</code> (alias <code>--best-of N</code>) runs <b>N isolated worker
+        attempts each iteration</b> in linked git worktrees, scores each against the <b>same frozen
+        ladder</b>, and keeps the best — the tournament is <b>Driver-side</b>, so the pure reducer sees
+        exactly one winning run and never learns N existed. A passing candidate beats any failing one;
+        ties break to lower cost. Composes with <code>--phased</code> / <code>--delta-verify</code> /
+        <code>--sandbox</code>; needs a committed HEAD.</p>
+      </div>
       <div class="card">
         <h3>Follow up after it ends</h3>
         <p><code>goaly "now also handle empty input" --from-run &lt;id&gt;</code> starts a <b>new,

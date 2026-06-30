@@ -541,12 +541,24 @@ function phaseReason(phase: PhaseCtx | undefined, reason: string): string {
   return `phase ${phase.index + 1}/${total}${goal}: ${reason}`;
 }
 
+/**
+ * Start one loop iteration. Exactly ONE command either way (the Driver `commands.length === 1`
+ * invariant). With `--candidates N` (N>1, issue #85) emit `RUN_AGENT_BEST_OF` so the Driver runs a
+ * best-of-N tournament and feeds back the winner's `AGENT_RAN` — decided PURELY from config, so the
+ * reducer stays pure and `stepRunningAgent` is unchanged (it never learns K existed). N===1 emits
+ * `RUN_AGENT` byte-for-byte as before (no markers, the classic single attempt).
+ */
 function startIteration(
   ctx: LoopCtx,
   prompt: string,
   sessionId: LoopCtx['sessionId'],
 ): StepResult {
-  return [{ tag: 'RUNNING_AGENT', ctx }, [{ tag: 'RUN_AGENT', prompt, sessionId }]];
+  const candidates = ctx.config.candidates;
+  const command: Command =
+    candidates > 1
+      ? { tag: 'RUN_AGENT_BEST_OF', prompt, sessionId, candidates }
+      : { tag: 'RUN_AGENT', prompt, sessionId };
+  return [{ tag: 'RUNNING_AGENT', ctx }, [command]];
 }
 
 // ---- pure prompt builders -------------------------------------------------

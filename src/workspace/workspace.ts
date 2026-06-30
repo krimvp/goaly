@@ -8,6 +8,50 @@ export type CommandResult = {
 };
 
 /**
+ * One isolated git worktree linked off the canonical repo (issue #85, best-of-N). Each best-of-N
+ * candidate gets its own — a real, separate working directory checked out at the baseline tree, so K
+ * worker attempts never see each other's edits. `scope` is a {@link Workspace} rooted at this worktree
+ * (the harness runs in `root`; the frozen ladder scores against `scope`). The handle is owned by the
+ * Driver's tournament and torn down on EVERY exit path (the {@link WorktreeHost.remove} call).
+ */
+export type Worktree = {
+  /** Absolute filesystem path of the linked worktree (the candidate's harness cwd). */
+  readonly root: string;
+  /** A {@link Workspace} rooted at {@link root}, so the frozen ladder scores this candidate's tree. */
+  readonly scope: Workspace;
+};
+
+/**
+ * The worktree lifecycle seam (issue #85): create K isolated worktrees off a baseline tree, promote a
+ * winning tree into the canonical workspace, and tear worktrees down. Lives on the workspace side (the
+ * Driver/effect seam) so NONE of it touches the pure reducer. Fakeable end-to-end (the fake never
+ * spawns git); the git implementation uses `git worktree add --detach <wt> <treeish>`.
+ */
+export interface WorktreeHost {
+  /**
+   * True when the repo has a resolvable HEAD (a committed root). Best-of-N needs one: `git worktree`
+   * cannot check out an unborn branch's tree, so a `--candidates > 1` run on a HEAD-less repo refuses
+   * to start (fail-closed, the worktree floor). Fail-safe to `false` on any error.
+   */
+  headResolves(): Promise<boolean>;
+  /**
+   * Create an isolated worktree checked out at `treeish` (a git tree SHA / ref — the current baseline).
+   * Returns the handle; the caller MUST {@link removeWorktree} it on every exit path. Throws
+   * fail-closed on a git failure, which the tournament scores as that candidate's hard red.
+   */
+  addWorktree(treeish: string): Promise<Worktree>;
+  /** Tear down a worktree created by {@link addWorktree}. Never throws (best-effort cleanup). */
+  removeWorktree(worktree: Worktree): Promise<void>;
+  /**
+   * Promote a winning candidate's tree (a git tree SHA produced inside its worktree) into the canonical
+   * workspace — make the canonical working tree match it — WITHOUT a user-visible commit, so the next
+   * iteration continues from the winner's edits. Fail-closed: throws on a git failure (the tournament
+   * surfaces it to the outer loop, never a silent half-applied tree).
+   */
+  promoteTree(treeish: string): Promise<void>;
+}
+
+/**
  * The workspace seam — harness-independent. `diffHash` and verifier `run` live OUTSIDE
  * every adapter (ARCHITECTURE "Why adding a harness is trivial"), so stuck-detection and
  * verification work identically on any harness for free.

@@ -12,7 +12,7 @@ import type { VerifierCompiler } from '../compile/compiler';
 import type { SealGate } from '../compile/seal';
 import type { Planner } from '../plan/planner';
 import type { PlanGate } from '../plan/plan-gate';
-import type { Workspace, CommandResult } from '../workspace/workspace';
+import type { Workspace, CommandResult, Worktree, WorktreeHost } from '../workspace/workspace';
 import type { Clock } from '../driver/clock';
 import type { BudgetMeter } from '../driver/budget';
 import type { RunLog, RunLogHeader, RunLogEntry } from '../runlog/runlog';
@@ -280,6 +280,71 @@ export class FakeWorkspace implements Workspace {
   }
   async isEmptyOfSource(): Promise<boolean> {
     return this.#emptyOfSource;
+  }
+}
+
+/**
+ * Scripted {@link WorktreeHost} for best-of-N tests (issue #85) — zero real git, zero subprocesses.
+ * Each `addWorktree` hands out the NEXT scripted per-candidate tree hash on a fresh {@link FakeWorkspace}
+ * scope, so the ladder scores that candidate's tree. Records every add / remove / promote for assertions.
+ */
+export class FakeWorktreeHost implements WorktreeHost {
+  #i = 0;
+  readonly #candidateHashes: string[];
+  /** Override `headResolves()` — defaults to true (a committed HEAD; best-of-N allowed). */
+  #headResolves = true;
+  /** When set, `addWorktree` throws for the candidate at this index (simulates a worktree error). */
+  #throwAddAt: number | undefined;
+  readonly added: string[] = [];
+  readonly removed: string[] = [];
+  readonly promoted: string[] = [];
+  /** Worktrees currently outstanding (not yet removed) — assert clean teardown by emptiness. */
+  readonly live = new Set<string>();
+
+  /**
+   * @param candidateHashes the per-candidate worktree tree hash, by index.
+   * @param canonical optional canonical workspace whose hash {@link promoteTree} updates to the winner —
+   *   so the post-tournament `diffHash` (the iteration's verifier + stuck input) reflects the promotion,
+   *   exactly as the real git promote makes the canonical tree match the winner.
+   */
+  constructor(
+    candidateHashes: string[] = [],
+    private readonly canonical?: FakeWorkspace,
+  ) {
+    this.#candidateHashes = candidateHashes;
+  }
+
+  setHeadResolves(v: boolean): void {
+    this.#headResolves = v;
+  }
+  /** Make the i-th `addWorktree` throw (a worktree-creation error → a fail-closed hard-red candidate). */
+  throwAddAt(index: number): void {
+    this.#throwAddAt = index;
+  }
+
+  async headResolves(): Promise<boolean> {
+    return this.#headResolves;
+  }
+
+  async addWorktree(_treeish: string): Promise<Worktree> {
+    const i = this.#i;
+    this.#i += 1;
+    if (this.#throwAddAt === i) throw new Error(`fake worktree add error at ${i}`);
+    const hash = this.#candidateHashes[i] ?? `000000${i}`.slice(-7);
+    const root = `/fake/wt-${i}`;
+    this.added.push(root);
+    this.live.add(root);
+    return { root, scope: new FakeWorkspace(hash, `diff ${i}`) };
+  }
+
+  async removeWorktree(worktree: Worktree): Promise<void> {
+    this.removed.push(worktree.root);
+    this.live.delete(worktree.root);
+  }
+
+  async promoteTree(treeish: string): Promise<void> {
+    this.promoted.push(treeish);
+    this.canonical?.setHash(treeish);
   }
 }
 

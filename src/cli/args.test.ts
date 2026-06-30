@@ -91,6 +91,35 @@ describe('parseArgs', () => {
     expect(a.config.maxCompileRetries).toBe(2);
   });
 
+  describe('--candidates / --best-of (issue #85)', () => {
+    it('defaults candidates to 1 when absent', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.config.candidates).toBe(1);
+    });
+
+    it('parses --candidates N', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--candidates', '4']);
+      expect(a.config.candidates).toBe(4);
+    });
+
+    it('accepts the --best-of alias', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--best-of', '3']);
+      expect(a.config.candidates).toBe(3);
+    });
+
+    it('rejects both --candidates and --best-of together (fail-closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--candidates', '2', '--best-of', '3']),
+      ).rejects.toThrow(/not both/);
+    });
+
+    it('rejects a non-positive --candidates (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--candidates', '0']),
+      ).rejects.toThrow(/positive integer/);
+    });
+  });
+
   it('parses --verify-dir (issue #52)', async () => {
     const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--verify-dir', 'test']);
     expect(a.verifyDir).toBe('test');

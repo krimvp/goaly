@@ -59,6 +59,13 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
       baseline = entry.event.tree;
       continue;
     }
+    // Best-of-N tournament markers (issue #85) are Driver-side ONLY: like CHECKPOINTED they are NEVER
+    // fed to `step()` — the reducer only ever folds the winner's AGENT_RAN and never learns K existed
+    // (invariant #1). They exist so the Driver's tournament can replay deterministically on `--resume`
+    // (already-logged candidates read back, never re-run); the pure fold here simply skips them.
+    if (entry.event.tag === 'CANDIDATE_RAN' || entry.event.tag === 'CANDIDATE_SELECTED') {
+      continue;
+    }
     if (entry.event.tag === 'CONTRACT_COMPILED') {
       contract = entry.event.contract;
       contractHash = entry.event.contract.contractHash;

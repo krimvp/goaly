@@ -17,9 +17,10 @@ import type { HarnessAdapter } from '../harness/adapter';
 import type { Verifier } from '../verify/verifier';
 import type { Approver } from '../verify/approver';
 import type { LlmProvider } from '../llm/provider';
-import type { Workspace } from '../workspace/workspace';
+import type { Workspace, WorktreeHost } from '../workspace/workspace';
 import type { Clock } from './clock';
 import type { BudgetMeter } from './budget';
+import { bestOfFloor, performBestOf } from './best-of-driver';
 import { LlmTokenMeter, deltaToUsage } from './llm-meter';
 import { summarizeUsage } from '../runlog/usage';
 import { lastRealSessionId } from '../runlog/session-id';
@@ -60,6 +61,14 @@ export type DriverDeps = {
   makeLadder: (contract: CompiledContract) => Verifier;
   approver: Approver;
   workspace: Workspace;
+  /**
+   * The worktree lifecycle seam for best-of-N (issue #85). REQUIRED only when `config.candidates > 1`:
+   * the Driver fans out K isolated worktrees off the baseline tree, scores each against the frozen
+   * ladder, and promotes the winner's tree — all here, never in the reducer. Absent ⇒ a `--candidates 1`
+   * run never touches it (the classic single attempt is byte-for-byte unchanged). When `candidates > 1`
+   * but this is absent, the run refuses to start (fail-closed).
+   */
+  worktrees?: WorktreeHost;
   clock: Clock;
   budget: BudgetMeter;
   /**
@@ -190,6 +199,24 @@ export async function drive(
     });
   }
 
+  // Worktree floor (issue #85, locked decision #8): best-of-N needs a resolvable HEAD — `git worktree`
+  // cannot check out an unborn branch's tree — and a WorktreeHost to drive. Refuse to start fail-closed
+  // (a clear ABORTED, never a silent downgrade to a single attempt or a thrown rejection) when
+  // `--candidates > 1` on a HEAD-less repo or with no worktree host wired.
+  if (config.candidates > 1) {
+    const floor = await bestOfFloor(deps);
+    if (floor !== null) {
+      log.error('best-of-N refused to start (fail-closed)', { reason: floor });
+      return {
+        status: 'ABORTED',
+        reason: floor,
+        iterations: iterationCount(state),
+        contractHash: contractHash ?? null,
+        runId,
+      };
+    }
+  }
+
   try {
     while (!isTerminal(state)) {
       if (commands.length !== 1) {
@@ -200,9 +227,15 @@ export async function drive(
       const command = commands[0]!;
       log.debug('perform command', { command: command.tag, state: state.tag });
 
-      // Perform the effect (the only place anything stochastic/IO happens), then build the
-      // Event. `ladder` is created at COMPILE and reused for every RUN_VERIFIER.
-      const performed = await perform(command, deps, ladder, llmMeter, baseline);
+      // Best-of-N (issue #85): the Driver performs the WHOLE tournament here — it appends its own
+      // CANDIDATE_RAN/CANDIDATE_SELECTED markers write-ahead (advancing seq) and feeds back ONE
+      // AGENT_RAN for the winner, so the reducer is unchanged. Kept in this seam (not `perform`) so it
+      // can read the log for resume + advance seq exactly like the Baseline checkpoint path.
+      const performed =
+        command.tag === 'RUN_AGENT_BEST_OF'
+          ? await performBestOf(command, deps, ladder, state, runId, contractHash, seq)
+          : await perform(command, deps, ladder, llmMeter, baseline);
+      if (performed.seq !== undefined) seq = performed.seq;
       const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge
       if (performed.ladder !== undefined) ladder = performed.ladder;
       if (event.tag === 'CONTRACT_COMPILED') contractHash = event.contract.contractHash;
@@ -407,7 +440,12 @@ function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void
   }
 }
 
-type Performed = { event: OrchestratorEvent; ladder?: Verifier };
+type Performed = {
+  event: OrchestratorEvent;
+  ladder?: Verifier;
+  /** The advanced seq after best-of-N appended its own markers write-ahead (issue #85); else absent. */
+  seq?: number;
+};
 
 async function perform(
   command: Command,
@@ -633,6 +671,11 @@ async function perform(
         };
       }
     }
+
+    case 'RUN_AGENT_BEST_OF':
+      // Best-of-N is performed in the main loop (it appends its own write-ahead markers + advances
+      // seq), never here. Reaching `perform` with it is a wiring bug — fail closed loudly.
+      throw new Error('RUN_AGENT_BEST_OF must be performed by the main loop, not perform()');
   }
 }
 

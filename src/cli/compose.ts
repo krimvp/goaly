@@ -23,7 +23,8 @@ import { StaticPlanner } from '../plan/static-planner';
 import { AutoPlanGate, HumanPlanGate } from '../plan/plan-gates';
 import type { Planner } from '../plan/planner';
 import type { PlanGate } from '../plan/plan-gate';
-import { GitWorkspace } from '../workspace/git-workspace';
+import { GitWorkspace, realExec } from '../workspace/git-workspace';
+import { GitWorktreeHost } from '../workspace/git-worktree-host';
 import { excludeFromGit } from '../workspace/git-exclude';
 import { FileRunLog } from '../runlog/file-runlog';
 import { StreamTranscriptSink, STREAM_FILE } from '../runlog/stream-transcript';
@@ -259,6 +260,19 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
           options.egressProxy,
         );
   const workspace = new GitWorkspace(options.workspaceRoot, undefined, excludes, true, runLauncher);
+  // Best-of-N worktree host (issue #85): only wired when `--candidates > 1` (a `--candidates 1` run
+  // never touches it). It shares the canonical root / exec / excludes / verify-jail so each candidate's
+  // isolated worktree hashes + scores identically to the canonical workspace.
+  const worktrees =
+    config.candidates > 1
+      ? new GitWorktreeHost({
+          root: options.workspaceRoot,
+          exec: realExec,
+          excludes,
+          scrubVerifyEnv: true,
+          ...(runLauncher !== undefined ? { runLauncher } : {}),
+        })
+      : undefined;
   // Adopt an explicit `--baseline` (issue #47) so `diff()`/Sign-off compare against it instead of HEAD.
   // The CLI already validated it resolves (fail-closed); a resumed run re-points it from the log.
   if (options.baseline !== undefined) workspace.setBaseline(options.baseline);
@@ -385,6 +399,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     // model — it is a verification judgment — and is metered through the same shared meter.
     prepareLlm: llmFor(models.judge, 'preflight'),
     workspace,
+    ...(worktrees !== undefined ? { worktrees } : {}),
     clock,
     budget: new SystemBudgetMeter(config.budget, clock),
     llmMeter,
