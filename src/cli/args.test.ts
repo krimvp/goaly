@@ -120,6 +120,35 @@ describe('parseArgs', () => {
     });
   });
 
+  describe('--resume-best-of-incomplete (issue #85 follow-up)', () => {
+    it('defaults to rerun when absent (byte-for-byte the historical behavior)', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.config.resumeBestOfIncomplete).toBe('rerun');
+    });
+
+    it('parses --resume-best-of-incomplete collapse', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--resume-best-of-incomplete', 'collapse',
+      ]);
+      expect(a.config.resumeBestOfIncomplete).toBe('collapse');
+    });
+
+    it('parses --resume-best-of-incomplete rerun', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--resume-best-of-incomplete', 'rerun',
+      ]);
+      expect(a.config.resumeBestOfIncomplete).toBe('rerun');
+    });
+
+    it('rejects an unknown value (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs([
+          'run', '--goal', 'g', '--verify-cmd', 'true', '--resume-best-of-incomplete', 'merge',
+        ]),
+      ).rejects.toThrow(/rerun.*collapse|collapse/);
+    });
+  });
+
   it('parses --verify-dir (issue #52)', async () => {
     const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--verify-dir', 'test']);
     expect(a.verifyDir).toBe('test');
@@ -764,6 +793,27 @@ describe('parseArgs', () => {
       expect(a.harness).toBe('codex');
       expect(a.config.maxIterations).toBe(5);
       expect(a.config.verifier).toEqual({ kind: 'existing', ref: 'true' });
+    });
+
+    it('reads --resume-best-of-incomplete from the config file (issue #85 follow-up)', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "resume-best-of-incomplete": "collapse" }' }),
+      );
+      expect(a.config.resumeBestOfIncomplete).toBe('collapse');
+    });
+
+    it('a CLI --resume-best-of-incomplete overrides the config file', async () => {
+      const a = await parseArgs(
+        [
+          'run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true',
+          '--resume-best-of-incomplete', 'rerun',
+        ],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "resume-best-of-incomplete": "collapse" }' }),
+      );
+      expect(a.config.resumeBestOfIncomplete).toBe('rerun');
     });
 
     it('reads the approver panel from the config file (issue #84)', async () => {

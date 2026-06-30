@@ -61,9 +61,10 @@ export async function performBestOf(
   runId: RunId,
   contractHash: ContractHash | null,
   startSeq: number,
+  resumeIncomplete: 'rerun' | 'collapse',
 ): Promise<BestOfPerformed> {
   try {
-    return await runTournament(command, deps, ladder, state, runId, contractHash, startSeq);
+    return await runTournament(command, deps, ladder, state, runId, contractHash, startSeq, resumeIncomplete);
   } catch (e) {
     // Fail-closed: a tournament that throws (promotion failure, host error) becomes a crashed run with
     // DISTINCT sentinel hashes so no-diff doesn't false-fire; the frozen verifier then runs and the
@@ -96,6 +97,7 @@ async function runTournament(
   runId: RunId,
   contractHash: ContractHash | null,
   startSeq: number,
+  resumeIncomplete: 'rerun' | 'collapse',
 ): Promise<BestOfPerformed> {
   // The candidate set belongs to the iteration ABOUT to run: ctx.iteration counts COMPLETED runs, so
   // this is the next (1-based) iteration — the marker key resume reconstructs against.
@@ -129,6 +131,7 @@ async function runTournament(
         ? { onStreamEvent: (event) => deps.onStreamEvent?.('agent', event) }
         : {}),
       prior,
+      resumeIncomplete,
     },
     {
       prompt: command.prompt,
@@ -164,7 +167,20 @@ async function reconstructPriorCandidates(
     for (const entry of stored.entries) {
       const ev = entry.event;
       if (ev.tag === 'CANDIDATE_RAN' && ev.iteration === iteration) {
-        candidates.push({ index: ev.index, pass: ev.pass, tree: ev.tree, budget: ev.budget, run: ev.run });
+        // Graded depth (issue #85): read the persisted score back so resume re-selection uses the
+        // SAME graded key. A log written before graded ranking omits the fields — fall back to the
+        // boolean (`pass ? rungsTotal : 0`) so old logs still re-select deterministically.
+        const rungsTotal = ev.rungsTotal ?? 1;
+        const rungsPassed = ev.rungsPassed ?? (ev.pass ? rungsTotal : 0);
+        candidates.push({
+          index: ev.index,
+          pass: ev.pass,
+          rungsPassed,
+          rungsTotal,
+          tree: ev.tree,
+          budget: ev.budget,
+          run: ev.run,
+        });
       }
       if (ev.tag === 'CANDIDATE_SELECTED' && ev.iteration === iteration) selected = true;
     }

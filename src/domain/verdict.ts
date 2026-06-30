@@ -11,6 +11,16 @@ export const Verdict = z.object({
   confidence: z.number().min(0).max(1),
   /** Human/agent-readable explanation, fed back as next-iteration prompt on failure. */
   detail: z.string(),
+  /**
+   * How far up a frozen {@link Ladder} this verdict got (best-of-N graded ranking, issue #85):
+   * the number of rungs that PASSED before the short-circuit (all of them on a green). Optional so
+   * every non-ladder producer/consumer is unaffected (a bare deterministic/judge verdict omits it).
+   * Populated only by `Ladder.verify`; the tournament ranks candidates by it (deeper beats shallower)
+   * at ZERO extra execution cost — it is just the position where the short-circuit stopped.
+   */
+  rungsPassed: z.number().int().min(0).optional(),
+  /** The frozen ladder's total rung count (the denominator for {@link rungsPassed}). */
+  rungsTotal: z.number().int().min(0).optional(),
 });
 export type Verdict = z.infer<typeof Verdict>;
 

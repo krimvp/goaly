@@ -233,7 +233,16 @@ export async function drive(
       // can read the log for resume + advance seq exactly like the Baseline checkpoint path.
       const performed =
         command.tag === 'RUN_AGENT_BEST_OF'
-          ? await performBestOf(command, deps, ladder, state, runId, contractHash, seq)
+          ? await performBestOf(
+              command,
+              deps,
+              ladder,
+              state,
+              runId,
+              contractHash,
+              seq,
+              config.resumeBestOfIncomplete,
+            )
           : await perform(command, deps, ladder, llmMeter, baseline);
       if (performed.seq !== undefined) seq = performed.seq;
       const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge

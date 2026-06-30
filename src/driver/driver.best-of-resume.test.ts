@@ -151,3 +151,143 @@ describe('best-of-N resume — crash mid-fan-out (issue #85, invariant #7)', () 
     expect(host.promoted).toHaveLength(1);
   });
 });
+
+/** A crashed log with contract+seal but ZERO CANDIDATE_RAN markers (nothing to collapse to). */
+function seedNoCandidatesLog(): InMemoryRunLog {
+  const log = new InMemoryRunLog();
+  log.header = {
+    runId,
+    startedAt: 0,
+    config: makeConfig({
+      goal: 'best-of-N resume goal',
+      candidates: 3,
+      maxIterations: 1,
+      resumeBestOfIncomplete: 'collapse',
+    }),
+  };
+  log.entries = [
+    {
+      runId,
+      seq: 1,
+      ts: 1,
+      contractHash: contract.contractHash,
+      event: { tag: 'CONTRACT_COMPILED', contract },
+      stateTagAfter: 'AWAIT_SEAL',
+    },
+    {
+      runId,
+      seq: 2,
+      ts: 2,
+      contractHash: contract.contractHash,
+      event: { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } },
+      stateTagAfter: 'RUNNING_AGENT',
+    },
+  ];
+  return log;
+}
+
+describe('best-of-N resume — collapse mode (issue #85 follow-up, fail-closed)', () => {
+  it('collapse re-runs NOTHING and selects the winner from only the logged candidates', async () => {
+    const log = seedCrashedLog();
+
+    const canonical = new FakeWorkspace('aaaaaaa', 'diff');
+    // No worktrees are added in collapse mode (nothing is re-run); the host's hash list is unused.
+    const host = new FakeWorktreeHost([], canonical);
+    const harness = new CountingHarness([]); // must NEVER be called under collapse
+
+    const passByHash = new Map<string, boolean>([
+      ['0000c00', true], // logged candidate 0 (pass) — the collapse winner's promoted tree must pass
+    ]);
+
+    const deps: DriverDeps = {
+      compiler: new FakeCompiler(new Error('compile must not run on resume')),
+      seal: new FakeSealGate({ kind: 'reject', reason: 'seal must not run on resume' }),
+      harness,
+      makeLadder: () => new HashVerifier(passByHash),
+      approver: new FakeApprover([approve()]),
+      workspace: canonical,
+      worktrees: host,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(false),
+      runlog: log,
+    };
+
+    const outcome = await drive(
+      deps,
+      makeConfig({
+        goal: 'best-of-N resume goal',
+        candidates: 3,
+        maxIterations: 1,
+        resumeBestOfIncomplete: 'collapse',
+      }),
+      runId,
+      { resume: true },
+    );
+
+    // Re-run NOTHING: no harness call, no worktree added.
+    expect(harness.calls).toBe(0);
+    expect(host.added).toHaveLength(0);
+
+    // Selected from ONLY the logged set: candidate 0 (the passing one) wins; promoted once → DONE.
+    expect(host.promoted).toEqual(['0000c00']);
+    expect(outcome.status).toBe('DONE');
+
+    const stored = (await log.read())!;
+    // The not-yet-logged index 2 is NEVER appended under collapse (only 0 and 1 stay).
+    const indices = stored.entries
+      .filter((e) => e.event.tag === 'CANDIDATE_RAN')
+      .map((e) => (e.event as { iteration: number; index: number }))
+      .filter((e) => e.iteration === 1)
+      .map((e) => e.index)
+      .sort();
+    expect(indices).toEqual([0, 1]);
+    expect(stored.entries.filter((e) => e.event.tag === 'CANDIDATE_SELECTED')).toHaveLength(1);
+    expect(stored.entries.filter((e) => e.event.tag === 'AGENT_RAN')).toHaveLength(1);
+  });
+
+  it('collapse with ZERO logged candidates STILL runs the full set (fail-closed, no green-from-nothing)', async () => {
+    const log = seedNoCandidatesLog();
+
+    const canonical = new FakeWorkspace('bbbbbbb', 'diff');
+    // All 3 candidates must run since there is nothing to collapse to; the last one passes.
+    const host = new FakeWorktreeHost(['0000a00', '0000a01', '0000a02'], canonical);
+    const harness = new CountingHarness([100, 100, 100]);
+
+    const passByHash = new Map<string, boolean>([
+      ['0000a00', false],
+      ['0000a01', false],
+      ['0000a02', true], // a passing candidate so the iteration greens → DONE
+    ]);
+
+    const deps: DriverDeps = {
+      compiler: new FakeCompiler(new Error('compile must not run on resume')),
+      seal: new FakeSealGate({ kind: 'reject', reason: 'seal must not run on resume' }),
+      harness,
+      makeLadder: () => new HashVerifier(passByHash),
+      approver: new FakeApprover([approve()]),
+      workspace: canonical,
+      worktrees: host,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(false),
+      runlog: log,
+    };
+
+    const outcome = await drive(
+      deps,
+      makeConfig({
+        goal: 'best-of-N resume goal',
+        candidates: 3,
+        maxIterations: 1,
+        resumeBestOfIncomplete: 'collapse',
+      }),
+      runId,
+      { resume: true },
+    );
+
+    // Fail-closed: the FULL set ran (3 candidates) because collapse to an empty set is impossible.
+    expect(harness.calls).toBe(3);
+    expect(host.added).toHaveLength(3);
+    expect(outcome.status).toBe('DONE');
+    expect(host.promoted).toEqual(['0000a02']);
+  });
+});

@@ -668,6 +668,9 @@ export async function parseArgs(
       ? { maxIterations: str(flags, 'max-iterations') }
       : {}),
     ...(candidatesFlag(flags) !== undefined ? { candidates: candidatesFlag(flags) } : {}),
+    ...(parseResumeBestOfIncomplete(flags) !== undefined
+      ? { resumeBestOfIncomplete: parseResumeBestOfIncomplete(flags) }
+      : {}),
     ...(flags['phased'] !== undefined ? { phased: true } : {}),
     ...(str(flags, 'max-phases') !== undefined ? { maxPhases: str(flags, 'max-phases') } : {}),
     ...(str(flags, 'max-plan-revisions') !== undefined
@@ -787,6 +790,23 @@ function candidatesFlag(flags: RawFlags): string | undefined {
     throw new UsageError(`--candidates: expected a positive integer, got '${value}'`);
   }
   return value;
+}
+
+/**
+ * Validate `--resume-best-of-incomplete <rerun|collapse>` at the seam (issue #85 follow-up): the
+ * best-of-N resume policy, fail-closed on any other value (invariant #6). Absent ⇒ undefined so the
+ * schema default (`'rerun'`, the historical behavior) applies.
+ */
+function parseResumeBestOfIncomplete(flags: RawFlags): 'rerun' | 'collapse' | undefined {
+  const v = str(flags, 'resume-best-of-incomplete');
+  if (v === undefined) return undefined;
+  const parsed = z.enum(['rerun', 'collapse']).safeParse(v);
+  if (!parsed.success) {
+    throw new UsageError(
+      `--resume-best-of-incomplete: expected 'rerun' or 'collapse', got '${v}'`,
+    );
+  }
+  return parsed.data;
 }
 
 /**

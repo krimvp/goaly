@@ -41,7 +41,13 @@ describe('Ladder', () => {
     const verdict = await ladder.verify(ws, GOAL, RUBRIC);
 
     // Assert
-    expect(verdict).toEqual({ pass: true, confidence: 1, detail: 'all 0 checks passed' });
+    expect(verdict).toEqual({
+      pass: true,
+      confidence: 1,
+      detail: 'all 0 checks passed',
+      rungsPassed: 0,
+      rungsTotal: 0,
+    });
   });
 
   it('passes when all rungs pass and reports the minimum confidence', async () => {
@@ -55,7 +61,13 @@ describe('Ladder', () => {
     const verdict = await ladder.verify(ws, GOAL, RUBRIC);
 
     // Assert
-    expect(verdict).toEqual({ pass: true, confidence: 0.6, detail: 'all 3 checks passed' });
+    expect(verdict).toEqual({
+      pass: true,
+      confidence: 0.6,
+      detail: 'all 3 checks passed',
+      rungsPassed: 3,
+      rungsTotal: 3,
+    });
     expect(r1.called).toBe(true);
     expect(r2.called).toBe(true);
     expect(r3.called).toBe(true);
@@ -70,8 +82,14 @@ describe('Ladder', () => {
     // Act
     const verdict = await ladder.verify(ws, GOAL, RUBRIC);
 
-    // Assert: the exact failing verdict is returned, no judge call wasted.
-    expect(verdict).toEqual({ pass: false, confidence: 1, detail: 'tests failed' });
+    // Assert: the exact failing verdict is returned (plus the depth score), no judge call wasted.
+    expect(verdict).toEqual({
+      pass: false,
+      confidence: 1,
+      detail: 'tests failed',
+      rungsPassed: 0,
+      rungsTotal: 2,
+    });
     expect(fail.called).toBe(true);
     expect(later.called).toBe(false);
   });
@@ -85,7 +103,13 @@ describe('Ladder', () => {
     const verdict = await ladder.verify(ws, GOAL, RUBRIC);
 
     // Assert
-    expect(verdict).toEqual({ pass: false, confidence: 0.33, detail: 'quorum not met' });
+    expect(verdict).toEqual({
+      pass: false,
+      confidence: 0.33,
+      detail: 'quorum not met',
+      rungsPassed: 0,
+      rungsTotal: 1,
+    });
   });
 
   it('fail-closes when a rung throws and short-circuits later rungs', async () => {
@@ -102,6 +126,8 @@ describe('Ladder', () => {
       pass: false,
       confidence: 1,
       detail: 'rung error (fail-closed): grader exploded',
+      rungsPassed: 0,
+      rungsTotal: 2,
     });
     expect(boom.called).toBe(true);
     expect(later.called).toBe(false);
@@ -137,6 +163,58 @@ describe('Ladder', () => {
     const verdict = await ladder.verify(ws, GOAL, RUBRIC);
 
     // Assert
-    expect(verdict).toEqual({ pass: true, confidence: 1, detail: 'all 2 checks passed' });
+    expect(verdict).toEqual({
+      pass: true,
+      confidence: 1,
+      detail: 'all 2 checks passed',
+      rungsPassed: 2,
+      rungsTotal: 2,
+    });
+  });
+
+  describe('graded depth scoring — rungsPassed / rungsTotal (issue #85)', () => {
+    it('reports rungsPassed === rungsTotal on an all-pass ladder', async () => {
+      const ladder = new Ladder([
+        rung({ pass: true, confidence: 1, detail: 'a' }),
+        rung({ pass: true, confidence: 1, detail: 'b' }),
+        rung({ pass: true, confidence: 1, detail: 'c' }),
+      ]);
+
+      const verdict = await ladder.verify(ws, GOAL, RUBRIC);
+
+      expect(verdict.pass).toBe(true);
+      expect(verdict.rungsPassed).toBe(3);
+      expect(verdict.rungsTotal).toBe(3);
+    });
+
+    it('reports rungsPassed = the short-circuit index when a middle rung fails', async () => {
+      const r0 = rung({ pass: true, confidence: 1, detail: 'a' });
+      const r1 = rung({ pass: true, confidence: 1, detail: 'b' });
+      const r2 = rung({ pass: false, confidence: 1, detail: 'c failed' }); // fails at index 2
+      const r3 = rung({ pass: true, confidence: 1, detail: 'd' });
+      const ladder = new Ladder([r0, r1, r2, r3]);
+
+      const verdict = await ladder.verify(ws, GOAL, RUBRIC);
+
+      // Two rungs (indices 0, 1) passed before the index-2 failure short-circuited; rung 3 never ran.
+      expect(verdict.pass).toBe(false);
+      expect(verdict.rungsPassed).toBe(2);
+      expect(verdict.rungsTotal).toBe(4);
+      expect(r3.called).toBe(false);
+    });
+
+    it('reports rungsPassed = the index of a THROWING rung (rungs before the throw passed)', async () => {
+      const r0 = rung({ pass: true, confidence: 1, detail: 'a' });
+      const boom = throwingRung('grader exploded'); // throws at index 1
+      const r2 = rung({ pass: true, confidence: 1, detail: 'c' });
+      const ladder = new Ladder([r0, boom, r2]);
+
+      const verdict = await ladder.verify(ws, GOAL, RUBRIC);
+
+      expect(verdict.pass).toBe(false);
+      expect(verdict.rungsPassed).toBe(1); // only rung 0 passed before the throw
+      expect(verdict.rungsTotal).toBe(3);
+      expect(r2.called).toBe(false);
+    });
   });
 });

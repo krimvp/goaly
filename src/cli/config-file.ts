@@ -50,6 +50,7 @@ const ConfigFileSchema = z
     'max-iterations': FlagValue.optional(),
     candidates: FlagValue.optional(),
     'best-of': FlagValue.optional(),
+    'resume-best-of-incomplete': FlagValue.optional(),
     phased: FlagValue.optional(),
     'max-phases': FlagValue.optional(),
     'max-plan-revisions': FlagValue.optional(),

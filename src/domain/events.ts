@@ -182,6 +182,16 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     budget: BudgetSnapshot,
     /** Whether this candidate PASSED the frozen ladder (a passing candidate beats any failing one). */
     pass: z.boolean(),
+    /**
+     * How far this candidate got up the frozen ladder (issue #85 graded ranking): rungs passed before
+     * the short-circuit. Persisted so a `--resume` re-selection (esp. `--resume-best-of-incomplete
+     * collapse`) ranks the already-logged candidates by the SAME graded key, not the boolean alone.
+     * Optional for backward-compatible replay of logs written before graded ranking (fall back to
+     * `pass ? rungsTotal : 0`).
+     */
+    rungsPassed: z.number().int().min(0).optional(),
+    /** The frozen ladder's total rung count (the depth denominator). Optional for old-log replay. */
+    rungsTotal: z.number().int().min(0).optional(),
     /** The candidate's harness run result (status + session id), re-fed as the winner's AGENT_RAN. */
     run: HarnessRunResult,
   }),

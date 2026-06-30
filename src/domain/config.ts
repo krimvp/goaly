@@ -109,6 +109,19 @@ export const RunConfig = z.object({
    */
   candidates: z.number().int().positive().default(1),
   /**
+   * How `--resume` handles an iteration whose best-of-N fan-out crashed mid-flight — prior
+   * `CANDIDATE_RAN` markers but no `CANDIDATE_SELECTED` (issue #85 follow-up):
+   *  - `'rerun'` (default): re-run ONLY the not-yet-logged candidate indices, then select over the
+   *    FULL set — byte-for-byte the historical behavior, maximally faithful to the original fan-out.
+   *  - `'collapse'`: select the winner from ONLY the already-logged candidates and re-run NOTHING —
+   *    cheaper + deterministic, at the cost of considering a smaller set. Fail-closed: if ZERO
+   *    candidates were logged it STILL runs the full set (you can't collapse to an empty set; never a
+   *    green-from-nothing). Selection still uses the same graded {@link selectWinner}.
+   * Loop-policy/driver WIRING — never frozen into the contract; inherited by a `--phased` sub-goal
+   * via the LoopPolicy view (so a long phased run resumes consistently across phases).
+   */
+  resumeBestOfIncomplete: z.enum(['rerun', 'collapse']).default('rerun'),
+  /**
    * Phased decomposition (issue #48). When true the run starts with a PLAN phase that turns the goal
    * into a frozen, ordered plan of sub-goals; each sub-goal runs as its own frozen, two-key contract
    * (with a checkpoint between phases), finished by a cumulative ACCEPT contract on the ORIGINAL goal.
@@ -205,6 +218,7 @@ export type LoopPolicy = Pick<
   RunConfig,
   | 'maxIterations'
   | 'candidates'
+  | 'resumeBestOfIncomplete'
   | 'stuckPolicy'
   | 'budget'
   | 'phased'
@@ -225,6 +239,7 @@ export const pickGatePolicy = (c: GatePolicy): GatePolicy => ({
 export const pickLoopPolicy = (c: LoopPolicy): LoopPolicy => ({
   maxIterations: c.maxIterations,
   candidates: c.candidates,
+  resumeBestOfIncomplete: c.resumeBestOfIncomplete,
   stuckPolicy: c.stuckPolicy,
   budget: c.budget,
   phased: c.phased,
@@ -262,6 +277,8 @@ export const CliInput = z.object({
   maxIterations: z.coerce.number().int().positive().optional(),
   /** Best-of-N parallel worker (issue #85): a positive-int candidate count (default 1). */
   candidates: z.coerce.number().int().positive().optional(),
+  /** Resume policy for an incomplete best-of-N fan-out (issue #85 follow-up); enum, fail-closed. */
+  resumeBestOfIncomplete: z.enum(['rerun', 'collapse']).optional(),
   /** Phased decomposition (issue #48). */
   phased: z.coerce.boolean().optional(),
   maxPhases: z.coerce.number().int().positive().optional(),
@@ -341,6 +358,9 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
       : {}),
     ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
     ...(input.candidates !== undefined ? { candidates: input.candidates } : {}),
+    ...(input.resumeBestOfIncomplete !== undefined
+      ? { resumeBestOfIncomplete: input.resumeBestOfIncomplete }
+      : {}),
     ...(input.phased !== undefined ? { phased: input.phased } : {}),
     ...(input.maxPhases !== undefined ? { maxPhases: input.maxPhases } : {}),
     ...(input.maxPlanRevisions !== undefined

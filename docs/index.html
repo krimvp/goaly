@@ -138,9 +138,15 @@
         <p><code>--candidates N</code> (alias <code>--best-of N</code>) runs <b>N isolated worker
         attempts each iteration</b> in linked git worktrees, scores each against the <b>same frozen
         ladder</b>, and keeps the best — the tournament is <b>Driver-side</b>, so the pure reducer sees
-        exactly one winning run and never learns N existed. A passing candidate beats any failing one;
-        ties break to lower cost. Composes with <code>--phased</code> / <code>--delta-verify</code> /
-        <code>--sandbox</code>; needs a committed HEAD.</p>
+        exactly one winning run and never learns N existed. Candidates are graded by <b>how far each got
+        up the ladder — furthest up wins</b> (an all-pass beats every partial), so two <i>failing</i>
+        attempts are distinguished; the depth is read off the verdict at <b>zero extra cost</b> (the
+        ladder already short-circuits at the first failing rung). Ties on depth break to lower cost, then
+        index. On <code>--resume</code> a crashed fan-out re-runs only the not-yet-logged candidates — or,
+        with <code>--resume-best-of-incomplete collapse</code>, collapses to the best already-logged one
+        and re-runs nothing (fail-closed: zero logged still runs the full set). Composes with
+        <code>--phased</code> / <code>--delta-verify</code> / <code>--sandbox</code>; needs a committed
+        HEAD.</p>
       </div>
       <div class="card">
         <h3>Follow up after it ends</h3>

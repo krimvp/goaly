@@ -19,19 +19,34 @@ import type { AgentEventSink } from '../agent-cli/stream';
 export type CandidateResult = {
   readonly index: number;
   readonly pass: boolean;
+  /**
+   * How far this candidate got up the SAME frozen ladder (issue #85 graded ranking): the number of
+   * rungs that passed before the short-circuit, captured from the ladder verdict at ZERO extra
+   * execution cost (it is just where `Ladder.verify` stopped). The PRIMARY selection key — a
+   * candidate that got further up the ladder beats one that stalled earlier, so two FAILING
+   * candidates are no longer indistinguishable. `pass` stays derivable (`rungsPassed === rungsTotal`).
+   */
+  readonly rungsPassed: number;
+  /** The frozen ladder's total rung count (the denominator; equal across a single iteration's set). */
+  readonly rungsTotal: number;
   readonly tree: DiffHash;
   readonly budget: BudgetSnapshot;
   readonly run: HarnessRunResult;
 };
 
 /**
- * The pure tournament rule (issue #85, locked decision #2). Rank candidates by, in order:
- *  (a) frozen-ladder boolean pass — a passing candidate beats ANY failing one;
+ * The pure tournament rule (issue #85, locked decision #2 + graded follow-up). Rank candidates by,
+ * in order:
+ *  (a) GRADED ladder depth — higher {@link CandidateResult.rungsPassed} first: a candidate that got
+ *      further up the SAME frozen ladder beats one that stalled earlier (an all-pass candidate, whose
+ *      depth equals `rungsTotal`, beats any partial). This SUBSUMES the old boolean `pass` key — a
+ *      real pass is just maximal depth — so there is still a SINGLE frozen scorer (invariant #2): the
+ *      depth is read straight off the ladder verdict, never re-graded.
  *  (b) lower token cost (from the candidate's BudgetSnapshot; unknown spend sorts as most-expensive);
  *  (c) lowest candidate index (stable).
- * If all K fail, the winner is the least-cost failing candidate (the iteration is a normal red that
- * loops through decide() unchanged). NO second scorer that could disagree with the frozen ladder.
- * Pure + total over the recorded set; throws ONLY on an empty set, which the Driver guards upstream.
+ * If all K fail, the winner is the FURTHEST-up-then-least-cost failing candidate (the iteration is a
+ * normal red that loops through decide() unchanged). NO second scorer that could disagree with the
+ * frozen ladder. Pure + total over the recorded set; throws ONLY on an empty set (Driver-guarded).
  */
 export function selectWinner(candidates: readonly CandidateResult[]): CandidateResult {
   if (candidates.length === 0) {
@@ -45,9 +60,13 @@ function costOf(c: CandidateResult): number {
   return c.budget.tokensSpent ?? Number.POSITIVE_INFINITY;
 }
 
-/** Strict-weak ordering for {@link selectWinner}: pass desc, then cost asc, then index asc (stable). */
+/**
+ * Strict-weak ordering for {@link selectWinner}: ladder depth DESC (further up the frozen ladder
+ * wins), then cost ASC, then index ASC (stable). Depth subsumes the boolean pass — an all-pass
+ * candidate has maximal depth, so it still beats every partial — keeping a single frozen scorer.
+ */
 function compareCandidates(a: CandidateResult, b: CandidateResult): number {
-  if (a.pass !== b.pass) return a.pass ? -1 : 1; // a passing candidate sorts first
+  if (a.rungsPassed !== b.rungsPassed) return b.rungsPassed - a.rungsPassed; // deeper sorts first
   const costDelta = costOf(a) - costOf(b);
   if (costDelta !== 0) return costDelta;
   return a.index - b.index;
@@ -75,6 +94,15 @@ export type BestOfDeps = {
   onStreamEvent?: AgentEventSink;
   /** Marker events already logged for THIS iteration (resume): completed candidates + a selection. */
   prior?: { candidates: readonly CandidateResult[]; selected: boolean };
+  /**
+   * Resume policy for an incomplete fan-out (issue #85 follow-up, `--resume-best-of-incomplete`):
+   *  - `'rerun'` (default): re-run the not-yet-logged indices, then select over the full set.
+   *  - `'collapse'`: select from ONLY the already-logged candidates and re-run NOTHING — UNLESS zero
+   *    were logged, in which case the full set still runs (fail-closed: never a green-from-nothing).
+   * Only consulted on resume (when `prior.candidates` is non-empty there's something to collapse to);
+   * a fresh run logs nothing, so both modes run the full set identically.
+   */
+  resumeIncomplete?: 'rerun' | 'collapse';
 };
 
 export type BestOfInput = {
@@ -105,8 +133,16 @@ export async function runBestOf(deps: BestOfDeps, input: BestOfInput): Promise<B
   const prior = deps.prior ?? { candidates: [], selected: false };
   const done = new Map(prior.candidates.map((c) => [c.index, c]));
 
+  // Collapse (issue #85 follow-up): on resume of an incomplete fan-out with ≥1 already-logged
+  // candidate, `--resume-best-of-incomplete collapse` selects from ONLY the logged set and re-runs
+  // NOTHING. Fail-closed: when ZERO candidates were logged we CANNOT collapse to an empty set, so we
+  // fall through and run the full fan-out (never a green-from-nothing). Honored only here, on the
+  // resume path — a fresh run has no prior markers, so collapse is a no-op (the full set still runs).
+  const collapse = deps.resumeIncomplete === 'collapse' && prior.candidates.length > 0;
+
   const pending: Promise<CandidateResult>[] = [];
   for (let index = 0; index < input.candidates; index++) {
+    if (collapse) continue; // collapse to the logged set: re-run nothing (invariant #7, fail-closed)
     if (done.has(index)) continue; // logged on a prior run — read back, never re-run (invariant #7)
     pending.push(runCandidate(deps, input, index, log));
   }
@@ -155,6 +191,8 @@ async function appendCandidateRan(
     tree: c.tree,
     budget: c.budget,
     pass: c.pass,
+    rungsPassed: c.rungsPassed,
+    rungsTotal: c.rungsTotal,
     run: c.run,
   });
 }
@@ -181,8 +219,16 @@ async function runCandidate(
     // independent of the concurrent fan-out order (the shared cumulative snapshot would race).
     deps.budget.record(run.tokensUsed, estimatedTokens(run));
     const tree = await worktree.scope.diffHash();
-    const pass = await scoreLadder(deps.ladder, worktree.scope, deps.contract);
-    return { index, pass, tree, budget: candidateCost(run), run };
+    const score = await scoreLadder(deps.ladder, worktree.scope, deps.contract);
+    return {
+      index,
+      pass: score.pass,
+      rungsPassed: score.rungsPassed,
+      rungsTotal: score.rungsTotal,
+      tree,
+      budget: candidateCost(run),
+      run,
+    };
   } catch (e) {
     log.warn('best-of-N candidate failed (scored as a hard red)', {
       iteration: input.iteration,
@@ -214,21 +260,30 @@ function candidateCost(run: HarnessRunResult): BudgetSnapshot {
   };
 }
 
+/** A candidate's frozen-ladder score: the boolean pass plus the graded depth (issue #85). */
+type LadderScore = { pass: boolean; rungsPassed: number; rungsTotal: number };
+
 /**
  * Score the frozen ladder against a candidate's worktree, fail-closed (invariant #4): a ladder that
- * throws is a hard red, never a pass. Mirrors the Driver's `runVerifierFailClosed` wrapper so the
- * tournament can never green a candidate the ladder couldn't actually grade.
+ * throws is a hard red (depth 0), never a pass. Mirrors the Driver's `runVerifierFailClosed` wrapper
+ * so the tournament can never green a candidate the ladder couldn't actually grade. The graded depth
+ * is read straight off the SAME ladder verdict (no second scorer) — a verdict that omits the fields
+ * (e.g. a fake `Verifier` that isn't a `Ladder`) falls back to `pass ? 1 : 0` / total so ranking
+ * still degrades to the boolean.
  */
 async function scoreLadder(
   ladder: Verifier,
   scope: Workspace,
   contract: CompiledContract,
-): Promise<boolean> {
+): Promise<LadderScore> {
   try {
     const verdict = await ladder.verify(scope, contract.goal, contract.rubric);
-    return verdict.pass;
+    const rungsTotal = verdict.rungsTotal ?? 1;
+    const rungsPassed = verdict.rungsPassed ?? (verdict.pass ? rungsTotal : 0);
+    return { pass: verdict.pass, rungsPassed, rungsTotal };
   } catch {
-    return false;
+    // A ladder that THREW couldn't grade anything: hard red, zero depth.
+    return { pass: false, rungsPassed: 0, rungsTotal: 1 };
   }
 }
 
@@ -237,6 +292,10 @@ function failedCandidate(input: BestOfInput, index: number, error: unknown): Can
   return {
     index,
     pass: false,
+    // A crashed attempt was never graded by the ladder: zero depth, so it loses the primary key to
+    // any candidate that actually ran a rung (and never beats a real pass).
+    rungsPassed: 0,
+    rungsTotal: 1,
     // The baseline tree (no edits applied): promoting it is a safe no-op if this red somehow wins an
     // all-fail iteration (the iteration is then a normal red that loops through decide() unchanged).
     tree: input.baselineHash,

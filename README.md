@@ -166,12 +166,17 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   **same frozen verifier ladder**, keep the **best** candidate's tree, and advance. The whole tournament
   is **Driver-side**: the pure reducer sees exactly **one** winning agent run and never learns N existed,
   so the state machine is untouched and `--candidates 1` is byte-for-byte the classic single attempt. The
-  **scorer is the frozen ladder itself** (no second scorer that could disagree): a candidate that *passes*
-  beats any that fails; ties break to lower token cost, then lowest index; all-N-fail is a normal red
-  iteration (the least-cost failing candidate) that loops as usual; a crashed/timed-out candidate scores a
-  hard red and can't win. Each candidate completes write-ahead, so `--resume` re-runs only the
-  not-yet-logged ones and re-selects deterministically. Needs a committed HEAD (it refuses to start
-  fail-closed on an unborn branch). See [Best-of-N parallel worker](#best-of-n-parallel-worker---candidates).
+  **scorer is the frozen ladder itself** (no second scorer that could disagree): candidates are ranked by
+  **how far each got *up* that ladder** — the **furthest up the ladder wins** (an all-pass candidate, the
+  maximal depth, beats every partial), so two *failing* attempts are no longer indistinguishable. This
+  graded depth is read straight off the ladder verdict at **zero extra cost** (the ladder already
+  short-circuits at the first failing rung, so "rungs passed" is just where it stopped). Ties on depth
+  break to lower token cost, then lowest index; all-N-fail is a normal red iteration (the furthest-then-
+  cheapest failing candidate) that loops as usual; a crashed/timed-out candidate scores a hard red (depth
+  0) and can't win. Each candidate completes write-ahead, so `--resume` re-runs only the not-yet-logged
+  ones and re-selects deterministically — or, with `--resume-best-of-incomplete collapse`, collapses to the
+  best already-logged candidate and re-runs nothing. Needs a committed HEAD (it refuses to start fail-closed
+  on an unborn branch). See [Best-of-N parallel worker](#best-of-n-parallel-worker---candidates).
 - **Compile is resilient, not one-shot.** A `COMPILE_FAILED` (a correctable authoring mistake — bad
   path, transient parse miss) re-authors the verification with the error fed back as guidance, up to
   `--max-compile-retries` (default 2; `0` disables), before the run fails — so one bad compile output
@@ -282,20 +287,36 @@ each iteration, with --candidates N:
   1` is byte-for-byte the classic single attempt, and the loop, stuck detection, and the two-key DONE
   see exactly one run per iteration (one `diffHash`).
 - **The scorer is the frozen ladder — no second scorer.** Candidates are ranked by the **same**
-  `makeLadder(contract)` the loop already uses: a candidate that **passes** the frozen ladder beats any
-  that fails; ties break to **lower token cost**, then **lowest candidate index** (stable). If **all N
-  fail**, the least-cost failing candidate wins and the iteration is a **normal red** that loops through
-  DECIDE unchanged. A candidate that **crashes / times out** scores a hard red and can't win on merit.
+  `makeLadder(contract)` the loop already uses, and graded by **how far each got up that ladder**: the
+  candidate that climbed **furthest up the ladder wins** (an all-pass candidate, whose depth equals the
+  rung count, beats every partial). This *subsumes* the old boolean pass — a real pass is just maximal
+  depth — so it's still one frozen scorer, and it **distinguishes two failing attempts** the boolean
+  couldn't. The depth is read straight off the ladder verdict at **zero extra execution cost**: the ladder
+  already **short-circuits at the first failing rung**, so "rungs passed" is just the position where it
+  stopped (no second pass, no re-grading). Ties on depth break to **lower token cost**, then **lowest
+  candidate index** (stable). If **all N fail**, the furthest-then-cheapest failing candidate wins and the
+  iteration is a **normal red** that loops through DECIDE unchanged. A candidate that **crashes / times
+  out** scores a hard red (depth 0) and can't win on merit.
 - **Isolated worktrees, promoted without a commit.** Each candidate runs in its own linked **git
   worktree** off the current baseline tree, so the N attempts never see each other's edits; the winning
   tree is promoted into the canonical workspace (no user-visible commit, `HEAD` untouched), and **every**
   worktree is torn down on every exit path. So the canonical loop still records **one** `diffHash` per
   iteration — no-diff / oscillation / repeat-failure keep their meaning.
-- **Write-ahead + resume.** Each candidate is logged the moment it completes (`CANDIDATE_RAN`), then the
-  selection (`CANDIDATE_SELECTED`) before the tree is promoted. On `--resume` a crash mid-fan-out re-runs
-  **only the not-yet-logged candidates** (completed ones are read back from their markers, never re-run)
-  and re-selects deterministically — no tree is double-applied. These markers are Driver-side only and
-  are **never** fed to the reducer (replay skips them, exactly like the internal checkpoint marker).
+- **Write-ahead + resume.** Each candidate is logged the moment it completes (`CANDIDATE_RAN`, now also
+  carrying its ladder depth so resume re-selects by the same graded key), then the selection
+  (`CANDIDATE_SELECTED`) before the tree is promoted. On `--resume` a crash mid-fan-out re-runs **only the
+  not-yet-logged candidates** (completed ones are read back from their markers, never re-run) and
+  re-selects deterministically — no tree is double-applied. These markers are Driver-side only and are
+  **never** fed to the reducer (replay skips them, exactly like the internal checkpoint marker).
+- **`--resume-best-of-incomplete rerun|collapse` — determinism vs. the best winner.** When a `--resume`
+  lands on a fan-out that crashed mid-flight (some `CANDIDATE_RAN` markers, no `CANDIDATE_SELECTED`), you
+  choose how to finish it. **`rerun`** (the default) re-runs the not-yet-logged indices then selects over
+  the **full** set — maximally faithful to the original N-way fan-out, at the cost of more agent calls.
+  **`collapse`** selects from **only the already-logged** candidates and re-runs **nothing** — cheaper and
+  fully deterministic, considering a smaller set. Either way the winner still flows through the canonical
+  ladder + Sign-off (collapse changes only *which* candidates are considered on resume, never the two-key
+  gate). Fail-closed: if **zero** candidates were logged, `collapse` still runs the full set (you can't
+  collapse to an empty set — never a green-from-nothing).
 - **Composes with everything.** **`--phased`** sub-goals inherit `--candidates` (each phase runs its own
   tournament); **`--delta-verify`** is unaffected (the judge still reviews the winner's delta);
   **`--sandbox`** jails each of the N execs through the same launcher. Best-of-N needs a **committed
