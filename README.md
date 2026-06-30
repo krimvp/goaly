@@ -161,6 +161,22 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   (shown at SEAL) so it can't drift. A plain `--verify-cmd` run with no authored files skips the check.
 - **Two keys for DONE:** the frozen verifier passes *and* the independent approver (Sign-off, veto-only)
   doesn't veto.
+- **Best-of-N parallel worker (`--candidates N`, default 1).** Each iteration can fan out **N independent
+  worker attempts in isolated git worktrees** off the current baseline tree, score each against the
+  **same frozen verifier ladder**, keep the **best** candidate's tree, and advance. The whole tournament
+  is **Driver-side**: the pure reducer sees exactly **one** winning agent run and never learns N existed,
+  so the state machine is untouched and `--candidates 1` is byte-for-byte the classic single attempt. The
+  **scorer is the frozen ladder itself** (no second scorer that could disagree): candidates are ranked by
+  **how far each got *up* that ladder** — the **furthest up the ladder wins** (an all-pass candidate, the
+  maximal depth, beats every partial), so two *failing* attempts are no longer indistinguishable. This
+  graded depth is read straight off the ladder verdict at **zero extra cost** (the ladder already
+  short-circuits at the first failing rung, so "rungs passed" is just where it stopped). Ties on depth
+  break to lower token cost, then lowest index; all-N-fail is a normal red iteration (the furthest-then-
+  cheapest failing candidate) that loops as usual; a crashed/timed-out candidate scores a hard red (depth
+  0) and can't win. Each candidate completes write-ahead, so `--resume` re-runs only the not-yet-logged
+  ones and re-selects deterministically — or, with `--resume-best-of-incomplete collapse`, collapses to the
+  best already-logged candidate and re-runs nothing. Needs a committed HEAD (it refuses to start fail-closed
+  on an unborn branch). See [Best-of-N parallel worker](#best-of-n-parallel-worker---candidates).
 - **Compile is resilient, not one-shot.** A `COMPILE_FAILED` (a correctable authoring mistake — bad
   path, transient parse miss) re-authors the verification with the error fed back as guidance, up to
   `--max-compile-retries` (default 2; `0` disables), before the run fails — so one bad compile output
@@ -250,6 +266,70 @@ ACCEPT  (a cumulative contract on the ORIGINAL goal) ──both keys──► DO
   every phase). `--resume` re-enters mid-plan without repeating completed phases. `goaly runs show`
   prints the frozen plan and stamps each iteration with its phase.
 
+## Best-of-N parallel worker (`--candidates`)
+
+Some iterations are a coin-flip — one attempt half-finishes, another nails it. `--candidates N` (alias
+`--best-of N`, default `1`) runs **N independent worker attempts every iteration** and keeps the best,
+without ever weakening the bar or letting the reducer learn N existed.
+
+```
+each iteration, with --candidates N:
+   ┌─ worktree 1 (off the baseline tree) ─► RUN_AGENT ─► score the FROZEN ladder ─┐
+   ├─ worktree 2 ───────────────────────► RUN_AGENT ─► score the FROZEN ladder ──┤  tournament
+   └─ … worktree N ─────────────────────► RUN_AGENT ─► score the FROZEN ladder ──┘  (Driver-side)
+                                              │ pick the BEST candidate
+                                              ▼ promote its tree → ONE AGENT_RAN → the loop continues
+```
+
+- **The tournament is Driver-side; the reducer is untouched.** The pure state machine emits one
+  `RUN_AGENT_BEST_OF` command (decided purely from config, still exactly one command per state) and the
+  Driver feeds back the **same single `AGENT_RAN`** it always did — for the **winner**. So `--candidates
+  1` is byte-for-byte the classic single attempt, and the loop, stuck detection, and the two-key DONE
+  see exactly one run per iteration (one `diffHash`).
+- **The scorer is the frozen ladder — no second scorer.** Candidates are ranked by the **same**
+  `makeLadder(contract)` the loop already uses, and graded by **how far each got up that ladder**: the
+  candidate that climbed **furthest up the ladder wins** (an all-pass candidate, whose depth equals the
+  rung count, beats every partial). This *subsumes* the old boolean pass — a real pass is just maximal
+  depth — so it's still one frozen scorer, and it **distinguishes two failing attempts** the boolean
+  couldn't. The depth is read straight off the ladder verdict at **zero extra execution cost**: the ladder
+  already **short-circuits at the first failing rung**, so "rungs passed" is just the position where it
+  stopped (no second pass, no re-grading). Ties on depth break to **lower token cost**, then **lowest
+  candidate index** (stable). If **all N fail**, the furthest-then-cheapest failing candidate wins and the
+  iteration is a **normal red** that loops through DECIDE unchanged. A candidate that **crashes / times
+  out** scores a hard red (depth 0) and can't win on merit.
+- **Isolated worktrees, promoted without a commit.** Each candidate runs in its own linked **git
+  worktree** off the current baseline tree, so the N attempts never see each other's edits; the winning
+  tree is promoted into the canonical workspace (no user-visible commit, `HEAD` untouched), and **every**
+  worktree is torn down on every exit path. So the canonical loop still records **one** `diffHash` per
+  iteration — no-diff / oscillation / repeat-failure keep their meaning.
+- **Write-ahead + resume.** Each candidate is logged the moment it completes (`CANDIDATE_RAN`, now also
+  carrying its ladder depth so resume re-selects by the same graded key), then the selection
+  (`CANDIDATE_SELECTED`) before the tree is promoted. On `--resume` a crash mid-fan-out re-runs **only the
+  not-yet-logged candidates** (completed ones are read back from their markers, never re-run) and
+  re-selects deterministically — no tree is double-applied. These markers are Driver-side only and are
+  **never** fed to the reducer (replay skips them, exactly like the internal checkpoint marker).
+- **`--resume-best-of-incomplete rerun|collapse` — determinism vs. the best winner.** When a `--resume`
+  lands on a fan-out that crashed mid-flight (some `CANDIDATE_RAN` markers, no `CANDIDATE_SELECTED`), you
+  choose how to finish it. **`rerun`** (the default) re-runs the not-yet-logged indices then selects over
+  the **full** set — maximally faithful to the original N-way fan-out, at the cost of more agent calls.
+  **`collapse`** selects from **only the already-logged** candidates and re-runs **nothing** — cheaper and
+  fully deterministic, considering a smaller set. Either way the winner still flows through the canonical
+  ladder + Sign-off (collapse changes only *which* candidates are considered on resume, never the two-key
+  gate). Fail-closed: if **zero** candidates were logged, `collapse` still runs the full set (you can't
+  collapse to an empty set — never a green-from-nothing).
+- **Cost scales with K, and K is capped.** Running N attempts every iteration multiplies the
+  per-iteration **worker** spend up to **~N×** (the K attempts run concurrently). That spend is metered
+  and still governed by **`--budget-tokens`** (the whole-run cap), so a budget bounds total spend
+  regardless of K. Because each candidate is a full concurrent worker run **plus** a git worktree, an
+  unbounded K is a resource-exhaustion footgun: **K is capped at 16** — a `--candidates` / `--best-of`
+  value above 16 is a **fail-closed** usage error. `--candidates 1` (the default) and any `2..16` are
+  unchanged.
+- **Composes with everything.** **`--phased`** sub-goals inherit `--candidates` (each phase runs its own
+  tournament); **`--delta-verify`** is unaffected (the judge still reviews the winner's delta);
+  **`--sandbox`** jails each of the N execs through the same launcher. Best-of-N needs a **committed
+  HEAD** — `git worktree` can't check out an unborn tree, so a `--candidates > 1` run on a HEAD-less repo
+  **refuses to start** (fail-closed) with a clear message; make an initial commit or use `--candidates 1`.
+
 ## Hardening against reward-hacking
 
 The point of goaly is correctness under adversarial self-interest, so the loop is hardened against
@@ -278,6 +358,37 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   deadlock-prone setup (it can stall authoring a bar it cannot satisfy or recognize as satisfied). For
   autonomous `--generate`, prefer `--approver-model` (and/or `--judge-model`) on a **different
   model/provider** so the second key is a genuinely independent skeptic.
+- **The second key can be a multi-vote panel.** `--approver-quorum N` (default `1`) runs the Sign-off
+  approver as an **N-reviewer panel** behind the unchanged seam — the reducer and driver still see
+  exactly one verdict. The panel **greens only on a strict supermajority** of no-veto votes
+  (`noVetoCount * 2 > N`) *and* only when **every** counted reviewer parsed; any reviewer that throws,
+  times out, or returns unparseable output counts as a **veto**, and zero parseable reviewers is a
+  veto — so a panel is **never weaker** than the single veto. At `N > 1` the reviewers sample at a
+  small diversity temperature (`--approver-diversity-temp`, default `0.5`) and are cycled through a
+  small default lens taxonomy (correctness / security / goal-actually-met / prompt-injection) for
+  perspective spread; `N = 1` is **byte-for-byte** the historical single call (temperature 0, no
+  lens). A quorum on **one** model is **variance reduction, not perspective independence** — goaly
+  warns when a multi-vote panel shares a model with the judge or the worker; pair `--approver-quorum`
+  with `--approver-model` on a different model/provider for a genuinely independent second key.
+  **Cost:** a panel multiplies approver LLM spend **~quorum×**; that spend is metered and counts
+  against **`--budget-tokens`**. A **small panel (≈3–5 reviewers)** is the recommended practical range;
+  `--approver-quorum 1` (the default) is **cost-neutral**.
+- **The lens taxonomy is overridable.** `--approver-lenses l1,l2,…` replaces the built-in lens taxonomy
+  with an **operator-supplied** comma-separated list, cycled across reviewers when `quorum > 1`
+  (ignored at quorum 1). Each lens biases one reviewer toward a failure mode and rides the approver
+  **system** prompt — it is operator config, **not** the worker-controlled diff (which stays fenced as
+  untrusted data). Absent ⇒ the default correctness / security / goal-actually-met / prompt-injection
+  lenses, byte-for-byte unchanged.
+- **The panel can run genuinely independent models.** `--approver-models m1,m2,…` gives the Sign-off
+  panel **real per-reviewer independence**: reviewer *i* runs model *i* (cycled when the quorum
+  exceeds the count), each paired with lens *i*, every one an `'approve'`-metered provider on the same
+  `--llm-provider` — so **all** panel spend still attributes to the approver layer (no new spend
+  category). With `--approver-models` the quorum **defaults to the model count** unless you set
+  `--approver-quorum` explicitly. Because **≥2 distinct models** have uncorrelated blind spots, that
+  panel **is** the independent second key (not just variance reduction), so goaly **suppresses** the
+  variance-reduction / collapse warnings; a one-model list (or all-identical entries) falls back to the
+  single-model panel and the warnings stay. Use `--approver-model` (singular) for a single distinct
+  model; `--approver-models` (plural) for a per-reviewer panel.
 - **The verify command runs with a credential-scrubbed environment.** The verifier executes
   worker/model-authored code on your host every iteration; goaly strips credential-looking variables
   (`*_TOKEN`, `*_KEY`, `*SECRET*`, `AWS_*`, `GITHUB_*`, …) from its environment so they can't be
@@ -446,6 +557,10 @@ goaly run --goal "step 2 of the build" --verify-cmd "npm test" --baseline <ref-o
 
 # Keep the per-iteration judge prompt flat on a long run (DONE stays cumulative-safe):
 goaly run --goal "..." --verify-cmd "npm test" --delta-verify
+
+# Best-of-N: run 3 isolated attempts each iteration and keep the one that best passes the frozen
+# ladder (needs a committed HEAD; composes with --phased / --delta-verify / --sandbox):
+goaly run --goal "..." --verify-cmd "npm test" --candidates 3   # or --best-of 3
 
 # Author verification into test/, give the compiler more self-correction, and loosen no-diff for an
 # exploratory build (authored files are auto git-excluded, so your `git status` stays clean):
@@ -714,8 +829,15 @@ is the global default (the harness *and* the LLM steps); `--llm-model` overrides
 `--explain` observer) override a single step. Precedence per LLM
 step: per-step flag → `--llm-model` → `--model` → the tool's own default. `--llm-provider`
 (`claude` default, or `codex` / `droid` / `pi` / `openai`) picks which provider runs those steps —
-handy when the harness and the LLM steps should share a model namespace. Omit them all and every tool
-uses its own default.
+handy when the harness and the LLM steps should share a model namespace. **`--approver-quorum N`**
+(default `1`) turns the Sign-off approver into an N-reviewer panel (see *Two keys for DONE* above),
+with **`--approver-diversity-temp T`** (default `0.5`, applied only when `N > 1`) tuning the panel's
+sampling spread. **`--approver-models m1,m2,…`** runs that panel across **distinct models** for real
+per-reviewer independence (reviewer *i* → model *i*, cycled); with it set the quorum defaults to the
+model count, and ≥2 distinct models make the panel a genuinely independent second key.
+**`--approver-lenses l1,l2,…`** overrides the panel's default review-lens taxonomy with an
+operator-supplied list (cycled across reviewers when `N > 1`, ignored at `N = 1`). All of these
+are pure wiring and never enter the frozen contract. Omit them all and every tool uses its own default.
 
 **Harness selection.** `--harness` (`claude` default, or `codex` / `droid` / `pi` / `goaly-code`) picks the
 write-role coding agent. `goaly-code` is the first non-CLI harness: goaly drives its own tool-use loop

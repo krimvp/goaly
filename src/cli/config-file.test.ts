@@ -54,6 +54,27 @@ describe('overlayFromConfig', () => {
     expect(overlay).toEqual({ 'budget-tokens': '500000', 'max-seal-revisions': '0' });
   });
 
+  it('accepts the approver panel keys (issue #84)', () => {
+    const overlay = overlayFromConfig(
+      { 'approver-quorum': 3, 'approver-diversity-temp': 0.7 },
+      '.goalyrc',
+    );
+    expect(overlay).toEqual({ 'approver-quorum': '3', 'approver-diversity-temp': '0.7' });
+  });
+
+  it('joins an --approver-lenses array into the comma wire form (issue #84 OQ4)', () => {
+    const overlay = overlayFromConfig(
+      { 'approver-lenses': ['CORRECTNESS', 'SECURITY'] },
+      '.goalyrc',
+    );
+    expect(overlay).toEqual({ 'approver-lenses': 'CORRECTNESS,SECURITY' });
+  });
+
+  it('also accepts --approver-lenses as a comma-separated string (issue #84 OQ4)', () => {
+    const overlay = overlayFromConfig({ 'approver-lenses': 'CORRECTNESS,SECURITY' }, '.goalyrc');
+    expect(overlay).toEqual({ 'approver-lenses': 'CORRECTNESS,SECURITY' });
+  });
+
   it('rejects an unknown key (fails closed)', () => {
     expect(() => overlayFromConfig({ bogus: 'x' }, '.goalyrc')).toThrow(UsageError);
   });

@@ -99,6 +99,29 @@ export const RunConfig = z.object({
   maxCompileRetries: z.number().int().nonnegative().default(2),
   maxIterations: z.number().int().positive().default(10),
   /**
+   * Best-of-N parallel worker (issue #85). When > 1, each loop iteration fans out K independent worker
+   * attempts in ISOLATED git worktrees off the current baseline tree, scores each against the SAME
+   * frozen verifier ladder, keeps the best candidate's tree, and feeds the reducer exactly ONE winning
+   * AGENT_RAN event (it never learns K existed). The whole tournament is Driver-side; the reducer only
+   * picks RUN_AGENT_BEST_OF over RUN_AGENT purely from this number. Default 1 ⇒ the classic single
+   * attempt, byte-for-byte unchanged (no markers, RUN_AGENT exactly as before). An operational LOOP
+   * knob (it inherits into a --phased sub-goal via the LoopPolicy view), never the frozen contract.
+   */
+  candidates: z.number().int().positive().default(1),
+  /**
+   * How `--resume` handles an iteration whose best-of-N fan-out crashed mid-flight — prior
+   * `CANDIDATE_RAN` markers but no `CANDIDATE_SELECTED` (issue #85 follow-up):
+   *  - `'rerun'` (default): re-run ONLY the not-yet-logged candidate indices, then select over the
+   *    FULL set — byte-for-byte the historical behavior, maximally faithful to the original fan-out.
+   *  - `'collapse'`: select the winner from ONLY the already-logged candidates and re-run NOTHING —
+   *    cheaper + deterministic, at the cost of considering a smaller set. Fail-closed: if ZERO
+   *    candidates were logged it STILL runs the full set (you can't collapse to an empty set; never a
+   *    green-from-nothing). Selection still uses the same graded {@link selectWinner}.
+   * Loop-policy/driver WIRING — never frozen into the contract; inherited by a `--phased` sub-goal
+   * via the LoopPolicy view (so a long phased run resumes consistently across phases).
+   */
+  resumeBestOfIncomplete: z.enum(['rerun', 'collapse']).default('rerun'),
+  /**
    * Phased decomposition (issue #48). When true the run starts with a PLAN phase that turns the goal
    * into a frozen, ordered plan of sub-goals; each sub-goal runs as its own frozen, two-key contract
    * (with a checkpoint between phases), finished by a cumulative ACCEPT contract on the ORIGINAL goal.
@@ -145,6 +168,28 @@ export const RunConfig = z.object({
     })
     .default({}),
   /**
+   * Sign-off (second-key) approver panel (issue #84). `quorum` reviewers behind the unchanged
+   * Approver seam: with `quorum === 1` (the default) Sign-off is byte-for-byte the historical single
+   * call. `quorum > 1` runs a perspective-diverse panel that greens ONLY on a strict supermajority of
+   * no-veto votes (every counted reviewer must parse) and otherwise vetoes — never weaker than the
+   * single veto. `diversityTemperature` is applied ONLY when `quorum > 1`. Pure WIRING — never frozen
+   * into the contract (it's how the second key is produced, not part of what "done" means).
+   */
+  approver: z
+    .object({
+      quorum: z.number().int().min(1).default(1),
+      diversityTemperature: z.number().min(0).max(2).default(0.5),
+      /**
+       * User-overridable review lenses (issue #84 OQ4). When set (≥1 entry), this OPERATOR-supplied
+       * taxonomy replaces {@link DEFAULT_LENSES} and is cycled across the panel when `quorum > 1`
+       * (ignored at quorum 1). Each entry is trimmed + non-empty (fail-closed at the CLI seam). The
+       * lens text rides the approver SYSTEM prompt — it is operator config, never the worker-controlled
+       * diff (which stays fenced). Absent ⇒ the default taxonomy, byte-for-byte unchanged.
+       */
+      lenses: z.array(z.string().min(1)).nonempty().optional(),
+    })
+    .default({}),
+  /**
    * Follow-up session inheritance (Capability C, `--from-run … --inherit-session`). When set, the
    * follow-up's FIRST agent turn resumes this prior harness session so the agent keeps its working
    * memory; after turn 1 the real returned session id overwrites it. The NEW frozen contract still
@@ -179,10 +224,17 @@ export type GatePolicy = Pick<
 /** Operational loop policy the pure reducer reads: iteration cap, stuck, budget, phasing, tools. */
 export type LoopPolicy = Pick<
   RunConfig,
-  'maxIterations' | 'stuckPolicy' | 'budget' | 'phased' | 'maxPhases' | 'installMissingTools'
+  | 'maxIterations'
+  | 'candidates'
+  | 'resumeBestOfIncomplete'
+  | 'stuckPolicy'
+  | 'budget'
+  | 'phased'
+  | 'maxPhases'
+  | 'installMissingTools'
 >;
 /** Pure Driver wiring — NEVER the frozen contract, never the reducer's decision (the diff scope). */
-export type DriverWiring = Pick<RunConfig, 'diffIgnore' | 'deltaVerify'>;
+export type DriverWiring = Pick<RunConfig, 'diffIgnore' | 'deltaVerify' | 'approver'>;
 
 /** Extract the {@link GatePolicy} fields. Pure; used to re-derive a phase config from the base. */
 export const pickGatePolicy = (c: GatePolicy): GatePolicy => ({
@@ -194,6 +246,8 @@ export const pickGatePolicy = (c: GatePolicy): GatePolicy => ({
 /** Extract the {@link LoopPolicy} fields. Pure. */
 export const pickLoopPolicy = (c: LoopPolicy): LoopPolicy => ({
   maxIterations: c.maxIterations,
+  candidates: c.candidates,
+  resumeBestOfIncomplete: c.resumeBestOfIncomplete,
   stuckPolicy: c.stuckPolicy,
   budget: c.budget,
   phased: c.phased,
@@ -204,6 +258,7 @@ export const pickLoopPolicy = (c: LoopPolicy): LoopPolicy => ({
 export const pickDriverWiring = (c: DriverWiring): DriverWiring => ({
   diffIgnore: c.diffIgnore,
   deltaVerify: c.deltaVerify,
+  approver: c.approver,
 });
 
 /**
@@ -228,6 +283,14 @@ export const CliInput = z.object({
   maxSealRevisions: z.coerce.number().int().nonnegative().optional(),
   maxCompileRetries: z.coerce.number().int().nonnegative().optional(),
   maxIterations: z.coerce.number().int().positive().optional(),
+  /**
+   * Best-of-N parallel worker (issue #85): a positive-int candidate count (default 1), capped at 16
+   * (issue #85 OQ4) — each candidate is a full concurrent worker + worktree, so an unbounded K is a
+   * resource-exhaustion footgun. The CLI seam fails closed above the cap with a clearer message.
+   */
+  candidates: z.coerce.number().int().positive().max(16).optional(),
+  /** Resume policy for an incomplete best-of-N fan-out (issue #85 follow-up); enum, fail-closed. */
+  resumeBestOfIncomplete: z.enum(['rerun', 'collapse']).optional(),
   /** Phased decomposition (issue #48). */
   phased: z.coerce.boolean().optional(),
   maxPhases: z.coerce.number().int().positive().optional(),
@@ -243,6 +306,15 @@ export const CliInput = z.object({
   stuckRepeatThreshold: z.coerce.number().int().min(2).optional(),
   stuckOscillation: z.boolean().optional(),
   stuckCrashThreshold: z.coerce.number().int().min(2).optional(),
+  /** Sign-off approver panel (issue #84): a positive-int reviewer quorum (default 1). */
+  approverQuorum: z.coerce.number().int().positive().optional(),
+  /** Diversity temperature for a `> 1` approver panel (issue #84); ignored at quorum 1. */
+  approverDiversityTemp: z.coerce.number().min(0).max(2).optional(),
+  /**
+   * User-overridable approver review lenses (issue #84 OQ4): a LIST of operator-supplied lens
+   * addenda, each trimmed + non-empty, replacing the default taxonomy when set. Ignored at quorum 1.
+   */
+  approverLenses: z.array(z.string().min(1)).nonempty().optional(),
 });
 export type CliInput = z.infer<typeof CliInput>;
 
@@ -276,6 +348,16 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
   if (input.stuckCrashThreshold !== undefined)
     stuckPolicy.harnessCrashThreshold = input.stuckCrashThreshold;
 
+  // Sign-off approver panel (issue #84): override only the fields the user set; the rest keep their
+  // schema defaults (quorum 1 ⇒ byte-for-byte the single-call approver). Omitted entirely when no
+  // flag was given so the approver-block default applies.
+  const approver: { quorum?: number; diversityTemperature?: number; lenses?: [string, ...string[]] } =
+    {};
+  if (input.approverQuorum !== undefined) approver.quorum = input.approverQuorum;
+  if (input.approverDiversityTemp !== undefined)
+    approver.diversityTemperature = input.approverDiversityTemp;
+  if (input.approverLenses !== undefined) approver.lenses = input.approverLenses;
+
   return RunConfig.parse({
     goal: input.goal,
     verifier,
@@ -294,6 +376,10 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
       ? { maxCompileRetries: input.maxCompileRetries }
       : {}),
     ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
+    ...(input.candidates !== undefined ? { candidates: input.candidates } : {}),
+    ...(input.resumeBestOfIncomplete !== undefined
+      ? { resumeBestOfIncomplete: input.resumeBestOfIncomplete }
+      : {}),
     ...(input.phased !== undefined ? { phased: input.phased } : {}),
     ...(input.maxPhases !== undefined ? { maxPhases: input.maxPhases } : {}),
     ...(input.maxPlanRevisions !== undefined
@@ -303,5 +389,6 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     ...(diffIgnore.length > 0 ? { diffIgnore } : {}),
     ...(input.deltaVerify !== undefined ? { deltaVerify: input.deltaVerify } : {}),
     ...(Object.keys(stuckPolicy).length > 0 ? { stuckPolicy } : {}),
+    ...(Object.keys(approver).length > 0 ? { approver } : {}),
   } satisfies RunConfigInput);
 }

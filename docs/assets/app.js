@@ -101,8 +101,8 @@
     },
     run: {
       t: "RUN_AGENT — one turn",
-      d: "Spawn the chosen harness headlessly with the prompt, resuming the session.",
-      pills: ['<span class="pill neutral">harness adapter</span>'],
+      d: "Spawn the chosen harness headlessly with the prompt, resuming the session. With --candidates N (best-of-N) the Driver fans out N isolated worktree attempts, scores each against the SAME frozen ladder, and keeps the best one's tree — the reducer still sees exactly one winning run and never learns N existed.",
+      pills: ['<span class="pill neutral">harness adapter</span>', '<span class="pill violet">--candidates N (best-of-N)</span>'],
     },
     ladder: {
       t: "Verify — deterministic first",

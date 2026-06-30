@@ -7,7 +7,7 @@ import { composeDeps, makeLlmProvider, buildLadder } from './compose';
 import { codexCodec } from '../agent-cli/codex-codec';
 import { droidCodec } from '../agent-cli/droid-codec';
 import { piCodec } from '../agent-cli/pi-codec';
-import { makeConfig, makeFakeContract, InMemoryLogFs } from '../testing/fakes';
+import { makeConfig, makeFakeContract, InMemoryLogFs, passVerdict } from '../testing/fakes';
 import { sha256Hex } from '../util/hash';
 import { asRunId, DiffHash } from '../domain/ids';
 import { freezeContract } from '../util/hash';
@@ -91,6 +91,64 @@ describe('composeDeps — phased wiring (issue #48)', () => {
     expect(staticP.planner?.constructor.name).toBe('StaticPlanner');
     const agentP = composeDeps(makeConfig({ phased: true }), opts());
     expect(agentP.planner?.constructor.name).toBe('AgentPlanner');
+  });
+});
+
+describe('composeDeps — per-reviewer approver models (follow-up to issue #84)', () => {
+  const baseInput = {
+    goal: 'g',
+    rubric: 'r',
+    diff: 'diff --git a/x b/x',
+    verdicts: [passVerdict('green')],
+  };
+  // A FakeLlm with a no-veto completion that reports tokens so we can confirm the panel's spend is
+  // metered through the SHARED meter (the approver layer — no new spend category).
+  const noVetoWithTokens = { text: '{"veto": false}', tokensUsed: 100 };
+  const opts = (over: Record<string, unknown> = {}) => ({
+    harness: 'fake' as const,
+    workspaceRoot: '/tmp/x',
+    runId: asRunId('run-mm'),
+    noLogConsole: true,
+    logFs: new InMemoryLogFs(),
+    ...over,
+  });
+
+  it('builds a per-reviewer panel that defaults the quorum to the model count', async () => {
+    // Three models, no --approver-quorum ⇒ the panel makes one call per model (quorum = 3).
+    const llm = new FakeLlm([noVetoWithTokens, noVetoWithTokens, noVetoWithTokens]);
+    const deps = composeDeps(
+      makeConfig(),
+      opts({ llm, models: { approverModels: ['a', 'b', 'c'] } }),
+    );
+
+    const verdict = await deps.approver.review(baseInput);
+
+    expect(verdict.veto).toBe(false);
+    expect(llm.requests).toHaveLength(3);
+    // All three reviewer calls are attributed to the approver layer via the shared meter.
+    expect(deps.llmMeter?.take().calls).toBe(3);
+  });
+
+  it('cycles the panel when --approver-quorum exceeds the model count', async () => {
+    const llm = new FakeLlm(Array(5).fill(noVetoWithTokens));
+    const deps = composeDeps(
+      makeConfig({ approver: { quorum: 5 } }),
+      opts({ llm, models: { approverModels: ['a', 'b'] } }),
+    );
+
+    await deps.approver.review(baseInput);
+
+    expect(llm.requests).toHaveLength(5);
+  });
+
+  it('without --approver-models the approver stays the single-model path (quorum 1 single call)', async () => {
+    const llm = new FakeLlm([noVetoWithTokens]);
+    const deps = composeDeps(makeConfig(), opts({ llm }));
+
+    await deps.approver.review(baseInput);
+
+    expect(llm.requests).toHaveLength(1);
+    expect(llm.requests[0]?.temperature).toBe(0);
   });
 });
 

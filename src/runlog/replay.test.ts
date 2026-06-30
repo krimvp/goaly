@@ -152,6 +152,48 @@ describe('replay()', () => {
     expect(withCheckpoint.baseline).toBe(tree);
   });
 
+  it('skips CANDIDATE_RAN / CANDIDATE_SELECTED markers in the reducer fold (best-of-N, issue #85)', async () => {
+    const runlog = await driveAndStore();
+    const stored = (await runlog.read())!;
+    const baseline = replay(stored.header.config, stored.entries);
+
+    // Splice best-of-N markers into the stream (after the first AGENT_RAN). Like CHECKPOINTED they are
+    // Driver-side only — the reducer must NEVER fold them, so the terminal state stays identical.
+    const insertAt = stored.entries.findIndex((e) => e.event.tag === 'AGENT_RAN') + 1;
+    const ran: OrchestratorEvent = {
+      tag: 'CANDIDATE_RAN',
+      iteration: 1,
+      index: 0,
+      tree: DiffHash.parse('a'.repeat(40)),
+      budget: { exceeded: false },
+      pass: true,
+      run: { output: '', sessionId: SessionId.parse('s'), status: 'completed' },
+    };
+    const selected: OrchestratorEvent = {
+      tag: 'CANDIDATE_SELECTED',
+      iteration: 1,
+      winner: 0,
+      tree: DiffHash.parse('a'.repeat(40)),
+    };
+    const mk = (event: OrchestratorEvent): RunLogEntry => ({
+      runId,
+      seq: 999,
+      ts: 1,
+      contractHash: contract.contractHash,
+      event,
+      stateTagAfter: 'RUNNING_AGENT',
+    });
+    const spliced = [
+      ...stored.entries.slice(0, insertAt),
+      mk(ran),
+      mk(selected),
+      ...stored.entries.slice(insertAt),
+    ];
+
+    const withMarkers = replay(stored.header.config, spliced);
+    expect(withMarkers.state).toEqual(baseline.state); // reducer unaffected — it never folds them
+  });
+
   it('keeps only the LAST checkpoint tree when several are logged', () => {
     const mk = (tree: string): RunLogEntry => ({
       runId,

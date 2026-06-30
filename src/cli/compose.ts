@@ -23,7 +23,8 @@ import { StaticPlanner } from '../plan/static-planner';
 import { AutoPlanGate, HumanPlanGate } from '../plan/plan-gates';
 import type { Planner } from '../plan/planner';
 import type { PlanGate } from '../plan/plan-gate';
-import { GitWorkspace } from '../workspace/git-workspace';
+import { GitWorkspace, realExec } from '../workspace/git-workspace';
+import { GitWorktreeHost } from '../workspace/git-worktree-host';
 import { excludeFromGit } from '../workspace/git-exclude';
 import { FileRunLog } from '../runlog/file-runlog';
 import { StreamTranscriptSink, STREAM_FILE } from '../runlog/stream-transcript';
@@ -259,6 +260,19 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
           options.egressProxy,
         );
   const workspace = new GitWorkspace(options.workspaceRoot, undefined, excludes, true, runLauncher);
+  // Best-of-N worktree host (issue #85): only wired when `--candidates > 1` (a `--candidates 1` run
+  // never touches it). It shares the canonical root / exec / excludes / verify-jail so each candidate's
+  // isolated worktree hashes + scores identically to the canonical workspace.
+  const worktrees =
+    config.candidates > 1
+      ? new GitWorktreeHost({
+          root: options.workspaceRoot,
+          exec: realExec,
+          excludes,
+          scrubVerifyEnv: true,
+          ...(runLauncher !== undefined ? { runLauncher } : {}),
+        })
+      : undefined;
   // Adopt an explicit `--baseline` (issue #47) so `diff()`/Sign-off compare against it instead of HEAD.
   // The CLI already validated it resolves (fail-closed); a resumed run re-points it from the log.
   if (options.baseline !== undefined) workspace.setBaseline(options.baseline);
@@ -273,6 +287,8 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     const independenceCtx = {
       generate: config.verifier.kind === 'generate',
       autonomous: config.autonomous,
+      approverQuorum: config.approver.quorum,
+      ...(models.approverModels !== undefined ? { approverModels: models.approverModels } : {}),
     };
     for (const warning of independenceWarnings(models, options.harness, provider, independenceCtx)) {
       logger.warn('model independence', { detail: warning });
@@ -370,12 +386,19 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       workspace.setDiffIncludes(contract.generatedFiles.map((f) => f.path));
       return buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs);
     },
-    approver: new AgentApprover({ llm: llmFor(models.approver, 'approve') }),
+    // Sign-off (second key, issue #84 + follow-up): a single reviewer by default (quorum 1 ⇒
+    // byte-for-byte the historical call). `--approver-quorum N` runs a perspective-diverse panel
+    // behind the UNCHANGED Approver seam; `--approver-models m1,m2,…` (follow-up) gives the panel REAL
+    // per-reviewer model independence — one `'approve'`-metered provider per model (so the usage
+    // report still attributes ALL panel spend to the approver layer), cycled across reviewers. With
+    // a model list and no `--approver-quorum`, the quorum defaults to the model count.
+    approver: buildApprover(config, models, llmFor),
     // Pre-flight soundness classifier (Fix #2): a read-only call that decides whether a failing
     // deterministic pre-flight rung is a broken frozen verifier or an honest red. Reuses the judge
     // model — it is a verification judgment — and is metered through the same shared meter.
     prepareLlm: llmFor(models.judge, 'preflight'),
     workspace,
+    ...(worktrees !== undefined ? { worktrees } : {}),
     clock,
     budget: new SystemBudgetMeter(config.budget, clock),
     llmMeter,
@@ -557,6 +580,37 @@ export function buildLadder(
     rungs.unshift(new GeneratedFilesGuard(contract.generatedFiles));
   }
   return new Ladder(rungs);
+}
+
+/**
+ * Build the Sign-off approver (second key). With `--approver-models m1,m2,…` (follow-up to issue #84)
+ * the panel gains REAL per-reviewer model independence: one `'approve'`-metered provider per model
+ * (every panel call still attributes to the approver layer — no new spend category), passed as the
+ * approver's `reviewers`. When the user did NOT pin `--approver-quorum`, the quorum defaults to the
+ * model count (`AgentApprover` applies that default from the reviewers list). The single `llm` stays
+ * the back-compat fallback. Absent ⇒ the single-model approver, byte-for-byte unchanged.
+ *
+ * `--approver-lenses` (issue #84 OQ4) replaces the cycled default lens taxonomy with an
+ * operator-supplied one (forwarded only when set); absent ⇒ the AgentApprover's DEFAULT_LENSES.
+ */
+function buildApprover(
+  config: RunConfig,
+  models: ResolvedModels,
+  llmFor: (model: string | undefined, phase: StreamPhase) => LlmProvider,
+): AgentApprover {
+  const reviewers = (models.approverModels ?? []).map((m) => llmFor(m, 'approve'));
+  // Only forward an explicit `--approver-quorum`. When a model list is given and the user left the
+  // quorum at its default 1, the approver defaults the quorum to the model count instead.
+  const quorumExplicit = reviewers.length === 0 || config.approver.quorum > 1;
+  return new AgentApprover({
+    llm: llmFor(models.approver, 'approve'),
+    diversityTemperature: config.approver.diversityTemperature,
+    ...(reviewers.length > 0 ? { reviewers } : {}),
+    ...(quorumExplicit ? { quorum: config.approver.quorum } : {}),
+    // Operator-supplied review lenses (issue #84 OQ4): forward when set so they replace the default
+    // taxonomy the AgentApprover cycles; absent ⇒ the approver uses DEFAULT_LENSES as today.
+    ...(config.approver.lenses !== undefined ? { lenses: config.approver.lenses } : {}),
+  });
 }
 
 /** The sandbox wiring threaded into {@link makeHarness}: the launcher + the harness-seam profile. */

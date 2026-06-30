@@ -91,9 +91,191 @@ describe('parseArgs', () => {
     expect(a.config.maxCompileRetries).toBe(2);
   });
 
+  describe('--candidates / --best-of (issue #85)', () => {
+    it('defaults candidates to 1 when absent', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.config.candidates).toBe(1);
+    });
+
+    it('parses --candidates N', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--candidates', '4']);
+      expect(a.config.candidates).toBe(4);
+    });
+
+    it('accepts the --best-of alias', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--best-of', '3']);
+      expect(a.config.candidates).toBe(3);
+    });
+
+    it('rejects both --candidates and --best-of together (fail-closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--candidates', '2', '--best-of', '3']),
+      ).rejects.toThrow(/not both/);
+    });
+
+    it('rejects a non-positive --candidates (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--candidates', '0']),
+      ).rejects.toThrow(/positive integer/);
+    });
+  });
+
+  describe('--resume-best-of-incomplete (issue #85 follow-up)', () => {
+    it('defaults to rerun when absent (byte-for-byte the historical behavior)', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.config.resumeBestOfIncomplete).toBe('rerun');
+    });
+
+    it('parses --resume-best-of-incomplete collapse', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--resume-best-of-incomplete', 'collapse',
+      ]);
+      expect(a.config.resumeBestOfIncomplete).toBe('collapse');
+    });
+
+    it('parses --resume-best-of-incomplete rerun', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--resume-best-of-incomplete', 'rerun',
+      ]);
+      expect(a.config.resumeBestOfIncomplete).toBe('rerun');
+    });
+
+    it('rejects an unknown value (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs([
+          'run', '--goal', 'g', '--verify-cmd', 'true', '--resume-best-of-incomplete', 'merge',
+        ]),
+      ).rejects.toThrow(/rerun.*collapse|collapse/);
+    });
+  });
+
   it('parses --verify-dir (issue #52)', async () => {
     const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--verify-dir', 'test']);
     expect(a.verifyDir).toBe('test');
+  });
+
+  describe('--approver-quorum / --approver-diversity-temp (issue #84)', () => {
+    it('defaults the approver quorum to 1 when the flag is absent', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.config.approver.quorum).toBe(1);
+      expect(a.config.approver.diversityTemperature).toBe(0.5);
+    });
+
+    it('parses a positive --approver-quorum', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-quorum', '3']);
+      expect(a.config.approver.quorum).toBe(3);
+    });
+
+    it('parses --approver-diversity-temp', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true',
+        '--approver-quorum', '3', '--approver-diversity-temp', '0.7',
+      ]);
+      expect(a.config.approver.diversityTemperature).toBe(0.7);
+    });
+
+    it('rejects a non-positive --approver-quorum (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-quorum', '0']),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('rejects a non-integer --approver-quorum (fail-closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-quorum', '2.5']),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('rejects an out-of-range --approver-diversity-temp (fail-closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-diversity-temp', '3']),
+      ).rejects.toThrow(UsageError);
+    });
+  });
+
+  describe('--approver-models per-reviewer models (follow-up to issue #84)', () => {
+    it('is absent by default', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.models.approverModels).toBeUndefined();
+    });
+
+    it('parses a comma-separated list into a string array', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--approver-models', 'opus,sonnet,haiku',
+      ]);
+      expect(a.models.approverModels).toEqual(['opus', 'sonnet', 'haiku']);
+    });
+
+    it('trims whitespace around each entry', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--approver-models', ' opus , sonnet ',
+      ]);
+      expect(a.models.approverModels).toEqual(['opus', 'sonnet']);
+    });
+
+    it('rejects an empty entry (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-models', 'opus,,sonnet']),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('rejects an all-empty list (fail-closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-models', ' , ']),
+      ).rejects.toThrow(UsageError);
+    });
+  });
+
+  describe('--approver-lenses user-overridable lenses (issue #84 OQ4)', () => {
+    it('is absent by default (the approver keeps the default taxonomy)', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.config.approver.lenses).toBeUndefined();
+    });
+
+    it('parses a comma-separated list into a string array', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--approver-lenses', 'CORRECTNESS,SECURITY,SPEED',
+      ]);
+      expect(a.config.approver.lenses).toEqual(['CORRECTNESS', 'SECURITY', 'SPEED']);
+    });
+
+    it('trims whitespace around each entry', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--approver-lenses', ' a lens , another ',
+      ]);
+      expect(a.config.approver.lenses).toEqual(['a lens', 'another']);
+    });
+
+    it('rejects an empty entry (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-lenses', 'a,,b']),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('rejects an all-empty list (fail-closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-lenses', ' , ']),
+      ).rejects.toThrow(UsageError);
+    });
+  });
+
+  describe('--candidates K cap (issue #85 OQ4)', () => {
+    it('accepts the cap value 16', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--candidates', '16']);
+      expect(a.config.candidates).toBe(16);
+    });
+
+    it('rejects a value above the cap of 16 (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--candidates', '17']),
+      ).rejects.toThrow(/16/);
+    });
+
+    it('also caps the --best-of alias at 16', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--best-of', '32']),
+      ).rejects.toThrow(/16/);
+    });
   });
 
   it('parses the phased flags (issue #48)', async () => {
@@ -663,6 +845,101 @@ describe('parseArgs', () => {
       expect(a.harness).toBe('codex');
       expect(a.config.maxIterations).toBe(5);
       expect(a.config.verifier).toEqual({ kind: 'existing', ref: 'true' });
+    });
+
+    it('reads --resume-best-of-incomplete from the config file (issue #85 follow-up)', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "resume-best-of-incomplete": "collapse" }' }),
+      );
+      expect(a.config.resumeBestOfIncomplete).toBe('collapse');
+    });
+
+    it('a CLI --resume-best-of-incomplete overrides the config file', async () => {
+      const a = await parseArgs(
+        [
+          'run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true',
+          '--resume-best-of-incomplete', 'rerun',
+        ],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "resume-best-of-incomplete": "collapse" }' }),
+      );
+      expect(a.config.resumeBestOfIncomplete).toBe('rerun');
+    });
+
+    it('reads the approver panel from the config file (issue #84)', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-quorum": 3, "approver-diversity-temp": 0.7 }' }),
+      );
+      expect(a.config.approver.quorum).toBe(3);
+      expect(a.config.approver.diversityTemperature).toBe(0.7);
+    });
+
+    it('reads --approver-models as a JSON array from the config file (follow-up to issue #84)', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-models": ["opus", "sonnet"] }' }),
+      );
+      expect(a.models.approverModels).toEqual(['opus', 'sonnet']);
+    });
+
+    it('also accepts --approver-models as a comma-separated string in the config file', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-models": "opus,sonnet" }' }),
+      );
+      expect(a.models.approverModels).toEqual(['opus', 'sonnet']);
+    });
+
+    it('lets the CLI --approver-models override the config-file list', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true', '--approver-models', 'haiku'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-models": ["opus", "sonnet"] }' }),
+      );
+      expect(a.models.approverModels).toEqual(['haiku']);
+    });
+
+    it('reads --approver-lenses as a JSON array from the config file (issue #84 OQ4)', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-lenses": ["CORRECTNESS", "SECURITY"] }' }),
+      );
+      expect(a.config.approver.lenses).toEqual(['CORRECTNESS', 'SECURITY']);
+    });
+
+    it('also accepts --approver-lenses as a comma-separated string in the config file', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-lenses": "CORRECTNESS,SECURITY" }' }),
+      );
+      expect(a.config.approver.lenses).toEqual(['CORRECTNESS', 'SECURITY']);
+    });
+
+    it('lets the CLI --approver-lenses override the config-file list', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true', '--approver-lenses', 'SPEED'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-lenses": ["CORRECTNESS", "SECURITY"] }' }),
+      );
+      expect(a.config.approver.lenses).toEqual(['SPEED']);
+    });
+
+    it('caps --candidates at 16 on the config-file path too (issue #85 OQ4, fail-closed)', async () => {
+      await expect(
+        parseArgs(
+          ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+          fakeReaders({}),
+          fakeConfig({ [rc]: '{ "candidates": 99 }' }),
+        ),
+      ).rejects.toThrow(/16/);
     });
 
     it('reads per-step timeouts from the config file', async () => {

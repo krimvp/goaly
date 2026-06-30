@@ -48,6 +48,9 @@ const ConfigFileSchema = z
     rubric: FlagValue.optional(),
     autonomous: FlagValue.optional(),
     'max-iterations': FlagValue.optional(),
+    candidates: FlagValue.optional(),
+    'best-of': FlagValue.optional(),
+    'resume-best-of-incomplete': FlagValue.optional(),
     phased: FlagValue.optional(),
     'max-phases': FlagValue.optional(),
     'max-plan-revisions': FlagValue.optional(),
@@ -72,6 +75,16 @@ const ConfigFileSchema = z
     'llm-model': FlagValue.optional(),
     'judge-model': FlagValue.optional(),
     'approver-model': FlagValue.optional(),
+    // Per-reviewer Sign-off models (follow-up to issue #84): a per-lens model LIST. Accept a JSON
+    // ARRAY of strings (idiomatic for a list) OR a comma-separated string (the CLI wire form); both
+    // normalize to the same comma-joined overlay value the CLI's `--approver-models` parser splits.
+    'approver-models': z.union([z.array(z.string()), FlagValue]).optional(),
+    'approver-quorum': FlagValue.optional(),
+    'approver-diversity-temp': FlagValue.optional(),
+    // User-overridable approver review lenses (issue #84 OQ4): like `approver-models`, accept a JSON
+    // ARRAY of strings OR a comma-separated string; both normalize to the comma-joined overlay the
+    // CLI's `--approver-lenses` parser splits (one parsing path).
+    'approver-lenses': z.union([z.array(z.string()), FlagValue]).optional(),
     'compiler-model': FlagValue.optional(),
     'llm-provider': FlagValue.optional(),
     'log-level': FlagValue.optional(),
@@ -113,6 +126,12 @@ export function overlayFromConfig(raw: unknown, source: string): RawFlags {
     if (value === undefined) continue;
     if (typeof value === 'boolean') {
       if (value) overlay[flag] = true; // false → omit (matches CLI flag-absence semantics)
+      continue;
+    }
+    // A LIST value (e.g. `approver-models`) is joined into the comma-separated wire form so it flows
+    // through the SAME `--flag a,b` parser the CLI uses (one parsing path, no special-casing here).
+    if (Array.isArray(value)) {
+      overlay[flag] = value.join(',');
       continue;
     }
     overlay[flag] = typeof value === 'number' ? String(value) : value;

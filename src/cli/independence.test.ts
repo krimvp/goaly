@@ -78,4 +78,74 @@ describe('independenceWarnings', () => {
       expect(w.some((s) => s.includes('judge'))).toBe(true);
     });
   });
+
+  describe('--approver-quorum on one model = variance reduction (issue #84)', () => {
+    it('notes a multi-vote panel that shares a model with the judge/worker', () => {
+      const resolved = resolveModels({ model: 'claude-x' });
+      const w = independenceWarnings(resolved, 'claude', 'claude', { approverQuorum: 3 });
+      const note = w.find((s) => s.includes('VARIANCE REDUCTION'));
+      expect(note).toBeDefined();
+      expect(note).toContain('3-reviewer quorum');
+      expect(note).toContain('--approver-model');
+    });
+
+    it('does NOT add the note at quorum 1 (the single-call approver)', () => {
+      const resolved = resolveModels({ model: 'claude-x' });
+      const w = independenceWarnings(resolved, 'claude', 'claude', { approverQuorum: 1 });
+      expect(w.some((s) => s.includes('VARIANCE REDUCTION'))).toBe(false);
+    });
+
+    it('does NOT add the note when the panel is on its own --approver-model (already independent)', () => {
+      const resolved = resolveModels({ model: 'claude-x', approverModel: 'other-model' });
+      const w = independenceWarnings(resolved, 'claude', 'claude', { approverQuorum: 3 });
+      expect(w.some((s) => s.includes('VARIANCE REDUCTION'))).toBe(false);
+    });
+  });
+
+  describe('--approver-models per-reviewer independence (follow-up to issue #84)', () => {
+    it('≥2 distinct models ⇒ no variance-reduction-only warning (the panel IS independent)', () => {
+      const resolved = resolveModels({ model: 'claude-x', approverModels: ['model-a', 'model-b'] });
+      const w = independenceWarnings(resolved, 'claude', 'claude', {
+        approverQuorum: 3,
+        approverModels: ['model-a', 'model-b'],
+      });
+      expect(w.some((s) => s.includes('VARIANCE REDUCTION'))).toBe(false);
+    });
+
+    it('≥2 distinct models suppress the judge↔approver and worker↔approver collapse warnings', () => {
+      // Default cascade (--model claude-x) would normally collapse all three onto claude-x; a genuine
+      // per-reviewer panel breaks that — no collapse warnings at all.
+      const resolved = resolveModels({ model: 'claude-x', approverModels: ['a', 'b'] });
+      const w = independenceWarnings(resolved, 'claude', 'claude', { approverModels: ['a', 'b'] });
+      expect(w).toEqual([]);
+    });
+
+    it('≥2 distinct models suppress the --generate --autonomous self-judge escalation', () => {
+      const resolved = resolveModels({ model: 'claude-x', approverModels: ['a', 'b'] });
+      const w = independenceWarnings(resolved, 'claude', 'claude', {
+        generate: true,
+        autonomous: true,
+        approverModels: ['a', 'b'],
+      });
+      expect(w).toEqual([]);
+    });
+
+    it('ONE model in the list ⇒ still the single-model panel, warning kept', () => {
+      const resolved = resolveModels({ model: 'claude-x', approverModels: ['claude-x'] });
+      const w = independenceWarnings(resolved, 'claude', 'claude', {
+        approverQuorum: 3,
+        approverModels: ['claude-x'],
+      });
+      expect(w.some((s) => s.includes('VARIANCE REDUCTION'))).toBe(true);
+    });
+
+    it('a list whose entries are all the SAME model is not independent (warning kept)', () => {
+      const resolved = resolveModels({ model: 'claude-x', approverModels: ['m', 'm', 'm'] });
+      const w = independenceWarnings(resolved, 'claude', 'claude', {
+        approverQuorum: 3,
+        approverModels: ['m', 'm', 'm'],
+      });
+      expect(w.some((s) => s.includes('VARIANCE REDUCTION'))).toBe(true);
+    });
+  });
 });
