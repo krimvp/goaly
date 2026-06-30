@@ -286,6 +286,13 @@ function sdkUserToolResults(message: Record<string, unknown>): AgentStreamEvent[
  * → tool_result, and the closing `result` event → usage + done. Pass `errorKey` so a soft failure
  * (`is_error`) on the result line surfaces as `done` status `error`. Unknown lines map to `[]`.
  *
+ * Only the `init` system line (the session-announcing one) yields a `session` event. Claude Code
+ * also emits OTHER `system` subtypes mid-turn (`thinking_tokens`, `post_turn_summary`, …), all
+ * carrying the same `session_id`; mapping every one to a `session` event floods the live `--stream`
+ * view with hundreds of identical, content-free lines that drown the real turns (observed: ~75% of
+ * agent stream lines on a long run). A subtype-less system line (other SDK tools) still yields one,
+ * for forward compatibility. The session id is unchanged, so resume/display is unaffected.
+ *
  * A tool whose `stream-json` only emits a final result envelope (no per-turn assistant lines)
  * degrades to `usage` + `done` for the live view; its final TEXT is still recovered separately by
  * the tool's `FieldExtractor`, so the run is unaffected.
@@ -294,6 +301,9 @@ export function sdkStreamExtractor(opts: { errorKey?: string } = {}): StreamEven
   return (obj) => {
     const type = typeof obj['type'] === 'string' ? obj['type'] : '';
     if (type === 'system') {
+      const subtype = obj['subtype'];
+      // Suppress non-init system lines (mid-turn telemetry that repeats the same session id).
+      if (typeof subtype === 'string' && subtype !== 'init') return [];
       const sid = obj['session_id'] ?? obj['sessionId'];
       return typeof sid === 'string' ? [{ kind: 'session', sessionId: sid }] : [];
     }
