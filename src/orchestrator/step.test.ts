@@ -391,6 +391,22 @@ describe('step() transitions', () => {
     if (cmds[0]?.tag === 'RUN_AGENT') expect(cmds[0].prompt).toContain('build broke');
   });
 
+  it('worker prompts tell the agent goaly verifies automatically (edit, do not self-run the bar)', () => {
+    // Initial prompt (first turn) carries the division-of-labor note...
+    const [s0] = initial(makeConfig());
+    const [s1] = step(s0, { tag: 'CONTRACT_COMPILED', contract });
+    const [, initCmds] = step(s1, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } });
+    const initPrompt = initCmds[0]?.tag === 'RUN_AGENT' ? initCmds[0].prompt : '';
+    expect(initPrompt).toContain('goaly runs the frozen success contract above for you AUTOMATICALLY');
+    expect(initPrompt).toContain('end the turn');
+
+    // ...and so does the continuation prompt after a failed verification.
+    const verifying = step(runningAgent(), agentRan('0000000', '0000001'))[0];
+    const [, cmds] = step(verifying, { tag: 'VERIFIED', verdict: failVerdict('still red') });
+    const loopPrompt = cmds[0]?.tag === 'RUN_AGENT' ? cmds[0].prompt : '';
+    expect(loopPrompt).toContain('goaly runs the frozen success contract above for you AUTOMATICALLY');
+  });
+
   it('throws on an invalid (state, event) pair', () => {
     const [s0] = initial(makeConfig());
     expect(() => step(s0, { tag: 'VERIFIED', verdict: passVerdict() })).toThrow(
