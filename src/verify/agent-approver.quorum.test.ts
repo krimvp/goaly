@@ -193,4 +193,21 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     expect(llm.requests[0]?.system).not.toContain('SHOULD_NOT_APPEAR');
     expect(llm.requests[0]?.temperature).toBe(0);
   });
+
+  it('explicit operator lenses REPLACE the default taxonomy and cycle (issue #84 OQ4)', async () => {
+    const llm = new FakeLlm([noVeto, noVeto, noVeto]);
+    // Two operator lenses, a 3-reviewer panel: they cycle 0→OPS_A, 1→OPS_B, 2→OPS_A, and NONE of the
+    // built-in default lenses (correctness/security/prompt-injection) leaks into any reviewer.
+    const approver = new AgentApprover({ llm, quorum: 3, lenses: ['OPS_LENS_A', 'OPS_LENS_B'] });
+
+    await approver.review(baseInput);
+
+    expect(llm.requests).toHaveLength(3);
+    expect(llm.requests[0]?.system).toContain('OPS_LENS_A');
+    expect(llm.requests[1]?.system).toContain('OPS_LENS_B');
+    expect(llm.requests[2]?.system).toContain('OPS_LENS_A');
+    const joined = llm.requests.map((r) => r.system ?? '').join('\n').toLowerCase();
+    expect(joined).not.toContain('does the change actually implement the goal'); // a DEFAULT_LENSES phrase
+    expect(joined).not.toContain('unsafe deserialization'); // another DEFAULT_LENSES phrase
+  });
 });

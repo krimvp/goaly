@@ -317,6 +317,13 @@ each iteration, with --candidates N:
   ladder + Sign-off (collapse changes only *which* candidates are considered on resume, never the two-key
   gate). Fail-closed: if **zero** candidates were logged, `collapse` still runs the full set (you can't
   collapse to an empty set — never a green-from-nothing).
+- **Cost scales with K, and K is capped.** Running N attempts every iteration multiplies the
+  per-iteration **worker** spend up to **~N×** (the K attempts run concurrently). That spend is metered
+  and still governed by **`--budget-tokens`** (the whole-run cap), so a budget bounds total spend
+  regardless of K. Because each candidate is a full concurrent worker run **plus** a git worktree, an
+  unbounded K is a resource-exhaustion footgun: **K is capped at 16** — a `--candidates` / `--best-of`
+  value above 16 is a **fail-closed** usage error. `--candidates 1` (the default) and any `2..16` are
+  unchanged.
 - **Composes with everything.** **`--phased`** sub-goals inherit `--candidates` (each phase runs its own
   tournament); **`--delta-verify`** is unaffected (the judge still reviews the winner's delta);
   **`--sandbox`** jails each of the N execs through the same launcher. Best-of-N needs a **committed
@@ -363,6 +370,15 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   lens). A quorum on **one** model is **variance reduction, not perspective independence** — goaly
   warns when a multi-vote panel shares a model with the judge or the worker; pair `--approver-quorum`
   with `--approver-model` on a different model/provider for a genuinely independent second key.
+  **Cost:** a panel multiplies approver LLM spend **~quorum×**; that spend is metered and counts
+  against **`--budget-tokens`**. A **small panel (≈3–5 reviewers)** is the recommended practical range;
+  `--approver-quorum 1` (the default) is **cost-neutral**.
+- **The lens taxonomy is overridable.** `--approver-lenses l1,l2,…` replaces the built-in lens taxonomy
+  with an **operator-supplied** comma-separated list, cycled across reviewers when `quorum > 1`
+  (ignored at quorum 1). Each lens biases one reviewer toward a failure mode and rides the approver
+  **system** prompt — it is operator config, **not** the worker-controlled diff (which stays fenced as
+  untrusted data). Absent ⇒ the default correctness / security / goal-actually-met / prompt-injection
+  lenses, byte-for-byte unchanged.
 - **The panel can run genuinely independent models.** `--approver-models m1,m2,…` gives the Sign-off
   panel **real per-reviewer independence**: reviewer *i* runs model *i* (cycled when the quorum
   exceeds the count), each paired with lens *i*, every one an `'approve'`-metered provider on the same
@@ -818,7 +834,9 @@ handy when the harness and the LLM steps should share a model namespace. **`--ap
 with **`--approver-diversity-temp T`** (default `0.5`, applied only when `N > 1`) tuning the panel's
 sampling spread. **`--approver-models m1,m2,…`** runs that panel across **distinct models** for real
 per-reviewer independence (reviewer *i* → model *i*, cycled); with it set the quorum defaults to the
-model count, and ≥2 distinct models make the panel a genuinely independent second key. All of these
+model count, and ≥2 distinct models make the panel a genuinely independent second key.
+**`--approver-lenses l1,l2,…`** overrides the panel's default review-lens taxonomy with an
+operator-supplied list (cycled across reviewers when `N > 1`, ignored at `N = 1`). All of these
 are pure wiring and never enter the frozen contract. Omit them all and every tool uses its own default.
 
 **Harness selection.** `--harness` (`claude` default, or `codex` / `droid` / `pi` / `goaly-code`) picks the

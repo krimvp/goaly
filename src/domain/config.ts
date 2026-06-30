@@ -179,6 +179,14 @@ export const RunConfig = z.object({
     .object({
       quorum: z.number().int().min(1).default(1),
       diversityTemperature: z.number().min(0).max(2).default(0.5),
+      /**
+       * User-overridable review lenses (issue #84 OQ4). When set (≥1 entry), this OPERATOR-supplied
+       * taxonomy replaces {@link DEFAULT_LENSES} and is cycled across the panel when `quorum > 1`
+       * (ignored at quorum 1). Each entry is trimmed + non-empty (fail-closed at the CLI seam). The
+       * lens text rides the approver SYSTEM prompt — it is operator config, never the worker-controlled
+       * diff (which stays fenced). Absent ⇒ the default taxonomy, byte-for-byte unchanged.
+       */
+      lenses: z.array(z.string().min(1)).nonempty().optional(),
     })
     .default({}),
   /**
@@ -275,8 +283,12 @@ export const CliInput = z.object({
   maxSealRevisions: z.coerce.number().int().nonnegative().optional(),
   maxCompileRetries: z.coerce.number().int().nonnegative().optional(),
   maxIterations: z.coerce.number().int().positive().optional(),
-  /** Best-of-N parallel worker (issue #85): a positive-int candidate count (default 1). */
-  candidates: z.coerce.number().int().positive().optional(),
+  /**
+   * Best-of-N parallel worker (issue #85): a positive-int candidate count (default 1), capped at 16
+   * (issue #85 OQ4) — each candidate is a full concurrent worker + worktree, so an unbounded K is a
+   * resource-exhaustion footgun. The CLI seam fails closed above the cap with a clearer message.
+   */
+  candidates: z.coerce.number().int().positive().max(16).optional(),
   /** Resume policy for an incomplete best-of-N fan-out (issue #85 follow-up); enum, fail-closed. */
   resumeBestOfIncomplete: z.enum(['rerun', 'collapse']).optional(),
   /** Phased decomposition (issue #48). */
@@ -298,6 +310,11 @@ export const CliInput = z.object({
   approverQuorum: z.coerce.number().int().positive().optional(),
   /** Diversity temperature for a `> 1` approver panel (issue #84); ignored at quorum 1. */
   approverDiversityTemp: z.coerce.number().min(0).max(2).optional(),
+  /**
+   * User-overridable approver review lenses (issue #84 OQ4): a LIST of operator-supplied lens
+   * addenda, each trimmed + non-empty, replacing the default taxonomy when set. Ignored at quorum 1.
+   */
+  approverLenses: z.array(z.string().min(1)).nonempty().optional(),
 });
 export type CliInput = z.infer<typeof CliInput>;
 
@@ -334,10 +351,12 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
   // Sign-off approver panel (issue #84): override only the fields the user set; the rest keep their
   // schema defaults (quorum 1 ⇒ byte-for-byte the single-call approver). Omitted entirely when no
   // flag was given so the approver-block default applies.
-  const approver: { quorum?: number; diversityTemperature?: number } = {};
+  const approver: { quorum?: number; diversityTemperature?: number; lenses?: [string, ...string[]] } =
+    {};
   if (input.approverQuorum !== undefined) approver.quorum = input.approverQuorum;
   if (input.approverDiversityTemp !== undefined)
     approver.diversityTemperature = input.approverDiversityTemp;
+  if (input.approverLenses !== undefined) approver.lenses = input.approverLenses;
 
   return RunConfig.parse({
     goal: input.goal,

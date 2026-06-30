@@ -226,6 +226,58 @@ describe('parseArgs', () => {
     });
   });
 
+  describe('--approver-lenses user-overridable lenses (issue #84 OQ4)', () => {
+    it('is absent by default (the approver keeps the default taxonomy)', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.config.approver.lenses).toBeUndefined();
+    });
+
+    it('parses a comma-separated list into a string array', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--approver-lenses', 'CORRECTNESS,SECURITY,SPEED',
+      ]);
+      expect(a.config.approver.lenses).toEqual(['CORRECTNESS', 'SECURITY', 'SPEED']);
+    });
+
+    it('trims whitespace around each entry', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--approver-lenses', ' a lens , another ',
+      ]);
+      expect(a.config.approver.lenses).toEqual(['a lens', 'another']);
+    });
+
+    it('rejects an empty entry (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-lenses', 'a,,b']),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('rejects an all-empty list (fail-closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-lenses', ' , ']),
+      ).rejects.toThrow(UsageError);
+    });
+  });
+
+  describe('--candidates K cap (issue #85 OQ4)', () => {
+    it('accepts the cap value 16', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--candidates', '16']);
+      expect(a.config.candidates).toBe(16);
+    });
+
+    it('rejects a value above the cap of 16 (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--candidates', '17']),
+      ).rejects.toThrow(/16/);
+    });
+
+    it('also caps the --best-of alias at 16', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--best-of', '32']),
+      ).rejects.toThrow(/16/);
+    });
+  });
+
   it('parses the phased flags (issue #48)', async () => {
     const a = await parseArgs([
       'run', '--goal', 'big', '--generate', '--phased',
@@ -851,6 +903,43 @@ describe('parseArgs', () => {
         fakeConfig({ [rc]: '{ "approver-models": ["opus", "sonnet"] }' }),
       );
       expect(a.models.approverModels).toEqual(['haiku']);
+    });
+
+    it('reads --approver-lenses as a JSON array from the config file (issue #84 OQ4)', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-lenses": ["CORRECTNESS", "SECURITY"] }' }),
+      );
+      expect(a.config.approver.lenses).toEqual(['CORRECTNESS', 'SECURITY']);
+    });
+
+    it('also accepts --approver-lenses as a comma-separated string in the config file', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-lenses": "CORRECTNESS,SECURITY" }' }),
+      );
+      expect(a.config.approver.lenses).toEqual(['CORRECTNESS', 'SECURITY']);
+    });
+
+    it('lets the CLI --approver-lenses override the config-file list', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true', '--approver-lenses', 'SPEED'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-lenses": ["CORRECTNESS", "SECURITY"] }' }),
+      );
+      expect(a.config.approver.lenses).toEqual(['SPEED']);
+    });
+
+    it('caps --candidates at 16 on the config-file path too (issue #85 OQ4, fail-closed)', async () => {
+      await expect(
+        parseArgs(
+          ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+          fakeReaders({}),
+          fakeConfig({ [rc]: '{ "candidates": 99 }' }),
+        ),
+      ).rejects.toThrow(/16/);
     });
 
     it('reads per-step timeouts from the config file', async () => {

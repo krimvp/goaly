@@ -159,7 +159,7 @@ Usage:
                [--stuck-oscillation true|false] [--stuck-crash-threshold N]
                [--harness claude|codex|droid|pi|goaly-code] [--max-agent-turns N] [--model <m>]
                [--llm-model <m>] [--approver-quorum N] [--approver-diversity-temp T]
-               [--approver-models m1,m2,…]
+               [--approver-models m1,m2,…] [--approver-lenses l1,l2,…]
                [--llm-provider claude|codex|droid|pi|openai] [--harness-timeout-ms N]
                [--base-url <url>] [--llm-api-key-env <NAME>]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
@@ -275,7 +275,10 @@ Phased decomposition (issue #48 — split one big goal into a frozen plan of sma
 Best-of-N parallel worker (issue #85 — tournament-select candidates against the frozen ladder):
   --candidates N      (alias --best-of N) run N independent worker attempts EACH loop iteration in
                       ISOLATED git worktrees off the current baseline tree, score each against the SAME
-                      frozen verifier ladder, keep the BEST candidate's tree, and advance. Default 1 ⇒
+                      frozen verifier ladder, keep the BEST candidate's tree, and advance. N multiplies
+                      per-iteration WORKER spend up to ~N× (the K attempts run concurrently); K is
+                      capped at 16 (a value > 16 is a fail-closed error — each candidate is a full
+                      worker + worktree), and --budget-tokens still governs total spend. Default 1 ⇒
                       the classic single attempt, byte-for-byte unchanged. The whole tournament is
                       Driver-side: the reducer sees exactly ONE winning agent run and never learns N
                       existed (the pure state machine is untouched). Ranking: a candidate that PASSES the
@@ -309,6 +312,9 @@ Model selection (all optional; default = each tool's own default):
                         exactly one verdict. A quorum on ONE model is variance reduction, not
                         perspective independence — pair it with --approver-model (single model) or
                         --approver-models (per-reviewer models) for a genuinely independent second key.
+                        COST: the panel multiplies approver LLM spend ~quorum×; that spend is metered
+                        and counts against --budget-tokens. A small panel (≈3–5 reviewers) is the
+                        recommended practical range; quorum 1 (the default) is cost-neutral.
   --approver-models m1,m2,…  run Sign-off as a panel of DISTINCT models for REAL per-reviewer
                         independence (follow-up to issue #84): reviewer i uses model i (cycled),
                         paired with lens i. Each is an 'approve'-metered provider on the SAME
@@ -318,6 +324,11 @@ Model selection (all optional; default = each tool's own default):
                         a quorum > the count cycles the models. Overrides --approver-model for the panel.
   --approver-diversity-temp T  sampling temperature for an --approver-quorum > 1 panel (default 0.5,
                         in [0,2]); applied ONLY when the quorum is > 1 (a single reviewer stays at 0).
+  --approver-lenses l1,l2,…  override the panel's review-lens taxonomy (issue #84): a comma-separated
+                        list of operator-supplied lenses, cycled across reviewers when quorum > 1
+                        (ignored at quorum 1). Each lens biases one reviewer toward a failure mode and
+                        rides the approver SYSTEM prompt (operator config — the worker diff stays
+                        fenced). Absent ⇒ the built-in correctness/security/goal-met/injection lenses.
   --compiler-model <m>  model for the verification compiler only
   --planner-model <m>   model for the phased planner only (issue #48)
   --explain-model <m>   model for the --explain observer only (issue #8)
@@ -708,6 +719,9 @@ export async function parseArgs(
     ...(parseApproverDiversityTemp(flags) !== undefined
       ? { approverDiversityTemp: parseApproverDiversityTemp(flags) }
       : {}),
+    ...(parseApproverLenses(flags) !== undefined
+      ? { approverLenses: parseApproverLenses(flags) }
+      : {}),
   });
 
   const harness = parseHarness(str(flags, 'harness'));
@@ -773,9 +787,17 @@ function parseTimeouts(flags: RawFlags): StepTimeouts {
 }
 
 /**
+ * The hard upper bound on `--candidates` / `--best-of` (issue #85 OQ4). Each candidate is a full
+ * CONCURRENT worker run in its own git worktree, so an unbounded K is a resource-exhaustion footgun —
+ * a value above this is a fail-closed UsageError. `--budget-tokens` still governs total spend below it.
+ */
+export const MAX_CANDIDATES = 16;
+
+/**
  * Resolve `--candidates N` (alias `--best-of N`) at the seam (issue #85): a positive integer best-of-N
- * candidate count, fail-closed on anything else (invariant #6). The two spellings are aliases; giving
- * both is a conflict. Absent ⇒ undefined so the schema default (1) applies.
+ * candidate count CAPPED at {@link MAX_CANDIDATES}, fail-closed on anything else (invariant #6). The
+ * two spellings are aliases; giving both is a conflict. Absent ⇒ undefined so the schema default (1)
+ * applies.
  */
 function candidatesFlag(flags: RawFlags): string | undefined {
   const primary = str(flags, 'candidates');
@@ -785,9 +807,11 @@ function candidatesFlag(flags: RawFlags): string | undefined {
   }
   const value = primary ?? alias;
   if (value === undefined) return undefined;
-  const parsed = z.coerce.number().int().positive().safeParse(value);
+  const parsed = z.coerce.number().int().positive().max(MAX_CANDIDATES).safeParse(value);
   if (!parsed.success) {
-    throw new UsageError(`--candidates: expected a positive integer, got '${value}'`);
+    throw new UsageError(
+      `--candidates: expected a positive integer ≤ ${MAX_CANDIDATES}, got '${value}'`,
+    );
   }
   return value;
 }
@@ -850,6 +874,26 @@ function parseApproverDiversityTemp(flags: RawFlags): number | undefined {
   const parsed = z.coerce.number().min(0).max(2).safeParse(v);
   if (!parsed.success) {
     throw new UsageError(`--approver-diversity-temp: expected a number in [0,2], got '${v}'`);
+  }
+  return parsed.data;
+}
+
+/**
+ * Validate `--approver-lenses l1,l2,…` at the seam (issue #84 OQ4): a comma-separated LIST of
+ * operator-supplied review lenses, each trimmed + non-empty, fail-closed on an empty entry / empty
+ * list (invariant #6). Mirrors `--approver-models` exactly — splitting here just normalizes the wire
+ * form; the Zod array seam (`.nonempty()`, `.min(1)` per entry) is the real fail-closed gate. Absent
+ * ⇒ undefined so the approver keeps the default lens taxonomy (byte-for-byte unchanged).
+ */
+function parseApproverLenses(flags: RawFlags): [string, ...string[]] | undefined {
+  const v = str(flags, 'approver-lenses');
+  if (v === undefined) return undefined;
+  const entries = v.split(',').map((l) => l.trim());
+  const parsed = z.array(z.string().min(1)).nonempty().safeParse(entries);
+  if (!parsed.success) {
+    throw new UsageError(
+      `--approver-lenses: expected a comma-separated list of non-empty lenses, got '${v}'`,
+    );
   }
   return parsed.data;
 }

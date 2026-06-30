@@ -84,7 +84,7 @@
   <div class="wrap">
     <div class="grid grid-3 reveal" style="align-items:start">
       <div class="card"><h3><span class="pill pass">1</span> Freeze the bar</h3><p>The success check is hashed and <b>frozen</b> before the loop — the agent can't weaken its own test to finish.</p></div>
-      <div class="card"><h3><span class="pill gate">2</span> Two keys for DONE</h3><p>Done means <b>both</b> turn: the frozen check passes <em>and</em> an independent reviewer doesn't veto. The reviewer can be a multi-vote panel (<code>--approver-quorum N</code>) that greens only on a strict supermajority and counts any failure as a veto &mdash; and with <code>--approver-models m1,m2,&hellip;</code> that panel runs <b>distinct models</b> (reviewer <i>i</i> &rarr; model <i>i</i>) for genuine per-reviewer independence, not just variance reduction.</p></div>
+      <div class="card"><h3><span class="pill gate">2</span> Two keys for DONE</h3><p>Done means <b>both</b> turn: the frozen check passes <em>and</em> an independent reviewer doesn't veto. The reviewer can be a multi-vote panel (<code>--approver-quorum N</code>) that greens only on a strict supermajority and counts any failure as a veto &mdash; and with <code>--approver-models m1,m2,&hellip;</code> that panel runs <b>distinct models</b> (reviewer <i>i</i> &rarr; model <i>i</i>) for genuine per-reviewer independence, not just variance reduction. A panel multiplies approver spend <b>~quorum&times;</b> (metered, counted against <code>--budget-tokens</code>) &mdash; a small panel (&approx;3&ndash;5) is the recommended range, and quorum&nbsp;1 (the default) is cost-neutral. <code>--approver-lenses l1,l2,&hellip;</code> overrides the panel's review-lens taxonomy with operator-supplied lenses (cycled when quorum&nbsp;&gt;&nbsp;1).</p></div>
       <div class="card"><h3><span class="pill fail">3</span> Fail closed</h3><p>Anything that errors or returns garbage is a <b>fail</b>, never a false green. The control loop makes zero LLM calls.</p></div>
     </div>
   </div>
@@ -144,7 +144,10 @@
         ladder already short-circuits at the first failing rung). Ties on depth break to lower cost, then
         index. On <code>--resume</code> a crashed fan-out re-runs only the not-yet-logged candidates — or,
         with <code>--resume-best-of-incomplete collapse</code>, collapses to the best already-logged one
-        and re-runs nothing (fail-closed: zero logged still runs the full set). Composes with
+        and re-runs nothing (fail-closed: zero logged still runs the full set). N multiplies per-iteration
+        <b>worker</b> spend up to <b>~N&times;</b> (still governed by <code>--budget-tokens</code>), and
+        because each candidate is a full concurrent worker + worktree, <b>K is capped at 16</b> (a value
+        above 16 is a fail-closed error). Composes with
         <code>--phased</code> / <code>--delta-verify</code> / <code>--sandbox</code>; needs a committed
         HEAD.</p>
       </div>

@@ -81,6 +81,10 @@ const ConfigFileSchema = z
     'approver-models': z.union([z.array(z.string()), FlagValue]).optional(),
     'approver-quorum': FlagValue.optional(),
     'approver-diversity-temp': FlagValue.optional(),
+    // User-overridable approver review lenses (issue #84 OQ4): like `approver-models`, accept a JSON
+    // ARRAY of strings OR a comma-separated string; both normalize to the comma-joined overlay the
+    // CLI's `--approver-lenses` parser splits (one parsing path).
+    'approver-lenses': z.union([z.array(z.string()), FlagValue]).optional(),
     'compiler-model': FlagValue.optional(),
     'llm-provider': FlagValue.optional(),
     'log-level': FlagValue.optional(),

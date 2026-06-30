@@ -589,6 +589,9 @@ export function buildLadder(
  * approver's `reviewers`. When the user did NOT pin `--approver-quorum`, the quorum defaults to the
  * model count (`AgentApprover` applies that default from the reviewers list). The single `llm` stays
  * the back-compat fallback. Absent ⇒ the single-model approver, byte-for-byte unchanged.
+ *
+ * `--approver-lenses` (issue #84 OQ4) replaces the cycled default lens taxonomy with an
+ * operator-supplied one (forwarded only when set); absent ⇒ the AgentApprover's DEFAULT_LENSES.
  */
 function buildApprover(
   config: RunConfig,
@@ -604,6 +607,9 @@ function buildApprover(
     diversityTemperature: config.approver.diversityTemperature,
     ...(reviewers.length > 0 ? { reviewers } : {}),
     ...(quorumExplicit ? { quorum: config.approver.quorum } : {}),
+    // Operator-supplied review lenses (issue #84 OQ4): forward when set so they replace the default
+    // taxonomy the AgentApprover cycles; absent ⇒ the approver uses DEFAULT_LENSES as today.
+    ...(config.approver.lenses !== undefined ? { lenses: config.approver.lenses } : {}),
   });
 }
 
