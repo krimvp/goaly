@@ -442,8 +442,14 @@ function stepVerifying(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
 
   if (verdict.pass) {
     // A passing ladder breaks any failure streak — clear the history so an interleaved green
-    // (e.g. pass→veto→fail) can't be mistaken for "N identical failures in a row".
-    const next: LoopCtx = { ...ctx, lastVerdict: verdict, verifierDetailHistory: [] };
+    // (e.g. pass→veto→fail) can't be mistaken for "N identical failures in a row". A pass is by
+    // definition a real evaluation, so it appends `true` and breaks any could-not-evaluate streak.
+    const next: LoopCtx = {
+      ...ctx,
+      lastVerdict: verdict,
+      verifierDetailHistory: [],
+      verifierEvaluableHistory: [...ctx.verifierEvaluableHistory, true],
+    };
     return [
       { tag: 'AWAIT_SIGNOFF', ctx: next },
       [
@@ -457,11 +463,14 @@ function stepVerifying(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
     ];
   }
 
-  // Failed ladder: record the normalized failure, then DECIDE (Sign-off never runs).
+  // Failed ladder: record the normalized failure AND whether it was a real evaluation or a
+  // could-not-evaluate (an unevaluable verdict carries `evaluable: false`), then DECIDE (Sign-off
+  // never runs). The evaluability history drives the consecutive-unevaluable stuck detector.
   const next: LoopCtx = {
     ...ctx,
     lastVerdict: verdict,
     verifierDetailHistory: [...ctx.verifierDetailHistory, normalizeDetail(verdict.detail)],
+    verifierEvaluableHistory: [...ctx.verifierEvaluableHistory, verdict.evaluable !== false],
   };
   return applyDecision(next, decide(next, verdict, null));
 }

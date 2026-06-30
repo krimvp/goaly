@@ -116,7 +116,7 @@
     },
     decide: {
       t: "DECIDE — pure truth table",
-      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop on STUCK / budget / iteration cap. A no-diff turn is excused when the run was cut short (timeout, crash, or truncated at its turn cap) — it gets another iteration instead of a premature stuck abort.",
+      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop on STUCK / budget / iteration cap. A no-diff turn is excused when the run was cut short (timeout, crash, or truncated at its turn cap) — it gets another iteration instead of a premature stuck abort. When the checker itself can't RUN (a missing tool, a network/package-manager error, a timeout, or a judge that errors/overflows) for N turns in a row, that's a typed CONTRACT_UNEVALUABLE — it says the work may be correct-but-unverified instead of blaming (and discarding) the tree. Still fail-closed: a could-not-evaluate is never a green.",
       pills: ['<span class="pill pass">two keys → DONE</span>'],
     },
   };

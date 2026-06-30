@@ -342,6 +342,41 @@ describe('step() transitions', () => {
     }
   });
 
+  it('two consecutive could-not-evaluate verdicts → ABORTED (CONTRACT_UNEVALUABLE), not no-diff/repeat', () => {
+    const unevaluable = {
+      pass: false,
+      confidence: 1,
+      detail: 'npm test: the verify command could not run (exit 127)',
+      evaluable: false,
+    } as const;
+
+    // Iter 1: the checker can't run, but one occurrence may be transient → CONTINUE.
+    const v1 = step(runningAgent(), agentRan('0000000', '0000001'))[0];
+    const [cont] = step(v1, { tag: 'VERIFIED', verdict: unevaluable });
+    expect(cont.tag).toBe('RUNNING_AGENT');
+
+    // Iter 2: a second consecutive could-not-evaluate trips the typed CONTRACT_UNEVALUABLE abort,
+    // surfacing the environment cause instead of blaming (and discarding) a possibly-correct tree.
+    const v2 = step(cont, agentRan('0000001', '0000002'))[0];
+    const [aborted] = step(v2, { tag: 'VERIFIED', verdict: unevaluable });
+    expect(aborted.tag).toBe('ABORTED');
+    if (aborted.tag === 'ABORTED') {
+      expect(aborted.reason).toContain('CONTRACT_UNEVALUABLE');
+      expect(aborted.reason).toContain('could not run (exit 127)');
+      expect(aborted.reason).not.toContain('no-diff');
+    }
+  });
+
+  it('a streak of GENUINE reds does not trip CONTRACT_UNEVALUABLE (it stays a normal CONTINUE)', () => {
+    const v1 = step(runningAgent(), agentRan('0000000', '0000001'))[0];
+    const [cont] = step(v1, { tag: 'VERIFIED', verdict: failVerdict('2 tests failed') });
+    expect(cont.tag).toBe('RUNNING_AGENT');
+    const v2 = step(cont, agentRan('0000001', '0000002'))[0];
+    const [next] = step(v2, { tag: 'VERIFIED', verdict: failVerdict('2 tests failed') });
+    // Two real reds (below the repeat threshold of 3) keep iterating — never an unevaluable abort.
+    expect(next.tag).toBe('RUNNING_AGENT');
+  });
+
   it('VERIFIED pass → AWAIT_SIGNOFF + REQUEST_SIGNOFF with the frozen rubric', () => {
     const verifying = step(runningAgent(), agentRan('0000000', '0000001'))[0];
     const [next, cmds] = step(verifying, { tag: 'VERIFIED', verdict: passVerdict() });

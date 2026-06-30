@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DeterministicVerifier } from './deterministic';
+import { DeterministicVerifier, executionErrorReason } from './deterministic';
 import { FakeWorkspace } from '../testing/fakes';
 import type { Workspace, CommandResult } from '../workspace/workspace';
 import { DiffHash } from '../domain/ids';
@@ -134,5 +134,75 @@ describe('DeterministicVerifier', () => {
 
     // Assert: prefix "check: exit 1\n" plus 2000 chars of output
     expect(verdict.detail).toBe(`check: exit 1\n${'x'.repeat(2000)}`);
+  });
+
+  describe('could-not-evaluate classification (verifier ERROR vs FAIL)', () => {
+    it('flags exit 127 (command not found) as unevaluable, not a genuine red', async () => {
+      const workspace = new FakeWorkspace('0000000', '', [
+        { exitCode: 127, stdout: '', stderr: 'sh: 1: vitest: not found' },
+      ]);
+      const verdict = await new DeterministicVerifier('vitest run').verify(workspace, 'g', 'r');
+
+      expect(verdict.pass).toBe(false); // still fail-closed
+      expect(verdict.evaluable).toBe(false); // but a could-not-run, not "your code is wrong"
+      expect(verdict.detail).toContain('could not run');
+    });
+
+    it('flags the 124 timeout exit as unevaluable', async () => {
+      const workspace = new FakeWorkspace('0000000', '', [
+        { exitCode: 124, stdout: '', stderr: '[goaly] command timed out after 1000ms' },
+      ]);
+      const verdict = await new DeterministicVerifier('npm test').verify(workspace, 'g', 'r');
+
+      expect(verdict.pass).toBe(false);
+      expect(verdict.evaluable).toBe(false);
+    });
+
+    it('flags a network/package-manager fetch failure (the npx-egress incident) as unevaluable', async () => {
+      // The exact case from the run: `npx --yes vitest` fails to resolve behind a restricted proxy,
+      // exiting 1 — but the output names a DNS/registry fetch error, so it could-not-RUN, not a red.
+      const workspace = new FakeWorkspace('0000000', '', [
+        {
+          exitCode: 1,
+          stdout: '',
+          stderr: 'npm error code EAI_AGAIN\nnpm error request to https://registry.npmjs.org failed, reason: getaddrinfo EAI_AGAIN',
+        },
+      ]);
+      const verdict = await new DeterministicVerifier('npx --yes vitest run').verify(workspace, 'g', 'r');
+
+      expect(verdict.pass).toBe(false);
+      expect(verdict.evaluable).toBe(false);
+    });
+
+    it('does NOT flag a genuine assertion failure as unevaluable (a real red stays a real red)', async () => {
+      const workspace = new FakeWorkspace('0000000', '', [
+        { exitCode: 1, stdout: '', stderr: 'AssertionError: expected 3 to equal 4\n2 failed | 25 passed' },
+      ]);
+      const verdict = await new DeterministicVerifier('npm test').verify(workspace, 'g', 'r');
+
+      expect(verdict.pass).toBe(false);
+      expect(verdict.evaluable).toBeUndefined(); // omitted ⇒ a normal, evaluable red
+    });
+  });
+
+  describe('executionErrorReason (pure classifier)', () => {
+    it('returns a reason for the structural could-not-run exit codes', () => {
+      for (const code of [124, 126, 127, 137, 143]) {
+        expect(executionErrorReason(code, '')).not.toBeNull();
+      }
+    });
+
+    it('returns null for a plain non-zero exit with assertion-failure output', () => {
+      expect(executionErrorReason(1, 'AssertionError: expected 3 to equal 4')).toBeNull();
+      expect(executionErrorReason(2, 'lint: 5 problems')).toBeNull();
+    });
+
+    it('matches conservative infra signatures but not generic transport errors', () => {
+      expect(executionErrorReason(1, 'Error: Cannot find module "vitest"')).not.toBeNull();
+      expect(executionErrorReason(1, 'getaddrinfo ENOTFOUND registry.npmjs.org')).not.toBeNull();
+      expect(executionErrorReason(1, 'No test files found, exiting with code 1')).not.toBeNull();
+      // ECONNREFUSED is intentionally NOT a signature — it may be the subject of a real network test.
+      expect(executionErrorReason(1, 'expected connect to succeed but got ECONNREFUSED')).toBeNull();
+    });
   });
 });

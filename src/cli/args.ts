@@ -251,6 +251,14 @@ Stuck-detection tuning:
   --stuck-crash-threshold N       abort after N consecutive harness crashes (default 2) — a typed
                                   STUCK_HARNESS_CRASH that surfaces the harness error itself, instead
                                   of looping on the downstream verifier red an unfinished turn leaves.
+  --stuck-unevaluable-threshold N abort after N consecutive iterations whose frozen verifier ladder
+                                  could not be EVALUATED to a real pass/fail (default 2) — the check
+                                  itself failed to RUN (a missing tool, a network/package-manager
+                                  error, a timeout, or an LLM judge that errored or overflowed its
+                                  context). A typed CONTRACT_UNEVALUABLE that says the verification
+                                  ENVIRONMENT is broken and your tree may be correct-but-unverified,
+                                  instead of a misleading no-diff/repeat abort that blames (and
+                                  discards) possibly-correct work. Still fail-closed (never DONE).
 
 Phased decomposition (issue #48 — split one big goal into a frozen plan of small, verified phases):
   --phased            turn one big goal into a PLAN of ordered sub-goals, each run as its OWN frozen,
@@ -704,6 +712,9 @@ export async function parseArgs(
       : {}),
     ...(str(flags, 'stuck-crash-threshold') !== undefined
       ? { stuckCrashThreshold: str(flags, 'stuck-crash-threshold') }
+      : {}),
+    ...(str(flags, 'stuck-unevaluable-threshold') !== undefined
+      ? { stuckUnevaluableThreshold: str(flags, 'stuck-unevaluable-threshold') }
       : {}),
     ...(str(flags, 'budget-tokens') !== undefined
       ? { budgetTokens: str(flags, 'budget-tokens') }

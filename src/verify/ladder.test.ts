@@ -128,6 +128,9 @@ describe('Ladder', () => {
       detail: 'rung error (fail-closed): grader exploded',
       rungsPassed: 0,
       rungsTotal: 2,
+      // A throwing grader never produced a pass/fail, so it is flagged could-not-evaluate (still a
+      // fail-closed red here; the orchestrator surfaces a persistent streak as CONTRACT_UNEVALUABLE).
+      evaluable: false,
     });
     expect(boom.called).toBe(true);
     expect(later.called).toBe(false);

@@ -42,6 +42,16 @@ export const StuckPolicy = z.object({
    * be transient (one retry); this many in a row is a typed `STUCK_HARNESS_CRASH`.
    */
   harnessCrashThreshold: z.number().int().min(2).default(2),
+  /**
+   * Abort after this many consecutive iterations whose frozen verifier ladder could not be
+   * EVALUATED to a real pass/fail (the verify command failed to RUN — a missing tool, a network /
+   * package-manager error, a timeout/kill — or the LLM judge errored / returned no parseable verdict
+   * / overflowed its context). A could-not-evaluate is a verification-ENVIRONMENT failure, not a code
+   * red, so looping is near-useless and — worse — a downstream no-diff/repeat abort would blame (and
+   * discard) a possibly-correct tree for an environment problem. A single occurrence may be transient
+   * (one retry); this many in a row is a typed `CONTRACT_UNEVALUABLE`. Mirrors `harnessCrashThreshold`.
+   */
+  unevaluableThreshold: z.number().int().min(2).default(2),
 });
 export type StuckPolicy = z.infer<typeof StuckPolicy>;
 export type StuckPolicyInput = z.input<typeof StuckPolicy>;
@@ -306,6 +316,7 @@ export const CliInput = z.object({
   stuckRepeatThreshold: z.coerce.number().int().min(2).optional(),
   stuckOscillation: z.boolean().optional(),
   stuckCrashThreshold: z.coerce.number().int().min(2).optional(),
+  stuckUnevaluableThreshold: z.coerce.number().int().min(2).optional(),
   /** Sign-off approver panel (issue #84): a positive-int reviewer quorum (default 1). */
   approverQuorum: z.coerce.number().int().positive().optional(),
   /** Diversity temperature for a `> 1` approver panel (issue #84); ignored at quorum 1. */
@@ -347,6 +358,8 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
   if (input.stuckOscillation !== undefined) stuckPolicy.oscillation = input.stuckOscillation;
   if (input.stuckCrashThreshold !== undefined)
     stuckPolicy.harnessCrashThreshold = input.stuckCrashThreshold;
+  if (input.stuckUnevaluableThreshold !== undefined)
+    stuckPolicy.unevaluableThreshold = input.stuckUnevaluableThreshold;
 
   // Sign-off approver panel (issue #84): override only the fields the user set; the rest keep their
   // schema defaults (quorum 1 ⇒ byte-for-byte the single-call approver). Omitted entirely when no

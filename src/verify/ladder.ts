@@ -31,13 +31,17 @@ export class Ladder implements Verifier {
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
         // Fail-closed: an exploding grader short-circuits as a hard red. The `i` rungs BEFORE the
-        // throw passed, so the depth score is `i` (issue #85 graded ranking).
+        // throw passed, so the depth score is `i` (issue #85 graded ranking). A throwing grader could
+        // not EVALUATE the bar (it never produced a pass/fail), so it is also flagged unevaluable —
+        // still a red here, but the orchestrator can surface a persistent grader explosion as
+        // CONTRACT_UNEVALUABLE rather than as "your code is wrong".
         return {
           pass: false,
           confidence: 1,
           detail: `rung error (fail-closed): ${msg}`,
           rungsPassed: i,
           rungsTotal,
+          evaluable: false,
         };
       }
 

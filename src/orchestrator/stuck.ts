@@ -7,7 +7,7 @@ import type { LoopCtx } from './state';
  */
 
 /** The kind of stuck condition, so DECIDE can apply reason-specific policy (e.g. excuse a no-diff). */
-export type StuckKind = 'budget' | 'crash' | 'no-diff' | 'oscillation' | 'repeat';
+export type StuckKind = 'budget' | 'crash' | 'unevaluable' | 'no-diff' | 'oscillation' | 'repeat';
 
 /**
  * A detected stuck condition: a typed `kind` + the human-readable `message` (the audit / feedback
@@ -90,6 +90,23 @@ export function detectStuck(ctx: LoopCtx): StuckReason | null {
     return { kind: 'crash', message: harnessCrashReason(crashThreshold, ctx.lastRunOutput ?? '') };
   }
 
+  // Contract unevaluable — the frozen verifier ladder could not be EVALUATED to a real pass/fail
+  // `unevaluableThreshold` times in a row (the verify command itself failed to run — a missing tool,
+  // a network / package-manager error, a timeout/kill — or the LLM judge errored / overflowed). Like
+  // the crash check, this is placed BEFORE no-diff / repeat / oscillation because all three are
+  // DOWNSTREAM SYMPTOMS of a checker that can't run: on a tree the agent left unchanged the
+  // unevaluable verdict reads as "no-diff", and the byte-identical can't-run error reads as
+  // "repeat-failure" — both of which would blame (and discard) a possibly-correct tree for a
+  // verification-ENVIRONMENT failure. Naming it CONTRACT_UNEVALUABLE keeps the run fail-closed (never
+  // a green) while telling the user the work may be correct-but-unverified and what to fix.
+  const unevalThreshold = ctx.config.stuckPolicy.unevaluableThreshold;
+  if (isUnevaluableStreak(ctx.verifierEvaluableHistory, unevalThreshold)) {
+    return {
+      kind: 'unevaluable',
+      message: contractUnevaluableReason(unevalThreshold, ctx.lastVerdict?.detail ?? ''),
+    };
+  }
+
   // No-diff — the most recent iteration left the working tree unchanged. Excused once (issue #54) by
   // the history half here (timeout/crash); the fresh-veto half is applied by DECIDE on a `no-diff` kind.
   if (
@@ -151,6 +168,44 @@ function isCrashStreak(history: readonly string[], threshold: number): boolean {
   if (history.length < threshold) return false;
   const tail = history.slice(history.length - threshold);
   return tail.every((s) => s === 'crashed');
+}
+
+/**
+ * True when the last `threshold` verifier evaluations were all could-not-evaluate (a consecutive
+ * unevaluable streak). The history stores `evaluable` per iteration (`false` ⇒ the ladder could not
+ * be run to a real pass/fail), so the streak is `threshold` trailing `false`s. A real evaluation
+ * (pass or genuine fail) appends `true` and breaks it — exactly the crash-streak shape over a
+ * different signal.
+ */
+function isUnevaluableStreak(history: readonly boolean[], threshold: number): boolean {
+  if (history.length < threshold) return false;
+  const tail = history.slice(history.length - threshold);
+  return tail.every((evaluable) => evaluable === false);
+}
+
+/**
+ * The contract-unevaluable abort reason: the frozen verifier ladder could not be evaluated to a real
+ * pass/fail `threshold` times in a row. This is a verification-ENVIRONMENT failure (the check never
+ * ran), NOT evidence the code is wrong — so the message says the working tree may in fact satisfy the
+ * goal but is UNVERIFIED, points at the fix (install the tool, allow the verify command network, raise
+ * --verify-timeout-ms, shrink the judge input with --delta-verify), and surfaces the verifier's own
+ * last output so the real cause is visible. Still fail-closed upstream: an unevaluable contract is
+ * never DONE.
+ */
+function contractUnevaluableReason(threshold: number, detail: string): string {
+  const trimmed = detail.trim();
+  const snippet =
+    trimmed.length > CRASH_OUTPUT_LIMIT ? `${trimmed.slice(0, CRASH_OUTPUT_LIMIT)}…` : trimmed;
+  const tail = snippet.length > 0 ? ` Last verifier output: ${snippet}` : '';
+  return (
+    `CONTRACT_UNEVALUABLE: the frozen verifier ladder could not be evaluated to a real pass/fail ` +
+    `${threshold} times in a row — the check itself failed to RUN (a missing tool, a network / ` +
+    'package-manager error, a timeout, or an LLM judge that errored or overflowed its context), so ' +
+    'this is a verification-environment failure, not evidence your code is wrong. Your working tree ' +
+    'may in fact satisfy the goal but is UNVERIFIED. Fix the verification environment (install the ' +
+    'missing tool, allow network for the verify command, raise --verify-timeout-ms, or shrink the ' +
+    `judge input with --delta-verify) and re-run, or run the frozen verify command yourself.${tail}`
+  );
 }
 
 /** Cap the signature folded into the abort reason so a large verifier dump doesn't bloat the run log. */

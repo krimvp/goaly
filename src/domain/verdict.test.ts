@@ -1,9 +1,30 @@
 import { describe, it, expect } from 'vitest';
-import { JudgeOutput, ApprovalVerdict, Verdict, SealDecision } from './verdict';
+import { JudgeOutput, ApprovalVerdict, Verdict, SealDecision, isUnevaluable } from './verdict';
 
 describe('Verdict', () => {
   it('rejects confidence outside [0,1]', () => {
     expect(() => Verdict.parse({ pass: true, confidence: 1.5, detail: '' })).toThrow();
+  });
+
+  it('accepts an optional evaluable flag and defaults it to absent', () => {
+    expect(Verdict.parse({ pass: false, confidence: 1, detail: 'x' }).evaluable).toBeUndefined();
+    expect(Verdict.parse({ pass: false, confidence: 1, detail: 'x', evaluable: false }).evaluable).toBe(
+      false,
+    );
+  });
+});
+
+describe('isUnevaluable', () => {
+  it('is true only for an explicit could-not-evaluate red', () => {
+    expect(isUnevaluable({ pass: false, confidence: 1, detail: 'x', evaluable: false })).toBe(true);
+  });
+
+  it('is false for a normal red (evaluable omitted ⇒ evaluated-and-failed)', () => {
+    expect(isUnevaluable({ pass: false, confidence: 1, detail: 'x' })).toBe(false);
+  });
+
+  it('is never true for a passing verdict, even if evaluable were false', () => {
+    expect(isUnevaluable({ pass: true, confidence: 1, detail: 'x', evaluable: false })).toBe(false);
   });
 });
 

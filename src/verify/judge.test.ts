@@ -191,7 +191,10 @@ describe('JudgeVerifier', () => {
 
     expect(verdict.pass).toBe(false);
     expect(verdict.confidence).toBe(0);
-    expect(verdict.detail).toBe('judge produced no parseable verdicts');
+    expect(verdict.detail).toBe('judge produced no parseable verdicts (the judge could not be evaluated)');
+    // Could-not-evaluate, not a genuine red: flagged unevaluable so a persistent judge-can't-run
+    // surfaces as CONTRACT_UNEVALUABLE rather than "the diff fails the rubric". Still fail-closed.
+    expect(verdict.evaluable).toBe(false);
   });
 
   it('isolates the worker-controlled diff in an untrusted fence', async () => {

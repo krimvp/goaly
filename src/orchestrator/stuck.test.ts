@@ -222,6 +222,84 @@ describe('detectStuck', () => {
     });
   });
 
+  describe('contract-unevaluable streak', () => {
+    it('fires after the default threshold (2) of consecutive could-not-evaluate verdicts', () => {
+      const ctx = makeCtx({ verifierEvaluableHistory: [false, false] });
+      const reason = detectStuck(ctx);
+      expect(reason?.kind).toBe('unevaluable');
+      expect(reason?.message).toContain('CONTRACT_UNEVALUABLE');
+      expect(reason?.message).toContain('UNVERIFIED');
+    });
+
+    it('does not fire on a single unevaluable (which may be transient — one retry is allowed)', () => {
+      expect(detectStuck(makeCtx({ verifierEvaluableHistory: [false] }))).toBeNull();
+    });
+
+    it('resets when a real evaluation (a true) interrupts the streak', () => {
+      const ctx = makeCtx({ verifierEvaluableHistory: [false, true, false] });
+      expect(detectStuck(ctx)).toBeNull();
+    });
+
+    it('does not fire on a streak of GENUINE evaluations (real reds, not could-not-evaluate)', () => {
+      const ctx = makeCtx({
+        verifierEvaluableHistory: [true, true, true],
+        verifierDetailHistory: ['a', 'b', 'c'],
+      });
+      expect(detectStuck(ctx)).toBeNull();
+    });
+
+    it('surfaces the verifier output so the real (environment) cause is visible', () => {
+      const ctx = makeCtx({
+        verifierEvaluableHistory: [false, false],
+        lastVerdict: {
+          pass: false,
+          confidence: 1,
+          detail: 'npm test: the verify command could not run (exit 127)',
+          evaluable: false,
+        },
+      });
+      expect(detectStuck(ctx)?.message).toContain('could not run (exit 127)');
+    });
+
+    it('honors a custom threshold', () => {
+      const below = makeCtx({
+        config: makeConfig({ stuckPolicy: { unevaluableThreshold: 3 } }),
+        verifierEvaluableHistory: [false, false],
+      });
+      expect(detectStuck(below)).toBeNull();
+      const tripped = makeCtx({
+        config: makeConfig({ stuckPolicy: { unevaluableThreshold: 3 } }),
+        verifierEvaluableHistory: [false, false, false],
+      });
+      expect(detectStuck(tripped)?.kind).toBe('unevaluable');
+    });
+
+    it('wins over the no-diff a checker-that-cannot-run leaves on an unchanged tree', () => {
+      // The exact incident: the verify command could not run, so the tree was left unchanged and the
+      // could-not-run verdict repeated. The unevaluable cause must win over the misleading no-diff /
+      // repeat-failure that would otherwise blame (and discard) a possibly-correct tree.
+      const ctx = makeCtx({
+        lastNoDiff: true,
+        iteration: 2,
+        lastRunStatus: 'completed',
+        verifierEvaluableHistory: [false, false],
+        verifierDetailHistory: ['cannot run', 'cannot run'],
+      });
+      const reason = detectStuck(ctx);
+      expect(reason?.kind).toBe('unevaluable');
+      expect(reason?.message).toContain('CONTRACT_UNEVALUABLE');
+      expect(reason?.message).not.toContain('no-diff');
+    });
+
+    it('still yields to a harness crash (the more upstream environment failure)', () => {
+      const ctx = makeCtx({
+        runStatusHistory: ['crashed', 'crashed'],
+        verifierEvaluableHistory: [false, false],
+      });
+      expect(detectStuck(ctx)?.kind).toBe('crash');
+    });
+  });
+
   describe('budget', () => {
     it('fires when the meter reports exceeded, regardless of iteration', () => {
       const ctx = makeCtx({ iteration: 0, lastBudget: { exceeded: true } });
