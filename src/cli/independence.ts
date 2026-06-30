@@ -50,7 +50,22 @@ export type IndependenceContext = {
    * Default 1 ⇒ the single-call approver (no extra note).
    */
   approverQuorum?: number;
+  /**
+   * Per-reviewer Sign-off models (follow-up to issue #84). When this lists ≥2 DISTINCT models, the
+   * panel IS perspective-independent — distinct vendors/models with uncorrelated blind spots, not one
+   * model re-sampled. That genuinely supplies the independent second key, so the judge↔approver,
+   * worker↔approver, and variance-reduction warnings are all SUPPRESSED. A single distinct model (a
+   * one-entry list, or every entry the same) collapses back to the single-model panel and the
+   * warnings still apply. Absent ⇒ the single-model approver.
+   */
+  approverModels?: string[];
 };
+
+/** True when the per-reviewer list supplies ≥2 DISTINCT models — a genuinely independent panel. */
+function panelIsModelIndependent(models: string[] | undefined): boolean {
+  if (models === undefined) return false;
+  return new Set(models).size >= 2;
+}
 
 /**
  * Compute the model-independence warnings for a resolved wiring. Pure and order-stable so it is
@@ -64,9 +79,17 @@ export function independenceWarnings(
 ): string[] {
   const warnings: string[] = [];
 
-  const judgeApproverCollapse = sameModel(resolved.judge, resolved.approver);
+  // A `--approver-models` panel with ≥2 DISTINCT models is the genuinely independent second key: the
+  // approver no longer collapses onto the judge's or the worker's model, so EVERY approver-collapse
+  // warning below (judge↔approver, worker↔approver, the self-judge escalation, and the
+  // variance-reduction note) is suppressed. (A one-model panel — a single entry or all-identical
+  // entries — falls back to the single-model approver and the warnings still apply.)
+  const panelIndependent = panelIsModelIndependent(context.approverModels);
+  const judgeApproverCollapse = !panelIndependent && sameModel(resolved.judge, resolved.approver);
   const workerApproverCollapse =
-    harnessFamily(harness) === llmProvider && sameModel(resolved.harness, resolved.approver);
+    !panelIndependent &&
+    harnessFamily(harness) === llmProvider &&
+    sameModel(resolved.harness, resolved.approver);
 
   // Follow-on H: in `--generate --autonomous` the model self-authors its bar AND self-judges it. When
   // the coding agent, the judge rung, AND the Sign-off approver all collapse onto ONE model, that is

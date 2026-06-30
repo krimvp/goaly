@@ -288,6 +288,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       generate: config.verifier.kind === 'generate',
       autonomous: config.autonomous,
       approverQuorum: config.approver.quorum,
+      ...(models.approverModels !== undefined ? { approverModels: models.approverModels } : {}),
     };
     for (const warning of independenceWarnings(models, options.harness, provider, independenceCtx)) {
       logger.warn('model independence', { detail: warning });
@@ -385,15 +386,13 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       workspace.setDiffIncludes(contract.generatedFiles.map((f) => f.path));
       return buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs);
     },
-    // Sign-off (second key, issue #84): a single reviewer by default (quorum 1 ⇒ byte-for-byte the
-    // historical call). `--approver-quorum N` runs a perspective-diverse panel behind the UNCHANGED
-    // Approver seam; the diversity temperature is applied only when quorum > 1, and the default lens
-    // taxonomy is cycled (no explicit lenses are exposed on the CLI in v1).
-    approver: new AgentApprover({
-      llm: llmFor(models.approver, 'approve'),
-      quorum: config.approver.quorum,
-      diversityTemperature: config.approver.diversityTemperature,
-    }),
+    // Sign-off (second key, issue #84 + follow-up): a single reviewer by default (quorum 1 ⇒
+    // byte-for-byte the historical call). `--approver-quorum N` runs a perspective-diverse panel
+    // behind the UNCHANGED Approver seam; `--approver-models m1,m2,…` (follow-up) gives the panel REAL
+    // per-reviewer model independence — one `'approve'`-metered provider per model (so the usage
+    // report still attributes ALL panel spend to the approver layer), cycled across reviewers. With
+    // a model list and no `--approver-quorum`, the quorum defaults to the model count.
+    approver: buildApprover(config, models, llmFor),
     // Pre-flight soundness classifier (Fix #2): a read-only call that decides whether a failing
     // deterministic pre-flight rung is a broken frozen verifier or an honest red. Reuses the judge
     // model — it is a verification judgment — and is metered through the same shared meter.
@@ -581,6 +580,31 @@ export function buildLadder(
     rungs.unshift(new GeneratedFilesGuard(contract.generatedFiles));
   }
   return new Ladder(rungs);
+}
+
+/**
+ * Build the Sign-off approver (second key). With `--approver-models m1,m2,…` (follow-up to issue #84)
+ * the panel gains REAL per-reviewer model independence: one `'approve'`-metered provider per model
+ * (every panel call still attributes to the approver layer — no new spend category), passed as the
+ * approver's `reviewers`. When the user did NOT pin `--approver-quorum`, the quorum defaults to the
+ * model count (`AgentApprover` applies that default from the reviewers list). The single `llm` stays
+ * the back-compat fallback. Absent ⇒ the single-model approver, byte-for-byte unchanged.
+ */
+function buildApprover(
+  config: RunConfig,
+  models: ResolvedModels,
+  llmFor: (model: string | undefined, phase: StreamPhase) => LlmProvider,
+): AgentApprover {
+  const reviewers = (models.approverModels ?? []).map((m) => llmFor(m, 'approve'));
+  // Only forward an explicit `--approver-quorum`. When a model list is given and the user left the
+  // quorum at its default 1, the approver defaults the quorum to the model count instead.
+  const quorumExplicit = reviewers.length === 0 || config.approver.quorum > 1;
+  return new AgentApprover({
+    llm: llmFor(models.approver, 'approve'),
+    diversityTemperature: config.approver.diversityTemperature,
+    ...(reviewers.length > 0 ? { reviewers } : {}),
+    ...(quorumExplicit ? { quorum: config.approver.quorum } : {}),
+  });
 }
 
 /** The sandbox wiring threaded into {@link makeHarness}: the launcher + the harness-seam profile. */

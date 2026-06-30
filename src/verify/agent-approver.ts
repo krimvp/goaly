@@ -136,7 +136,22 @@ function dedupe(items: string[]): string[] {
  */
 export type AgentApproverOptions = {
   llm: LlmProvider;
-  /** Number of reviewers in the panel. Default 1 (the single-call behavior). */
+  /**
+   * Per-reviewer model independence (follow-up to issue #84). When present and NON-EMPTY, the panel
+   * gains REAL perspective independence: reviewer `i` calls `reviewers[i % reviewers.length]`
+   * (cycled), paired with lens `i % lenses.length` exactly as the single-model panel pairs them. The
+   * required {@link llm} is then unused for the per-reviewer calls — it stays the back-compat
+   * fallback. When ABSENT (or empty) the approver is byte-for-byte the single-`llm` behavior: a
+   * `quorum === 1` single call, or a `quorum > 1` panel that re-samples the ONE `llm` (variance
+   * reduction, not perspective independence). Each provider in the list is an `'approve'`-metered
+   * provider, so the usage report still attributes all panel spend to the approver layer.
+   */
+  reviewers?: LlmProvider[];
+  /**
+   * Number of reviewers in the panel. Default 1 (the single-call behavior) when no {@link reviewers}
+   * list is given; when {@link reviewers} IS given, an unset quorum defaults to the model count. May
+   * exceed the model count — the providers cycle.
+   */
   quorum?: number;
   /**
    * Sampling temperature used ONLY when `quorum > 1`, to make the N reviewers genuinely diverse on a
@@ -164,40 +179,51 @@ export type AgentApproverOptions = {
  */
 export class AgentApprover implements Approver {
   readonly #llm: LlmProvider;
+  /** The per-reviewer providers (follow-up to issue #84), or empty for the single-`llm` path. */
+  readonly #reviewers: readonly LlmProvider[];
   readonly #quorum: number;
   readonly #diversityTemperature: number;
   readonly #lenses: readonly string[];
 
   constructor(opts: AgentApproverOptions) {
     this.#llm = opts.llm;
-    this.#quorum = Math.max(1, Math.trunc(opts.quorum ?? 1));
+    this.#reviewers = opts.reviewers !== undefined ? opts.reviewers : [];
+    // With a reviewers list, an unset quorum defaults to the model count (cycle if quorum exceeds it).
+    const defaultQuorum = this.#reviewers.length > 0 ? this.#reviewers.length : 1;
+    this.#quorum = Math.max(1, Math.trunc(opts.quorum ?? defaultQuorum));
     this.#diversityTemperature = opts.diversityTemperature ?? DIVERSITY_TEMPERATURE;
     this.#lenses = opts.lenses !== undefined && opts.lenses.length > 0 ? opts.lenses : DEFAULT_LENSES;
   }
 
   async review(input: ApprovalInput): Promise<ApprovalVerdict> {
-    // quorum === 1 is the historical single call: temperature 0, no lens — byte-for-byte unchanged.
-    if (this.#quorum === 1) {
-      return this.#reviewOnce(input, 0, undefined);
+    // The byte-for-byte historical single call: no reviewers list AND quorum 1 (temperature 0, no
+    // lens). A non-empty reviewers list is always the per-reviewer panel, even at quorum 1 (an
+    // explicit opt-in to model independence — it weaves a lens and samples at the diversity temp).
+    if (this.#reviewers.length === 0 && this.#quorum === 1) {
+      return this.#reviewOnce(this.#llm, input, 0, undefined);
     }
 
     const prompt = buildPrompt(input);
     const votes: ApprovalVerdict[] = [];
     for (let i = 0; i < this.#quorum; i += 1) {
       const lens = this.#lenses[i % this.#lenses.length];
-      // Each reviewer's call is independently fail-closed: a throw/timeout becomes a veto vote.
+      // Reviewer i uses reviewers[i % reviewers.length] (cycled) when a list is given, else the single
+      // `llm`. Each call is independently fail-closed: a throw/timeout becomes a veto vote.
+      const provider =
+        this.#reviewers.length > 0 ? this.#reviewers[i % this.#reviewers.length]! : this.#llm;
       // eslint-disable-next-line no-await-in-loop
-      votes.push(await this.#reviewOnce(input, this.#diversityTemperature, lens, prompt));
+      votes.push(await this.#reviewOnce(provider, input, this.#diversityTemperature, lens, prompt));
     }
     return aggregate(votes, this.#quorum);
   }
 
   /**
-   * One reviewer's vote. ALWAYS fail-closed: any failure to produce a valid verdict (throw, no JSON,
-   * bad JSON, schema miss) becomes a veto. An optional precomputed `prompt` lets the panel build the
-   * (per-call random-nonce) prompt once and reuse it across reviewers.
+   * One reviewer's vote against a given provider. ALWAYS fail-closed: any failure to produce a valid
+   * verdict (throw, no JSON, bad JSON, schema miss) becomes a veto. An optional precomputed `prompt`
+   * lets the panel build the (per-call random-nonce) prompt once and reuse it across reviewers.
    */
   async #reviewOnce(
+    provider: LlmProvider,
     input: ApprovalInput,
     temperature: number,
     lens: string | undefined,
@@ -206,7 +232,7 @@ export class AgentApprover implements Approver {
     let raw: string;
     try {
       raw = (
-        await this.#llm.complete({
+        await provider.complete({
           system: systemFor(lens),
           prompt: prompt ?? buildPrompt(input),
           temperature,

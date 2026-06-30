@@ -8,6 +8,7 @@ const models: ResolvedModels = {
   compiler: 'llm-model',
   judge: 'llm-model',
   approver: 'llm-model',
+  approverModels: undefined,
   planner: 'llm-model',
   explain: 'llm-model',
 };

@@ -342,6 +342,16 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   lens). A quorum on **one** model is **variance reduction, not perspective independence** — goaly
   warns when a multi-vote panel shares a model with the judge or the worker; pair `--approver-quorum`
   with `--approver-model` on a different model/provider for a genuinely independent second key.
+- **The panel can run genuinely independent models.** `--approver-models m1,m2,…` gives the Sign-off
+  panel **real per-reviewer independence**: reviewer *i* runs model *i* (cycled when the quorum
+  exceeds the count), each paired with lens *i*, every one an `'approve'`-metered provider on the same
+  `--llm-provider` — so **all** panel spend still attributes to the approver layer (no new spend
+  category). With `--approver-models` the quorum **defaults to the model count** unless you set
+  `--approver-quorum` explicitly. Because **≥2 distinct models** have uncorrelated blind spots, that
+  panel **is** the independent second key (not just variance reduction), so goaly **suppresses** the
+  variance-reduction / collapse warnings; a one-model list (or all-identical entries) falls back to the
+  single-model panel and the warnings stay. Use `--approver-model` (singular) for a single distinct
+  model; `--approver-models` (plural) for a per-reviewer panel.
 - **The verify command runs with a credential-scrubbed environment.** The verifier executes
   worker/model-authored code on your host every iteration; goaly strips credential-looking variables
   (`*_TOKEN`, `*_KEY`, `*SECRET*`, `AWS_*`, `GITHUB_*`, …) from its environment so they can't be
@@ -785,8 +795,10 @@ step: per-step flag → `--llm-model` → `--model` → the tool's own default. 
 handy when the harness and the LLM steps should share a model namespace. **`--approver-quorum N`**
 (default `1`) turns the Sign-off approver into an N-reviewer panel (see *Two keys for DONE* above),
 with **`--approver-diversity-temp T`** (default `0.5`, applied only when `N > 1`) tuning the panel's
-sampling spread; both are pure wiring and never enter the frozen contract. Omit them all and every tool
-uses its own default.
+sampling spread. **`--approver-models m1,m2,…`** runs that panel across **distinct models** for real
+per-reviewer independence (reviewer *i* → model *i*, cycled); with it set the quorum defaults to the
+model count, and ≥2 distinct models make the panel a genuinely independent second key. All of these
+are pure wiring and never enter the frozen contract. Omit them all and every tool uses its own default.
 
 **Harness selection.** `--harness` (`claude` default, or `codex` / `droid` / `pi` / `goaly-code`) picks the
 write-role coding agent. `goaly-code` is the first non-CLI harness: goaly drives its own tool-use loop

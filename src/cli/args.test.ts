@@ -164,6 +164,39 @@ describe('parseArgs', () => {
     });
   });
 
+  describe('--approver-models per-reviewer models (follow-up to issue #84)', () => {
+    it('is absent by default', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.models.approverModels).toBeUndefined();
+    });
+
+    it('parses a comma-separated list into a string array', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--approver-models', 'opus,sonnet,haiku',
+      ]);
+      expect(a.models.approverModels).toEqual(['opus', 'sonnet', 'haiku']);
+    });
+
+    it('trims whitespace around each entry', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--approver-models', ' opus , sonnet ',
+      ]);
+      expect(a.models.approverModels).toEqual(['opus', 'sonnet']);
+    });
+
+    it('rejects an empty entry (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-models', 'opus,,sonnet']),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('rejects an all-empty list (fail-closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--approver-models', ' , ']),
+      ).rejects.toThrow(UsageError);
+    });
+  });
+
   it('parses the phased flags (issue #48)', async () => {
     const a = await parseArgs([
       'run', '--goal', 'big', '--generate', '--phased',
@@ -741,6 +774,33 @@ describe('parseArgs', () => {
       );
       expect(a.config.approver.quorum).toBe(3);
       expect(a.config.approver.diversityTemperature).toBe(0.7);
+    });
+
+    it('reads --approver-models as a JSON array from the config file (follow-up to issue #84)', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-models": ["opus", "sonnet"] }' }),
+      );
+      expect(a.models.approverModels).toEqual(['opus', 'sonnet']);
+    });
+
+    it('also accepts --approver-models as a comma-separated string in the config file', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-models": "opus,sonnet" }' }),
+      );
+      expect(a.models.approverModels).toEqual(['opus', 'sonnet']);
+    });
+
+    it('lets the CLI --approver-models override the config-file list', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'do x', '--workspace', '/ws', '--verify-cmd', 'true', '--approver-models', 'haiku'],
+        fakeReaders({}),
+        fakeConfig({ [rc]: '{ "approver-models": ["opus", "sonnet"] }' }),
+      );
+      expect(a.models.approverModels).toEqual(['haiku']);
     });
 
     it('reads per-step timeouts from the config file', async () => {

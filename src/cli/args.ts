@@ -159,6 +159,7 @@ Usage:
                [--stuck-oscillation true|false] [--stuck-crash-threshold N]
                [--harness claude|codex|droid|pi|goaly-code] [--max-agent-turns N] [--model <m>]
                [--llm-model <m>] [--approver-quorum N] [--approver-diversity-temp T]
+               [--approver-models m1,m2,…]
                [--llm-provider claude|codex|droid|pi|openai] [--harness-timeout-ms N]
                [--base-url <url>] [--llm-api-key-env <NAME>]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
@@ -306,8 +307,15 @@ Model selection (all optional; default = each tool's own default):
                         returns unparseable output counts as a VETO, and zero parseable ⇒ veto — so
                         a panel is never weaker than the single veto. The reducer/driver still see
                         exactly one verdict. A quorum on ONE model is variance reduction, not
-                        perspective independence — pair it with --approver-model on a DIFFERENT
-                        model/provider for a genuinely independent second key.
+                        perspective independence — pair it with --approver-model (single model) or
+                        --approver-models (per-reviewer models) for a genuinely independent second key.
+  --approver-models m1,m2,…  run Sign-off as a panel of DISTINCT models for REAL per-reviewer
+                        independence (follow-up to issue #84): reviewer i uses model i (cycled),
+                        paired with lens i. Each is an 'approve'-metered provider on the SAME
+                        --llm-provider, so all panel spend stays attributed to the approver. With ≥2
+                        distinct models the panel IS the independent second key (not just variance
+                        reduction). If --approver-quorum is unset it defaults to the model count;
+                        a quorum > the count cycles the models. Overrides --approver-model for the panel.
   --approver-diversity-temp T  sampling temperature for an --approver-quorum > 1 panel (default 0.5,
                         in [0,2]); applied ONLY when the quorum is > 1 (a single reviewer stays at 0).
   --compiler-model <m>  model for the verification compiler only
@@ -920,7 +928,7 @@ function parseLlmProvider(value: string | undefined): LlmProviderChoice {
 
 /** Collect the model flags and validate them at the Zod seam (non-empty, fails closed). */
 function parseModels(flags: RawFlags): ModelSelection {
-  const raw: Partial<Record<keyof ModelSelectionInput, string>> = {};
+  const raw: Partial<Record<keyof ModelSelectionInput, string | string[]>> = {};
   const add = (key: keyof ModelSelectionInput, flag: string): void => {
     const v = str(flags, flag);
     if (v !== undefined) raw[key] = v;
@@ -929,6 +937,14 @@ function parseModels(flags: RawFlags): ModelSelection {
   add('llmModel', 'llm-model');
   add('judgeModel', 'judge-model');
   add('approverModel', 'approver-model');
+  // Per-reviewer Sign-off models (follow-up to issue #84): a comma-separated LIST split into trimmed,
+  // non-empty entries. The Zod array seam (.nonempty(), .min(1) per entry) is the real fail-closed
+  // gate — splitting here just normalizes the wire form; an all-empty `--approver-models ,,` becomes
+  // an empty array that the schema rejects.
+  const approverModelsRaw = str(flags, 'approver-models');
+  if (approverModelsRaw !== undefined) {
+    raw.approverModels = approverModelsRaw.split(',').map((m) => m.trim());
+  }
   add('compilerModel', 'compiler-model');
   add('plannerModel', 'planner-model');
   add('explainModel', 'explain-model');
