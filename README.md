@@ -190,8 +190,17 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   not just A,B,A,B), **harness-crash** (the agent CLI exited abnormally N times in a row — a typed
   **`STUCK_HARNESS_CRASH`** that surfaces the harness's own error and points at the environment, so a
   crashing CLI is diagnosed as such instead of looping on the stale verifier red an unfinished turn
-  leaves behind), and budget. Tune it
-  with `--stuck-no-diff`, `--stuck-repeat-threshold`, `--stuck-oscillation`, `--stuck-crash-threshold`.
+  leaves behind), **contract-unevaluable** (the frozen ladder could not be *evaluated* N times in a
+  row — the verify command **timed out** or could not be **started**, or the LLM judge errored /
+  overflowed — a typed **`CONTRACT_UNEVALUABLE`** that distinguishes a verification-**environment**
+  failure from a real red: it says the tree may be correct-but-**unverified** instead of letting a
+  misleading no-diff/repeat abort blame and discard possibly-correct work — still fail-closed, never a
+  green. It keys only on facts goaly *owns* — never heuristic exit-code/error-string guessing — and is
+  prevented at the source: the compiler authors **offline** verify commands [install once in `setup`,
+  invoke the local binary], and a missing toolchain is caught **before** the loop by the
+  `requiredTools` pre-flight), and budget. Tune it
+  with `--stuck-no-diff`, `--stuck-repeat-threshold`, `--stuck-oscillation`, `--stuck-crash-threshold`,
+  `--stuck-unevaluable-threshold`.
   Use `--diff-ignore` to
   keep verifier-produced artifacts (coverage dirs, `__pycache__`, build output) out of the tree hash
   so they can't make a no-op agent look like it changed something. A no-diff iteration is **excused**
@@ -1204,7 +1213,9 @@ list, see [`CONTEXT.md`](CONTEXT.md) — the ubiquitous-language reference.)
 - <a id="g-stuck"></a>**Stuck detection** — bailing **before** `--max-iterations` with a typed reason,
   because the loop is making no progress. Kinds: **no-diff** (the tree didn't change), **repeat-failure**
   (`STUCK_REPEATED_FAILURE`, the same verifier-failure signature recurs), **oscillation** (period-N
-  cycling), **harness-crash** (`STUCK_HARNESS_CRASH`, the agent CLI keeps exiting abnormally), and
+  cycling), **harness-crash** (`STUCK_HARNESS_CRASH`, the agent CLI keeps exiting abnormally),
+  **contract-unevaluable** (`CONTRACT_UNEVALUABLE`, the frozen ladder could not be *evaluated* — the
+  check couldn't run or the judge errored — so the tree is correct-but-unverified, never blamed), and
   **budget**. ↪ [How it works](#how-it-works), [CONTEXT.md](CONTEXT.md).
 - **Terminal statuses** — **DONE** (both keys turned), **FAILED** (a typed failure: stuck, budget, out
   of iterations, a fatal prepare abort), **ABORTED** (Seal-reject / a no-diff stuck / driver error),

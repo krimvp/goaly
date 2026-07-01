@@ -58,6 +58,14 @@ const SYSTEM_PROMPT =
   'that in "setup" (e.g. "npm ci", "pip install -r requirements.txt", "go mod download") so the ' +
   'worker starts from a populated tree. Use the lockfile-respecting install for the repo\'s manifest. ' +
   'Omit "setup" when no preparation is needed.\n' +
+  '- The "command" MUST be runnable OFFLINE — it runs every iteration and must not fetch from the ' +
+  'network at verify time. Do all installing/fetching ONCE in "setup", then invoke the ' +
+  'already-installed runner in the command. Concretely: do NOT use fetch-on-run forms like ' +
+  '`npx --yes <pkg>` / `npx -y <pkg>`, `pip install ... && ...`, `go run <remote-url>`, or ' +
+  '`uvx <pkg>` in the command — install the tool in "setup" (e.g. setup `npm install --no-save vitest`, ' +
+  'command `npx --no-install vitest run ...` or `node ./node_modules/.bin/vitest run ...`; or simply ' +
+  "use the repo's own `npm test` script). A verify command that depends on a live network is flaky by " +
+  'construction and is the single most common cause of a run that cannot be evaluated.\n' +
   '- List in "requiredTools" the external programs the command and setup assume ALREADY exist on PATH ' +
   '— the language toolchain and test runner (e.g. ["cargo"], ["python","pytest"], ["go"], ' +
   '["node","npm"]). These are what goaly probes (and installs, or aborts on) before the loop; do NOT ' +
@@ -132,6 +140,39 @@ export function isVacuousCommand(command: string): boolean {
  */
 export function referencesOutOfRepoPath(command: string): boolean {
   return /(?:^|[\s='"(`])(?:\/tmp|\/var\/tmp|\/var\/folders)(?:\/|\b)/.test(command);
+}
+
+/**
+ * Fetch/install invocations that must NOT appear in the per-iteration verify COMMAND — they belong in
+ * the one-time `setup` (which runs once before the loop). A verify command that fetches from the
+ * network every iteration is flaky by construction: a transient registry/DNS hiccup turns a correct
+ * tree into a could-not-evaluate run. Catching it at compile turns it into a typed COMPILE_FAILED the
+ * bounded re-author loop (issue #51) self-corrects into an offline command — the enforcement half of
+ * the "offline verify command" guardrail in the authoring prompt. This is a small, closed vocabulary
+ * of install verbs matched at the START of each command segment (NOT a heuristic scrape of arbitrary
+ * output), so a normal runner invocation (`npm test`, `vitest run`, `pytest`, `go test ./...`) passes
+ * untouched. `npx <pkg>` is fine (it uses a locally-installed package); only the fetch-forcing
+ * `npx --yes`/`-y`, `uvx`, and `pipx run` are flagged. Applied to LLM-authored `--generate` commands
+ * only — a user's explicit `--verify-cmd` is their own informed choice (like the vacuous guard).
+ */
+export function referencesNetworkFetch(command: string): boolean {
+  const FETCH_AT_RUN: readonly RegExp[] = [
+    /^npx\s+(?:-y|--yes)\b/, // forces a registry fetch+install of the package
+    /^uvx\b/, // always fetches the tool
+    /^pipx\s+run\b/, // fetches+runs
+    /^npm\s+(?:install|i|ci|add)\b/,
+    /^pnpm\s+(?:install|i|add)\b/,
+    /^yarn\s+(?:install|add)\b/,
+    /^bun\s+(?:install|add|a)\b/,
+    /^(?:pip|pip3)\s+install\b/,
+    /^bundle\s+install\b/,
+    /^go\s+mod\s+(?:download|tidy)\b/,
+    /^cargo\s+(?:install|fetch)\b/,
+  ];
+  return command
+    .split(/[\n;]|&&|\|\||\|/)
+    .map((s) => s.trim())
+    .some((segment) => FETCH_AT_RUN.some((re) => re.test(segment)));
 }
 
 /**
@@ -304,6 +345,17 @@ export class AgentCompiler implements VerifierCompiler {
         `AgentCompiler: refusing a verification command that references an out-of-repo path ` +
           `('${generated.command}') — author the bar over the repo's existing tooling and keep any ` +
           'helper file inside the workspace (a relative path)',
+      );
+    }
+
+    if (referencesNetworkFetch(generated.command)) {
+      throw new Error(
+        `AgentCompiler: refusing a verification command that fetches/installs at verify time ` +
+          `('${generated.command}') — it runs every iteration and a network hiccup would make a ` +
+          'correct tree un-evaluable. Move the install into "setup" (runs once) and invoke the ' +
+          'already-installed runner offline in the command (e.g. setup "npm install --no-save vitest", ' +
+          'command "npx --no-install vitest run …" or "node ./node_modules/.bin/vitest run …"; or the ' +
+          "repo's own \"npm test\").",
       );
     }
 

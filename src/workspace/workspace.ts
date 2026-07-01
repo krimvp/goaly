@@ -5,6 +5,21 @@ export type CommandResult = {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /**
+   * True when goaly itself KILLED the command for exceeding its timeout — a fact goaly owns, not a
+   * guess from the exit code. A timed-out verify command never produced a real pass/fail, so the
+   * verifier flags the verdict could-not-evaluate ({@link import('../domain/verdict').Verdict.evaluable})
+   * rather than a genuine red. Absent ⇒ the command exited on its own. Optional so non-timeout
+   * producers (and fakes) need not set it.
+   */
+  timedOut?: boolean;
+  /**
+   * True when goaly could not even START the command (the spawn itself threw — e.g. the shell is
+   * missing). Like {@link timedOut}, a fact goaly owns: the command never ran, so the verifier flags
+   * could-not-evaluate, not a real red. Distinct from a command that ran and exited non-zero (a
+   * genuine failure). Absent ⇒ the command was started. Optional.
+   */
+  spawnFailed?: boolean;
 };
 
 /**

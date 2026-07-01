@@ -339,18 +339,25 @@ describe('parseArgs', () => {
       '--stuck-repeat-threshold', '5',
       '--stuck-oscillation', 'false',
       '--stuck-crash-threshold', '4',
+      '--stuck-unevaluable-threshold', '3',
     ]);
     expect(a.config.stuckPolicy).toEqual({
       noDiff: false,
       repeatFailureThreshold: 5,
       oscillation: false,
       harnessCrashThreshold: 4,
+      unevaluableThreshold: 3,
     });
   });
 
   it('defaults the harness-crash threshold to 2 when the flag is omitted', async () => {
     const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
     expect(a.config.stuckPolicy.harnessCrashThreshold).toBe(2);
+  });
+
+  it('defaults the unevaluable threshold to 2 when the flag is omitted', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+    expect(a.config.stuckPolicy.unevaluableThreshold).toBe(2);
   });
 
   it('treats a bare --stuck-no-diff as true and keeps other stuck defaults (issue #54)', async () => {

@@ -127,7 +127,16 @@ export class JudgeVerifier implements Verifier {
     }
 
     if (samples.length === 0) {
-      return { pass: false, confidence: 0, detail: 'judge produced no parseable verdicts' };
+      // Could-not-EVALUATE, not a genuine red: every sample errored, was empty, overflowed the
+      // model's context ("prompt too long"), or returned unparseable output. Still fail-closed
+      // (`pass: false`) — but flagged unevaluable so a persistent judge-can't-run surfaces as
+      // CONTRACT_UNEVALUABLE rather than being mistaken for "the diff fails the rubric".
+      return {
+        pass: false,
+        confidence: 0,
+        detail: 'judge produced no parseable verdicts (the judge could not be evaluated)',
+        evaluable: false,
+      };
     }
 
     const passCount = samples.filter((s) => s.pass).length;

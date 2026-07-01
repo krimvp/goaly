@@ -12,7 +12,7 @@ import type { CommandResult, Workspace } from './workspace';
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
 /** Low-level process result used by the injectable exec runner. */
-export type ExecResult = { stdout: string; stderr: string; code: number };
+export type ExecResult = { stdout: string; stderr: string; code: number; timedOut?: boolean };
 
 /**
  * Injectable process runner. Defaults to a real `node:child_process` spawn helper so
@@ -72,6 +72,7 @@ export const realExec: ExecFn = async (cmd, args, opts) => {
       stdout: r.stdout,
       stderr: `${r.stderr}\n[goaly] command timed out after ${opts.timeoutMs}ms`,
       code: TIMEOUT_EXIT_CODE,
+      timedOut: true,
     };
   }
   return { stdout: r.stdout, stderr: r.stderr, code: r.code };
@@ -390,9 +391,16 @@ export class GitWorkspace implements Workspace {
         env,
         ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       });
-      return { exitCode: result.code, stdout: result.stdout, stderr: result.stderr };
+      return {
+        exitCode: result.code,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        // Propagate the one fact only goaly knows: whether IT killed the command for timing out.
+        ...(result.timedOut === true ? { timedOut: true } : {}),
+      };
     } catch (e) {
-      return { exitCode: 127, stdout: '', stderr: errorMessage(e) };
+      // The spawn itself threw — goaly could not even start the command (it never ran).
+      return { exitCode: 127, stdout: '', stderr: errorMessage(e), spawnFailed: true };
     }
   }
 }

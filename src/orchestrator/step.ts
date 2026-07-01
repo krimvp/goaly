@@ -442,8 +442,14 @@ function stepVerifying(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
 
   if (verdict.pass) {
     // A passing ladder breaks any failure streak — clear the history so an interleaved green
-    // (e.g. pass→veto→fail) can't be mistaken for "N identical failures in a row".
-    const next: LoopCtx = { ...ctx, lastVerdict: verdict, verifierDetailHistory: [] };
+    // (e.g. pass→veto→fail) can't be mistaken for "N identical failures in a row". A pass is by
+    // definition a real evaluation, so it appends `true` and breaks any could-not-evaluate streak.
+    const next: LoopCtx = {
+      ...ctx,
+      lastVerdict: verdict,
+      verifierDetailHistory: [],
+      verifierEvaluableHistory: [...ctx.verifierEvaluableHistory, true],
+    };
     return [
       { tag: 'AWAIT_SIGNOFF', ctx: next },
       [
@@ -457,11 +463,14 @@ function stepVerifying(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
     ];
   }
 
-  // Failed ladder: record the normalized failure, then DECIDE (Sign-off never runs).
+  // Failed ladder: record the normalized failure AND whether it was a real evaluation or a
+  // could-not-evaluate (an unevaluable verdict carries `evaluable: false`), then DECIDE (Sign-off
+  // never runs). The evaluability history drives the consecutive-unevaluable stuck detector.
   const next: LoopCtx = {
     ...ctx,
     lastVerdict: verdict,
     verifierDetailHistory: [...ctx.verifierDetailHistory, normalizeDetail(verdict.detail)],
+    verifierEvaluableHistory: [...ctx.verifierEvaluableHistory, verdict.evaluable !== false],
   };
   return applyDecision(next, decide(next, verdict, null));
 }
@@ -590,8 +599,27 @@ function buildInitialPrompt(
     contract.rubric ? `\nOverall rubric:\n${contract.rubric}` : '',
     '',
     'Make the changes needed to satisfy the contract. Do not weaken or rewrite the checks themselves.',
+    '',
+    VERIFICATION_DIVISION_OF_LABOR,
   ].join('\n');
 }
+
+/**
+ * The division-of-labor note carried by every worker prompt. The worker's ONE job each turn is to
+ * EDIT the tree toward the goal; goaly runs the frozen contract itself after the turn and feeds the
+ * result back next iteration. Spelling this out prevents the failure mode where the agent treats
+ * "run the verification command" as a required submit step and — when that command can't run in its
+ * environment — burns the whole turn flailing on it and ends with no edits (a no-diff stall). Running
+ * its own quick checks is fine; getting stuck on one is not.
+ */
+const VERIFICATION_DIVISION_OF_LABOR = [
+  '# How verification works (do not run it yourself to "submit")',
+  'goaly runs the frozen success contract above for you AUTOMATICALLY after this turn ends, and gives',
+  'you the result on the next turn. You do NOT need to run the verification command to submit your',
+  'work — your job each turn is to EDIT the code toward the goal. Running your own quick checks is',
+  'fine, but if a command is unavailable or blocked in this environment, do NOT get stuck on it:',
+  'make your best-effort code changes and end the turn. A turn that changes no files makes no progress.',
+].join('\n');
 
 /**
  * The bootstrap instruction prepended to the first prompt when required tools are missing and goaly is
@@ -646,6 +674,8 @@ function buildLoopPrompt(
     feedback,
     '',
     'Continue working toward the goal. Do not modify the success contract or its tests.',
+    '',
+    VERIFICATION_DIVISION_OF_LABOR,
   ].join('\n');
 }
 

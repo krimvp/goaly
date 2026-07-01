@@ -153,6 +153,29 @@ describe('runCodecHarness', () => {
     expect(result.tokensUsed).toBe(9);
   });
 
+  it('does NOT resume the unknown-session sentinel — starts fresh instead of crashing every turn', async () => {
+    // Regression: a timed-out first turn yields no session id, so the ctx carries the codec's
+    // `claude-unknown` sentinel. Threading it into `--resume` is rejected by the CLI and would crash
+    // every continuation turn (a false STUCK_HARNESS_CRASH). The next turn must omit --resume.
+    const captured = { args: [] as string[][] };
+    const exec: AgentExecFn = async () => ({
+      stdout: JSON.stringify({ result: 'ok', session_id: 's-2', usage: { total_tokens: 3 } }),
+      stderr: '',
+      code: 0,
+    });
+    const result = await runCodecHarness(
+      spyCodec(captured),
+      exec,
+      undefined,
+      'go',
+      sid(claudeCodec.unknownSession),
+    );
+    expect(captured.args[0]).not.toContain('--resume');
+    expect(captured.args[0]).not.toContain(claudeCodec.unknownSession);
+    expect(result.status).toBe('completed'); // the fresh turn recovers a real session id
+    expect(result.sessionId).toBe('s-2');
+  });
+
   it('never throws when the exec seam itself rejects — fails closed to crashed', async () => {
     const exec: AgentExecFn = async () => {
       throw new Error('spawn ENOENT');

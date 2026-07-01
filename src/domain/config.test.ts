@@ -65,6 +65,7 @@ describe('RunConfig', () => {
       repeatFailureThreshold: 3,
       oscillation: true,
       harnessCrashThreshold: 2,
+      unevaluableThreshold: 2,
     });
     expect(c.judge).toEqual({ quorum: 3, confidenceFloor: 0.66 });
     expect(c.diffIgnore).toEqual([]);

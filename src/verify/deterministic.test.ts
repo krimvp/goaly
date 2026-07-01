@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DeterministicVerifier } from './deterministic';
+import { DeterministicVerifier, executionErrorReason } from './deterministic';
 import { FakeWorkspace } from '../testing/fakes';
 import type { Workspace, CommandResult } from '../workspace/workspace';
 import { DiffHash } from '../domain/ids';
@@ -134,5 +134,68 @@ describe('DeterministicVerifier', () => {
 
     // Assert: prefix "check: exit 1\n" plus 2000 chars of output
     expect(verdict.detail).toBe(`check: exit 1\n${'x'.repeat(2000)}`);
+  });
+
+  describe('could-not-evaluate classification — only on facts goaly OWNS (no heuristics)', () => {
+    it('flags a timed-out command (goaly killed it) as unevaluable, not a genuine red', async () => {
+      const workspace = new FakeWorkspace('0000000', '', [
+        { exitCode: 124, stdout: '', stderr: '[goaly] command timed out after 1000ms', timedOut: true },
+      ]);
+      const verdict = await new DeterministicVerifier('npm test').verify(workspace, 'g', 'r');
+
+      expect(verdict.pass).toBe(false); // still fail-closed
+      expect(verdict.evaluable).toBe(false); // but a could-not-evaluate, not "your code is wrong"
+      expect(verdict.detail).toContain('timed out');
+    });
+
+    it('flags a spawn failure (goaly could not start the command) as unevaluable', async () => {
+      const workspace = new FakeWorkspace('0000000', '', [
+        { exitCode: 127, stdout: '', stderr: 'spawn sh ENOENT', spawnFailed: true },
+      ]);
+      const verdict = await new DeterministicVerifier('npm test').verify(workspace, 'g', 'r');
+
+      expect(verdict.pass).toBe(false);
+      expect(verdict.evaluable).toBe(false);
+      expect(verdict.detail).toContain('could not be started');
+    });
+
+    it('does NOT guess from the exit code or output — a bare exit 127 stays a genuine red', async () => {
+      // A command that RAN and exited 127 (e.g. a missing sub-command inside a test script) is a real
+      // red, not a could-not-evaluate. Missing TOOLCHAIN is caught earlier by the requiredTools
+      // pre-flight; we deliberately do not re-derive "couldn't run" from the exit code here.
+      const workspace = new FakeWorkspace('0000000', '', [
+        { exitCode: 127, stdout: '', stderr: 'foo: command not found' },
+      ]);
+      const verdict = await new DeterministicVerifier('npm test').verify(workspace, 'g', 'r');
+
+      expect(verdict.pass).toBe(false);
+      expect(verdict.evaluable).toBeUndefined();
+    });
+
+    it('does NOT flag a genuine assertion failure as unevaluable (a real red stays a real red)', async () => {
+      const workspace = new FakeWorkspace('0000000', '', [
+        { exitCode: 1, stdout: '', stderr: 'AssertionError: expected 3 to equal 4\n2 failed | 25 passed' },
+      ]);
+      const verdict = await new DeterministicVerifier('npm test').verify(workspace, 'g', 'r');
+
+      expect(verdict.pass).toBe(false);
+      expect(verdict.evaluable).toBeUndefined(); // omitted ⇒ a normal, evaluable red
+    });
+  });
+
+  describe('executionErrorReason (pure classifier — owned facts only)', () => {
+    it('returns a reason for a timeout and for a spawn failure', () => {
+      expect(executionErrorReason({ exitCode: 124, stdout: '', stderr: '', timedOut: true })).not.toBeNull();
+      expect(executionErrorReason({ exitCode: 127, stdout: '', stderr: '', spawnFailed: true })).not.toBeNull();
+    });
+
+    it('returns null for any plain non-zero exit, regardless of exit code or output', () => {
+      expect(executionErrorReason({ exitCode: 1, stdout: '', stderr: 'AssertionError' })).toBeNull();
+      // No heuristics: a network-looking error or a 127 with no owned flag is NOT reclassified.
+      expect(
+        executionErrorReason({ exitCode: 1, stdout: '', stderr: 'getaddrinfo ENOTFOUND registry.npmjs.org' }),
+      ).toBeNull();
+      expect(executionErrorReason({ exitCode: 127, stdout: '', stderr: 'vitest: not found' })).toBeNull();
+    });
   });
 });

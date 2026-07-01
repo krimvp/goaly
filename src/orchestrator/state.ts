@@ -40,6 +40,14 @@ export type LoopCtx = {
   readonly diffHashHistory: readonly DiffHash[];
   /** Normalized details of FAILED verifier verdicts (drives repeat-failure detection). */
   readonly verifierDetailHistory: readonly string[];
+  /**
+   * Per-iteration verifier evaluability, in order (drives consecutive-unevaluable detection): `true`
+   * when the frozen ladder produced a real pass/fail that iteration, `false` when it could not be
+   * evaluated (the verify command failed to run / the judge errored — see {@link Verdict.evaluable}).
+   * Append-only like {@link runStatusHistory}; a real evaluation (pass or genuine fail) pushes `true`
+   * and so breaks any could-not-evaluate streak.
+   */
+  readonly verifierEvaluableHistory: readonly boolean[];
   /** Whether the most recent iteration left the working tree unchanged. */
   readonly lastNoDiff: boolean;
   /** Status of the most recent agent run (surfaced as feedback when not 'completed'). */
@@ -188,6 +196,7 @@ export function initialCtx(
     sessionId: config.seedSessionId,
     diffHashHistory: [],
     verifierDetailHistory: [],
+    verifierEvaluableHistory: [],
     lastNoDiff: false,
     lastRunStatus: undefined,
     runStatusHistory: [],

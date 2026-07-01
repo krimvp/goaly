@@ -66,7 +66,10 @@ consumes:
 interface AgentCliCodec {
   readonly name: string;            // "myagent" — short id for logs
   readonly command: string;         // the binary to spawn, e.g. "myagent"
-  readonly unknownSession: string;  // safe sentinel session id, e.g. "myagent-unknown"
+  readonly unknownSession: string;  // safe sentinel session id, e.g. "myagent-unknown". The shared
+                                    // core never threads this sentinel into a resume — a turn that
+                                    // yields no real session (e.g. a timeout) just starts fresh next
+                                    // turn instead of `<cli> --resume <sentinel>` (which would crash).
   readonly promptOnStdin: boolean;  // also write the prompt to stdin (claude) vs argv-only (codex/droid)
 
   readonly fieldExtractor: FieldExtractor;          // final-result field mapping (§1)

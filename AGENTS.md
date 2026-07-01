@@ -63,7 +63,14 @@ These are the product. A change that violates one is wrong even if tests pass �
 7. **Write-ahead + resume.** Events are appended before the state advances; resume is a replay-fold
    over the log; no completed iteration is repeated. Durability is at-least-once by design.
 8. **Stuck detection stays pure** over `LoopCtx` histories: no-diff, repeat-failure, oscillation,
-   harness-crash (consecutive `crashed` runs → typed `STUCK_HARNESS_CRASH`), budget.
+   harness-crash (consecutive `crashed` runs → typed `STUCK_HARNESS_CRASH`), contract-unevaluable
+   (consecutive could-not-evaluate verdicts — the verify command timed out or could not be started, or
+   the judge errored/overflowed — carried as `Verdict.evaluable === false` → typed
+   `CONTRACT_UNEVALUABLE`, so a verification-environment failure is never mistaken for a code red and
+   never discards a possibly-correct tree behind a misleading no-diff/repeat abort — still fail-closed).
+   Classified ONLY from facts goaly owns (its own timeout / spawn-failure; the judge's own error) —
+   never heuristic exit-code/error-string guessing — and prevented at the source (the compiler authors
+   offline verify commands; a missing toolchain is a pre-loop `requiredTools` abort), budget.
 
 ## The mental model: one deep module, four seams
 

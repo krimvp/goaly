@@ -63,8 +63,11 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
   checkpoints shrank the judge's diff. `--delta-verify` is read here (Driver wiring), never the reducer.
   _avoid:_ threading baselines through the loop by hand; letting the approver's diff scope vary silently.
 - **Stuck** — a pre-`maxIterations` bail with a typed `{ kind, message }` reason — `kind` ∈
-  `no-diff | repeat | oscillation | crash | budget` (`STUCK_HARNESS_CRASH` / `STUCK_REPEATED_FAILURE`
-  in the message). `detectStuck` is pure over the `LoopCtx` histories; **DECIDE** keys the one
+  `no-diff | repeat | oscillation | crash | unevaluable | budget` (`STUCK_HARNESS_CRASH` /
+  `STUCK_REPEATED_FAILURE` / `CONTRACT_UNEVALUABLE` in the message). `unevaluable` fires on a streak of
+  could-not-evaluate verdicts (`Verdict.evaluable === false`: the verify command couldn't run or the
+  judge errored/overflowed) — a verification-environment failure, never mistaken for a code red and
+  never discarding a possibly-correct tree. `detectStuck` is pure over the `LoopCtx` histories; **DECIDE** keys the one
   reason-specific excuse off `kind` (a `no-diff` abort is excused by a fresh, unseen Sign-off veto —
   the in-flight half it holds the verdict for). _avoid:_ a normal failure (that's FAILED); putting the
   fresh-veto excuse inside `detectStuck` (it needs the verdict, so it lives in DECIDE).

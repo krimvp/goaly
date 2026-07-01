@@ -21,8 +21,31 @@ export const Verdict = z.object({
   rungsPassed: z.number().int().min(0).optional(),
   /** The frozen ladder's total rung count (the denominator for {@link rungsPassed}). */
   rungsTotal: z.number().int().min(0).optional(),
+  /**
+   * `false` marks a COULD-NOT-EVALUATE verdict — the bar was never actually tested to a real
+   * pass/fail. The verification could not be RUN: the verify command itself failed to execute (a
+   * missing tool / exit 127, a network or package-manager error, a timeout/kill), or the LLM judge
+   * errored, returned no parseable verdict, or overflowed its context. This is STILL fail-closed —
+   * an unevaluable verdict always carries `pass: false` and is NEVER a green — it only adds the
+   * signal that the failure is a verification-ENVIRONMENT failure, not evidence the worker's code is
+   * wrong. The orchestrator uses it to surface an honest `CONTRACT_UNEVALUABLE` terminal instead of
+   * mistaking a checker that can't run for "your code is broken" (a misleading no-diff/repeat abort
+   * that would discard a possibly-correct tree). Optional and defaults to evaluable: omit it for a
+   * normal pass/fail, so every existing producer/consumer is unaffected.
+   */
+  evaluable: z.boolean().optional(),
 });
 export type Verdict = z.infer<typeof Verdict>;
+
+/**
+ * True when a verdict is a could-not-evaluate result (see {@link Verdict.evaluable}): the bar was
+ * not actually tested, as opposed to evaluated-and-failed. An omitted `evaluable` means evaluable
+ * (the normal pass/fail case), so only an explicit `false` counts. A passing verdict is never
+ * unevaluable.
+ */
+export function isUnevaluable(verdict: Verdict): boolean {
+  return verdict.evaluable === false && !verdict.pass;
+}
 
 /**
  * Structured output forced from a single LLM judge sample (temperature 0).

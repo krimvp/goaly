@@ -40,7 +40,7 @@ export function decide(
   // histories; the one reason-specific excuse that needs the in-flight verdict/approval lives HERE
   // (issue #54): a `no-diff` abort is excused when the agent had no fair chance to act on a FRESH,
   // correctable Sign-off veto (green ladder, a veto whose reason the just-run turn was NOT yet given).
-  // Only `no-diff` is excusable — budget / crash / oscillation / repeat always abort.
+  // Only `no-diff` is excusable — budget / crash / unevaluable / oscillation / repeat always abort.
   const stuck = detectStuck(ctx);
   if (stuck !== null && !(stuck.kind === 'no-diff' && freshVeto(ctx, ladder, approval))) {
     return { kind: 'ABORTED', reason: stuck.message };
