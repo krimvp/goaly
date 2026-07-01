@@ -19,10 +19,25 @@ import {
   failVerdict,
   approve,
 } from '../testing/fakes';
-import { replay } from './replay';
+import { replay, extendedRunConfig } from './replay';
 
 const runId = RunId.parse('run-replay');
 const contract = makeFakeContract({ goal: 'replayed goal' });
+
+/** A RUN_EXTENDED marker entry (ADR 0012) appended after `seq` prior entries. */
+function extensionEntry(
+  seq: number,
+  fields: Partial<Extract<OrchestratorEvent, { tag: 'RUN_EXTENDED' }>>,
+): RunLogEntry {
+  return {
+    runId,
+    seq,
+    ts: 1_700_000_000_000 + seq,
+    contractHash: contract.contractHash,
+    event: { tag: 'RUN_EXTENDED', ...fields },
+    stateTagAfter: 'RUNNING_AGENT',
+  };
+}
 
 async function driveAndStore(): Promise<InMemoryRunLog> {
   const workspace = new FakeWorkspace('0000000');
@@ -205,5 +220,113 @@ describe('replay()', () => {
     });
     const { baseline } = replay(makeConfig(), [mk('b'.repeat(40)), mk('c'.repeat(40))]);
     expect(baseline).toBe('c'.repeat(40));
+  });
+});
+
+// ---- operator extension markers (RUN_EXTENDED, ADR 0012) --------------------
+
+/** Drive a run that FAILS at its iteration cap, returning the stored log. */
+async function driveToIterationCap(maxIterations: number): Promise<InMemoryRunLog> {
+  const workspace = new FakeWorkspace('0000000');
+  const runlog = new InMemoryRunLog();
+  const deps: DriverDeps = {
+    compiler: new FakeCompiler(contract),
+    seal: new FakeSealGate({ kind: 'approve' }),
+    harness: new FakeHarness([{ postHash: '0000001' }, { postHash: '0000002' }], workspace),
+    makeLadder: () => new FakeVerifier([failVerdict('red 1'), failVerdict('red 2')]),
+    approver: new FakeApprover([]),
+    workspace,
+    clock: new ManualClock(),
+    budget: new ManualBudgetMeter(false),
+    runlog,
+  };
+  const outcome = await drive(deps, makeConfig({ goal: 'replayed goal', maxIterations }), runId);
+  expect(outcome.status).toBe('FAILED');
+  return runlog;
+}
+
+describe('replay() — RUN_EXTENDED (operator extension, ADR 0012)', () => {
+  it('extendedRunConfig applies overlays in order (later wins)', () => {
+    const cfg = extendedRunConfig(makeConfig({ maxIterations: 5 }), [
+      extensionEntry(1, { maxIterations: 10, budgetTokens: 1000 }),
+      extensionEntry(2, { maxIterations: 20, stuck: { noDiff: false } }),
+    ]);
+    expect(cfg.maxIterations).toBe(20);
+    expect(cfg.budget.tokens).toBe(1000);
+    expect(cfg.stuckPolicy.noDiff).toBe(false);
+    expect(cfg.stuckPolicy.oscillation).toBe(true); // untouched fields keep their values
+  });
+
+  it('a raised maxIterations UN-TERMINATES a FAILED-at-cap fold (the run continues)', async () => {
+    const runlog = await driveToIterationCap(1);
+    const stored = await runlog.read();
+
+    // Without the extension the fold is terminal at the old cap.
+    const before = replay(stored!.header.config, stored!.entries);
+    expect(before.state.tag).toBe('FAILED');
+
+    // With it, the fold continues into the next iteration: the resumed run has a next command.
+    const after = replay(stored!.header.config, [
+      ...stored!.entries,
+      extensionEntry(stored!.entries.length + 1, { maxIterations: 3 }),
+    ]);
+    expect(after.state.tag).toBe('RUNNING_AGENT');
+    expect(after.commands[0]?.tag).toBe('RUN_AGENT');
+  });
+
+  it('a raised token budget re-judges persisted exceeded flags (a budget abort revives)', async () => {
+    // Hand-build a minimal loop log whose AGENT_RAN snapshot exceeded the OLD 100-token cap.
+    const cfg = makeConfig({ goal: 'replayed goal', maxIterations: 5 });
+    const base: RunLogEntry[] = [
+      {
+        runId, seq: 1, ts: 1, contractHash: contract.contractHash,
+        event: { tag: 'CONTRACT_COMPILED', contract },
+        stateTagAfter: 'AWAIT_SEAL',
+      },
+      {
+        runId, seq: 2, ts: 2, contractHash: contract.contractHash,
+        event: { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } },
+        stateTagAfter: 'RUNNING_AGENT',
+      },
+      {
+        runId, seq: 3, ts: 3, contractHash: contract.contractHash,
+        event: {
+          tag: 'AGENT_RAN',
+          run: { output: 'worked', sessionId: SessionId.parse('s1'), status: 'completed', tokensUsed: 150 },
+          prevDiffHash: DiffHash.parse('0000000'),
+          diffHash: DiffHash.parse('0000001'),
+          budget: { tokensSpent: 150, exceeded: true }, // over the old cap
+        },
+        stateTagAfter: 'VERIFYING',
+      },
+      {
+        runId, seq: 4, ts: 4, contractHash: contract.contractHash,
+        event: { tag: 'VERIFIED', verdict: { pass: false, confidence: 1, detail: 'red' } },
+        stateTagAfter: 'ABORTED',
+      },
+    ];
+    const before = replay(cfg, base);
+    expect(before.state.tag).toBe('ABORTED');
+
+    const after = replay(cfg, [...base, extensionEntry(5, { budgetTokens: 1000 })]);
+    expect(after.state.tag).toBe('RUNNING_AGENT'); // exceeded re-judged vs the new cap → continue
+  });
+
+  it('surfaces a pending note until an agent turn consumes it', async () => {
+    const runlog = await driveToIterationCap(1);
+    const stored = await runlog.read();
+
+    const pending = replay(stored!.header.config, [
+      ...stored!.entries,
+      extensionEntry(stored!.entries.length + 1, { maxIterations: 3, note: 'try the other approach' }),
+    ]);
+    expect(pending.pendingNote).toBe('try the other approach');
+
+    // A note that PRECEDES a logged agent turn was seen by that turn — no longer pending.
+    const consumed = replay(stored!.header.config, [
+      extensionEntry(0, { note: 'try the other approach' }),
+      ...stored!.entries,
+    ]);
+    expect(consumed.pendingNote).toBeNull();
   });
 });

@@ -11,6 +11,8 @@ import { asRunId, type RunId } from '../domain/ids';
 import type { RunOutcome } from '../domain/events';
 import type { RunConfig } from '../domain/config';
 import { readRun } from '../runlog/inspect';
+import { FileRunLog } from '../runlog/file-runlog';
+import { extendedRunConfig, applyRunExtension } from '../runlog/replay';
 import { acquireRunLock, RunLockedError, type RunLock } from '../runlog/lock';
 import { killActiveChildren } from '../util/spawn';
 import { preflightRun } from './preflight';
@@ -194,7 +196,6 @@ export async function main(argv: string[]): Promise<number> {
   // --inherit-session) seed the session. A normal run passes through unchanged.
   const followup = await resolveFollowup(parsed, (s) => process.stderr.write(s));
   if (!followup.ok) return followup.code;
-  const runConfig = followup.config;
 
   // First-run preflight (fail-fast, before any spend): git repo present, harness / LLM-provider
   // CLI on PATH — the mistakes that used to surface only AFTER a compile + agent turn, as cryptic
@@ -218,6 +219,10 @@ export async function main(argv: string[]): Promise<number> {
   // Validate --resume BEFORE creating anything (the run lock would otherwise mkdir a run dir for a
   // typo'd id): a missing run gets a pointer to `runs list`; a corrupt log a clear parse error —
   // mirroring the --from-run guards above instead of failing deep inside the resume fold.
+  // A resumed run continues with the LOG's effective config (header + any logged RUN_EXTENDED
+  // overlays + this invocation's explicit extension), NOT this invocation's re-parsed defaults — so
+  // the budget meter, best-of wiring, etc. match exactly what the resume fold will compute.
+  let runConfig = followup.config;
   if (parsed.resumeRunId !== undefined) {
     const stateDir = path.join(parsed.workspace, STATE_DIR);
     const prior = await readRun(stateDir, parsed.resumeRunId);
@@ -233,6 +238,22 @@ export async function main(argv: string[]): Promise<number> {
         `goaly: --resume ${parsed.resumeRunId}: run log is corrupt: ${prior.error}\n`,
       );
       return 2;
+    }
+    // Extending a DONE run is meaningless (both keys already turned) — route to the follow-up path.
+    if (prior.detail.status === 'DONE' && parsed.resumeExtend !== undefined) {
+      process.stderr.write(
+        `goaly: --resume ${parsed.resumeRunId}: this run is DONE — there is nothing to extend. ` +
+          `Build on it with: goaly "<follow-up goal>" --from-run ${parsed.resumeRunId}\n`,
+      );
+      return 2;
+    }
+    const stored = await new FileRunLog(path.join(stateDir, parsed.resumeRunId)).read();
+    if (stored !== null) {
+      const effective = extendedRunConfig(stored.header.config, stored.entries);
+      runConfig =
+        parsed.resumeExtend !== undefined
+          ? applyRunExtension(effective, parsed.resumeExtend)
+          : effective;
     }
   }
 
@@ -333,7 +354,11 @@ export async function main(argv: string[]): Promise<number> {
         { ...deps, interrupted: interrupt.interrupted },
         runConfig,
         runId,
-        { resume: resuming, harness: parsed.harness },
+        {
+          resume: resuming,
+          harness: parsed.harness,
+          ...(parsed.resumeExtend !== undefined ? { extend: parsed.resumeExtend } : {}),
+        },
       );
     } finally {
       process.removeListener('SIGINT', interrupt.onSignal);

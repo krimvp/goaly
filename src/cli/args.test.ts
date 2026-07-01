@@ -1112,4 +1112,51 @@ describe('parseArgs', () => {
       ).rejects.toThrow(UsageError);
     });
   });
+
+  describe('--resume extension & --note (operator control, ADR 0012)', () => {
+    it('collects explicitly-passed caps + note into resumeExtend on --resume', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--resume', 'run-x',
+        '--max-iterations', '25', '--budget-tokens', '900000',
+        '--stuck-no-diff', 'false', '--note', 'try the other approach',
+      ]);
+      expect(a.resumeExtend).toEqual({
+        maxIterations: 25,
+        budgetTokens: 900_000,
+        stuck: { noDiff: false },
+        note: 'try the other approach',
+      });
+    });
+
+    it('a plain --resume collects NO extension (nothing is appended to the log)', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--resume', 'run-x']);
+      expect(a.resumeExtend).toBeUndefined();
+    });
+
+    it('does not treat config-file defaults as an explicit extension', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'g', '--verify-cmd', 'true', '--resume', 'run-x', '--config', 'goaly.json'],
+        undefined,
+        async () => ({
+          overlay: { 'budget-tokens': '500000', 'max-iterations': '30' },
+          sources: ['goaly.json'],
+        }),
+      );
+      expect(a.resumeExtend).toBeUndefined();
+    });
+
+    it('fails closed on --note without --resume, naming the fix', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--note', 'hint']),
+      ).rejects.toThrow(/--resume/);
+    });
+
+    it('a fresh run (no --resume) never collects an extension from cap flags', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--max-iterations', '25',
+      ]);
+      expect(a.resumeExtend).toBeUndefined();
+      expect(a.config.maxIterations).toBe(25);
+    });
+  });
 });

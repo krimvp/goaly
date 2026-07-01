@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CliInput, cliInputToRunConfig, type RunConfig } from '../domain/config';
+import type { RunExtension } from '../domain/events';
 import { SandboxPolicy } from '../sandbox/policy';
 import { LogLevel } from '../log/logger';
 import { ModelSelection, type ModelSelectionInput } from './models';
@@ -135,6 +136,13 @@ export type ParsedArgs = {
    * token, so an unset var is allowed (no `Authorization` header is sent).
    */
   llmApiKeyEnv: string;
+  /**
+   * Operator extension/steering for a `--resume` (ADR 0012): the cap / stuck-policy flags the user
+   * EXPLICITLY passed alongside `--resume` (raises `maxIterations` / budget / thresholds for the
+   * resumed run), plus an optional `--note` appended to the next agent prompt. Undefined on a fresh
+   * run or a plain resume. Operational knobs only — never the goal / verifier / rubric.
+   */
+  resumeExtend: RunExtension | undefined;
 };
 
 export const USAGE = `goaly — run a coding agent until a frozen success contract is met.
@@ -166,7 +174,8 @@ Usage:
                [--sandbox[=none|auto|bwrap|firejail|container]]
                [--sandbox-net none|allow|allow:<host,…>]
                [--sandbox-image <ref>] [--sandbox-runtime docker|podman]
-               [--cost-table <path>] [--baseline <ref>] [--delta-verify] [--workspace <dir>] [--resume <runId>]
+               [--cost-table <path>] [--baseline <ref>] [--delta-verify] [--workspace <dir>]
+               [--resume <runId> [--note "<text>"]]
                [--from-run <runId> [--inherit-session]]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
                [--stream] [--stream-transcript] [--stream-file <path>] [--explain] [--explain-model <m>]
@@ -472,6 +481,22 @@ Plain-language run narration (opt-in observability — issue #8):
   --explain-model <m>  model for the --explain observer only (cascades like the other LLM-step
                     models: --explain-model → --llm-model → --model).
 
+Resume, steer & extend (operator control over ONE run — the frozen contract never changes):
+  --resume <runId>    re-enter an INCOMPLETE run's loop exactly where the write-ahead log left it
+                      (crash, Ctrl-C, kill — nothing completed is repeated). Pass any of the flags
+                      below WITH --resume to extend/steer the resumed run; each is recorded in the
+                      log (a RUN_EXTENDED marker) so the extension is auditable and later resumes
+                      keep it. Only these OPERATIONAL knobs are extendable — never the goal, the
+                      verifier, or the rubric (the contract stays frozen; both keys still gate DONE):
+                        --max-iterations N      also REVIVES a run that FAILED at its iteration cap
+                        --budget-tokens N       also revives a budget-ABORTED run (spend re-judged
+                        --budget-wall-ms N        against the new cap; prior spend still counts)
+                        --stuck-* flags         raise/toggle a tripped stuck detector to continue
+                      Live in another terminal: goaly runs watch <runId>.
+  --note "<text>"     (with --resume) operator guidance appended to the NEXT agent prompt — steer
+                      the worker without touching the bar. Combine with Ctrl-C for mid-run steering:
+                      interrupt, then 'goaly --resume <id> --note "try the other approach"'.
+
 Follow-up after a run ends (build on a finished run — keeps every invariant by construction):
   --from-run <runId>  start a NEW run whose contract is authored AWARE of a finished run: a concise,
                       deterministic COMPACTION of the prior run (its goal, frozen bar, outcome) is fed
@@ -602,6 +627,54 @@ function boolFlag(flags: RawFlags, key: string): boolean | undefined {
   if (v === 'true' || v === '1' || v === 'yes') return true;
   if (v === 'false' || v === '0' || v === 'no') return false;
   throw new UsageError(`--${key}: expected true or false, got '${String(v)}'`);
+}
+
+/**
+ * Collect the operator extension for a `--resume` (ADR 0012) from EXPLICITLY-passed CLI flags
+ * (never the config-file overlay — an extension is a per-invocation operator act). The values are
+ * read off the already-validated RunConfig (so every coercion/floor is applied once); only flags
+ * actually present become part of the extension — absent ones keep whatever the run log's
+ * effective config says. `--note` is resume-only: on a fresh run there is no next-turn boundary to
+ * attach it to, so it fails closed with the fix.
+ */
+function collectResumeExtension(flags: RawFlags, config: RunConfig): RunExtension | undefined {
+  const resuming = str(flags, 'resume') !== undefined;
+  const note = str(flags, 'note');
+  if (!resuming) {
+    if (note !== undefined) {
+      throw new UsageError(
+        '--note steers a RESUMED run (it is appended to the next agent prompt) — pair it with ' +
+          '--resume <runId>. To guide a fresh run, put the guidance in the goal or --intent.',
+      );
+    }
+    return undefined;
+  }
+  const has = (key: string): boolean => flags[key] !== undefined;
+  const stuck = {
+    ...(has('stuck-no-diff') ? { noDiff: config.stuckPolicy.noDiff } : {}),
+    ...(has('stuck-repeat-threshold')
+      ? { repeatFailureThreshold: config.stuckPolicy.repeatFailureThreshold }
+      : {}),
+    ...(has('stuck-oscillation') ? { oscillation: config.stuckPolicy.oscillation } : {}),
+    ...(has('stuck-crash-threshold')
+      ? { harnessCrashThreshold: config.stuckPolicy.harnessCrashThreshold }
+      : {}),
+    ...(has('stuck-unevaluable-threshold')
+      ? { unevaluableThreshold: config.stuckPolicy.unevaluableThreshold }
+      : {}),
+  };
+  const extension: RunExtension = {
+    ...(has('max-iterations') ? { maxIterations: config.maxIterations } : {}),
+    ...(has('budget-tokens') && config.budget.tokens !== undefined
+      ? { budgetTokens: config.budget.tokens }
+      : {}),
+    ...(has('budget-wall-ms') && config.budget.wallClockMs !== undefined
+      ? { budgetWallMs: config.budget.wallClockMs }
+      : {}),
+    ...(Object.keys(stuck).length > 0 ? { stuck } : {}),
+    ...(note !== undefined ? { note } : {}),
+  };
+  return Object.keys(extension).length > 0 ? extension : undefined;
 }
 
 /** Fields that may be sourced inline / from a file / from stdin; a CLI source overrides config. */
@@ -739,6 +812,10 @@ export async function parseArgs(
 
   const harness = parseHarness(str(flags, 'harness'));
   const config = cliInputToRunConfig(cliInput);
+  // Explicitness for the resume extension is judged on CLI flags ONLY (never the config-file
+  // overlay): a `.goalyrc` default like "budget-tokens" must not append a RUN_EXTENDED marker to
+  // the log on every resume — an extension is an explicit per-invocation operator act.
+  const resumeExtend = collectResumeExtension(cliFlags, config);
 
   // Piping a field via stdin (`--goal -`) drains the ONLY stdin stream, so the interactive Seal
   // prompt that a non-autonomous run needs would read EOF / hang. That used to be a doc-note
@@ -763,6 +840,7 @@ export async function parseArgs(
     verifyDir: str(flags, 'verify-dir'),
     planFile: str(flags, 'plan-file'),
     resumeRunId: str(flags, 'resume'),
+    resumeExtend,
     fromRunId: str(flags, 'from-run'),
     inheritSession: flags['inherit-session'] !== undefined,
     logLevel: parseLogLevel(str(flags, 'log-level')),
@@ -1133,5 +1211,6 @@ function baseArgs(
     configSources: [],
     baseUrl: undefined,
     llmApiKeyEnv: 'OPENAI_API_KEY',
+    resumeExtend: undefined,
   };
 }

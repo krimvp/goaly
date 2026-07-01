@@ -223,6 +223,105 @@ describe('main() — --baseline validation (issue #47)', () => {
   });
 });
 
+describe('main() — resume extension end-to-end (operator control, ADR 0012)', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'goaly-main-extend-'));
+    const git = (...args: string[]): void => {
+      const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test User');
+    await writeFile(join(root, 'f.txt'), 'x\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function captureAll(fn: () => Promise<number>): Promise<{ code: number; out: string }> {
+    const writes: string[] = [];
+    const origOut = process.stdout.write.bind(process.stdout);
+    const origErr = process.stderr.write.bind(process.stderr);
+    const capture = ((s: string | Uint8Array): boolean => {
+      writes.push(typeof s === 'string' ? s : Buffer.from(s).toString());
+      return true;
+    }) as typeof process.stdout.write;
+    process.stdout.write = capture;
+    process.stderr.write = capture;
+    try {
+      return { code: await fn(), out: writes.join('') };
+    } finally {
+      process.stdout.write = origOut;
+      process.stderr.write = origErr;
+    }
+  }
+
+  it('revives a stuck-aborted run via --resume with a stuck override + note (zero LLM)', async () => {
+    // Run 1: the fake harness edits nothing and the deterministic bar is red → no-diff ABORTED
+    // after iteration 1. (A red ladder never reaches Sign-off, so no LLM is ever invoked.)
+    const first = await captureAll(() =>
+      main(['run', 'g', '--verify-cmd', 'false', '--harness', 'fake', '--autonomous',
+        '--max-iterations', '2', '--workspace', root]),
+    );
+    expect(first.code).toBe(1);
+    expect(first.out).toContain('no-diff');
+    const runId = /── goaly run (run-[0-9a-f-]+) ──/.exec(first.out)?.[1];
+    expect(runId).toBeDefined();
+
+    // Resume with an operator override + note: the fold revives past the no-diff abort, runs
+    // iteration 2 (still red), and now terminates at the iteration cap instead.
+    const second = await captureAll(() =>
+      main(['run', 'g', '--verify-cmd', 'false', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--resume', runId!,
+        '--stuck-no-diff', 'false', '--note', 'the fixture is in f.txt']),
+    );
+    expect(second.code).toBe(1);
+    expect(second.out).toContain('iterations:  2');
+    expect(second.out).toContain('reached maxIterations');
+  });
+
+  it('refuses to extend a DONE run, pointing at --from-run', async () => {
+    // Fabricate a DONE run log directly (no LLM/harness involved): both keys turned.
+    const contract = makeFakeContract({ goal: 'g' });
+    const log = new FileRunLog(join(root, STATE_DIR, 'run-done'));
+    await log.writeHeader({
+      runId: RunId.parse('run-done'),
+      startedAt: 1,
+      config: makeConfig({ goal: 'g' }),
+      harness: 'fake',
+    });
+    const base = { runId: RunId.parse('run-done'), contractHash: contract.contractHash };
+    await log.append({ ...base, seq: 1, ts: 1, event: { tag: 'CONTRACT_COMPILED', contract }, stateTagAfter: 'AWAIT_SEAL' });
+    await log.append({ ...base, seq: 2, ts: 2, event: { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }, stateTagAfter: 'RUNNING_AGENT' });
+    await log.append({
+      ...base, seq: 3, ts: 3,
+      event: {
+        tag: 'AGENT_RAN',
+        run: { output: 'ok', sessionId: SessionId.parse('s1'), status: 'completed' },
+        prevDiffHash: DiffHash.parse('0000000'),
+        diffHash: DiffHash.parse('0000001'),
+        budget: { exceeded: false },
+      },
+      stateTagAfter: 'VERIFYING',
+    });
+    await log.append({ ...base, seq: 4, ts: 4, event: { tag: 'VERIFIED', verdict: { pass: true, confidence: 1, detail: 'green' } }, stateTagAfter: 'AWAIT_SIGNOFF' });
+    await log.append({ ...base, seq: 5, ts: 5, event: { tag: 'SIGNOFF_DECIDED', approval: { veto: false } }, stateTagAfter: 'DONE' });
+
+    const res = await captureAll(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--resume', 'run-done', '--max-iterations', '5']),
+    );
+    expect(res.code).toBe(2);
+    expect(res.out).toContain('nothing to extend');
+    expect(res.out).toContain('--from-run');
+  });
+});
+
 describe('main() — follow-up (Capability C) guards & resume-cmd (Capability A)', () => {
   let root: string;
 

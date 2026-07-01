@@ -1,5 +1,6 @@
-import type { Command, OrchestratorEvent, RunOutcome } from '../domain/events';
+import type { Command, OrchestratorEvent, RunExtension, RunOutcome } from '../domain/events';
 import { OrchestratorEvent as OrchestratorEventSchema } from '../domain/events';
+import type { RunLogEntry } from '../runlog/runlog';
 import type { RunConfig } from '../domain/config';
 import type { CompiledContract } from '../domain/contract';
 import type { ContractHash, RunId, SessionId } from '../domain/ids';
@@ -152,6 +153,12 @@ export type DriveOptions = {
    * wiring, never the frozen contract; absent ⇒ the header omits it (old behavior unchanged).
    */
   harness?: string;
+  /**
+   * Operator extension/steering for THIS resume (ADR 0012). Ignored on a fresh run and on a log
+   * that doesn't exist yet. Appended as a RUN_EXTENDED marker BEFORE the resume fold, so a raised
+   * cap un-terminates a FAILED-at-cap / budget-ABORTED run and a `note` reaches the next prompt.
+   */
+  extend?: RunExtension;
 };
 
 /**
@@ -170,6 +177,7 @@ export async function drive(
   let seq: number;
   let ladder: Verifier | null = null;
   let contractHash: ContractHash | null = null;
+  let pendingNote: string | null = null;
   const log = deps.logger ?? noopLogger;
   const llmMeter = deps.llmMeter ?? new LlmTokenMeter();
   // Capture the run's START baseline BEFORE any internal checkpoint (or the resume re-point below)
@@ -208,7 +216,7 @@ export async function drive(
   // ABORTED like every other seam — a disk-full/corrupt-log throw here used to escape `drive()`
   // entirely (the only rejection path left), reaching the caller as a raw stack trace.
   try {
-    ({ state, commands, seq, contractHash, ladder } = await bootstrap(
+    ({ state, commands, seq, contractHash, ladder, pendingNote } = await bootstrap(
       deps, config, runId, options, baseline, log,
     ));
   } catch (e) {
@@ -262,7 +270,17 @@ export async function drive(
           `driver invariant: non-terminal state ${state.tag} emitted ${commands.length} commands (expected 1)`,
         );
       }
-      const command = commands[0]!;
+      let command = commands[0]!;
+      // Consume an un-consumed operator note (ADR 0012) on the FIRST agent turn after resume —
+      // whichever step it turns out to be. Worker steering only; the contract/ladder never see it.
+      if (
+        pendingNote !== null &&
+        (command.tag === 'RUN_AGENT' || command.tag === 'RUN_AGENT_BEST_OF')
+      ) {
+        command = withOperatorNote(command, pendingNote);
+        pendingNote = null;
+        log.info('operator note appended to the next agent prompt', {});
+      }
       log.debug('perform command', { command: command.tag, state: state.tag });
 
       // Best-of-N (issue #85): the Driver performs the WHOLE tournament here — it appends its own
@@ -766,6 +784,8 @@ type Bootstrapped = {
   seq: number;
   contractHash: ContractHash | null;
   ladder: Verifier | null;
+  /** Un-consumed operator note (ADR 0012) to append to the NEXT agent turn's prompt; null if none. */
+  pendingNote: string | null;
 };
 
 /**
@@ -790,10 +810,17 @@ async function bootstrap(
       config,
       ...(options.harness !== undefined ? { harness: options.harness } : {}),
     });
-    return { state, commands, seq: 0, contractHash: null, ladder: null };
+    return { state, commands, seq: 0, contractHash: null, ladder: null, pendingNote: null };
   }
 
-  const resumed = await resume(deps, config);
+  const resumed = await resume(deps, config, runId, options.extend);
+  // An extension that did not un-terminate the run (e.g. a note on a stuck abort whose tripping
+  // detector was not raised) is loud, not silent — the outcome will still be the terminal one.
+  if (options.extend !== undefined && isTerminal(resumed.state)) {
+    log.warn('resume extension did not un-terminate the run — the terminal outcome stands', {
+      state: resumed.state.tag,
+    });
+  }
   // Re-point both baselines from the resumed fold (issue #47/#49): the active baseline to the last
   // internal checkpoint (overriding any compose-time `--baseline`, since the logged checkpoint reflects
   // real progress), and the approver's cumulative baseline to the current phase's start.
@@ -820,7 +847,18 @@ async function bootstrap(
     seq: resumed.seq,
     contractHash: resumed.contractHash,
     ladder: resumed.contract !== null ? deps.makeLadder(resumed.contract) : null,
+    pendingNote: resumed.pendingNote,
   };
+}
+
+/**
+ * Append an un-consumed operator note (ADR 0012) to an agent turn's prompt. Steering is WORKER
+ * guidance only: it decorates the prompt the reducer already built — never the frozen contract,
+ * the ladder, or the approver's inputs — so both keys still gate DONE unchanged.
+ */
+function withOperatorNote(command: Command, note: string): Command {
+  if (command.tag !== 'RUN_AGENT' && command.tag !== 'RUN_AGENT_BEST_OF') return command;
+  return { ...command, prompt: `${command.prompt}\n\n# Operator note (added at resume)\n${note}` };
 }
 
 // ---- resume / replay ------------------------------------------------------
@@ -843,13 +881,20 @@ type Resumed = {
    * and resume is idle time, not spend — see ADR 0011.)
    */
   priorSpend: TokenUsage | null;
+  /** Un-consumed operator note from the replay fold (ADR 0012); null when none is pending. */
+  pendingNote: string | null;
 };
 
 /**
  * Reconstruct state by folding the pure reducer over the persisted event stream, then
  * continue. No completed iteration is repeated — replay applies `step` only, never `perform`.
  */
-async function resume(deps: DriverDeps, config: RunConfig): Promise<Resumed> {
+async function resume(
+  deps: DriverDeps,
+  config: RunConfig,
+  runId: RunId,
+  extend?: RunExtension,
+): Promise<Resumed> {
   const stored = await deps.runlog.read();
   if (stored === null) {
     const [state, commands] = initial(config);
@@ -862,29 +907,66 @@ async function resume(deps: DriverDeps, config: RunConfig): Promise<Resumed> {
       baseline: null,
       phaseBaseline: null,
       priorSpend: null,
+      pendingNote: null,
     };
+  }
+
+  // Operator extension (ADR 0012): validate + persist the RUN_EXTENDED marker write-ahead FIRST,
+  // so the fold below (and every later replay / `runs show` / watch) sees the same effective config.
+  let entries = stored.entries;
+  if (extend !== undefined && hasExtension(extend)) {
+    const event = OrchestratorEventSchema.parse({ tag: 'RUN_EXTENDED', ...extend });
+    // The marker never feeds the reducer, so folding a draft entry first is safe — its
+    // `stateTagAfter` is derived from the fold WITH the extension applied.
+    const draft: RunLogEntry[] = [
+      ...entries,
+      {
+        runId,
+        seq: entries.length + 1,
+        ts: deps.clock.now(),
+        contractHash: entries[entries.length - 1]?.contractHash ?? null,
+        event,
+        stateTagAfter: 'COMPILING', // placeholder — replaced below from the fold
+      },
+    ];
+    const folded = replay(stored.header.config, draft);
+    const entry: RunLogEntry = { ...draft[draft.length - 1]!, stateTagAfter: folded.state.tag };
+    await deps.runlog.append(entry);
+    entries = [...stored.entries, entry];
   }
 
   // Same replay-fold the read-only `runs` inspection uses — a single source of truth so an
   // inspected run's state matches exactly what resume reconstructs here.
-  const { state, commands, contract, contractHash, baseline, phaseBaseline } = replay(
+  const { state, commands, contract, contractHash, baseline, phaseBaseline, pendingNote } = replay(
     stored.header.config,
-    stored.entries,
+    entries,
   );
   const priorSpend = summarizeUsage(
-    stored.entries.map((entry) => entry.event),
+    entries.map((entry) => entry.event),
     stored.header.config.budget,
   ).total;
   return {
     state,
     commands,
-    seq: stored.entries.length,
+    seq: entries.length,
     contractHash,
     contract,
     baseline,
     phaseBaseline,
     priorSpend,
+    pendingNote,
   };
+}
+
+/** Does this extension actually carry anything to persist? An empty object is a no-op resume. */
+function hasExtension(x: RunExtension): boolean {
+  return (
+    x.maxIterations !== undefined ||
+    x.budgetTokens !== undefined ||
+    x.budgetWallMs !== undefined ||
+    (x.stuck !== undefined && Object.keys(x.stuck).length > 0) ||
+    x.note !== undefined
+  );
 }
 
 function buildOutcome(state: OrchestratorState, runId: RunId): RunOutcome {
