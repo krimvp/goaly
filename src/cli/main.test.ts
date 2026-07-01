@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { formatOutcome, main } from './main';
+import { formatOutcome, main, makeInterruptController } from './main';
 import { formatUsage } from './usage-format';
 import { STATE_DIR } from './compose';
 import { FileRunLog } from '../runlog/file-runlog';
@@ -120,6 +120,26 @@ describe('formatOutcome', () => {
   it('omits the spend block when usage is absent', () => {
     const text = formatOutcome(outcome({ usage: undefined }));
     expect(text).not.toContain('spend:');
+  });
+});
+
+describe('makeInterruptController', () => {
+  it('first signal warns with the resume command and flips interrupted; second force-exits', () => {
+    const warned: string[] = [];
+    let forced = 0;
+    const c = makeInterruptController('run-abc', (s) => warned.push(s), () => {
+      forced += 1;
+    });
+
+    expect(c.interrupted()).toBe(false);
+    c.onSignal();
+    expect(c.interrupted()).toBe(true);
+    expect(warned.join('')).toContain('--resume run-abc');
+    expect(warned.join('')).toContain('finishing the current step');
+    expect(forced).toBe(0);
+
+    c.onSignal();
+    expect(forced).toBe(1);
   });
 });
 

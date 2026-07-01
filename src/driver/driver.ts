@@ -91,6 +91,14 @@ export type DriverDeps = {
    */
   sleep?: (ms: number) => Promise<void>;
   /**
+   * Cooperative interrupt probe (Ctrl-C / SIGTERM): polled between steps — and before a crash-retry
+   * — so a graceful shutdown finishes the in-flight effect, persists its event write-ahead, and
+   * resolves to a typed ABORTED (with a resume path) instead of dying mid-iteration. Absent ⇒ never
+   * interrupted. The write-ahead log makes even a HARD kill safe (at-least-once resume); this just
+   * turns the common case into a clean, resumable exit with a clear outcome.
+   */
+  interrupted?: () => boolean;
+  /**
    * Meters LLM-step token spend (compiler / judge / approver). The composition root wraps each
    * workflow-step provider with `meterLlm` feeding this one meter; the Driver reads it per command
    * to attribute spend. Optional: when absent, LLM spend is simply reported as "unknown".
@@ -207,6 +215,20 @@ export async function drive(
     // internal checkpoint (overriding any compose-time `--baseline`, since the logged checkpoint reflects
     // real progress), and the approver's cumulative baseline to the current phase's start.
     baseline.hydrateResume(resumed);
+    // Re-arm the LIVE budget meter with the prior spend, so `--budget-tokens` caps the RUN, not
+    // each process: a run resumed near its cap must not get a fresh budget every restart.
+    if (resumed.priorSpend !== null &&
+        (resumed.priorSpend.tokens > 0 || resumed.priorSpend.unknownCalls > 0)) {
+      deps.budget.record(resumed.priorSpend.tokens, resumed.priorSpend.estimatedTokens ?? 0, {
+        unknownCalls: resumed.priorSpend.unknownCalls,
+      });
+      log.info('resume: prior token spend re-armed against the budget', {
+        tokens: resumed.priorSpend.tokens,
+        ...(resumed.priorSpend.unknownCalls > 0
+          ? { unknownCalls: resumed.priorSpend.unknownCalls }
+          : {}),
+      });
+    }
   } else {
     [state, commands] = initial(config);
     seq = 0;
@@ -238,6 +260,21 @@ export async function drive(
 
   try {
     while (!isTerminal(state)) {
+      // Cooperative interrupt: stop BETWEEN steps (the previous event is already durable), so the
+      // user gets a clean ABORTED with the resume path instead of a mid-iteration kill.
+      if (deps.interrupted?.() === true) {
+        log.warn('interrupt requested — stopping before the next step', { runId });
+        const extras = await buildOutcomeExtras(deps);
+        return {
+          status: 'ABORTED',
+          reason: `interrupted by user — resume this run with: --resume ${runId}`,
+          iterations: iterationCount(state),
+          contractHash: contractHash ?? null,
+          runId,
+          ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
+          ...(extras.sessionId !== undefined ? { sessionId: extras.sessionId } : {}),
+        };
+      }
       if (commands.length !== 1) {
         throw new Error(
           `driver invariant: non-terminal state ${state.tag} emitted ${commands.length} commands (expected 1)`,
@@ -624,7 +661,11 @@ async function perform(
         // the abandoned attempt's spend first (usually none — a crash rarely reports usage). A
         // crash that survives the retry flows to the reducer unchanged (stuck detection governs).
         const sleep = deps.sleep ?? realSleep;
-        for (let retry = 0; run.status === 'crashed' && retry < HARNESS_CRASH_RETRIES; retry++) {
+        for (
+          let retry = 0;
+          run.status === 'crashed' && retry < HARNESS_CRASH_RETRIES && deps.interrupted?.() !== true;
+          retry++
+        ) {
           const abandonedEstimate =
             run.tokenSource === 'estimated' && run.tokensUsed !== undefined ? run.tokensUsed : 0;
           deps.budget.record(run.tokensUsed, abandonedEstimate);
@@ -747,6 +788,14 @@ type Resumed = {
   baseline: DiffHash | null;
   /** The current phase's start tree SHA (last PHASE_ADVANCED), for re-pinning the approver (#49). */
   phaseBaseline: DiffHash | null;
+  /**
+   * The prior run's TOTAL token spend folded from the log, so `drive()` can re-arm the LIVE budget
+   * meter. Without this a resumed run restarted `--budget-tokens` from zero — a run resumed near
+   * its cap got a whole fresh budget, and repeated resumes could overshoot it arbitrarily. Null on
+   * a fresh/unreadable log. (Wall-clock deliberately restarts per process: the gap between crash
+   * and resume is idle time, not spend — see ADR 0011.)
+   */
+  priorSpend: TokenUsage | null;
 };
 
 /**
@@ -765,6 +814,7 @@ async function resume(deps: DriverDeps, config: RunConfig): Promise<Resumed> {
       contract: null,
       baseline: null,
       phaseBaseline: null,
+      priorSpend: null,
     };
   }
 
@@ -774,6 +824,10 @@ async function resume(deps: DriverDeps, config: RunConfig): Promise<Resumed> {
     stored.header.config,
     stored.entries,
   );
+  const priorSpend = summarizeUsage(
+    stored.entries.map((entry) => entry.event),
+    stored.header.config.budget,
+  ).total;
   return {
     state,
     commands,
@@ -782,6 +836,7 @@ async function resume(deps: DriverDeps, config: RunConfig): Promise<Resumed> {
     contract,
     baseline,
     phaseBaseline,
+    priorSpend,
   };
 }
 

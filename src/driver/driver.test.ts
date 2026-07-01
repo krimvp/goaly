@@ -575,6 +575,43 @@ describe('drive() — resume', () => {
     expect(outcome.iterations).toBe(1);
   });
 
+  it('re-arms the budget meter with prior spend on resume — the cap governs the RUN, not each process', async () => {
+    const inner = new InMemoryRunLog();
+    const ws1 = new FakeWorkspace('0000000', 'diff');
+    // First process: iteration 1 spends 500 tokens, then the 5th append crashes the run.
+    const deps1: DriverDeps = {
+      compiler: new FakeCompiler(contract),
+      seal: new FakeSealGate(),
+      harness: new FakeHarness([{ postHash: '0000001', tokensUsed: 500 }, { postHash: '0000002' }], ws1),
+      makeLadder: () => new FakeVerifier([failVerdict('e1'), failVerdict('e2')]),
+      approver: new FakeApprover([]),
+      workspace: ws1,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(),
+      runlog: crashAfter(inner, 5),
+    };
+    await drive(deps1, makeConfig({ maxIterations: 10 }), runId);
+
+    // Resume with a FRESH meter: the 500 prior tokens must be re-armed before the loop continues.
+    const ws2 = new FakeWorkspace('0000002', 'diff');
+    const resumedBudget = new ManualBudgetMeter();
+    const deps2: DriverDeps = {
+      compiler: new FakeCompiler(new Error('compile must not run on resume')),
+      seal: new FakeSealGate({ kind: 'reject', reason: 'gate must not run on resume' }),
+      harness: new FakeHarness([{ postHash: '0000003', tokensUsed: 100 }], ws2),
+      makeLadder: () => new FakeVerifier([passVerdict()]),
+      approver: new FakeApprover([approve()]),
+      workspace: ws2,
+      clock: new ManualClock(),
+      budget: resumedBudget,
+      runlog: inner,
+    };
+    const outcome = await drive(deps2, makeConfig({ maxIterations: 10 }), runId, { resume: true });
+
+    expect(outcome.status).toBe('DONE');
+    expect(resumedBudget.snapshot().tokensSpent).toBe(600); // 500 seeded from the log + 100 new
+  });
+
   it('resuming an already-terminal log returns the terminal outcome with no further effects', async () => {
     const runlog = new InMemoryRunLog();
     const { deps } = wire({
@@ -602,6 +639,42 @@ describe('drive() — resume', () => {
     const resumed = await drive(resumeDeps, makeConfig(), runId, { resume: true });
     expect(resumed.status).toBe('DONE');
     expect(resumed.iterations).toBe(first.iterations);
+  });
+});
+
+describe('drive() — cooperative interrupt', () => {
+  it('stops between steps with a typed ABORTED carrying the resume path (never mid-step)', async () => {
+    const { deps, harness, runlog } = wire({
+      scripts: [{ postHash: '0000001' }, { postHash: '0000002' }],
+      verdicts: [failVerdict('red')],
+    });
+    // The "user" hits Ctrl-C while the first agent turn is in flight: the turn completes, its event
+    // persists write-ahead, and the loop stops before the NEXT step (the verifier never runs).
+    let interrupted = false;
+    const innerHarness = deps.harness;
+    const wrapped: DriverDeps = {
+      ...deps,
+      harness: {
+        name: innerHarness.name,
+        run: async (...args: Parameters<typeof innerHarness.run>) => {
+          const r = await innerHarness.run(...args);
+          interrupted = true;
+          return r;
+        },
+      },
+      interrupted: () => interrupted,
+    };
+
+    const outcome = await drive(wrapped, makeConfig({ maxIterations: 10 }), runId);
+
+    expect(outcome.status).toBe('ABORTED');
+    expect(outcome.reason).toContain('interrupted by user');
+    expect(outcome.reason).toContain(`--resume ${runId}`);
+    expect(harness.prompts).toHaveLength(1);
+    // The in-flight step's event is durable; nothing after it ran.
+    const tags = runlog.entries.map((e) => e.event.tag);
+    expect(tags).toContain('AGENT_RAN');
+    expect(tags).not.toContain('VERIFIED');
   });
 });
 

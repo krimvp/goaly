@@ -12,6 +12,7 @@ import type { RunOutcome } from '../domain/events';
 import type { RunConfig } from '../domain/config';
 import { readRun } from '../runlog/inspect';
 import { acquireRunLock, RunLockedError, type RunLock } from '../runlog/lock';
+import { killActiveChildren } from '../util/spawn';
 import { compactRun } from '../followup/compaction';
 import { resumeHint, renderResumeHint, type ResumeHint } from './resume-cmd';
 import { resolveModels } from './models';
@@ -95,8 +96,46 @@ async function resolveFollowup(
 }
 
 /**
- * CLI entry. Returns a process exit code (0 = DONE, 1 = FAILED/ABORTED, 2 = usage error) so the
- * thin bin launcher stays trivial and `main` is unit-testable.
+ * Graceful-interrupt wiring (Ctrl-C / SIGTERM). The FIRST signal requests a cooperative stop: the
+ * Driver finishes the in-flight step (its event lands write-ahead) and resolves to a typed ABORTED
+ * with the resume command — nothing is lost and the user is told exactly how to continue. A SECOND
+ * signal force-exits (130) after reaping any live child process groups (a group-spawned agent CLI
+ * does not share the terminal's process group, so without the sweep it would outlive goaly and
+ * keep editing/spending). Exposed for tests; `main` installs/removes it around `drive()`.
+ */
+export function makeInterruptController(
+  runId: string,
+  warn: (s: string) => void,
+  forceExit: () => void = () => {
+    killActiveChildren();
+    process.exit(130);
+  },
+): { onSignal: () => void; interrupted: () => boolean } {
+  let signals = 0;
+  return {
+    onSignal: (): void => {
+      signals += 1;
+      if (signals === 1) {
+        warn(
+          `\ngoaly: interrupt received — finishing the current step, then stopping cleanly ` +
+            `(press Ctrl-C again to exit immediately).\n` +
+            `goaly: resume later with: goaly --resume ${runId} (plus your original flags)\n`,
+        );
+        return;
+      }
+      warn(`\ngoaly: exiting immediately — resume with: goaly --resume ${runId}\n`);
+      forceExit();
+    },
+    interrupted: (): boolean => signals > 0,
+  };
+}
+
+/** Exit code for a run stopped by Ctrl-C/SIGTERM (128 + SIGINT), distinct from FAILED/ABORTED (1). */
+const EXIT_INTERRUPTED = 130;
+
+/**
+ * CLI entry. Returns a process exit code (0 = DONE, 1 = FAILED/ABORTED, 2 = usage error,
+ * 130 = interrupted) so the thin bin launcher stays trivial and `main` is unit-testable.
  */
 export async function main(argv: string[]): Promise<number> {
   let parsed;
@@ -233,7 +272,11 @@ export async function main(argv: string[]): Promise<number> {
 
     // Human-facing startup banner, routed through the logger so it respects --log-level and lands
     // in the diagnostics file too. The run outcome below stays on stdout (the machine-facing result).
+    // The runId + resume command are printed UP FRONT so a crash/Ctrl-C at any point leaves the
+    // continuation path on screen (the headline resilience feature must be discoverable).
     deps.logger?.info('cli starting', {
+      runId,
+      resumeWith: `goaly --resume ${runId}`,
       harness: parsed.harness,
       autonomous: parsed.config.autonomous,
       ...(parsed.configSources.length > 0 ? { configFile: parsed.configSources.join(', ') } : {}),
@@ -241,7 +284,24 @@ export async function main(argv: string[]): Promise<number> {
       ...startupFields(parsed),
     });
 
-    const outcome = await drive(deps, runConfig, runId, { resume: resuming, harness: parsed.harness });
+    // Graceful interrupt: first Ctrl-C stops between steps (clean ABORTED + resume hint); second
+    // force-exits. Installed only around the run itself, and always removed in the finally below.
+    const interrupt = makeInterruptController(runId, (s) => process.stderr.write(s));
+    process.on('SIGINT', interrupt.onSignal);
+    process.on('SIGTERM', interrupt.onSignal);
+
+    let outcome;
+    try {
+      outcome = await drive(
+        { ...deps, interrupted: interrupt.interrupted },
+        runConfig,
+        runId,
+        { resume: resuming, harness: parsed.harness },
+      );
+    } finally {
+      process.removeListener('SIGINT', interrupt.onSignal);
+      process.removeListener('SIGTERM', interrupt.onSignal);
+    }
 
     // Surface the egress audit trail: any denied host:port the jail tried to reach (issue #39).
     if (egressProxy !== undefined && egressProxy.denied.length > 0) {
@@ -259,7 +319,8 @@ export async function main(argv: string[]): Promise<number> {
     // command (or the goaly-code → --from-run route). Stays quiet when there is no real session.
     const hint = resumeHint(parsed.harness, outcome.sessionId, runId);
     process.stdout.write(`${formatOutcome(outcome, cost, hint)}\n`);
-    return outcome.status === 'DONE' ? 0 : 1;
+    if (outcome.status === 'DONE') return 0;
+    return interrupt.interrupted() ? EXIT_INTERRUPTED : 1;
   } finally {
     await egressProxy?.close();
     await runLock.release();
