@@ -42,6 +42,20 @@ const SENTINEL_PREV_HASH: DiffHash = DiffHash.parse('0000000');
 const SENTINEL_POST_HASH: DiffHash = DiffHash.parse('0000001');
 
 /**
+ * Transient-crash absorption for one agent turn: a CRASHED harness run (the CLI exited abnormally —
+ * the shape a momentary rate-limit / network / auth blip produces) is retried once after a short
+ * backoff BEFORE the crash reaches the reducer. Without it, two quick back-to-back blips burn the
+ * whole `stuckCrashThreshold` (default 2) in seconds and abort an otherwise-healthy run. Retrying
+ * here is an EFFECT policy (the Driver's job), so the reducer, the stuck detectors, and the run-log
+ * semantics are untouched — a crash that survives the retry still counts toward the streak exactly
+ * as before. Timeouts are NOT retried (the wall-clock cap is the run's own guard).
+ */
+const HARNESS_CRASH_RETRIES = 1;
+const HARNESS_CRASH_BACKOFF_MS = 2000;
+
+const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
  * Everything the Driver needs to perform effects. The ladder is built once from the frozen
  * contract via `makeLadder` (the composition root knows how to assemble deterministic +
  * judge rungs); the Driver treats it as an opaque Verifier.
@@ -71,6 +85,11 @@ export type DriverDeps = {
   worktrees?: WorktreeHost;
   clock: Clock;
   budget: BudgetMeter;
+  /**
+   * Backoff sleep used by the harness crash-retry (see {@link HARNESS_CRASH_RETRIES}). Injectable
+   * so tests never wait a real timer; defaults to a real `setTimeout`.
+   */
+  sleep?: (ms: number) => Promise<void>;
   /**
    * Meters LLM-step token spend (compiler / judge / approver). The composition root wraps each
    * workflow-step provider with `meterLlm` feeding this one meter; the Driver reads it per command
@@ -600,7 +619,21 @@ async function perform(
           deps.onStreamEvent !== undefined
             ? (event: Parameters<PhasedStreamSink>[1]): void => deps.onStreamEvent?.('agent', event)
             : undefined;
-        const run = await deps.harness.run(command.prompt, command.sessionId, onEvent);
+        let run = await deps.harness.run(command.prompt, command.sessionId, onEvent);
+        // Transient-crash absorption: retry a crashed turn once after a short backoff, accounting
+        // the abandoned attempt's spend first (usually none — a crash rarely reports usage). A
+        // crash that survives the retry flows to the reducer unchanged (stuck detection governs).
+        const sleep = deps.sleep ?? realSleep;
+        for (let retry = 0; run.status === 'crashed' && retry < HARNESS_CRASH_RETRIES; retry++) {
+          const abandonedEstimate =
+            run.tokenSource === 'estimated' && run.tokensUsed !== undefined ? run.tokensUsed : 0;
+          deps.budget.record(run.tokensUsed, abandonedEstimate);
+          log.warn('harness crashed — retrying once after backoff (transient blips must not burn the crash streak)', {
+            backoffMs: HARNESS_CRASH_BACKOFF_MS,
+          });
+          await sleep(HARNESS_CRASH_BACKOFF_MS);
+          run = await deps.harness.run(command.prompt, command.sessionId, onEvent);
+        }
         // An estimated harness count (issue #24) still counts against the cap, marked so the
         // snapshot/report can show it as approximate.
         const estimated =

@@ -62,6 +62,8 @@ function wire(w: Wiring): {
     workspace,
     clock: new ManualClock(),
     budget: w.budget ?? new ManualBudgetMeter(false),
+    // No real timers in tests: the crash-retry backoff sleeps through this seam.
+    sleep: async () => {},
     runlog,
     ...(w.logger !== undefined ? { logger: w.logger } : {}),
   };
@@ -308,12 +310,16 @@ describe('drive() — full loop with zero IO', () => {
   it('ABORTED (STUCK_HARNESS_CRASH) after two consecutive harness crashes — fast and named, not a 6-iteration repeat-failure', async () => {
     // The real incident: the agent CLI crashed every turn (status=crashed), leaving a stale verifier
     // red that repeated. The loop must stop after the crash streak (2) with a harness-focused reason,
-    // not churn until the downstream verifier signature trips STUCK_REPEATED_FAILURE.
+    // not churn until the downstream verifier signature trips STUCK_REPEATED_FAILURE. Each iteration
+    // now absorbs ONE transient crash by retrying, so a persistently-crashing CLI burns two scripted
+    // crashes per iteration — the streak still fires at iteration 2, exactly as before.
+    const crash = { status: 'crashed', output: 'claude: command not found' } as const;
     const { deps } = wire({
       scripts: [
-        { status: 'crashed', output: 'claude: command not found', postHash: '0000001' },
-        { status: 'crashed', output: 'claude: command not found', postHash: '0000002' },
-        { status: 'crashed', output: 'claude: command not found', postHash: '0000003' },
+        { ...crash, postHash: '0000001' },
+        { ...crash, postHash: '0000002' }, // iteration 1: crash + retried crash
+        { ...crash, postHash: '0000003' },
+        { ...crash, postHash: '0000004' }, // iteration 2: crash + retried crash → streak trips
       ],
       verdicts: [failVerdict('ImportError'), failVerdict('ImportError'), failVerdict('ImportError')],
     });
@@ -323,6 +329,25 @@ describe('drive() — full loop with zero IO', () => {
     expect(outcome.reason).toContain('STUCK_HARNESS_CRASH');
     expect(outcome.reason).toContain('claude: command not found');
     expect(outcome.reason).not.toContain('STUCK_REPEATED_FAILURE');
+  });
+
+  it('absorbs a single transient harness crash by retrying the turn (never reaches the reducer)', async () => {
+    const { deps, harness, runlog } = wire({
+      scripts: [
+        { status: 'crashed', output: 'transient 429' },
+        { postHash: '0000001' }, // the retry succeeds within the same iteration
+      ],
+      verdicts: [passVerdict()],
+      approvals: [approve()],
+    });
+    const outcome = await drive(deps, makeConfig({ maxIterations: 10 }), runId);
+    expect(outcome.status).toBe('DONE');
+    expect(outcome.iterations).toBe(1);
+    expect(harness.prompts).toHaveLength(2); // one visible iteration, two attempts
+    // The persisted event carries the SUCCESSFUL attempt: the crash never entered the log/reducer.
+    const agentRan = runlog.entries.filter((e) => e.event.tag === 'AGENT_RAN');
+    expect(agentRan).toHaveLength(1);
+    expect(agentRan[0]!.event.tag === 'AGENT_RAN' && agentRan[0]!.event.run.status).toBe('completed');
   });
 
   it('fail-closed: a harness that throws is caught and mapped to a crashed run (never rejects)', async () => {

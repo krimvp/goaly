@@ -189,6 +189,14 @@ export class EndpointConfigError extends Error {}
 /** The orchestrator's own state directory name, kept out of stuck-detection hashing. */
 export const STATE_DIR = '.goaly';
 
+/**
+ * Default kill-timeout for the verify command (and each pre-flight deterministic rung) — the same
+ * 10 minutes the harness and LLM steps default to. Before this default existed, a verify command
+ * that hung (a test awaiting the network, a spawned server that never exits) hung the whole run
+ * unboundedly — the one unguarded subprocess in the loop. Override with `--verify-timeout-ms`.
+ */
+export const DEFAULT_VERIFY_TIMEOUT_MS = 10 * 60 * 1000;
+
 /** The default (off) sandbox policy: identity passthrough, behavior byte-for-byte unchanged. */
 function defaultPolicy(): SandboxPolicy {
   return { mode: 'none', network: 'none' };
@@ -234,7 +242,11 @@ function refuseIfUnavailable(launcher: SandboxLauncher): void {
 export function composeDeps(config: RunConfig, options: ComposeOptions): DriverDeps {
   const models = resolveModels(options.models ?? {});
   const provider = options.llmProvider ?? 'claude';
-  const timeouts = options.timeouts ?? {};
+  // The verify command gets a DEFAULT kill-timeout (matching the harness/LLM 10-min default): a
+  // verify command that hangs (a test awaiting the network, a server that never exits) must never
+  // hang the whole run unboundedly. A hit is a fail-closed could-not-evaluate — the unevaluable
+  // streak or the run's own caps then govern — never a green. `--verify-timeout-ms` overrides.
+  const timeouts = { verifyMs: DEFAULT_VERIFY_TIMEOUT_MS, ...(options.timeouts ?? {}) };
   // One meter for every LLM workflow step (compiler / judge / approver) so the Driver can aggregate
   // their token spend per command (issue #17). Wrapping is transparent — the consumers still see a
   // plain LlmProvider, and an injected test `llm` is metered just the same.
