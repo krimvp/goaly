@@ -32,7 +32,13 @@ export async function runRuns(
 async function runsList(stateDir: string, out: (s: string) => void): Promise<number> {
   const items = await listRuns(stateDir);
   if (items.length === 0) {
-    out(`No runs found in ${stateDir}\n`);
+    // Runs are stored PER WORKSPACE — the most common reason for an empty list is simply being in
+    // a different directory than the one the run was started in. Say so.
+    out(
+      `No runs found in ${stateDir}\n` +
+        `(runs are stored per-workspace under <dir>/.goaly — if your run was started elsewhere, ` +
+        `pass --workspace <dir>)\n`,
+    );
     return 0;
   }
   out(`${renderRunsTable(items)}\n`);

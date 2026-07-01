@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { formatOutcome, main, makeInterruptController } from './main';
+import { formatOutcome, main, makeInterruptController, nextStepHint } from './main';
 import { formatUsage } from './usage-format';
 import { STATE_DIR } from './compose';
 import { FileRunLog } from '../runlog/file-runlog';
@@ -123,6 +123,39 @@ describe('formatOutcome', () => {
   });
 });
 
+describe('nextStepHint — always-on next-step guidance for terminal outcomes', () => {
+  const aborted = (reason: string): RunOutcome =>
+    outcome({ status: 'ABORTED', reason, usage: undefined });
+
+  it('maps the typed stuck/prepare reasons to actionable hints', () => {
+    expect(nextStepHint(aborted('STUCK_HARNESS_CRASH: claude: command not found'))).toContain(
+      'run it once by hand',
+    );
+    expect(nextStepHint(aborted('CONTRACT_UNEVALUABLE: pytest could not be started'))).toContain(
+      'could not RUN',
+    );
+    expect(nextStepHint(aborted('budget exceeded'))).toContain('--budget-tokens');
+    expect(
+      nextStepHint(outcome({ status: 'FAILED', reason: 'reached maxIterations (12) without satisfying the contract', usage: undefined })),
+    ).toContain('--max-iterations');
+    expect(nextStepHint(aborted('no-diff: working tree unchanged after an iteration'))).toContain(
+      'runs show',
+    );
+  });
+
+  it('stays quiet on DONE, unknown reasons, and user interrupts (already self-describing)', () => {
+    expect(nextStepHint(outcome())).toBeUndefined();
+    expect(nextStepHint(aborted('some novel reason'))).toBeUndefined();
+    expect(nextStepHint(aborted('interrupted by user — resume this run with: --resume run-x'))).toBeUndefined();
+  });
+
+  it('formatOutcome renders the hint as a next: line', () => {
+    const text = formatOutcome(aborted('budget exceeded'));
+    expect(text).toContain('next:');
+    expect(text).toContain('--budget-tokens');
+  });
+});
+
 describe('makeInterruptController', () => {
   it('first signal warns with the resume command and flips interrupted; second force-exits', () => {
     const warned: string[] = [];
@@ -239,16 +272,55 @@ describe('main() — follow-up (Capability C) guards & resume-cmd (Capability A)
   });
 
   it('refuses to start (exit 2) when another live process holds the run lock', async () => {
-    // Pre-hold the lock for the deterministic --resume run id with pid 1 (always alive, not us).
-    const runDir = join(root, STATE_DIR, 'run-locked');
-    await (await import('node:fs/promises')).mkdir(runDir, { recursive: true });
-    await writeFile(join(runDir, 'run.lock'), '1\n', 'utf8');
+    // A real (resumable) run log in a real git repo, so preflight and the --resume existence check
+    // both pass and the run-lock guard is what fires.
+    const git = (...args: string[]): void => {
+      const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    git('init', '-q');
+    const log = new FileRunLog(join(root, STATE_DIR, 'run-locked'));
+    await log.writeHeader({
+      runId: RunId.parse('run-locked'),
+      startedAt: 1,
+      config: makeConfig(),
+      harness: 'fake',
+    });
+    // Pre-hold the lock with pid 1 (always alive, and never this test process).
+    await writeFile(join(root, STATE_DIR, 'run-locked', 'run.lock'), '1\n', 'utf8');
     const { code, err } = await captureStderr(() =>
       main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
         '--workspace', root, '--resume', 'run-locked']),
     );
     expect(code).toBe(2);
     expect(err).toContain('another goaly process');
+  });
+
+  it('exits 2 with a pointer to runs list when --resume names a non-existent run', async () => {
+    const git = (...args: string[]): void => {
+      const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    git('init', '-q');
+    const { code, err } = await captureStderr(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--resume', 'run-nope']),
+    );
+    expect(code).toBe(2);
+    expect(err).toContain('--resume run-nope');
+    expect(err).toContain('no such run');
+    expect(err).toContain('runs list');
+  });
+
+  it('exits 2 with git guidance when the workspace is not a git repository', async () => {
+    // `root` is a bare temp dir (no git init) — the preflight must say so BEFORE any spend.
+    const { code, err } = await captureStderr(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root]),
+    );
+    expect(code).toBe(2);
+    expect(err).toContain('not a git repository');
+    expect(err).toContain('git init');
   });
 
   it('exits 2 when --inherit-session is used without --from-run', async () => {

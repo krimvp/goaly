@@ -13,6 +13,7 @@ import type { RunConfig } from '../domain/config';
 import { readRun } from '../runlog/inspect';
 import { acquireRunLock, RunLockedError, type RunLock } from '../runlog/lock';
 import { killActiveChildren } from '../util/spawn';
+import { preflightRun } from './preflight';
 import { compactRun } from '../followup/compaction';
 import { resumeHint, renderResumeHint, type ResumeHint } from './resume-cmd';
 import { resolveModels } from './models';
@@ -195,9 +196,45 @@ export async function main(argv: string[]): Promise<number> {
   if (!followup.ok) return followup.code;
   const runConfig = followup.config;
 
+  // First-run preflight (fail-fast, before any spend): git repo present, harness / LLM-provider
+  // CLI on PATH — the mistakes that used to surface only AFTER a compile + agent turn, as cryptic
+  // spawn/plumbing errors. Cheap (milliseconds), skipped for the runs/help commands above.
+  {
+    const problem = await preflightRun({
+      harness: parsed.harness,
+      llmProvider: parsed.llmProvider,
+      workspace: parsed.workspace,
+    });
+    if (problem !== null) {
+      process.stderr.write(`goaly: ${problem}\n`);
+      return 2;
+    }
+  }
+
   const resuming = parsed.resumeRunId !== undefined;
   const runId: RunId =
     parsed.resumeRunId !== undefined ? asRunId(parsed.resumeRunId) : asRunId(`run-${randomUUID()}`);
+
+  // Validate --resume BEFORE creating anything (the run lock would otherwise mkdir a run dir for a
+  // typo'd id): a missing run gets a pointer to `runs list`; a corrupt log a clear parse error —
+  // mirroring the --from-run guards above instead of failing deep inside the resume fold.
+  if (parsed.resumeRunId !== undefined) {
+    const stateDir = path.join(parsed.workspace, STATE_DIR);
+    const prior = await readRun(stateDir, parsed.resumeRunId);
+    if (prior === null) {
+      process.stderr.write(
+        `goaly: --resume ${parsed.resumeRunId}: no such run in ${stateDir} — ` +
+          `list runs with: goaly runs list --workspace ${parsed.workspace}\n`,
+      );
+      return 2;
+    }
+    if (!prior.ok) {
+      process.stderr.write(
+        `goaly: --resume ${parsed.resumeRunId}: run log is corrupt: ${prior.error}\n`,
+      );
+      return 2;
+    }
+  }
 
   // Exclusive per-run lock: two goaly processes appending to one run log would interleave duplicate
   // seq values and corrupt it logically. A crashed holder self-heals (stale-pid detection); a LIVE
@@ -327,6 +364,35 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
+/**
+ * A one-line, always-on "what do I do now" for the common terminal reasons — the zero-cost,
+ * non-LLM complement to `--explain`. A first-time user seeing `status: ABORTED / reason:
+ * STUCK_NO_DIFF` should not need to read the architecture docs to know the next step. Matched on
+ * the typed reason prefixes/tags the reducer and stuck detectors emit; unknown reasons get no hint.
+ */
+export function nextStepHint(o: RunOutcome): string | undefined {
+  const reason = o.reason ?? '';
+  const inspect = `inspect with: goaly runs show ${o.runId}`;
+  const resume = `resume with: goaly --resume ${o.runId}`;
+  if (o.status === 'DONE' || reason.length === 0) return undefined;
+  if (reason.includes('interrupted by user')) return undefined; // the reason already says how to resume
+  const table: readonly (readonly [RegExp, string])[] = [
+    [/STUCK_HARNESS_CRASH/, `the agent CLI kept crashing — run it once by hand to check install/auth, then ${resume}`],
+    [/CONTRACT_UNEVALUABLE/, `the verification could not RUN (environment problem, not a code red) — fix the tool/network it names, then ${resume}`],
+    [/TOOLS_MISSING/, `install the tools named above (or rerun with --install-missing-tools true)`],
+    [/SETUP_FAILED/, `fix the setup command, or override it with --setup-cmd / disable it with --no-setup`],
+    [/CONTRACT_UNSOUND/, `the frozen verification itself is broken on this tree — start a fresh run with a corrected goal or an explicit --verify-cmd`],
+    [/budget exceeded/, `raise --budget-tokens / --budget-wall-ms and ${resume}`],
+    [/reached maxIterations/, `raise --max-iterations and ${resume}, or refine the goal — ${inspect}`],
+    [/no-diff/, `the agent stopped changing the tree — ${inspect}; a sharper goal or rubric usually unsticks it`],
+    [/oscillation/, `the agent is flip-flopping between two states — ${inspect}; the feedback may be contradictory`],
+    [/STUCK_REPEATED_FAILURE|identical .*failures/, `the same verifier failure repeated — ${inspect}; the agent may need a hint in the goal`],
+    [/compile failed|PLAN_FAILED|plan failed/i, `the contract/plan could not be authored — check the --llm-provider CLI runs & is authenticated, then retry`],
+  ];
+  for (const [pattern, hint] of table) if (pattern.test(reason)) return hint;
+  return undefined;
+}
+
 export function formatOutcome(o: RunOutcome, cost?: CostView, resume?: ResumeHint): string {
   const lines = [
     '',
@@ -336,6 +402,8 @@ export function formatOutcome(o: RunOutcome, cost?: CostView, resume?: ResumeHin
     `contract:    ${o.contractHash ?? '(none — failed before compile)'}`,
   ];
   if (o.reason !== undefined) lines.push(`reason:      ${o.reason}`);
+  const hint = nextStepHint(o);
+  if (hint !== undefined) lines.push(`next:        ${hint}`);
   if (o.usage !== undefined) lines.push(...formatUsage(o.usage, cost));
   // Capability A end-of-run banner: only printed when there is something useful to continue with
   // (a real interactive-resume command, or the goaly-code follow-up route). Quiet otherwise.

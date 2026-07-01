@@ -683,12 +683,18 @@ describe('parseArgs', () => {
       expect(a.config.goal).toBe('build the parser');
     });
 
-    it('reads the goal from stdin via "--goal -"', async () => {
+    it('reads the goal from stdin via "--goal -" (with --autonomous, since stdin is consumed)', async () => {
       const a = await parseArgs(
-        ['run', '--goal', '-', '--verify-cmd', 'true'],
+        ['run', '--goal', '-', '--verify-cmd', 'true', '--autonomous'],
         fakeReaders({ stdin: 'piped goal\n' }),
       );
       expect(a.config.goal).toBe('piped goal');
+    });
+
+    it('fails closed when stdin feeds a field but the run is NOT autonomous (the Seal prompt would deadlock)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', '-', '--verify-cmd', 'true'], fakeReaders({ stdin: 'piped goal\n' })),
+      ).rejects.toThrow(/interactive Seal prompt/);
     });
 
     it('reads intent and rubric from files too', async () => {

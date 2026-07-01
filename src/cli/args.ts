@@ -374,8 +374,9 @@ Seal (contract approval):
                               (--generate, the claude LLM provider, the claude harness) already
                               apply with no flag, so -d's only effect is auto-accepting the contract.
 
-  Note: piping the goal via stdin (--goal -) leaves no stdin for the interactive prompt;
-  pair it with --autonomous, or read the goal from a file (--goal-file) instead.
+  Note: piping the goal via stdin (--goal -) leaves no stdin for the interactive prompt, so a
+  non-autonomous run refuses to start (fail-closed): pair it with --autonomous, or read the goal
+  from a file (--goal-file) instead.
 
 Per-step timeouts (subprocess kill-timeouts in milliseconds; all optional, pure wiring):
   --harness-timeout-ms N      cap the harness (coding-agent) subprocess (default 600000 = 10 min)
@@ -736,11 +737,23 @@ export async function parseArgs(
   });
 
   const harness = parseHarness(str(flags, 'harness'));
+  const config = cliInputToRunConfig(cliInput);
+
+  // Piping a field via stdin (`--goal -`) drains the ONLY stdin stream, so the interactive Seal
+  // prompt that a non-autonomous run needs would read EOF / hang. That used to be a doc-note
+  // footgun; fail closed here with the exact fix instead of deadlocking at the gate.
+  const stdinField = MULTI_SOURCE_FIELDS.find((f) => flags[f] === '-');
+  if (stdinField !== undefined && !config.autonomous) {
+    throw new UsageError(
+      `--${stdinField} - reads from stdin, leaving no stdin for the interactive Seal prompt. ` +
+        `Add --autonomous (the contract is still frozen & logged), or use --${stdinField}-file.`,
+    );
+  }
 
   return {
     command: 'run',
     runs: undefined,
-    config: cliInputToRunConfig(cliInput),
+    config,
     harness,
     models: parseModels(flags),
     llmProvider: parseLlmProvider(str(flags, 'llm-provider')),

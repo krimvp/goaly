@@ -11,6 +11,13 @@ import { piCodec } from './pi-codec';
  */
 export type AgentCli = 'claude' | 'codex' | 'droid' | 'pi';
 
+const AGENT_CLIS: ReadonlySet<string> = new Set<AgentCli>(['claude', 'codex', 'droid', 'pi']);
+
+/** Type guard: is this harness/provider name one of the bundled agent CLIs (i.e. has a codec)? */
+export function isAgentCli(name: string): name is AgentCli {
+  return AGENT_CLIS.has(name);
+}
+
 /**
  * The single source of truth mapping a CLI name to its {@link AgentCliCodec}. Both the harness
  * (`AgentCliHarness(codecFor(c))`), the sandbox exec, and the read-only LLM provider
