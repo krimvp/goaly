@@ -169,28 +169,65 @@ describe('AgentCliLlmProvider — one codec-driven provider for every CLI', () =
     expect(streamed).toEqual(baseline);
   });
 
-  it('throws on a non-zero exit (fail closed)', async () => {
+  it('throws on a non-zero exit after exhausting bounded retries (fail closed)', async () => {
+    let calls = 0;
     const llm = new AgentCliLlmProvider({
       codec: codexCodec,
-      exec: async () => ({ stdout: '', stderr: 'boom', code: 7 }),
+      sleep: () => Promise.resolve(),
+      exec: async () => {
+        calls += 1;
+        return { stdout: '', stderr: 'boom', code: 7 };
+      },
     });
     await expect(llm.complete({ prompt: 'p' })).rejects.toThrow(/exited 7/);
+    expect(calls).toBe(3); // default: 2 retries → 3 attempts
   });
 
   it('throws when no parseable text comes back — fail closed, no plain-text fallback', async () => {
     // Both the argv-delivered (codex) and stdin-delivered (claude) codecs fail closed on garbage —
     // the old claude "return raw stdout" fallback is gone (invariant #4).
     for (const codec of [codexCodec, claudeCodec]) {
-      const llm = new AgentCliLlmProvider({ codec, exec: async () => ok('garbage, not json') });
+      const llm = new AgentCliLlmProvider({
+        codec,
+        sleep: () => Promise.resolve(),
+        exec: async () => ok('garbage, not json'),
+      });
       await expect(llm.complete({ prompt: 'p' })).rejects.toThrow(/no parseable text/);
     }
   });
 
-  it('throws on a timeout', async () => {
+  it('recovers when a transient failure clears on a later attempt (retry with backoff)', async () => {
+    const jsonl = JSON.stringify({ type: 'result', text: 'verdict', usage: { total_tokens: 3 } });
+    const slept: number[] = [];
+    let calls = 0;
     const llm = new AgentCliLlmProvider({
       codec: codexCodec,
-      exec: async () => ({ stdout: '', stderr: '', code: 0, timedOut: true }),
+      sleep: (ms) => {
+        slept.push(ms);
+        return Promise.resolve();
+      },
+      exec: async () => {
+        calls += 1;
+        return calls < 3 ? { stdout: '', stderr: 'rate limited', code: 1 } : ok(jsonl);
+      },
+    });
+    const out = await llm.complete({ prompt: 'p' });
+    expect(out.text).toBe('verdict');
+    expect(calls).toBe(3);
+    expect(slept).toEqual([1000, 2000]); // linear backoff between attempts
+  });
+
+  it('does NOT retry a timeout — the wall-clock cap is the run\'s own guard', async () => {
+    let calls = 0;
+    const llm = new AgentCliLlmProvider({
+      codec: codexCodec,
+      sleep: () => Promise.resolve(),
+      exec: async () => {
+        calls += 1;
+        return { stdout: '', stderr: '', code: 0, timedOut: true };
+      },
     });
     await expect(llm.complete({ prompt: 'p' })).rejects.toThrow(/timed out/);
+    expect(calls).toBe(1);
   });
 });

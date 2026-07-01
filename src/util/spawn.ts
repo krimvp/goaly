@@ -45,6 +45,26 @@ export type RunProcessOptions = {
 
 const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
+/** Live children spawned through {@link runProcess}, so a forced shutdown can reap them. */
+const activeChildren = new Set<{ pid: number | undefined; killGroup: boolean }>();
+
+/**
+ * SIGKILL every child (and, for group-spawned ones, its whole process group) still running.
+ * Used by the CLI's force-exit path (second Ctrl-C): a `killGroup` child lives in its OWN process
+ * group, so the terminal's SIGINT never reaches it — without this sweep a force-exit would orphan
+ * a live agent CLI that keeps editing the tree and spending tokens after goaly is gone.
+ */
+export function killActiveChildren(): void {
+  for (const entry of activeChildren) {
+    if (entry.pid === undefined) continue;
+    try {
+      process.kill(entry.killGroup ? -entry.pid : entry.pid, 'SIGKILL');
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
 /**
  * Spawn a process, capture stdout/stderr, and resolve (never reject) with the exit code and a
  * timeout flag. Shared by the CLI-backed LLM provider and harness adapters so subprocess
@@ -66,6 +86,8 @@ export function runProcess(
 
   return new Promise<ProcessResult>((resolve) => {
     const child = spawn(command, args, spawnOptions);
+    const registryEntry = { pid: child.pid, killGroup: options.killGroup === true };
+    activeChildren.add(registryEntry);
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -140,10 +162,12 @@ export function runProcess(
     });
     child.on('error', (e) => {
       clearTimers();
+      activeChildren.delete(registryEntry);
       resolve({ stdout, stderr: `${stderr}${String(e)}`, code: 127, timedOut, truncated });
     });
     child.on('close', (code) => {
       clearTimers();
+      activeChildren.delete(registryEntry);
       resolve({ stdout, stderr, code: code ?? 1, timedOut, truncated });
     });
 

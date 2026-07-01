@@ -29,8 +29,10 @@ import {
 export const DEFAULT_LLM_HTTP_TIMEOUT_MS = 10 * 60 * 1000;
 /** Default number of retries (so total attempts = retries + 1) on a transient failure. */
 const DEFAULT_RETRIES = 2;
-/** Linear backoff base between attempts. */
+/** Exponential backoff base between attempts (500ms, 1s, 2s, …). */
 const BACKOFF_MS = 500;
+/** Cap on a server-requested Retry-After wait, so a hostile/buggy header can't stall the run. */
+const MAX_RETRY_AFTER_MS = 60_000;
 
 /**
  * Minimal `fetch` shape the client depends on — a subset of the WHATWG/undici `fetch`, so the
@@ -40,7 +42,13 @@ const BACKOFF_MS = 500;
 export type FetchLike = (
   url: string,
   init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
-) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+) => Promise<{
+  ok: boolean;
+  status: number;
+  text(): Promise<string>;
+  /** Optional response headers (the WHATWG shape) — used to honor `Retry-After` on 429/503. */
+  headers?: { get(name: string): string | null };
+}>;
 
 /** The normalized result of one chat-completions call — wire quirks already resolved. */
 export type ChatResult = {
@@ -121,11 +129,19 @@ export class OpenAiClient implements LlmClient {
   async chat(req: ChatRequest): Promise<ChatResult> {
     const body = JSON.stringify(req);
     let lastError = 'unknown error';
+    // Exponential backoff; a server-provided Retry-After (rate-limit window) overrides the base
+    // wait when LONGER, capped so a bad header can't stall the run — real 429 windows are tens of
+    // seconds, which a fixed sub-second backoff would burn through pointlessly.
+    let retryAfterMs: number | undefined;
     for (let attempt = 0; attempt <= this.#retries; attempt++) {
-      if (attempt > 0) await this.#sleep(BACKOFF_MS * attempt);
+      if (attempt > 0) {
+        const backoff = BACKOFF_MS * 2 ** (attempt - 1);
+        await this.#sleep(Math.max(backoff, retryAfterMs ?? 0));
+      }
       const outcome = await this.#attempt(body);
       if (outcome.ok) return normalize(outcome.value);
       lastError = outcome.error;
+      retryAfterMs = outcome.retryAfterMs;
       if (!outcome.retriable) {
         throw new LlmClientError(outcome.error, outcome.status);
       }
@@ -138,7 +154,7 @@ export class OpenAiClient implements LlmClient {
     body: string,
   ): Promise<
     | { ok: true; value: ChatResponse }
-    | { ok: false; retriable: boolean; error: string; status?: number }
+    | { ok: false; retriable: boolean; error: string; status?: number; retryAfterMs?: number }
   > {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
@@ -153,11 +169,13 @@ export class OpenAiClient implements LlmClient {
       if (!res.ok) {
         // 429 / 5xx are transient (retry); other 4xx (auth, bad request) fail closed immediately.
         const retriable = res.status === 429 || res.status >= 500;
+        const retryAfterMs = parseRetryAfterMs(res.headers?.get('retry-after'));
         return {
           ok: false,
           retriable,
           status: res.status,
           error: `HTTP ${res.status}: ${text.slice(0, 500)}`,
+          ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
         };
       }
       return this.#parseBody(text);
@@ -197,6 +215,18 @@ export class OpenAiClient implements LlmClient {
     }
     return { ok: true, value: parsed.data };
   }
+}
+
+/**
+ * Parse a `Retry-After` header value (delta-seconds form) into milliseconds, capped at
+ * {@link MAX_RETRY_AFTER_MS}. The HTTP-date form and garbage both return undefined (base backoff
+ * applies) — fail-open to the client's own policy, never a stall.
+ */
+function parseRetryAfterMs(value: string | null | undefined): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const seconds = Number.parseFloat(value.trim());
+  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+  return Math.min(Math.round(seconds * 1000), MAX_RETRY_AFTER_MS);
 }
 
 /** Normalize the first choice into a {@link ChatResult}: minted tool-call ids + usage breakdown. */
