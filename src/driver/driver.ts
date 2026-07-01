@@ -204,40 +204,22 @@ export async function drive(
     resume: options.resume === true,
   });
 
-  if (options.resume === true) {
-    const resumed = await resume(deps, config);
-    state = resumed.state;
-    commands = resumed.commands;
-    seq = resumed.seq;
-    contractHash = resumed.contractHash;
-    if (resumed.contract !== null) ladder = deps.makeLadder(resumed.contract);
-    // Re-point both baselines from the resumed fold (issue #47/#49): the active baseline to the last
-    // internal checkpoint (overriding any compose-time `--baseline`, since the logged checkpoint reflects
-    // real progress), and the approver's cumulative baseline to the current phase's start.
-    baseline.hydrateResume(resumed);
-    // Re-arm the LIVE budget meter with the prior spend, so `--budget-tokens` caps the RUN, not
-    // each process: a run resumed near its cap must not get a fresh budget every restart.
-    if (resumed.priorSpend !== null &&
-        (resumed.priorSpend.tokens > 0 || resumed.priorSpend.unknownCalls > 0)) {
-      deps.budget.record(resumed.priorSpend.tokens, resumed.priorSpend.estimatedTokens ?? 0, {
-        unknownCalls: resumed.priorSpend.unknownCalls,
-      });
-      log.info('resume: prior token spend re-armed against the budget', {
-        tokens: resumed.priorSpend.tokens,
-        ...(resumed.priorSpend.unknownCalls > 0
-          ? { unknownCalls: resumed.priorSpend.unknownCalls }
-          : {}),
-      });
-    }
-  } else {
-    [state, commands] = initial(config);
-    seq = 0;
-    await deps.runlog.writeHeader({
+  // The pre-loop IO (reading the log to resume; writing the fresh header) must resolve to a typed
+  // ABORTED like every other seam — a disk-full/corrupt-log throw here used to escape `drive()`
+  // entirely (the only rejection path left), reaching the caller as a raw stack trace.
+  try {
+    ({ state, commands, seq, contractHash, ladder } = await bootstrap(
+      deps, config, runId, options, baseline, log,
+    ));
+  } catch (e) {
+    log.error('run bootstrap failed (fail-closed → ABORTED)', { reason: errorMessage(e) });
+    return {
+      status: 'ABORTED',
+      reason: `run bootstrap failed: ${errorMessage(e)}`,
+      iterations: 0,
+      contractHash: null,
       runId,
-      startedAt: deps.clock.now(),
-      config,
-      ...(options.harness !== undefined ? { harness: options.harness } : {}),
-    });
+    };
   }
 
   // Worktree floor (issue #85, locked decision #8): best-of-N needs a resolvable HEAD — `git worktree`
@@ -774,6 +756,71 @@ async function runVerifierFailClosed(
   } catch (e) {
     return { pass: false, confidence: 1, detail: `verifier error (fail-closed): ${errorMessage(e)}` };
   }
+}
+
+// ---- bootstrap / resume / replay ------------------------------------------
+
+type Bootstrapped = {
+  state: OrchestratorState;
+  commands: Command[];
+  seq: number;
+  contractHash: ContractHash | null;
+  ladder: Verifier | null;
+};
+
+/**
+ * The pre-loop IO in one guarded place: on `--resume`, fold the log, rebuild the ladder, re-point
+ * the baselines, and re-arm the budget meter with prior spend; on a fresh run, write the header.
+ * Called inside `drive()`'s bootstrap try/catch so any throw here (corrupt log, disk full) resolves
+ * to a typed ABORTED rather than the last remaining rejection path out of `drive()`.
+ */
+async function bootstrap(
+  deps: DriverDeps,
+  config: RunConfig,
+  runId: RunId,
+  options: DriveOptions,
+  baseline: Baseline,
+  log: Logger,
+): Promise<Bootstrapped> {
+  if (options.resume !== true) {
+    const [state, commands] = initial(config);
+    await deps.runlog.writeHeader({
+      runId,
+      startedAt: deps.clock.now(),
+      config,
+      ...(options.harness !== undefined ? { harness: options.harness } : {}),
+    });
+    return { state, commands, seq: 0, contractHash: null, ladder: null };
+  }
+
+  const resumed = await resume(deps, config);
+  // Re-point both baselines from the resumed fold (issue #47/#49): the active baseline to the last
+  // internal checkpoint (overriding any compose-time `--baseline`, since the logged checkpoint reflects
+  // real progress), and the approver's cumulative baseline to the current phase's start.
+  baseline.hydrateResume(resumed);
+  // Re-arm the LIVE budget meter with the prior spend, so `--budget-tokens` caps the RUN, not
+  // each process: a run resumed near its cap must not get a fresh budget every restart.
+  if (
+    resumed.priorSpend !== null &&
+    (resumed.priorSpend.tokens > 0 || resumed.priorSpend.unknownCalls > 0)
+  ) {
+    deps.budget.record(resumed.priorSpend.tokens, resumed.priorSpend.estimatedTokens ?? 0, {
+      unknownCalls: resumed.priorSpend.unknownCalls,
+    });
+    log.info('resume: prior token spend re-armed against the budget', {
+      tokens: resumed.priorSpend.tokens,
+      ...(resumed.priorSpend.unknownCalls > 0
+        ? { unknownCalls: resumed.priorSpend.unknownCalls }
+        : {}),
+    });
+  }
+  return {
+    state: resumed.state,
+    commands: resumed.commands,
+    seq: resumed.seq,
+    contractHash: resumed.contractHash,
+    ladder: resumed.contract !== null ? deps.makeLadder(resumed.contract) : null,
+  };
 }
 
 // ---- resume / replay ------------------------------------------------------

@@ -642,6 +642,43 @@ describe('drive() — resume', () => {
   });
 });
 
+describe('drive() — bootstrap fail-closed', () => {
+  it('a header write that throws (disk full) resolves to a typed ABORTED, never a rejection', async () => {
+    const { deps } = wire({ scripts: [{ postHash: '0000001' }], verdicts: [passVerdict()] });
+    const broken: DriverDeps = {
+      ...deps,
+      runlog: {
+        writeHeader: async () => {
+          throw new Error('ENOSPC: no space left on device');
+        },
+        append: async () => {},
+        read: async () => null,
+      },
+    };
+    const outcome = await drive(broken, makeConfig(), runId);
+    expect(outcome.status).toBe('ABORTED');
+    expect(outcome.reason).toContain('run bootstrap failed');
+    expect(outcome.reason).toContain('ENOSPC');
+  });
+
+  it('a resume read that throws resolves to a typed ABORTED, never a rejection', async () => {
+    const { deps } = wire({ scripts: [], verdicts: [] });
+    const broken: DriverDeps = {
+      ...deps,
+      runlog: {
+        writeHeader: async () => {},
+        append: async () => {},
+        read: async () => {
+          throw new Error('corrupt run log header');
+        },
+      },
+    };
+    const outcome = await drive(broken, makeConfig(), runId, { resume: true });
+    expect(outcome.status).toBe('ABORTED');
+    expect(outcome.reason).toContain('run bootstrap failed');
+  });
+});
+
 describe('drive() — cooperative interrupt', () => {
   it('stops between steps with a typed ABORTED carrying the resume path (never mid-step)', async () => {
     const { deps, harness, runlog } = wire({

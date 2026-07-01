@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { FileSessionStore, InMemorySessionStore, sessionFileName, type SessionFs } from './session-store';
 import { SessionId } from '../domain/ids';
 import type { ChatMessage } from '../llm-client/schema';
@@ -49,6 +52,26 @@ describe('FileSessionStore', () => {
   it('returns null for a missing session (fresh)', async () => {
     const store = new FileSessionStore({ dir: '/state', fs: new FakeFs() });
     expect(await store.load(id('sdk-missing'))).toBeNull();
+  });
+
+  it('real fs: saves atomically (tmp+rename — no tmp remnant) and overwrites in place', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'goaly-session-store-'));
+    try {
+      const store = new FileSessionStore({ dir: join(dir, 'sessions') });
+      await store.save(id('sdk-real'), log);
+      expect(await store.load(id('sdk-real'))).toEqual(log);
+
+      // Overwrite with a longer log (the every-turn full rewrite) and re-load.
+      const longer: ChatMessage[] = [...log, { role: 'user', content: 'again' }];
+      await store.save(id('sdk-real'), longer);
+      expect(await store.load(id('sdk-real'))).toEqual(longer);
+
+      // The atomic write leaves no .tmp-* files behind.
+      const names = await readdir(join(dir, 'sessions'));
+      expect(names).toEqual(['sdk-real.json']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('returns null for corrupt JSON (fail-closed → fresh)', async () => {
