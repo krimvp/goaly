@@ -335,6 +335,7 @@ export async function main(argv: string[]): Promise<number> {
     deps.logger?.info('cli starting', {
       runId,
       resumeWith: `goaly --resume ${runId}`,
+      watchWith: `goaly runs watch ${runId}`,
       harness: parsed.harness,
       autonomous: parsed.config.autonomous,
       ...(parsed.configSources.length > 0 ? { configFile: parsed.configSources.join(', ') } : {}),

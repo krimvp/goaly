@@ -12,6 +12,7 @@ import {
 } from '../runlog/inspect';
 import { formatUsage } from './usage-format';
 import { resumeHint, renderResumeHint } from './resume-cmd';
+import { runsWatch } from './watch';
 
 /**
  * Render the read-only `goaly runs` subcommands (issue #14). A pure presentation layer over the
@@ -26,6 +27,7 @@ export async function runRuns(
 ): Promise<number> {
   if (cmd.kind === 'list') return runsList(stateDir, out);
   if (cmd.kind === 'resume-cmd') return runsResumeCmd(cmd.runId, cmd.harness, stateDir, out, err);
+  if (cmd.kind === 'watch') return runsWatch(cmd.runId, stateDir, out, err);
   return runsShow(cmd.runId, stateDir, out, err);
 }
 

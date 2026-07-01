@@ -29,7 +29,8 @@ export type LlmProviderChoice = AgentCli | 'openai';
 export type RunsCommand =
   | { readonly kind: 'list' }
   | { readonly kind: 'show'; readonly runId: string }
-  | { readonly kind: 'resume-cmd'; readonly runId: string; readonly harness: string | undefined };
+  | { readonly kind: 'resume-cmd'; readonly runId: string; readonly harness: string | undefined }
+  | { readonly kind: 'watch'; readonly runId: string };
 
 /**
  * Per-step subprocess kill-timeouts in milliseconds (pure wiring — never enters the contract).
@@ -182,6 +183,7 @@ Usage:
 
   goaly runs list [--workspace <dir>]
   goaly runs show <runId> [--workspace <dir>]
+  goaly runs watch <runId> [--workspace <dir>]
   goaly runs resume-cmd <runId> [--harness <name>] [--workspace <dir>]
 
   goaly help
@@ -518,6 +520,11 @@ Run history & inspection (read-only — pure replay of the write-ahead run log, 
   goaly runs show <runId>   the frozen contract (+ hash), Seal outcome, the per-iteration
                             verifier-ladder results and Sign-off verdicts, the stuck/failure reason,
                             and totals — reconstructed by the same replay-fold that --resume uses.
+  goaly runs watch <runId>  attach to a run from ANOTHER terminal and follow it LIVE: one line per
+                            event (contract, seal, each agent turn / verify verdict / sign-off) as
+                            it lands in the write-ahead log. Read-only (never takes the run lock).
+                            Exits 0 at the terminal state; exits 1 when the run is incomplete and
+                            no live process is driving it (names the --resume command).
   goaly runs resume-cmd <runId>  print the command to CONTINUE the run's underlying CLI session in its
                             OWN interactive mode (e.g. 'claude --resume <id>', 'codex resume <id>').
                             Read-only; for a goaly-code run it routes you to --from-run --inherit-session.
@@ -1155,8 +1162,15 @@ function parseRunsCommand(rest: string[]): { runs: RunsCommand; workspace: strin
       workspace: str(flags, 'workspace') ?? process.cwd(),
     };
   }
+  if (sub === 'watch') {
+    const runId = subRest[0];
+    if (runId === undefined || runId.startsWith('--')) {
+      throw new UsageError('runs watch requires a <runId> (e.g. goaly runs watch run-1234)');
+    }
+    return { runs: { kind: 'watch', runId }, workspace: runsWorkspace(subRest.slice(1)) };
+  }
   throw new UsageError(
-    `unknown runs subcommand: ${sub ?? '(none)'} (expected list | show | resume-cmd)`,
+    `unknown runs subcommand: ${sub ?? '(none)'} (expected list | show | resume-cmd | watch)`,
   );
 }
 

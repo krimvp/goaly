@@ -76,6 +76,19 @@ export async function acquireRunLock(
   );
 }
 
+/**
+ * Is a LIVE goaly process currently holding this run directory's lock? Read-only — used by
+ * `runs watch` to tell "the run is still being driven" from "the run stalled/crashed" without ever
+ * touching the lock itself.
+ */
+export async function runLockActive(
+  runDir: string,
+  isPidAlive: (pid: number) => boolean = defaultIsPidAlive,
+): Promise<boolean> {
+  const pid = await readHolderPid(join(runDir, LOCK_FILE));
+  return pid !== null && isPidAlive(pid);
+}
+
 async function readHolderPid(path: string): Promise<number | null> {
   try {
     const raw = await readFile(path, 'utf8');
