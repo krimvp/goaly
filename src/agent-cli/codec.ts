@@ -164,10 +164,17 @@ export async function runCodecHarness(
 ): Promise<HarnessRunResult> {
   const { sink, estimator } = streamingEstimator(onEvent);
   const tap = sink !== undefined ? new StreamTap(codec.streamExtractor, sink) : undefined;
+  // A prior turn that never yielded a recoverable session id carries the codec's `unknownSession`
+  // sentinel (e.g. a timed-out first turn returns no session_id). NEVER thread that into a resume:
+  // `<cli> --resume claude-unknown` is rejected by the CLI ("not a UUID") and would crash EVERY
+  // continuation turn, turning one slow/timed-out turn into a dead run — a false STUCK_HARNESS_CRASH.
+  // Drop it so the next turn starts a FRESH session instead; the worker loses that turn's chat memory
+  // but keeps making real progress against the frozen contract (which alone governs DONE).
+  const resumeId = sessionId === codec.unknownSession ? undefined : sessionId;
   const args = codec.harnessArgs({
     prompt,
     model,
-    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(resumeId !== undefined ? { sessionId: resumeId } : {}),
     stream: tap !== undefined,
   });
 
@@ -179,7 +186,7 @@ export async function runCodecHarness(
     tap?.end();
     return HarnessRunResult.parse({
       output: err instanceof Error ? err.message : String(err),
-      sessionId: coerceSessionId(sessionId, codec.unknownSession),
+      sessionId: coerceSessionId(resumeId, codec.unknownSession),
       status: 'crashed',
     });
   }
@@ -190,7 +197,7 @@ export async function runCodecHarness(
     stderr: result.stderr,
     code: result.code,
     ...(result.timedOut !== undefined ? { timedOut: result.timedOut } : {}),
-    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(resumeId !== undefined ? { sessionId: resumeId } : {}),
     ...(estimator !== undefined ? { estimator } : {}),
   });
 }
