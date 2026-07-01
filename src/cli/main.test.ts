@@ -218,6 +218,19 @@ describe('main() — follow-up (Capability C) guards & resume-cmd (Capability A)
     expect(err).toContain('no such run');
   });
 
+  it('refuses to start (exit 2) when another live process holds the run lock', async () => {
+    // Pre-hold the lock for the deterministic --resume run id with pid 1 (always alive, not us).
+    const runDir = join(root, STATE_DIR, 'run-locked');
+    await (await import('node:fs/promises')).mkdir(runDir, { recursive: true });
+    await writeFile(join(runDir, 'run.lock'), '1\n', 'utf8');
+    const { code, err } = await captureStderr(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--resume', 'run-locked']),
+    );
+    expect(code).toBe(2);
+    expect(err).toContain('another goaly process');
+  });
+
   it('exits 2 when --inherit-session is used without --from-run', async () => {
     const { code, err } = await captureStderr(() =>
       main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',

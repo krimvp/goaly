@@ -11,6 +11,7 @@ import { asRunId, type RunId } from '../domain/ids';
 import type { RunOutcome } from '../domain/events';
 import type { RunConfig } from '../domain/config';
 import { readRun } from '../runlog/inspect';
+import { acquireRunLock, RunLockedError, type RunLock } from '../runlog/lock';
 import { compactRun } from '../followup/compaction';
 import { resumeHint, renderResumeHint, type ResumeHint } from './resume-cmd';
 import { resolveModels } from './models';
@@ -159,6 +160,20 @@ export async function main(argv: string[]): Promise<number> {
   const runId: RunId =
     parsed.resumeRunId !== undefined ? asRunId(parsed.resumeRunId) : asRunId(`run-${randomUUID()}`);
 
+  // Exclusive per-run lock: two goaly processes appending to one run log would interleave duplicate
+  // seq values and corrupt it logically. A crashed holder self-heals (stale-pid detection); a LIVE
+  // holder refuses to start with a clear message (fail-closed, invariant #4).
+  let runLock: RunLock;
+  try {
+    runLock = await acquireRunLock(path.join(parsed.workspace, STATE_DIR, runId));
+  } catch (e) {
+    if (e instanceof RunLockedError) {
+      process.stderr.write(`goaly: ${e.message}\n`);
+      return 2;
+    }
+    throw e;
+  }
+
   // Start the egress proxy (issue #39) when the sandbox policy uses an allowlist. It's IO (a running
   // server), so it lives at the composition EDGE — started here, threaded into both jailed seams,
   // and ALWAYS torn down in the `finally` below (even if the run throws). Absent ⇒ no allowlist.
@@ -247,6 +262,7 @@ export async function main(argv: string[]): Promise<number> {
     return outcome.status === 'DONE' ? 0 : 1;
   } finally {
     await egressProxy?.close();
+    await runLock.release();
   }
 }
 
