@@ -51,6 +51,7 @@ stays resumable). See [Usage](#usage) for every flag.
 - [Install](#install) · [Usage](#usage) — every flag and mode
 - [Phased goals](#phased-goals---phased) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
 - [Reliability](#reliability-preflight-retries-interrupts-crash-safety) — preflight, retries, Ctrl-C, crash-safety
+- [Operator control](#watching-steering--extending-a-run-operator-control) — watch live, steer with `--note`, extend caps on `--resume`
 - [Develop](#develop) · [Embedding](#embedding) — contributing and the library API
 - [Glossary](#appendix-glossary) — every project-specific term & idiom, plain-language
 
@@ -980,6 +981,46 @@ narrator can never starve or perturb the loop. **Off by default** — it costs o
 checkpoint; `--explain-model <m>` selects its model (cascading `--explain-model → --llm-model →
 --model`). Embedders can inject their own observer via `composeDeps({ observer })`.
 
+### Watching, steering & extending a run (operator control)
+
+You are never locked out of a run — before, during, or after ([ADR 0012](docs/adr/0012-operator-control.md)).
+The frozen contract is exactly as untouchable as ever: everything below steers the **worker** or the
+**operational caps**, never the bar, so both keys still gate DONE.
+
+**Watch it live, from any terminal.** Every run's startup banner names the command; it renders one
+line per event as it lands in the write-ahead log (agent turns, verifier verdicts, sign-off vetoes):
+
+```bash
+goaly runs watch run-<id>        # read-only; exits 0 when the run finishes
+```
+
+**Steer it mid-run.** Ctrl-C stops cleanly between steps (nothing is lost), then resume with
+guidance — the note is appended to the worker's next prompt and recorded in the log:
+
+```bash
+^C
+goaly --resume run-<id> --note "the fixture belongs in test/fixtures, not src"
+```
+
+**Extend it after it stops.** A run that ended at an *operational* limit is not a dead end: pass the
+raised cap **with** `--resume` and the run continues where it stood — prior work, session, and spend
+all intact. Each extension is persisted (an auditable `RUN_EXTENDED` log marker), so later plain
+resumes keep it:
+
+```bash
+goaly --resume run-<id> --max-iterations 25             # revive FAILED at the iteration cap
+goaly --resume run-<id> --budget-tokens 900000          # revive a budget abort (prior spend still counts)
+goaly --resume run-<id> --stuck-no-diff false --note "try editing src/parser.ts directly"
+                                                        # revive a stuck abort, with direction
+```
+
+Only the operational knobs are extendable (`--max-iterations`, `--budget-tokens`,
+`--budget-wall-ms`, the `--stuck-*` thresholds) — the goal, verifier, and rubric are structurally
+not part of an extension, so autonomy never becomes "renegotiate the bar." A DONE run refuses to
+extend and points you at `--from-run`. Rule of thumb: **same goal, more room → `--resume` with
+caps/note; new or refined goal → `--from-run`** (a fresh contract, compiled aware of what just
+happened — see [Following up](#following-up-after-a-run-ends---from-run)).
+
 ### Inspecting past runs
 
 The write-ahead run log is also queryable after the fact, with **read-only** subcommands that
@@ -989,6 +1030,7 @@ what they render is exactly the state the Driver computed:
 ```bash
 goaly runs list                  # a table of past runs under ./.goaly
 goaly runs show run-<id>         # full detail for one run
+goaly runs watch run-<id>        # follow a LIVE run's events from another terminal
 goaly runs resume-cmd run-<id>   # how to continue this run's CLI session interactively
 goaly runs list --workspace ./myrepo   # look elsewhere for the .goaly directory
 ```

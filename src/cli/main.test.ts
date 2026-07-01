@@ -138,9 +138,11 @@ describe('nextStepHint — always-on next-step guidance for terminal outcomes', 
     expect(
       nextStepHint(outcome({ status: 'FAILED', reason: 'reached maxIterations (12) without satisfying the contract', usage: undefined })),
     ).toContain('--max-iterations');
+    // The stuck hints name the exact extension flag — a plain resume would replay to the same abort.
     expect(nextStepHint(aborted('no-diff: working tree unchanged after an iteration'))).toContain(
-      'runs show',
+      '--stuck-no-diff false',
     );
+    expect(nextStepHint(aborted('STUCK_HARNESS_CRASH: boom'))).toContain('--stuck-crash-threshold');
   });
 
   it('stays quiet on DONE, unknown reasons, and user interrupts (already self-describing)', () => {

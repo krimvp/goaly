@@ -66,7 +66,12 @@ These are the product. A change that violates one is wrong even if tests pass �
    read and repaired on the next append (that transition never became durable, so dropping it is the
    write-ahead semantics); a TERMINATED corrupt line still rejects. The run dir is pid-locked
    against concurrent drivers; resume re-arms prior token spend so `--budget-tokens` caps the run,
-   not each process (see [ADR 0011](docs/adr/0011-reliability-hardening.md)).
+   not each process (see [ADR 0011](docs/adr/0011-reliability-hardening.md)). Operator control
+   ([ADR 0012](docs/adr/0012-operator-control.md)) rides on Driver-side MARKER events
+   (`RUN_EXTENDED`, like `CHECKPOINTED`) that replay applies as a config overlay BEFORE the fold and
+   NEVER feeds to `step()` — extensions can raise operational caps / stuck thresholds and steer the
+   worker with a note, but the marker schema has no field for the goal/verifier/rubric, so the
+   frozen contract is unreachable through it.
 8. **Stuck detection stays pure** over `LoopCtx` histories: no-diff, repeat-failure, oscillation,
    harness-crash (consecutive `crashed` runs → typed `STUCK_HARNESS_CRASH`), contract-unevaluable
    (consecutive could-not-evaluate verdicts — the verify command timed out or could not be started, or

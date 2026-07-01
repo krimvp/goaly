@@ -122,6 +122,37 @@ describe('runsWatch', () => {
     }
   });
 
+  it('a superseded mid-log terminal (revived by an operator extension) does not end the watch', async () => {
+    const stateDir = await freshDir();
+    try {
+      const log = new FileRunLog(join(stateDir, runId));
+      await log.writeHeader(header());
+      const extension: RunLogEntry = {
+        ...base, seq: 5, ts: 5_000,
+        event: { tag: 'RUN_EXTENDED', maxIterations: 4, note: 'keep going' },
+        stateTagAfter: 'RUNNING_AGENT',
+      };
+      // Iteration 1 ends in ABORTED — then an extension revives the run and iteration 2 finishes it.
+      for (const e of [compiled(1), sealed(2), agentRan(3), verified(4, false, true), extension,
+        agentRan(6), verified(7, true), signedOff(8)]) {
+        await log.append(e);
+      }
+      const lines: string[] = [];
+      const code = await runsWatch(runId, stateDir, (s) => lines.push(s), () => {}, {
+        sleep: async () => {},
+        isActive: async () => false,
+      });
+      const text = lines.join('');
+      expect(code).toBe(0);
+      expect(text).toContain('operator extension');
+      expect(text).toContain('iter 2: verify PASS');
+      expect(text).toContain('finished: DONE'); // the LAST state, not the superseded mid-log abort
+      expect(text).not.toContain('finished: ABORTED');
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it('exits 1 with the resume command when an INCOMPLETE run has no live driver', async () => {
     const stateDir = await freshDir();
     try {

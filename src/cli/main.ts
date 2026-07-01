@@ -399,20 +399,22 @@ export async function main(argv: string[]): Promise<number> {
 export function nextStepHint(o: RunOutcome): string | undefined {
   const reason = o.reason ?? '';
   const inspect = `inspect with: goaly runs show ${o.runId}`;
-  const resume = `resume with: goaly --resume ${o.runId}`;
+  const resume = `goaly --resume ${o.runId}`;
   if (o.status === 'DONE' || reason.length === 0) return undefined;
   if (reason.includes('interrupted by user')) return undefined; // the reason already says how to resume
+  // Every "…and continue" hint names the EXACT extension flag: a terminal run replays back to the
+  // same terminal state on a plain resume — only a --resume extension (ADR 0012) un-terminates it.
   const table: readonly (readonly [RegExp, string])[] = [
-    [/STUCK_HARNESS_CRASH/, `the agent CLI kept crashing — run it once by hand to check install/auth, then ${resume}`],
-    [/CONTRACT_UNEVALUABLE/, `the verification could not RUN (environment problem, not a code red) — fix the tool/network it names, then ${resume}`],
+    [/STUCK_HARNESS_CRASH/, `the agent CLI kept crashing — run it once by hand to check install/auth, then continue: ${resume} --stuck-crash-threshold 4`],
+    [/CONTRACT_UNEVALUABLE/, `the verification could not RUN (environment problem, not a code red) — fix the tool/network it names, then continue: ${resume} --stuck-unevaluable-threshold 4`],
     [/TOOLS_MISSING/, `install the tools named above (or rerun with --install-missing-tools true)`],
     [/SETUP_FAILED/, `fix the setup command, or override it with --setup-cmd / disable it with --no-setup`],
     [/CONTRACT_UNSOUND/, `the frozen verification itself is broken on this tree — start a fresh run with a corrected goal or an explicit --verify-cmd`],
-    [/budget exceeded/, `raise --budget-tokens / --budget-wall-ms and ${resume}`],
-    [/reached maxIterations/, `raise --max-iterations and ${resume}, or refine the goal — ${inspect}`],
-    [/no-diff/, `the agent stopped changing the tree — ${inspect}; a sharper goal or rubric usually unsticks it`],
-    [/oscillation/, `the agent is flip-flopping between two states — ${inspect}; the feedback may be contradictory`],
-    [/STUCK_REPEATED_FAILURE|identical .*failures/, `the same verifier failure repeated — ${inspect}; the agent may need a hint in the goal`],
+    [/budget exceeded/, `raise the cap and continue: ${resume} --budget-tokens <N> (or --budget-wall-ms <N>)`],
+    [/reached maxIterations/, `continue with more room: ${resume} --max-iterations <N> --note "<guidance>", or ${inspect}`],
+    [/no-diff/, `the agent stopped changing the tree — steer it: ${resume} --stuck-no-diff false --note "<hint>", or refine the goal in a follow-up: --from-run ${o.runId}`],
+    [/oscillation/, `the agent is flip-flopping between two states — ${inspect}; steer it: ${resume} --stuck-oscillation false --note "<which way to go>"`],
+    [/STUCK_REPEATED_FAILURE|identical .*failures/, `the same verifier failure repeated — steer it: ${resume} --stuck-repeat-threshold 6 --note "<hint>", or ${inspect}`],
     [/compile failed|PLAN_FAILED|plan failed/i, `the contract/plan could not be authored — check the --llm-provider CLI runs & is authenticated, then retry`],
   ];
   for (const [pattern, hint] of table) if (pattern.test(reason)) return hint;

@@ -63,10 +63,13 @@ export async function runsWatch(
       if (entry.event.tag === 'AGENT_RAN') iteration += 1;
       const line = renderWatchEvent(entry, iteration);
       if (line !== null) out(`${line}\n`);
-      if (isTerminalTag(entry.stateTagAfter)) {
-        out(`run ${runId} finished: ${entry.stateTagAfter}  (details: goaly runs show ${runId})\n`);
-        return 0;
-      }
+    }
+    // Terminal only when the LAST entry says so: a terminal tag mid-log is a superseded outcome —
+    // an operator extension (RUN_EXTENDED, ADR 0012) revived the run and later entries continue it.
+    const last = stored.entries[stored.entries.length - 1];
+    if (last !== undefined && isTerminalTag(last.stateTagAfter)) {
+      out(`run ${runId} finished: ${last.stateTagAfter}  (details: goaly runs show ${runId})\n`);
+      return 0;
     }
 
     if (fresh.length === 0 && !(await isActive(runDir))) {
