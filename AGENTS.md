@@ -60,8 +60,13 @@ These are the product. A change that violates one is wrong even if tests pass �
 6. **Parse at every seam (Zod).** CLI args, config, harness stdout (tolerant), judge/approver output
    (drop/fail-closed), and the run log on read (reject corrupt) all parse with Zod. Ids are branded.
    Nothing reaches the reducer without a `parse`.
-7. **Write-ahead + resume.** Events are appended before the state advances; resume is a replay-fold
-   over the log; no completed iteration is repeated. Durability is at-least-once by design.
+7. **Write-ahead + resume.** Events are appended (fsync'd) before the state advances; resume is a
+   replay-fold over the log; no completed iteration is repeated. Durability is at-least-once by
+   design. A torn (unterminated) FINAL line — the signature of a crash mid-append — is tolerated on
+   read and repaired on the next append (that transition never became durable, so dropping it is the
+   write-ahead semantics); a TERMINATED corrupt line still rejects. The run dir is pid-locked
+   against concurrent drivers; resume re-arms prior token spend so `--budget-tokens` caps the run,
+   not each process (see [ADR 0011](docs/adr/0011-reliability-hardening.md)).
 8. **Stuck detection stays pure** over `LoopCtx` histories: no-diff, repeat-failure, oscillation,
    harness-crash (consecutive `crashed` runs → typed `STUCK_HARNESS_CRASH`), contract-unevaluable
    (consecutive could-not-evaluate verdicts — the verify command timed out or could not be started, or

@@ -386,9 +386,10 @@ Per-step timeouts (subprocess kill-timeouts in milliseconds; all optional, pure 
                               that legitimately exceed the wall-clock cap. The wall-clock
                               --harness-timeout-ms stays the absolute backstop. Default: off.
   --llm-timeout-ms N       cap each LLM step: judge / approver / compiler (default 600000)
-  --verify-timeout-ms N    cap the verify command (default: unbounded). A timeout is a
-                           fail-closed non-zero exit, i.e. a verifier FAIL — never a green. Also caps
-                           each deterministic rung run during the Fix #2 pre-flight.
+  --verify-timeout-ms N    cap the verify command (default 600000 = 10 min). A timeout is a
+                           fail-closed could-not-evaluate — never a green — so a hanging check can
+                           never hang the whole run. Also caps each deterministic rung run during
+                           the Fix #2 pre-flight.
   --setup-timeout-ms N     cap the one-time --setup-cmd bootstrap (default 600000 = 10 min). A
                            timeout is a fail-closed SETUP_FAILED.
 

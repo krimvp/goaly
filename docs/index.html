@@ -165,6 +165,18 @@
         <code>codex resume &lt;id&gt;</code>, and so on. The end-of-run banner shows it too, so the
         next step is one copy-paste away.</p>
       </div>
+      <div class="card">
+        <h3>Reliable by default</h3>
+        <p>Fail closed, but never fail eagerly: a millisecond <b>preflight</b> catches a missing
+        CLI / non-git workspace <em>before</em> any token is spent; transient 429/network/CLI blips
+        are <b>retried with backoff</b> at every transport (a crashed agent turn once, LLM steps
+        twice, <code>Retry-After</code> honored) while timeouts stay hard; <b>Ctrl-C stops
+        cleanly</b> between steps and prints the <code>--resume</code> command (a second one
+        force-exits and reaps children); the fsync'd <b>write-ahead log survives a crash at any
+        byte</b> (a torn tail is repaired, a run lock stops double drivers), and
+        <code>--budget-tokens</code> survives <code>--resume</code>. Every failed run ends with a
+        one-line <code>next:</code> hint. <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0011-reliability-hardening.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0011 →</a></p>
+      </div>
     </div>
   </div>
 </section>
