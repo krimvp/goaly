@@ -5,6 +5,8 @@ import { parseArgs, USAGE, UsageError, type ParsedArgs } from './args';
 import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
 import { runRuns } from './runs';
+import { runWorktree } from './worktree-cmd';
+import { WorktreeManager, WorktreeError } from '../workspace/worktree-manager';
 import { drive } from '../driver/driver';
 import { refResolves } from '../workspace/git-workspace';
 import { asRunId, type RunId } from '../domain/ids';
@@ -165,6 +167,47 @@ export async function main(argv: string[]): Promise<number> {
       (s) => process.stdout.write(s),
       (s) => process.stderr.write(s),
     );
+  }
+
+  if (parsed.command === 'worktree' && parsed.worktree !== undefined) {
+    return runWorktree(
+      parsed.worktree,
+      parsed.workspace,
+      (s) => process.stdout.write(s),
+      (s) => process.stderr.write(s),
+    );
+  }
+
+  // --worktree: re-root the ENTIRE run at a managed worktree BEFORE anything reads
+  // `parsed.workspace` (baseline validation, --from-run/--resume log reads, preflight, state dir,
+  // run lock, composeDeps) — one rewrite here and every downstream consumer composes against the
+  // worktree, so the main tree is never touched.
+  let worktree: { name: string; mergeHint: string } | undefined;
+  if (parsed.worktreeRun !== undefined) {
+    if (parsed.worktreeRun === true && parsed.resumeRunId !== undefined) {
+      process.stderr.write(
+        'goaly: --resume needs the NAMED worktree the run lives in — pass --worktree <name> ' +
+          '(find it with: goaly worktree list)\n',
+      );
+      return 2;
+    }
+    const name =
+      parsed.worktreeRun === true ? `wt-${randomUUID().slice(0, 8)}` : parsed.worktreeRun;
+    const manager = new WorktreeManager({ root: parsed.workspace });
+    try {
+      const info = await manager.ensure(name);
+      process.stderr.write(
+        `goaly: running in worktree '${name}' at ${info.path} (branch ${info.branch})\n`,
+      );
+      worktree = { name, mergeHint: manager.mergeHint(name) };
+      parsed = { ...parsed, workspace: info.path };
+    } catch (e) {
+      if (e instanceof WorktreeError) {
+        process.stderr.write(`goaly: ${e.message}\n`);
+        return 2;
+      }
+      throw e;
+    }
   }
 
   // Load the optional cost table BEFORE the run so a malformed table fails fast (never mid-run).
@@ -334,8 +377,8 @@ export async function main(argv: string[]): Promise<number> {
     // continuation path on screen (the headline resilience feature must be discoverable).
     deps.logger?.info('cli starting', {
       runId,
-      resumeWith: `goaly --resume ${runId}`,
-      watchWith: `goaly runs watch ${runId}`,
+      resumeWith: `goaly --resume ${runId}${worktree !== undefined ? ` --worktree ${worktree.name}` : ''}`,
+      watchWith: `goaly runs watch ${runId}${worktree !== undefined ? ` --workspace ${parsed.workspace}` : ''}`,
       harness: parsed.harness,
       autonomous: parsed.config.autonomous,
       ...(parsed.configSources.length > 0 ? { configFile: parsed.configSources.join(', ') } : {}),
@@ -382,6 +425,10 @@ export async function main(argv: string[]): Promise<number> {
     // command (or the goaly-code → --from-run route). Stays quiet when there is no real session.
     const hint = resumeHint(parsed.harness, outcome.sessionId, runId);
     process.stdout.write(`${formatOutcome(outcome, cost, hint)}\n`);
+    // A worktree run never commits — tell the operator how to bring the work back to the main tree.
+    if (worktree !== undefined && outcome.iterations > 0) {
+      process.stdout.write(`\n${worktree.mergeHint}\n`);
+    }
     if (outcome.status === 'DONE') return 0;
     return interrupt.interrupted() ? EXIT_INTERRUPTED : 1;
   } finally {

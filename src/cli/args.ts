@@ -7,6 +7,8 @@ import { ModelSelection, type ModelSelectionInput } from './models';
 import { resolveInputSources, defaultReaders, type InputReaders } from './input-sources';
 import { loadConfig, type LoadedConfig } from './config-file';
 import type { AgentCli } from '../agent-cli/registry';
+import type { WorktreeCommand } from './worktree-cmd';
+import { WorktreeName } from '../workspace/worktree-manager';
 
 /**
  * The harness (write-role coding agent): any bundled CLI, the IO-free `fake`, plus `goaly-code` — the
@@ -55,9 +57,18 @@ export type StepTimeouts = {
 };
 
 export type ParsedArgs = {
-  command: 'run' | 'help' | 'runs';
+  command: 'run' | 'help' | 'runs' | 'worktree';
   /** The read-only inspection subcommand; present only when `command === 'runs'`. */
   runs: RunsCommand | undefined;
+  /** The worktree-management subcommand; present only when `command === 'worktree'`. */
+  worktree: WorktreeCommand | undefined;
+  /**
+   * Run inside a goaly-managed worktree (`--worktree [<name>]`): the run's whole workspace —
+   * state dir, run lock, harness cwd, diff scope — is re-rooted at `.goaly/worktrees/<name>`
+   * (created on branch `goaly/<name>` if absent). A bare `--worktree` auto-names one. Pure wiring;
+   * never enters the frozen contract.
+   */
+  worktreeRun: string | true | undefined;
   config: RunConfig;
   harness: HarnessChoice;
   models: ModelSelection;
@@ -176,6 +187,7 @@ Usage:
                [--sandbox-net none|allow|allow:<host,…>]
                [--sandbox-image <ref>] [--sandbox-runtime docker|podman]
                [--cost-table <path>] [--baseline <ref>] [--delta-verify] [--workspace <dir>]
+               [--worktree [<name>]]
                [--resume <runId> [--note "<text>"]]
                [--from-run <runId> [--inherit-session]]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
@@ -185,6 +197,10 @@ Usage:
   goaly runs show <runId> [--workspace <dir>]
   goaly runs watch <runId> [--workspace <dir>]
   goaly runs resume-cmd <runId> [--harness <name>] [--workspace <dir>]
+
+  goaly worktree create <name> [--base <ref>] [--workspace <dir>]
+  goaly worktree list [--workspace <dir>]
+  goaly worktree remove <name> [--force] [--delete-branch] [--workspace <dir>]
 
   goaly help
 
@@ -529,7 +545,28 @@ Run history & inspection (read-only — pure replay of the write-ahead run log, 
                             OWN interactive mode (e.g. 'claude --resume <id>', 'codex resume <id>').
                             Read-only; for a goaly-code run it routes you to --from-run --inherit-session.
                             --harness <name>  fallback when the log predates harness recording.
-  --workspace <dir>         where to look for the .goaly run-log directory (default: cwd).`;
+  --workspace <dir>         where to look for the .goaly run-log directory (default: cwd).
+
+Worktrees (run on an isolated copy of the repo; merge back with plain git):
+  --worktree [<name>]       run inside the goaly-managed worktree .goaly/worktrees/<name> on branch
+                            goaly/<name> — created off HEAD if absent, reused if present. The run's
+                            whole workspace (state dir, run lock, agent cwd, diff scope) is rooted at
+                            the worktree, so the main tree is never touched. A bare --worktree
+                            auto-names one (wt-<8 hex>). Resume a worktree run with the SAME
+                            --worktree <name> (its log lives under the worktree). NOTE a bare
+                            --worktree followed by the goal is ambiguous — put the goal first or use
+                            --worktree=<name>. Runs never commit: the merge-back hint printed at the
+                            end shows the commit + 'git merge goaly/<name>' steps.
+  goaly worktree create <name> [--base <ref>]  create it up front (default base: HEAD). If branch
+                            goaly/<name> survives from a removed worktree, re-attach to it.
+  goaly worktree list       NAME / BRANCH / HEAD / DIRTY / RUNS / PATH for every managed worktree;
+                            a checkout deleted out-of-band (e.g. git clean -dfx) shows as PRUNABLE.
+  goaly worktree remove <name> [--force] [--delete-branch]
+                            refuses while a LIVE run is inside (always) or the tree is dirty
+                            (without --force). The branch is KEPT by default for merge-back;
+                            --delete-branch removes it too (unmerged commits then need --force).
+  WARNING: worktrees live inside the git-ignored .goaly dir — 'git clean -dfx' on the main tree
+  deletes them (committed work survives on the goaly/<name> branch; uncommitted work does not).`;
 
 export type RawFlags = Record<string, string | boolean>;
 
@@ -701,6 +738,9 @@ export async function parseArgs(
   if (command === 'runs') {
     return runsResult(parseRunsCommand(rest));
   }
+  if (command === 'worktree') {
+    return worktreeResult(parseWorktreeCommand(rest));
+  }
   // `run` is optional: an argv that doesn't lead with a known subcommand (`runs`/`help`) is an
   // implicit run, whose first token may be a positional goal (`goaly "my goal"`) or a flag
   // (`goaly -d "my goal"`). A bare `goaly` already returned help above.
@@ -838,6 +878,8 @@ export async function parseArgs(
   return {
     command: 'run',
     runs: undefined,
+    worktree: undefined,
+    worktreeRun: parseWorktreeRun(flags),
     config,
     harness,
     models: parseModels(flags),
@@ -1178,12 +1220,80 @@ function runsWorkspace(tokens: string[]): string {
   return str(parseFlags(tokens).flags, 'workspace') ?? process.cwd();
 }
 
+/**
+ * Validate the `--worktree [<name>]` run flag at the seam: a bare flag (`true`) means auto-name;
+ * a string must be a valid {@link WorktreeName} — fail-closed on anything else (invariant #6).
+ */
+function parseWorktreeRun(flags: RawFlags): string | true | undefined {
+  const v = flags['worktree'];
+  if (v === undefined) return undefined;
+  if (v === true) return true;
+  const parsed = WorktreeName.safeParse(v);
+  if (!parsed.success) {
+    throw new UsageError(`--worktree: ${parsed.error.issues[0]?.message ?? 'invalid worktree name'}`);
+  }
+  return parsed.data;
+}
+
+/**
+ * Parse the `goaly worktree` subcommand (create / list / remove). `<name>` is a positional,
+ * validated at this seam with the same fail-closed {@link WorktreeName} schema the manager uses.
+ */
+function parseWorktreeCommand(rest: string[]): { worktree: WorktreeCommand; workspace: string } {
+  const [sub, ...subRest] = rest;
+  if (sub === 'list') {
+    return { worktree: { kind: 'list' }, workspace: runsWorkspace(subRest) };
+  }
+  if (sub === 'create') {
+    const name = worktreeNamePositional(subRest, 'create');
+    const flags = parseFlags(subRest.slice(1)).flags;
+    return {
+      worktree: { kind: 'create', name, base: str(flags, 'base') },
+      workspace: str(flags, 'workspace') ?? process.cwd(),
+    };
+  }
+  if (sub === 'remove') {
+    const name = worktreeNamePositional(subRest, 'remove');
+    const flags = parseFlags(subRest.slice(1)).flags;
+    return {
+      worktree: {
+        kind: 'remove',
+        name,
+        force: flags['force'] !== undefined,
+        deleteBranch: flags['delete-branch'] !== undefined,
+      },
+      workspace: str(flags, 'workspace') ?? process.cwd(),
+    };
+  }
+  throw new UsageError(
+    `unknown worktree subcommand: ${sub ?? '(none)'} (expected create | list | remove)`,
+  );
+}
+
+function worktreeNamePositional(subRest: string[], sub: string): string {
+  const raw = subRest[0];
+  if (raw === undefined || raw.startsWith('-')) {
+    throw new UsageError(`worktree ${sub} requires a <name> (e.g. goaly worktree ${sub} feature-x)`);
+  }
+  const parsed = WorktreeName.safeParse(raw);
+  if (!parsed.success) {
+    throw new UsageError(
+      `worktree ${sub} '${raw}': ${parsed.error.issues[0]?.message ?? 'invalid worktree name'}`,
+    );
+  }
+  return parsed.data;
+}
+
 function helpResult(): ParsedArgs {
   return baseArgs('help', undefined, process.cwd());
 }
 
 function runsResult(parsed: { runs: RunsCommand; workspace: string }): ParsedArgs {
   return baseArgs('runs', parsed.runs, parsed.workspace);
+}
+
+function worktreeResult(parsed: { worktree: WorktreeCommand; workspace: string }): ParsedArgs {
+  return { ...baseArgs('worktree', undefined, parsed.workspace), worktree: parsed.worktree };
 }
 
 /**
@@ -1199,6 +1309,8 @@ function baseArgs(
   return {
     command,
     runs,
+    worktree: undefined,
+    worktreeRun: undefined,
     // a placeholder config; never used for the help / runs commands.
     config: cliInputToRunConfig(CliInput.parse({ goal: 'help', verifyCmd: 'true' })),
     harness: 'claude',

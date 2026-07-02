@@ -185,6 +185,15 @@ export { LlmTokenMeter, meterLlm, deltaToUsage, type LlmDelta } from './driver/l
 export { summarizeUsage } from './runlog/usage';
 export { GitWorkspace } from './workspace/git-workspace';
 export { GitWorktreeHost } from './workspace/git-worktree-host';
+export {
+  WorktreeManager,
+  WorktreeError,
+  WorktreeName,
+  WORKTREES_DIR,
+  worktreeBranch,
+  type WorktreeInfo,
+} from './workspace/worktree-manager';
+export { runWorktree, renderWorktreeTable, type WorktreeCommand } from './cli/worktree-cmd';
 export { runBestOf, selectWinner, type CandidateResult, type BestOfWinner } from './driver/tournament';
 export { FileRunLog } from './runlog/file-runlog';
 export { DeterministicVerifier } from './verify/deterministic';

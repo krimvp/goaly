@@ -504,6 +504,51 @@ describe('parseArgs', () => {
     });
   });
 
+  describe('worktree subcommand + --worktree run flag', () => {
+    it('parses "worktree create <name>" with an optional --base and --workspace', async () => {
+      const a = await parseArgs(['worktree', 'create', 'feat-x', '--base', 'main', '--workspace', '/tmp/ws']);
+      expect(a.command).toBe('worktree');
+      expect(a.worktree).toEqual({ kind: 'create', name: 'feat-x', base: 'main' });
+      expect(a.workspace).toBe('/tmp/ws');
+    });
+
+    it('parses "worktree list" (default workspace = cwd)', async () => {
+      const a = await parseArgs(['worktree', 'list']);
+      expect(a.worktree).toEqual({ kind: 'list' });
+      expect(a.workspace).toBe(process.cwd());
+    });
+
+    it('parses "worktree remove <name>" with --force / --delete-branch booleans', async () => {
+      const a = await parseArgs(['worktree', 'remove', 'feat-x', '--force', '--delete-branch']);
+      expect(a.worktree).toEqual({ kind: 'remove', name: 'feat-x', force: true, deleteBranch: true });
+      const b = await parseArgs(['worktree', 'remove', 'feat-x']);
+      expect(b.worktree).toEqual({ kind: 'remove', name: 'feat-x', force: false, deleteBranch: false });
+    });
+
+    it('fails closed on a missing/invalid name or unknown subcommand', async () => {
+      await expect(parseArgs(['worktree', 'create'])).rejects.toThrow(UsageError);
+      await expect(parseArgs(['worktree', 'create', '../escape'])).rejects.toThrow(UsageError);
+      await expect(parseArgs(['worktree', 'remove', 'a/b'])).rejects.toThrow(UsageError);
+      await expect(parseArgs(['worktree', 'nuke', 'x'])).rejects.toThrow(UsageError);
+      await expect(parseArgs(['worktree'])).rejects.toThrow(UsageError);
+    });
+
+    it('captures --worktree <name> on a run, and bare --worktree as true', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--worktree', 'feat-x']);
+      expect(a.worktreeRun).toBe('feat-x');
+      const b = await parseArgs(['do it', '--verify-cmd', 'true', '--worktree']);
+      expect(b.worktreeRun).toBe(true);
+      const c = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(c.worktreeRun).toBeUndefined();
+    });
+
+    it('fails closed on an invalid --worktree name for a run', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--worktree', 'a/b']),
+      ).rejects.toThrow(UsageError);
+    });
+  });
+
   describe('--from-run / --inherit-session (Capability C)', () => {
     const base = ['run', '--goal', 'g', '--verify-cmd', 'true'];
 

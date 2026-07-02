@@ -152,6 +152,18 @@
         HEAD.</p>
       </div>
       <div class="card">
+        <h3>Named worktrees</h3>
+        <p><code>--worktree &lt;name&gt;</code> re-roots the <b>entire run</b> — run log, lock, agent
+        cwd, verifier, diff scope — at an isolated checkout under
+        <code>.goaly/worktrees/&lt;name&gt;</code> on branch <code>goaly/&lt;name&gt;</code>, so the
+        main tree is never touched and several runs can go at once. Manage them with
+        <code>goaly worktree create / list / remove</code>; runs never commit, so <b>merge-back is
+        plain git</b> (the end-of-run hint shows the commit + <code>git merge goaly/&lt;name&gt;</code>
+        steps, and remove keeps the branch by default). Fail-closed throughout: removal refuses a
+        live run inside (always) or a dirty tree (without <code>--force</code>).
+        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0013-named-worktrees.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0013 →</a></p>
+      </div>
+      <div class="card">
         <h3>Follow up after it ends</h3>
         <p><code>goaly "now also handle empty input" --from-run &lt;id&gt;</code> starts a <b>new,
         re-verified</b> goal that knows what just happened: a compaction of the prior run seeds the

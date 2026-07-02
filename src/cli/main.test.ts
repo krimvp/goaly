@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -321,6 +322,93 @@ describe('main() — resume extension end-to-end (operator control, ADR 0012)', 
     expect(res.code).toBe(2);
     expect(res.out).toContain('nothing to extend');
     expect(res.out).toContain('--from-run');
+  });
+});
+
+describe('main() — --worktree runs the whole run inside a managed worktree', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'goaly-main-worktree-'));
+    const git = (...args: string[]): void => {
+      const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test User');
+    await writeFile(join(root, 'f.txt'), 'x\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function captureAll(fn: () => Promise<number>): Promise<{ code: number; out: string }> {
+    const writes: string[] = [];
+    const origOut = process.stdout.write.bind(process.stdout);
+    const origErr = process.stderr.write.bind(process.stderr);
+    const capture = ((s: string | Uint8Array): boolean => {
+      writes.push(typeof s === 'string' ? s : Buffer.from(s).toString());
+      return true;
+    }) as typeof process.stdout.write;
+    process.stdout.write = capture;
+    process.stderr.write = capture;
+    try {
+      return { code: await fn(), out: writes.join('') };
+    } finally {
+      process.stdout.write = origOut;
+      process.stderr.write = origErr;
+    }
+  }
+
+  it('re-roots the run at .goaly/worktrees/<name>: state dir, branch, merge hint (zero LLM)', async () => {
+    // A red deterministic bar with the no-op fake harness → no-diff ABORT after iteration 1; the
+    // point here is WHERE the run ran, not its outcome.
+    const res = await captureAll(() =>
+      main(['run', 'g', '--verify-cmd', 'false', '--harness', 'fake', '--autonomous',
+        '--max-iterations', '2', '--workspace', root, '--worktree', 'feat']),
+    );
+    expect(res.code).toBe(1);
+    expect(res.out).toContain("running in worktree 'feat'");
+    // The run log landed under the WORKTREE's state dir, not the main workspace's.
+    const wtStateDir = join(root, '.goaly', 'worktrees', 'feat', '.goaly');
+    const runDirs = await readdir(wtStateDir);
+    expect(runDirs.some((d) => d.startsWith('run-'))).toBe(true);
+    expect(existsSync(join(root, '.goaly', runDirs.find((d) => d.startsWith('run-'))!))).toBe(false);
+    // The worktree is on its branch, and the operator got the merge-back hint.
+    const branch = spawnSync('git', ['branch', '--show-current'], {
+      cwd: join(root, '.goaly', 'worktrees', 'feat'),
+      encoding: 'utf8',
+    }).stdout.trim();
+    expect(branch).toBe('goaly/feat');
+    expect(res.out).toContain('git merge goaly/feat');
+  });
+
+  it('resume with a bare --worktree (no name) is a usage error naming the fix', async () => {
+    const res = await captureAll(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--worktree', '--resume', 'run-x']),
+    );
+    expect(res.code).toBe(2);
+    expect(res.out).toContain('--worktree <name>');
+  });
+
+  it('a --resume with the named --worktree finds the run inside the worktree', async () => {
+    const first = await captureAll(() =>
+      main(['run', 'g', '--verify-cmd', 'false', '--harness', 'fake', '--autonomous',
+        '--max-iterations', '2', '--workspace', root, '--worktree', 'feat']),
+    );
+    const runId = /── goaly run (run-[0-9a-f-]+) ──/.exec(first.out)?.[1];
+    expect(runId).toBeDefined();
+    const second = await captureAll(() =>
+      main(['run', 'g', '--verify-cmd', 'false', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--worktree', 'feat', '--resume', runId!,
+        '--stuck-no-diff', 'false']),
+    );
+    expect(second.code).toBe(1);
+    expect(second.out).toContain('iterations:  2');
   });
 });
 

@@ -49,7 +49,7 @@ stays resumable). See [Usage](#usage) for every flag.
 
 - [How it works](#how-it-works) — the loop, the two gates, the verify ladder
 - [Install](#install) · [Usage](#usage) — every flag and mode
-- [Phased goals](#phased-goals---phased) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
+- [Phased goals](#phased-goals---phased) · [Worktrees](#worktrees---worktree) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
 - [Reliability](#reliability-preflight-retries-interrupts-crash-safety) — preflight, retries, Ctrl-C, crash-safety
 - [Operator control](#watching-steering--extending-a-run-operator-control) — watch live, steer with `--note`, extend caps on `--resume`
 - [Develop](#develop) · [Embedding](#embedding) — contributing and the library API
@@ -342,6 +342,47 @@ each iteration, with --candidates N:
   HEAD** — `git worktree` can't check out an unborn tree, so a `--candidates > 1` run on a HEAD-less repo
   **refuses to start** (fail-closed) with a clear message; make an initial commit or use `--candidates 1`.
 
+## Worktrees (`--worktree`)
+
+Sometimes the run shouldn't touch your working tree at all — you keep editing while goaly builds, or
+you want several runs going at once without them stepping on each other. `goaly` manages light,
+**named, persistent git worktrees** for exactly that: `--worktree <name>` re-roots the **entire run**
+at an isolated checkout of the repo, and the work merges back with plain git.
+
+```bash
+goaly "add a /health endpoint" --worktree health      # create (or reuse) + run inside it
+goaly "try the other approach" --worktree             # bare flag: auto-named (wt-<8 hex>)
+
+goaly worktree create feature-x --base main           # create one up front (default base: HEAD)
+goaly worktree list                                   # NAME / BRANCH / HEAD / DIRTY / RUNS / PATH
+goaly worktree remove feature-x                       # refuses if dirty; branch kept for merge-back
+goaly worktree remove feature-x --force --delete-branch
+```
+
+- **Where they live.** Each worktree is `git worktree add`-ed at `.goaly/worktrees/<name>` on branch
+  **`goaly/<name>`** — inside the already git-ignored `.goaly` state dir, so nothing shows in
+  `git status` and everything goaly manages sits in one place. (Corollary: `git clean -dfx` on the
+  main tree deletes the checkouts — committed work survives on the `goaly/<name>` branch;
+  uncommitted work does not. `worktree list` flags such orphaned registrations as `PRUNABLE`.)
+- **The whole run is re-rooted.** One early rewrite points the run's workspace at the worktree, so
+  the run log (`<worktree>/.goaly/<runId>/`), the run lock, the agent's cwd, the verifier, and the
+  diff scope all live there — the main tree is never read or written by the run. Resume it with the
+  **same** `--worktree <name>` (the log lives inside the worktree); the startup banner prints the
+  exact command.
+- **Merge-back is plain git — no magic.** Runs never commit, so a finished worktree run leaves its
+  changes uncommitted on `goaly/<name>`; the end-of-run hint shows the two steps
+  (`git -C <worktree> add -A && git -C <worktree> commit …`, then `git merge goaly/<name>`).
+  Removing a worktree **keeps the branch by default** for exactly this reason; `--delete-branch`
+  opts out (an unmerged branch then needs `--force`).
+- **Fail-closed safety.** Creating over an existing worktree, an unresolvable `--base`, or an
+  invalid name (names are one safe path/branch component: `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`, no
+  `..`) all refuse with a clear message. `remove` refuses while a **live goaly run** is inside
+  (always — even `--force`) and refuses a dirty tree without `--force`, naming how to keep the work.
+- **Distinct from best-of-N.** `--candidates` makes **ephemeral, detached** worktrees for one
+  iteration's tournament and tears them down; `--worktree` is the **persistent, named** counterpart
+  a whole run (and you) can live in. They compose: a `--worktree` run with `--candidates 3` runs its
+  tournament off the worktree's tree.
+
 ## Hardening against reward-hacking
 
 The point of goaly is correctness under adversarial self-interest, so the loop is hardened against
@@ -573,6 +614,11 @@ goaly run --goal "..." --verify-cmd "npm test" --delta-verify
 # Best-of-N: run 3 isolated attempts each iteration and keep the one that best passes the frozen
 # ladder (needs a committed HEAD; composes with --phased / --delta-verify / --sandbox):
 goaly run --goal "..." --verify-cmd "npm test" --candidates 3   # or --best-of 3
+
+# Run in an isolated, named worktree (.goaly/worktrees/health, branch goaly/health) — the main
+# tree is never touched; merge back with plain git when it's done:
+goaly "add a /health endpoint" --verify-cmd "npm test" --worktree health
+goaly worktree list                          # manage them: create / list / remove
 
 # Author verification into test/, give the compiler more self-correction, and loosen no-diff for an
 # exploratory build (authored files are auto git-excluded, so your `git status` stays clean):
