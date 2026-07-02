@@ -204,9 +204,15 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   `requiredTools` pre-flight), and budget. Tune it
   with `--stuck-no-diff`, `--stuck-repeat-threshold`, `--stuck-oscillation`, `--stuck-crash-threshold`,
   `--stuck-unevaluable-threshold`.
-  Use `--diff-ignore` to
-  keep verifier-produced artifacts (coverage dirs, `__pycache__`, build output) out of the tree hash
-  so they can't make a no-op agent look like it changed something. A no-diff iteration is **excused**
+  **By default** goaly already keeps a conservative set of ephemeral verifier artifacts out of the tree
+  hash — Python bytecode/`__pycache__` and the pytest/mypy/ruff caches, plus JS `.nyc_output`/`htmlcov`
+  (`*.pyc`, `*__pycache__*`, `*.pytest_cache*`, `*.mypy_cache*`, `*.ruff_cache*`, `*.nyc_output*`,
+  `*htmlcov*`) — so a verify command that regenerates them between iterations can't make a no-op agent
+  turn look like it changed something. The defaults are deliberately narrow: they never touch build
+  output (`build/`, `dist/`, `target/` — a build goal's deliverable must stay visible) and avoid the
+  bare word `coverage` (which would over-match a real `coverage_report.py`). Use `--diff-ignore
+  "<p1,p2,…>"` to add your own artifact paths on top (deduped with the defaults); each is a git
+  pathspec where `*` spans `/`. A no-diff iteration is **excused**
   when the agent never had a fair chance to act — the previous turn **timed out**, **crashed**, or was
   **truncated** (it hit its turn/wall-clock cap mid-work), or the ladder is green and a **fresh Sign-off
   veto** is the only blocker — so a correct, actionable critique (or a run that simply ran out of room)

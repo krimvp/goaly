@@ -249,10 +249,11 @@ Diff baseline (issue #47 — keep a run's diff small without touching the user's
 
 Stuck-detection tuning:
   --diff-ignore "<p1,p2,…>"  comma-separated extra paths kept OUT of the working-tree hash that
-                             drives no-diff/oscillation detection, beyond the always-excluded
-                             .goaly state dir. List verifier-produced artifacts (e.g.
-                             "coverage,__pycache__,dist") so a verifier's side effects between
-                             iterations don't make a no-op agent look like it changed something.
+                             drives no-diff/oscillation detection, ADDED to the always-excluded
+                             .goaly state dir and the built-in ephemeral-artifact defaults (Python
+                             bytecode/__pycache__, pytest/mypy/ruff caches, JS .nyc_output/htmlcov).
+                             List your own verifier side effects so they don't make a no-op agent
+                             look like it changed something. Each is a git pathspec (* spans /).
   --stuck-no-diff <bool>          toggle the no-diff abort (default true). Even when on, a no-diff
                                   iteration is NOT terminal if the previous turn timed out, or if the
                                   ladder is green and a FRESH veto is the only blocker — the agent
