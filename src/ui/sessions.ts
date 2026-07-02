@@ -12,6 +12,8 @@ export function rootKey(root: RootRef): string {
 export type UiRunSession = {
   readonly runId: RunId;
   readonly root: RootRef;
+  /** The checkout the run executes in (the gate-file routes read/write under it, ADR 0016). */
+  readonly rootPath: string;
   readonly startedAt: number;
   readonly gates: UiGates;
   /** Cooperative stop: flips the interrupted probe AND rejects any parked gate. */

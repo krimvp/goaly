@@ -294,6 +294,9 @@ describe('buildLadder — verify timeout threading', () => {
         calls.push(opts !== undefined ? { command, opts } : { command });
         return result;
       },
+      async readFile() {
+        return null;
+      },
       async fileHash() {
         return null;
       },

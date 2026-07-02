@@ -187,10 +187,16 @@
         one (optionally into a worktree) through the <em>same</em> code path as the CLI, hold the
         <b>Seal in a browser modal</b> (approve / revise / reject — a real <code>SealGate</code>
         implementation, never a bypass), stop cooperatively, and resume with a note + raised
-        operational caps. One live run per tree, worktrees for parallelism. Localhost-only, with
-        fail-closed Host/Origin/<code>X-Goaly-Ui</code> guards.
+        operational caps. The Seal modal is a full <b>review station</b>: authored verification
+        files render with their <em>contents</em>, editable in the browser or in your own editor,
+        alongside the setup/verify commands and rubric — <b>"re-freeze &amp; review"</b> re-pins
+        the hashes into a freshly frozen contract (logged, zero LLM cost) as many rounds as you
+        like, and only the contract you finally approve starts executing (the CLI prompt's
+        <code>[e]dited</code> answer is the same mechanism). One live run per tree, worktrees for
+        parallelism. Localhost-only, with fail-closed Host/Origin/<code>X-Goaly-Ui</code> guards.
         <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0014-local-web-ui.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0014 →</a>
-        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0015-ui-owned-runs.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0015 →</a></p>
+        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0015-ui-owned-runs.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0015 →</a>
+        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0016-seal-review-station.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0016 →</a></p>
       </div>
       <div class="card">
         <h3>Watch it &amp; steer it</h3>

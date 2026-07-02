@@ -6,6 +6,10 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { makeUiActions, startArgv, resumeArgv, type UiActions } from './start-run';
 import { SessionStore } from './sessions';
+import { UiGates } from './ui-gates';
+import { makeFakeContract } from '../testing/fakes';
+import { sha256Hex } from '../util/hash';
+import { asRunId } from '../domain/ids';
 
 function git(cwd: string, ...args: string[]): void {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -101,7 +105,7 @@ describe('makeUiActions — in-process UI-owned runs (fake harness, zero LLM)', 
     const gate = await waitForGate(runId);
     const done = sessions.get(runId)!.done; // grab BEFORE resolving — the store cleans up on settle
     expect(gate.kind).toBe('seal');
-    expect(actions.resolveGate(runId, gate.gateId, { decision: 'approve' })).toBe('ok');
+    expect(await actions.resolveGate(runId, gate.gateId, { decision: 'approve' })).toBe('ok');
 
     const result = await done;
     expect(result.code).toBe(1); // red bar → no-diff ABORTED (the outcome isn't the point; the gate is)
@@ -160,11 +164,11 @@ describe('makeUiActions — in-process UI-owned runs (fake harness, zero LLM)', 
   });
 
   it('resolveGate: unknown run → no-session; stale gateId → stale (double-submit guard)', { timeout: 30000 }, async () => {
-    expect(actions.resolveGate('run-none', 'x', { decision: 'approve' })).toBe('no-session');
+    expect(await actions.resolveGate('run-none', 'x', { decision: 'approve' })).toBe('no-session');
     const started = await actions.start({ goal: 'g', verifyCmd: 'false', harness: 'fake', autonomous: false });
     const runId = started.ok ? started.runId : '';
     await waitForGate(runId);
-    expect(actions.resolveGate(runId, 'stale-id', { decision: 'approve' })).toBe('stale');
+    expect(await actions.resolveGate(runId, 'stale-id', { decision: 'approve' })).toBe('stale');
     actions.stop(runId);
     await waitSettled(runId);
   });
@@ -189,6 +193,57 @@ describe('makeUiActions — in-process UI-owned runs (fake harness, zero LLM)', 
     expect(log).toContain('try f.txt');
     // Revived past the no-diff abort: iteration 2 ran (a second AGENT_RAN landed).
     expect(log.split('"tag":"AGENT_RAN"').length - 1).toBe(2);
+  });
+
+  it('gate files + drift check: read, edit, allowlist, and the approve-time 409 (ADR 0016)', async () => {
+    // A synthetic parked SEAL session over a real temp checkout — the file actions and the drift
+    // check are exercised without an LLM compile (generatedFiles never arise from --verify-cmd).
+    const content = 'test("gen", () => {})';
+    await writeFile(join(root, 'gen.test.mjs'), content);
+    const contract = makeFakeContract({
+      generatedFiles: [{ path: 'gen.test.mjs', sha256: sha256Hex(content) }],
+    });
+    const gates = new UiGates();
+    const parked = gates.approveContract(contract); // parks the seal gate
+    const gateId = gates.pending()!.gateId;
+    sessions.register({
+      runId: asRunId('run-synthetic'),
+      root: { kind: 'main' },
+      rootPath: root,
+      startedAt: 1,
+      gates,
+      stop: () => gates.stop(),
+      stopRequested: () => false,
+      done: parked.then(() => ({ code: 0, runId: asRunId('run-synthetic'), outcome: undefined })),
+    });
+
+    // GET: clean content, not dirty.
+    const files = await actions.gateFiles('run-synthetic', gateId);
+    expect(files).toMatchObject({
+      gateId,
+      files: [{ path: 'gen.test.mjs', content, dirty: false, truncated: false }],
+    });
+    expect(await actions.gateFiles('run-none', gateId)).toBe('no-session');
+    expect(await actions.gateFiles('run-synthetic', 'stale')).toBe('stale');
+
+    // PUT: allowlisted path writes through the guarded writer; others refuse.
+    const written = await actions.writeGateFile('run-synthetic', gateId, {
+      path: 'gen.test.mjs',
+      content: 'test("gen", () => { expect(1).toBe(1) })',
+    });
+    expect(written).toMatchObject({ written: 'gen.test.mjs' });
+    expect(
+      await actions.writeGateFile('run-synthetic', gateId, { path: 'f.txt', content: 'hijack' }),
+    ).toBe('bad-path');
+
+    // The file is now DIRTY vs the frozen pin — approve refuses 409-style with the path named.
+    const drift = await actions.resolveGate('run-synthetic', gateId, { decision: 'approve' });
+    expect(drift).toEqual({ drifted: ['gen.test.mjs'] });
+    expect(gates.pending()?.gateId).toBe(gateId); // still parked
+
+    // `edited` resolves the gate (the run would refreeze); the drift is the operator's edit.
+    expect(await actions.resolveGate('run-synthetic', gateId, { decision: 'edited' })).toBe('ok');
+    await expect(parked).resolves.toEqual({ kind: 'edited' });
   });
 
   it('resume 404s an unknown run and refuses a bad start request with the guard text', { timeout: 30000 }, async () => {

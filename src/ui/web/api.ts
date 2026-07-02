@@ -7,6 +7,7 @@ import type {
   StartRunRequest,
   ResumeRequest,
   GateDecision,
+  GateFilesResponse,
   PendingGate,
   StartRunResponse,
 } from '../api-schema';
@@ -27,7 +28,7 @@ async function getJson<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function send<T>(method: 'POST' | 'DELETE', path: string, body?: unknown): Promise<T> {
+async function send<T>(method: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
     headers: {
@@ -59,6 +60,19 @@ export const api = {
   },
   answerGate: (runId: string, gateId: string, decision: GateDecision): Promise<{ resolved: string }> =>
     send('POST', `/api/runs/${encodeURIComponent(runId)}/gate/${encodeURIComponent(gateId)}`, decision),
+  gateFiles: async (runId: string, gateId: string): Promise<GateFilesResponse | null> => {
+    const res = await fetch(
+      `/api/runs/${encodeURIComponent(runId)}/gate/${encodeURIComponent(gateId)}/files`,
+    );
+    if (res.status !== 200) return null; // no files to review (or the gate moved on)
+    return (await res.json()) as GateFilesResponse;
+  },
+  putGateFile: (
+    runId: string,
+    gateId: string,
+    write: { path: string; content: string },
+  ): Promise<{ written: string; sha256: string }> =>
+    send('PUT', `/api/runs/${encodeURIComponent(runId)}/gate/${encodeURIComponent(gateId)}/files`, write),
   createWorktree: (name: string, base?: string): Promise<WorktreeInfo> =>
     send('POST', '/api/worktrees', { name, ...(base !== undefined && base !== '' ? { base } : {}) }),
   removeWorktree: (name: string, opts: { force?: boolean; deleteBranch?: boolean }): Promise<{ removed: string }> =>

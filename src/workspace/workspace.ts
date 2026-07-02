@@ -125,6 +125,13 @@ export interface Workspace {
    */
   fileHash(relPath: string): Promise<string | null>;
   /**
+   * UTF-8 content of a workspace file, or `null` when it is absent, unreadable, or escapes the
+   * workspace root (fail-closed, mirroring {@link fileHash} — a pinned path is untrusted). Used by
+   * the manual-edit refreeze (ADR 0016) to re-pin authored verification files from their current
+   * on-disk content before re-freezing the contract.
+   */
+  readFile(relPath: string): Promise<string | null>;
+  /**
    * True when the tree has no implementation source yet — only docs + the compiler's authored files.
    * The from-scratch signal the prepare phase uses (Fix B1) to skip the soundness pre-flight: on an
    * empty tree the deterministic bar is red *by definition* (the agent must scaffold first), so a red

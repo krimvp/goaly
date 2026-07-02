@@ -1,5 +1,7 @@
 import type { RunLogEntry } from '../../runlog/runlog';
 import type { StreamTranscriptEntry } from '../../runlog/stream-transcript';
+import type { CompiledContract } from '../../domain/contract';
+import type { SealEditPatch } from '../../domain/verdict';
 
 /**
  * Pure presentation helpers for the browser (no DOM, no node imports — unit-testable in vitest).
@@ -116,4 +118,47 @@ export function statusBadgeClass(status: string): string {
   if (s === 'done') return 'badge done';
   if (s === 'failed' || s === 'aborted' || s === 'corrupt') return `badge ${s}`;
   return 'badge incomplete';
+}
+
+/** The review station's editable contract FIELDS, as the modal's form state (ADR 0016). */
+export type SealFieldEdits = {
+  /** '' means "cleared" (→ `setup: null` in the patch). */
+  setup: string;
+  rubric: string;
+  /** One entry per rung index; judge rungs keep '' and are never patched. */
+  commands: string[];
+};
+
+/** The modal's initial form state, prefilled from the parked contract. */
+export function sealFieldsOf(contract: CompiledContract): SealFieldEdits {
+  return {
+    setup: contract.setup ?? '',
+    rubric: contract.rubric,
+    commands: contract.rungs.map((r) => (r.kind === 'deterministic' ? r.command : '')),
+  };
+}
+
+/**
+ * Diff the edited form state against the parked contract into a minimal {@link SealEditPatch} —
+ * or undefined when nothing changed (the refreeze then just re-pins the files from disk). Pure,
+ * so it is testable without preact; judge-rung entries are ignored by construction.
+ */
+export function buildSealPatch(
+  contract: CompiledContract,
+  edited: SealFieldEdits,
+): SealEditPatch | undefined {
+  const patch: SealEditPatch = {};
+  const trimmedSetup = edited.setup.trim();
+  if (trimmedSetup !== (contract.setup ?? '')) {
+    patch.setup = trimmedSetup === '' ? null : trimmedSetup;
+  }
+  if (edited.rubric !== contract.rubric) patch.rubric = edited.rubric;
+  const commands: Array<{ index: number; command: string }> = [];
+  contract.rungs.forEach((rung, index) => {
+    if (rung.kind !== 'deterministic') return;
+    const command = (edited.commands[index] ?? '').trim();
+    if (command !== '' && command !== rung.command) commands.push({ index, command });
+  });
+  if (commands.length > 0) patch.commands = commands;
+  return Object.keys(patch).length > 0 ? patch : undefined;
 }

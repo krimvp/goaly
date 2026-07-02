@@ -24,6 +24,7 @@ import {
   type FakeRunScript,
 } from '../testing/fakes';
 import type { Logger, LogRecord } from '../log/logger';
+import { sha256Hex } from '../util/hash';
 
 const runId = RunId.parse('run-1');
 const contract = makeFakeContract({ goal: 'make the thing work' });
@@ -496,6 +497,148 @@ function crashAfter(inner: InMemoryRunLog, failOnAppend: number): RunLog {
     read: () => inner.read(),
   };
 }
+
+describe('drive() — manual-edit refreeze at the Seal (ADR 0016)', () => {
+  const genContract = (content: string) =>
+    makeFakeContract({
+      goal: 'make the thing work',
+      generatedFiles: [{ path: 'test/gen.test.mjs', sha256: sha256Hex(content) }],
+    });
+
+  it("edited re-pins the on-disk edit, re-freezes, rebuilds the ladder, and the run proceeds", async () => {
+    // Compile pins v1; the operator edits the file to v2 on disk before answering `edited`.
+    const compiled = genContract('v1');
+    const workspace = new FakeWorkspace('0000000', 'diff');
+    workspace.setFileContent('test/gen.test.mjs', 'v2');
+    const gate = new FakeSealGate([{ kind: 'edited' }, { kind: 'approve' }]);
+    const ladderContracts: string[] = [];
+    const runlog = new InMemoryRunLog();
+    const deps: DriverDeps = {
+      compiler: new FakeCompiler(compiled),
+      seal: gate,
+      harness: new FakeHarness([{ postHash: '0000001' }], workspace),
+      makeLadder: (c) => {
+        ladderContracts.push(c.contractHash);
+        return new FakeVerifier([passVerdict()]);
+      },
+      approver: new FakeApprover([approve()]),
+      workspace,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(),
+      runlog,
+    };
+
+    const outcome = await drive(deps, makeConfig({ goal: 'make the thing work' }), runId);
+    expect(outcome.status).toBe('DONE');
+
+    // The gate saw BOTH contracts: the compiled one, then the refrozen one with the v2 pin.
+    expect(gate.seen).toHaveLength(2);
+    expect(gate.seen[1]?.generatedFiles[0]?.sha256).toBe(sha256Hex('v2'));
+    expect(gate.seen[1]?.contractHash).not.toBe(compiled.contractHash);
+    expect(outcome.contractHash).toBe(gate.seen[1]?.contractHash);
+
+    // Both freezes are write-ahead logged (auditable), and the refreeze rebuilt the ladder for the
+    // NEW contract — otherwise the cached guard would still pin the stale v1 hash.
+    const compiledEvents = runlog.entries.filter((e) => e.event.tag === 'CONTRACT_COMPILED');
+    expect(compiledEvents).toHaveLength(2);
+    expect(ladderContracts[ladderContracts.length - 1]).toBe(gate.seen[1]?.contractHash);
+    // And the SEAL_DECIDED entries record the edited → approve history.
+    const decisions = runlog.entries
+      .filter((e) => e.event.tag === 'SEAL_DECIDED')
+      .map((e) => (e.event.tag === 'SEAL_DECIDED' ? e.event.decision.kind : ''));
+    expect(decisions).toEqual(['edited', 'approve']);
+  });
+
+  it('the field patch rides the refreeze (setup cleared, command replaced)', async () => {
+    const compiled = makeFakeContract({ goal: 'g2', setup: 'npm ci' });
+    const workspace = new FakeWorkspace('0000000', 'diff');
+    const gate = new FakeSealGate([
+      { kind: 'edited', patch: { setup: null, commands: [{ index: 0, command: 'true # patched' }] } },
+      { kind: 'approve' },
+    ]);
+    const deps: DriverDeps = {
+      compiler: new FakeCompiler(compiled),
+      seal: gate,
+      harness: new FakeHarness([{ postHash: '0000001' }], workspace),
+      makeLadder: () => new FakeVerifier([passVerdict()]),
+      approver: new FakeApprover([approve()]),
+      workspace,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(),
+      runlog: new InMemoryRunLog(),
+    };
+    const outcome = await drive(deps, makeConfig({ goal: 'g2' }), runId);
+    expect(outcome.status).toBe('DONE');
+    expect(gate.seen[1]?.setup).toBeUndefined();
+    expect(gate.seen[1]?.rungs[0]).toMatchObject({ command: 'true # patched' });
+  });
+
+  it('a refreeze that cannot re-read a pinned file fails closed through COMPILE_FAILED', async () => {
+    const compiled = genContract('v1'); // pinned file NEVER written to the fake workspace
+    const workspace = new FakeWorkspace('0000000', 'diff');
+    const gate = new FakeSealGate([{ kind: 'edited' }]);
+    const runlog = new InMemoryRunLog();
+    const deps: DriverDeps = {
+      // The recovery recompile (compile-retry round 1) throws too, exhausting maxCompileRetries 0.
+      compiler: new FakeCompiler(compiled),
+      seal: gate,
+      harness: new FakeHarness([], workspace),
+      makeLadder: () => new FakeVerifier([]),
+      approver: new FakeApprover([]),
+      workspace,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(),
+      runlog,
+    };
+    const outcome = await drive(deps, makeConfig({ goal: 'make the thing work', maxCompileRetries: 0 }), runId);
+    expect(outcome.status).toBe('FAILED');
+    expect(outcome.reason).toContain('refreeze failed');
+    expect(outcome.reason).toContain('test/gen.test.mjs');
+  });
+
+  it('resume from a log cut right after SEAL_DECIDED{edited} re-performs the refreeze', async () => {
+    const compiled = genContract('v1');
+    const inner = new InMemoryRunLog();
+    const ws1 = new FakeWorkspace('0000000', 'diff');
+    ws1.setFileContent('test/gen.test.mjs', 'v2');
+    // Crash on the 3rd append: CONTRACT_COMPILED + SEAL_DECIDED{edited} persist; the refrozen
+    // CONTRACT_COMPILED does not — write-ahead means the refreeze effect re-performs on resume.
+    const deps1: DriverDeps = {
+      compiler: new FakeCompiler(compiled),
+      seal: new FakeSealGate([{ kind: 'edited' }]),
+      harness: new FakeHarness([], ws1),
+      makeLadder: () => new FakeVerifier([]),
+      approver: new FakeApprover([]),
+      workspace: ws1,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(),
+      runlog: crashAfter(inner, 3),
+    };
+    const crashed = await drive(deps1, makeConfig({ goal: 'make the thing work' }), runId);
+    expect(crashed.status).toBe('ABORTED'); // fail-closed persist crash
+    expect((await inner.read())?.entries).toHaveLength(2);
+
+    // Resume: the COMPILER must not run (the refreeze is not an LLM re-author); the refreeze
+    // re-reads the edited file and the fresh gate approves the refrozen contract.
+    const ws2 = new FakeWorkspace('0000000', 'diff');
+    ws2.setFileContent('test/gen.test.mjs', 'v2');
+    const gate2 = new FakeSealGate([{ kind: 'approve' }]);
+    const deps2: DriverDeps = {
+      compiler: new FakeCompiler(new Error('compile must not run on a refreeze resume')),
+      seal: gate2,
+      harness: new FakeHarness([{ postHash: '0000001' }], ws2),
+      makeLadder: () => new FakeVerifier([passVerdict()]),
+      approver: new FakeApprover([approve()]),
+      workspace: ws2,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(),
+      runlog: inner,
+    };
+    const outcome = await drive(deps2, makeConfig({ goal: 'make the thing work' }), runId, { resume: true });
+    expect(outcome.status).toBe('DONE');
+    expect(gate2.seen[0]?.generatedFiles[0]?.sha256).toBe(sha256Hex('v2'));
+  });
+});
 
 describe('drive() — resume', () => {
   it('reconstructs from a mid-loop log (after a persist crash) and never repeats a completed iteration', async () => {

@@ -123,6 +123,19 @@ function stepAwaitPlanSeal(
         [{ tag: 'COMPILE_PLAN', config, feedback: event.decision.feedback }],
       ];
     }
+    case 'edited':
+      // Manual editing applies to CONTRACT artifacts only (ADR 0016); no plan gate ever emits
+      // `edited` (the shared SealDecision schema merely allows it structurally). Defense in
+      // depth: a hand-crafted event fails closed to a typed ABORTED, never a silent approve.
+      return [
+        {
+          tag: 'ABORTED',
+          reason: 'manual plan editing is not supported at the plan Seal — use revise',
+          iterations: 0,
+          contractHash: undefined,
+        },
+        [],
+      ];
   }
 }
 
@@ -314,6 +327,32 @@ function stepAwaitSeal(
           ...(phase !== undefined ? { phase } : {}),
         },
         [{ tag: 'COMPILE_VERIFIER', config, feedback: event.decision.feedback }],
+      ];
+    }
+    case 'edited': {
+      // Manual-edit refreeze (ADR 0016): the operator changed the authored files on disk and/or
+      // sent a field patch. NOT counted against maxSealRevisions — that cap protects LLM spend,
+      // and a refreeze costs zero tokens while each round requires an explicit human action at an
+      // already-unbounded human gate, so it is unbounded by design. compileRound resets like
+      // revise's (issue #51): a fresh human-driven round gets a fresh per-attempt error budget.
+      // The reducer stays pure: it only NAMES the effect over data it already holds (the parked
+      // contract + the event's patch); the Driver re-reads/re-hashes/re-freezes and a fresh
+      // CONTRACT_COMPILED returns here for re-presentation.
+      return [
+        {
+          tag: 'COMPILING',
+          config,
+          reviseRound,
+          compileRound: 0,
+          ...(phase !== undefined ? { phase } : {}),
+        },
+        [
+          {
+            tag: 'REFREEZE_CONTRACT',
+            contract,
+            ...(event.decision.patch !== undefined ? { patch: event.decision.patch } : {}),
+          },
+        ],
       ];
     }
   }

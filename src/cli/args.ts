@@ -400,12 +400,19 @@ goaly-code harness / OpenAI-compatible endpoint (--harness goaly-code, --llm-pro
                         contract eats turns. ONLY the goaly-code harness reads this — the codec
                         harnesses (claude / codex / droid / pi) manage their own turn budgets.
 
-Seal (contract approval):
+Seal (contract approval — the review point before any execution):
   default                     print the frozen contract and prompt for one of:
                                 a / approve   accept it and start the loop
                                 f / feedback  type a note; the contract is re-authored & re-shown
+                                e / edited    you changed the authored verification files in your
+                                              OWN editor — goaly re-reads them from disk, re-pins
+                                              their hashes, RE-FREEZES the contract (new hash,
+                                              logged) and re-shows it. No LLM call; never counts
+                                              against --max-seal-revisions. Without this, a manual
+                                              edit after compile would trip the integrity guard.
                                 r / reject    abort the run (the loop never starts)
-  --max-seal-revisions N    cap the free-text revise rounds (default 10; 0 disables revision)
+  --max-seal-revisions N    cap the free-text revise rounds (default 10; 0 disables revision —
+                            [e]dited stays available even then)
   --autonomous                skip the prompt: auto-accept (still frozen; logged loudly)
   -d, --defaults              hands-off sugar for --autonomous. The other easy-mode defaults
                               (--generate, the claude LLM provider, the claude harness) already

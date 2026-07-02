@@ -13,7 +13,7 @@ describe('UiGates — the browser Seal / plan-Seal gate (ADR 0015)', () => {
       contract.contractHash,
     );
 
-    expect(gates.resolve(pending!.gateId, { kind: 'approve' })).toBe(true);
+    expect(gates.resolve(pending!.gateId, { kind: 'approve' })).toBe('ok');
     await expect(decision).resolves.toEqual({ kind: 'approve' });
     expect(gates.pending()).toBeUndefined();
   });
@@ -22,14 +22,14 @@ describe('UiGates — the browser Seal / plan-Seal gate (ADR 0015)', () => {
     const gates = new UiGates();
     const first = gates.approveContract(makeFakeContract());
     const firstId = gates.pending()!.gateId;
-    expect(gates.resolve('not-the-id', { kind: 'approve' })).toBe(false);
-    expect(gates.resolve(firstId, { kind: 'revise', feedback: 'tighten the bar' })).toBe(true);
+    expect(gates.resolve('not-the-id', { kind: 'approve' })).toBe('stale');
+    expect(gates.resolve(firstId, { kind: 'revise', feedback: 'tighten the bar' })).toBe('ok');
     await expect(first).resolves.toEqual({ kind: 'revise', feedback: 'tighten the bar' });
 
     // The next (re-authored) contract parks under a FRESH id; the old id cannot answer it.
     const second = gates.approveContract(makeFakeContract({ goal: 'v2' }));
     expect(gates.pending()!.gateId).not.toBe(firstId);
-    expect(gates.resolve(firstId, { kind: 'approve' })).toBe(false);
+    expect(gates.resolve(firstId, { kind: 'approve' })).toBe('stale');
     gates.resolve(gates.pending()!.gateId, { kind: 'reject', reason: 'no' });
     await expect(second).resolves.toMatchObject({ kind: 'reject' });
   });
@@ -41,6 +41,21 @@ describe('UiGates — the browser Seal / plan-Seal gate (ADR 0015)', () => {
     await expect(parked).resolves.toMatchObject({ kind: 'reject', reason: expect.stringContaining('stopped') });
     // A gate parked AFTER stop resolves immediately to reject — never an unanswerable hang.
     await expect(gates.approveContract(makeFakeContract())).resolves.toMatchObject({ kind: 'reject' });
+  });
+
+  it("resolves 'edited' on a seal gate; refuses it on a plan gate as 'invalid' (ADR 0016)", async () => {
+    const gates = new UiGates();
+    const sealDecision = gates.approveContract(makeFakeContract());
+    const sealId = gates.pending()!.gateId;
+    expect(gates.resolve(sealId, { kind: 'edited' })).toBe('ok');
+    await expect(sealDecision).resolves.toEqual({ kind: 'edited' });
+
+    const planDecision = gates.approvePlan({ phases: [{ goal: 'p1' }], planHash: 'p'.repeat(64) } as never);
+    const planId = gates.pending()!.gateId;
+    expect(gates.resolve(planId, { kind: 'edited' })).toBe('invalid');
+    expect(gates.pending()?.gateId).toBe(planId); // still parked — the refusal resolved nothing
+    gates.resolve(planId, { kind: 'approve' });
+    await expect(planDecision).resolves.toEqual({ kind: 'approve' });
   });
 
   it('notifies gate listeners on park and on resolve (the SSE push channel)', async () => {

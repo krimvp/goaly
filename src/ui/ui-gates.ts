@@ -37,16 +37,20 @@ export class UiGates implements SealGate, PlanGate {
   }
 
   /**
-   * Answer the parked gate. Returns false when there is no parked gate or the id is stale —
-   * the HTTP layer maps that to 409 so a double-submit can never answer a LATER gate.
+   * Answer the parked gate.
+   *  - `'stale'`: no parked gate, or the id names a superseded one — the HTTP layer maps it to
+   *    409 so a double-submit can never answer a LATER gate.
+   *  - `'invalid'`: an `edited` decision against a parked PLAN gate — manual editing applies to
+   *    contract artifacts only (ADR 0016); plans change through revise. Mapped to 400.
    */
-  resolve(gateId: string, decision: SealDecision): boolean {
+  resolve(gateId: string, decision: SealDecision): 'ok' | 'stale' | 'invalid' {
     const pending = this.#pending;
-    if (pending === undefined || pending.gate.gateId !== gateId) return false;
+    if (pending === undefined || pending.gate.gateId !== gateId) return 'stale';
+    if (decision.kind === 'edited' && pending.gate.kind === 'plan') return 'invalid';
     this.#pending = undefined;
     pending.resolve(decision);
     this.#notify({ resolved: gateId });
-    return true;
+    return 'ok';
   }
 
   /** Reject any parked gate (the stop path) — a parked run must unwind, not hang forever. */

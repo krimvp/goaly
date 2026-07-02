@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { DiffHash, SessionId, ContractHash, RunId } from './ids';
 import { CompiledContract } from './contract';
 import { PhasePlan } from './plan';
-import { Verdict, ApprovalVerdict, SealDecision } from './verdict';
+import { Verdict, ApprovalVerdict, SealDecision, type SealEditPatch } from './verdict';
 import { RunConfig, StuckPolicy } from './config';
 import { TokenUsage, TokenBreakdown, UsageReport } from './usage';
 
@@ -262,6 +262,15 @@ export type Command =
   | { tag: 'REQUEST_PLAN_SEAL'; plan: PhasePlan }
   | { tag: 'CHECKPOINT_AND_ADVANCE' }
   | { tag: 'COMPILE_VERIFIER'; config: RunConfig; feedback?: string }
+  /**
+   * Manual-edit refreeze (ADR 0016): the operator answered the Seal with `edited`. The Driver
+   * re-reads the contract's authored files from the workspace, re-pins their content hashes,
+   * applies the operator's field `patch`, and re-freezes a NEW contract — returned as a normal
+   * `CONTRACT_COMPILED` so it is write-ahead logged and re-presented at Seal. The reducer only
+   * NAMES the effect (the parked contract + the patch are data it already holds); all IO/hashing
+   * is Driver-side, exactly like `COMPILE_VERIFIER`. No LLM call is involved.
+   */
+  | { tag: 'REFREEZE_CONTRACT'; contract: CompiledContract; patch?: SealEditPatch }
   | { tag: 'REQUEST_SEAL'; contract: CompiledContract }
   | {
       tag: 'PREPARE_WORKSPACE';

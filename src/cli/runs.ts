@@ -212,6 +212,8 @@ function fmtSealDecision(d: SealDecision): string {
       return `reject (${d.reason})`;
     case 'revise':
       return 'revise';
+    case 'edited':
+      return 'edited (manual refreeze)';
   }
 }
 

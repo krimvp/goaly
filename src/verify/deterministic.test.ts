@@ -29,7 +29,10 @@ function spyWorkspace(result: CommandResult): {
       calls.push(opts !== undefined ? { command, opts } : { command });
       return result;
     },
-    async fileHash() {
+    async readFile() {
+        return null;
+      },
+      async fileHash() {
       return null;
     },
     async isEmptyOfSource() {

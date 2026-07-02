@@ -63,14 +63,18 @@ export class AutoSealGate implements SealGate {
 }
 
 /**
- * Seal in default mode: print the full contract and let a human approve, reject, or
- * revise it before the loop starts.
+ * Seal in default mode: print the full contract and let a human approve, reject, revise, or
+ * hand-edit it before the loop starts.
  *  - approve ('a'/'y'/'yes'): freeze stands, the loop starts.
  *  - revise  ('f'/'feedback'): collect a free-text note; the contract is re-authored with it
  *    and re-presented (bounded by maxSealRevisions in the reducer). Empty feedback can't
  *    steer a recompile, so it fails closed to reject.
+ *  - edited  ('e'/'edited'): the operator changed the authored verification files in their OWN
+ *    editor (ADR 0016) — goaly re-reads them from disk, re-freezes the contract (new hash), and
+ *    re-presents it here. No LLM call; never consumes the revise cap, so it is offered even when
+ *    revision rounds are capped at 0.
  *  - anything else: reject (abort).
- * When `allowRevise` is false (maxSealRevisions === 0) the prompt is the plain binary [y/N].
+ * When `allowRevise` is false (maxSealRevisions === 0) the prompt drops only the feedback path.
  */
 export class HumanSealGate implements SealGate {
   readonly #ask: (question: string) => Promise<string>;
@@ -91,10 +95,16 @@ export class HumanSealGate implements SealGate {
   async approveContract(contract: CompiledContract): Promise<SealDecision> {
     this.#out(renderContract(contract));
     if (!this.#allowRevise) {
-      return approveOrReject(await this.#ask('Approve this success contract? [y/N] '));
+      const answer = await this.#ask(
+        'Approve this success contract? [y]es / [e]dited (I changed the authored files — re-freeze) / [N]o ',
+      );
+      const normalized = answer.trim().toLowerCase();
+      if (normalized === 'e' || normalized === 'edited') return { kind: 'edited' };
+      return approveOrReject(answer);
     }
     const answer = await this.#ask(
-      'Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject: ',
+      'Approve, revise with feedback, re-freeze your manual edits, or reject? ' +
+        '[a]pprove / [f]eedback / [e]dited / [r]eject: ',
     );
     const normalized = answer.trim().toLowerCase();
     if (normalized === 'f' || normalized === 'feedback' || normalized === 'revise') {
@@ -103,6 +113,9 @@ export class HumanSealGate implements SealGate {
         return { kind: 'reject', reason: HUMAN_REJECT_REASON };
       }
       return { kind: 'revise', feedback };
+    }
+    if (normalized === 'e' || normalized === 'edited') {
+      return { kind: 'edited' };
     }
     return approveOrReject(answer);
   }

@@ -110,9 +110,17 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   the judge, turning "it actually runs" from a diff-reading judge's guess into an ungameable key, and
   is frozen into the contract like any rung. (Plain `--verify-cmd "npm test && node smoke.mjs"` does
   the same; `--smoke` just gives the runtime check its own labeled rung with its own failure feedback.)
-- **Seal is the human's say over the bar.** Before the loop you can approve the frozen contract,
-  **reject** it (abort), or give **free-text feedback to revise** it — goaly re-authors the contract
-  and re-presents it, bounded by `--max-seal-revisions` (default 10; `0` disables revision).
+- **Seal is the human's say over the bar — a full review station.** Before the loop you can
+  **approve** the frozen contract, **reject** it (abort), give **free-text feedback to revise** it
+  (goaly re-authors and re-presents, bounded by `--max-seal-revisions`, default 10; `0` disables
+  revision) — or **edit the artifacts yourself**. Answer **`e` (edited)** after changing the
+  authored verification files in your own editor: goaly re-reads them from disk, re-pins their
+  content hashes, **re-freezes** the contract (a new, logged `contractHash`) and re-presents it —
+  without this, a manual edit would trip the anti-tamper guard on iteration 1. A refreeze costs no
+  LLM tokens and never consumes the revise cap; iterate until you're happy, and only the contract
+  you finally approve enters the loop ([ADR 0016](docs/adr/0016-seal-review-station.md)). The
+  [web UI](#web-ui-goaly-ui) goes further: it renders the authored files' **contents**, lets you
+  edit them (and the setup/verify commands and rubric) **in the browser**, and re-freezes on click.
   `--autonomous` skips this pause entirely, never the freeze.
 - **Required-tools preflight, before anything else.** Every contract carries a frozen **`requiredTools`**
   manifest — the external programs the verification assumes already exist on PATH (`cargo`, `python`,
@@ -1164,6 +1172,18 @@ goaly ui --port 5000 --workspace ./myrepo
   `SealGate` *implementation*, never a bypass: the contract still freezes and the decision still
   lands in the log. Each parked gate carries a one-time `gateId`, so a double-submit can never
   answer a later gate.
+- **The Seal modal is a review station ([ADR 0016](docs/adr/0016-seal-review-station.md)).**
+  Every artifact the run will use is reviewable *by content* before you approve: each authored
+  verification file renders with its **full contents** and an **in-browser editor**, and the
+  contract's operator-editable fields (setup command, deterministic verify commands, rubric) are
+  edit-in-place. **"Re-freeze & review"** saves your edits through the same guarded, git-excluding
+  writer the compiler uses (writes are allowlisted to exactly the parked contract's authored
+  files), re-pins the hashes, and re-presents a freshly frozen contract — iterate as many times as
+  you like (a refreeze costs no LLM tokens and never consumes the revise cap). Edits made in your
+  **own editor** are picked up too: a *"changed on disk since frozen"* badge appears, and
+  **"refresh from disk"** re-freezes from the current tree. Approving with drifted files is
+  refused (409, *"re-freeze first"*) so a stale approval never wastes an agent iteration. Only the
+  contract you finally approve starts executing.
 - **Stop & resume from the browser.** Stop is the same cooperative between-steps interrupt as
   Ctrl-C (the ABORTED lands in the feed; nothing is lost); the resume panel continues any non-live
   run — terminal-started ones included — with an optional `--note` and raised **operational** caps

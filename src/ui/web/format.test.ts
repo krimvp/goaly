@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { feedLine, streamLine, iterationAt, statusBadgeClass, truncate } from './format';
+import { feedLine, streamLine, iterationAt, statusBadgeClass, truncate, sealFieldsOf, buildSealPatch } from './format';
 import { RunId, ContractHash, DiffHash, SessionId } from '../../domain/ids';
 import type { RunLogEntry } from '../../runlog/runlog';
+import { makeFakeContract } from '../../testing/fakes';
 
 function entry(event: RunLogEntry['event'], seq = 1): RunLogEntry {
   return {
@@ -77,5 +78,45 @@ describe('helpers', () => {
   it('truncate flattens whitespace and caps length', () => {
     expect(truncate('a  b\n c', 100)).toBe('a b c');
     expect(truncate('x'.repeat(20), 10)).toHaveLength(10);
+  });
+});
+
+describe('buildSealPatch — minimal field patch for the review station (ADR 0016)', () => {
+  const contract = makeFakeContract({
+    setup: 'npm ci',
+    rubric: 'the rubric',
+    rungs: [
+      { kind: 'deterministic', command: 'npm test' },
+      { kind: 'judge', rubric: 'judge it', quorum: 1, confidenceFloor: 0.5 },
+      { kind: 'deterministic', command: 'node smoke.mjs' },
+    ],
+  });
+
+  it('no edits → undefined (a pure files-from-disk refreeze)', () => {
+    expect(buildSealPatch(contract, sealFieldsOf(contract))).toBeUndefined();
+  });
+
+  it('maps each changed field; clearing setup becomes null', () => {
+    const fields = sealFieldsOf(contract);
+    expect(buildSealPatch(contract, { ...fields, setup: '' })).toEqual({ setup: null });
+    expect(buildSealPatch(contract, { ...fields, setup: ' make deps ' })).toEqual({ setup: 'make deps' });
+    expect(buildSealPatch(contract, { ...fields, rubric: 'stricter' })).toEqual({ rubric: 'stricter' });
+  });
+
+  it('emits command entries only for CHANGED deterministic rungs, indexed past judge rungs', () => {
+    const fields = sealFieldsOf(contract);
+    const commands = [...fields.commands];
+    commands[2] = 'node smoke.mjs --strict';
+    expect(buildSealPatch(contract, { ...fields, commands })).toEqual({
+      commands: [{ index: 2, command: 'node smoke.mjs --strict' }],
+    });
+    // Judge rungs render as '' in the form and are never patched.
+    expect(fields.commands[1]).toBe('');
+  });
+
+  it('a contract with no setup + untouched empty field stays undefined', () => {
+    const bare = makeFakeContract();
+    expect(bare.setup).toBeUndefined();
+    expect(buildSealPatch(bare, sealFieldsOf(bare))).toBeUndefined();
   });
 });

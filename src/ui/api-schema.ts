@@ -5,6 +5,7 @@ import type { RunLogEntry, RunLogHeader } from '../runlog/runlog';
 import type { StreamTranscriptEntry } from '../runlog/stream-transcript';
 import type { CompiledContract } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
+import { SealEditPatch } from '../domain/verdict';
 
 /**
  * The `goaly ui` HTTP wire shapes. Requests parse with Zod fail-closed (invariant #6); responses
@@ -108,13 +109,47 @@ export const StartRunRequest = z
   });
 export type StartRunRequest = z.infer<typeof StartRunRequest>;
 
-/** `POST /api/runs/:id/gate/:gateId` — answer a parked Seal / plan-Seal. */
+/**
+ * `POST /api/runs/:id/gate/:gateId` — answer a parked Seal / plan-Seal. `edited` (ADR 0016)
+ * triggers the manual-edit refreeze: authored files are re-read from disk (the operator's edits —
+ * saved from the review station or made in their own editor), the optional field `patch` is
+ * applied, and a NEW frozen contract is re-presented under a fresh gateId. Seal gates only —
+ * a plan gate refuses it (400).
+ */
 export const GateDecision = z.discriminatedUnion('decision', [
   z.object({ decision: z.literal('approve') }).strict(),
   z.object({ decision: z.literal('reject') }).strict(),
   z.object({ decision: z.literal('revise'), feedback: z.string().min(1) }).strict(),
+  z.object({ decision: z.literal('edited'), patch: SealEditPatch.optional() }).strict(),
 ]);
 export type GateDecision = z.infer<typeof GateDecision>;
+
+/**
+ * `GET /api/runs/:id/gate/:gateId/files` — the review station's artifact contents: one entry per
+ * generated file the PARKED contract pins. `dirty` compares the full-content on-disk hash to the
+ * frozen pin (truncation never lies about dirtiness); a missing/unreadable/out-of-root file is
+ * `sha256OnDisk: null` (rendered fail-closed as missing).
+ */
+export type GateFileEntry = {
+  path: string;
+  frozenSha256: string;
+  sha256OnDisk: string | null;
+  content: string | null;
+  truncated: boolean;
+  dirty: boolean;
+};
+export type GateFilesResponse = { gateId: string; files: GateFileEntry[] };
+
+/**
+ * `PUT /api/runs/:id/gate/:gateId/files` — save one in-UI file edit. The path must be strictly
+ * one of the parked contract's `generatedFiles` paths (allowlisted server-side); the write goes
+ * through the same guarded, git-excluding writer the compiler uses. Writing never refreezes by
+ * itself — the client answers the gate with `edited` when review should re-run.
+ */
+export const GateFileWrite = z
+  .object({ path: z.string().min(1), content: z.string().max(500_000) })
+  .strict();
+export type GateFileWrite = z.infer<typeof GateFileWrite>;
 
 /**
  * `POST /api/runs/:id/resume` — continue a non-live run, optionally extending the OPERATIONAL

@@ -26,7 +26,7 @@ import type { PlanGate } from '../plan/plan-gate';
 import type { SealGate } from '../compile/seal';
 import { GitWorkspace, realExec } from '../workspace/git-workspace';
 import { GitWorktreeHost } from '../workspace/git-worktree-host';
-import { excludeFromGit } from '../workspace/git-exclude';
+import { writeVerificationFile } from '../workspace/workspace-files';
 import { FileRunLog } from '../runlog/file-runlog';
 import { StreamTranscriptSink, STREAM_FILE } from '../runlog/stream-transcript';
 import { AgentCliHarness } from '../harness/agent-cli-harness';
@@ -788,46 +788,3 @@ export class NoopHarness implements HarnessAdapter {
   }
 }
 
-/**
- * Write a compiler-authored verification file and seamlessly keep it out of the user's git (issue
- * #52): after the path-guarded write, register the exact path in `.git/info/exclude` so it never
- * shows up in `git status` and is never accidentally committed — no `.gitignore` edit, no tracked
- * file touched, nothing for the user to review or undo. The exclude step is best-effort and
- * fail-closed: a failure degrades to "not excluded" (logged loudly), never a changed run outcome.
- * One loud log line per file tells the user what was authored and how to keep it (`git add -f`).
- */
-async function writeVerificationFile(
-  root: string,
-  rel: string,
-  content: string,
-  logger: Logger,
-): Promise<void> {
-  await writeWorkspaceFile(root, rel, content);
-  const result = await excludeFromGit(root, rel);
-  if (result.ok) {
-    logger.info('authored verification file', {
-      path: rel,
-      excludedLocally: result.excluded,
-      keep: 'git add -f to keep it as durable verification',
-    });
-  } else {
-    logger.warn('authored verification file (could not exclude from git — it may show in git status)', {
-      path: rel,
-      reason: result.reason,
-    });
-  }
-}
-
-/**
- * Write an agent-authored verification file, refusing any path that escapes the workspace
- * root (the compile phase output is untrusted — this is a path-traversal boundary).
- */
-async function writeWorkspaceFile(root: string, rel: string, content: string): Promise<void> {
-  const rootResolved = path.resolve(root);
-  const resolved = path.resolve(rootResolved, rel);
-  if (resolved !== rootResolved && !resolved.startsWith(rootResolved + path.sep)) {
-    throw new Error(`refusing to write outside the workspace: ${rel}`);
-  }
-  await mkdir(path.dirname(resolved), { recursive: true });
-  await writeFile(resolved, content, 'utf8');
-}

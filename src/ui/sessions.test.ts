@@ -13,6 +13,7 @@ function session(
   return {
     runId: asRunId(runId),
     root,
+    rootPath: '/ws',
     startedAt: 1,
     gates: new UiGates(),
     stop: () => {},

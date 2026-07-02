@@ -9,6 +9,7 @@ import {
   AfterParam,
   StartRunRequest,
   GateDecision,
+  GateFileWrite,
   ResumeRequest,
   WorktreeCreateRequest,
   BoolQueryParam,
@@ -74,6 +75,13 @@ export async function route(
     if (pathname === '/api/runs') return runsIndex(ctx);
     if (pathname === '/api/worktrees') return worktrees(ctx);
 
+    const gateFilesMatch = /^\/api\/runs\/([^/]+)\/gate\/([^/]+)\/files$/.exec(pathname);
+    if (gateFilesMatch !== null) {
+      const runId = parseRunId(gateFilesMatch[1]);
+      if (runId === null) return { kind: 'json', status: 400, body: { error: 'invalid run id' } };
+      return gateFiles(ctx, runId, decodeURIComponent(gateFilesMatch[2] ?? ''));
+    }
+
     const runMatch = /^\/api\/runs\/([^/]+)(\/events|\/transcript|\/gate)?$/.exec(pathname);
     if (runMatch !== null) {
       const runId = parseRunId(runMatch[1]);
@@ -98,6 +106,16 @@ export async function route(
   if (method === 'DELETE') {
     const wtMatch = /^\/api\/worktrees\/([^/]+)$/.exec(pathname);
     if (wtMatch !== null) return removeWorktree(actions, decodeURIComponent(wtMatch[1] ?? ''), query);
+    return { kind: 'json', status: 404, body: { error: 'unknown API route' } };
+  }
+
+  if (method === 'PUT') {
+    const filesMatch = /^\/api\/runs\/([^/]+)\/gate\/([^/]+)\/files$/.exec(pathname);
+    if (filesMatch !== null) {
+      const runId = parseRunId(filesMatch[1]);
+      if (runId === null) return { kind: 'json', status: 400, body: { error: 'invalid run id' } };
+      return putGateFile(actions, runId, decodeURIComponent(filesMatch[2] ?? ''), body);
+    }
     return { kind: 'json', status: 404, body: { error: 'unknown API route' } };
   }
 
@@ -252,12 +270,17 @@ function gateStatus(ctx: RouterCtx, runId: string): ApiResponse {
   return { kind: 'json', status: 200, body: gate };
 }
 
-function answerGate(actions: UiActions, runId: string, gateId: string, body: unknown): ApiResponse {
+async function answerGate(
+  actions: UiActions,
+  runId: string,
+  gateId: string,
+  body: unknown,
+): Promise<ApiResponse> {
   const parsed = GateDecision.safeParse(body);
   if (!parsed.success) {
     return { kind: 'json', status: 400, body: { error: firstIssue(parsed.error) } };
   }
-  const result = actions.resolveGate(runId, gateId, parsed.data);
+  const result = await actions.resolveGate(runId, gateId, parsed.data);
   if (result === 'no-session') {
     return { kind: 'json', status: 404, body: { error: `run ${runId} is not a live UI-owned run` } };
   }
@@ -265,7 +288,70 @@ function answerGate(actions: UiActions, runId: string, gateId: string, body: unk
     // A double-submit (or a decision for a superseded gate) must never answer a LATER gate.
     return { kind: 'json', status: 409, body: { error: 'that gate is no longer pending' } };
   }
+  if (result === 'invalid') {
+    return {
+      kind: 'json',
+      status: 400,
+      body: { error: 'manual editing applies to contract gates only — revise the plan instead' },
+    };
+  }
+  if (typeof result === 'object') {
+    // Approve-time drift refusal (ADR 0016): the gate stays parked; re-freeze first.
+    return {
+      kind: 'json',
+      status: 409,
+      body: {
+        error:
+          'authored files changed on disk since this contract was frozen — re-freeze (edited) first',
+        drifted: result.drifted,
+      },
+    };
+  }
   return { kind: 'json', status: 200, body: { resolved: gateId } };
+}
+
+/** Map the gate-file action misses onto the route's status ladder. */
+function gateFileMiss(runId: string, miss: 'no-session' | 'stale' | 'invalid'): ApiResponse {
+  if (miss === 'no-session') {
+    return { kind: 'json', status: 404, body: { error: `run ${runId} is not a live UI-owned run` } };
+  }
+  if (miss === 'stale') {
+    return { kind: 'json', status: 409, body: { error: 'that gate is no longer pending' } };
+  }
+  return { kind: 'json', status: 400, body: { error: 'artifact files apply to contract gates only' } };
+}
+
+async function gateFiles(ctx: RouterCtx, runId: string, gateId: string): Promise<ApiResponse> {
+  const actions = ctx.actions;
+  if (actions === undefined) {
+    return { kind: 'json', status: 503, body: { error: 'this server is read-only' } };
+  }
+  const result = await actions.gateFiles(runId, gateId);
+  if (typeof result === 'string') return gateFileMiss(runId, result);
+  return { kind: 'json', status: 200, body: result };
+}
+
+async function putGateFile(
+  actions: UiActions,
+  runId: string,
+  gateId: string,
+  body: unknown,
+): Promise<ApiResponse> {
+  const parsed = GateFileWrite.safeParse(body);
+  if (!parsed.success) {
+    return { kind: 'json', status: 400, body: { error: firstIssue(parsed.error) } };
+  }
+  const result = await actions.writeGateFile(runId, gateId, parsed.data);
+  if (result === 'bad-path') {
+    // Allowlist refusal: only the parked contract's authored files are writable here.
+    return {
+      kind: 'json',
+      status: 400,
+      body: { error: `not an authored file of the parked contract: ${parsed.data.path}` },
+    };
+  }
+  if (typeof result === 'string') return gateFileMiss(runId, result);
+  return { kind: 'json', status: 200, body: result };
 }
 
 async function createWorktree(actions: UiActions, body: unknown): Promise<ApiResponse> {

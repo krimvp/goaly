@@ -217,9 +217,37 @@ describe('route — interactive routes (ADR 0015), against a scripted UiActions'
         runId === 'run-live'
           ? { gateId: 'g1', kind: 'seal', contract: { rungs: [] } as never }
           : null,
-      resolveGate: (runId, gateId) =>
-        runId !== 'run-live' ? 'no-session' : gateId === 'g1' ? 'ok' : 'stale',
+      resolveGate: async (runId, gateId, decision) => {
+        if (runId !== 'run-live') return 'no-session';
+        if (decision.decision === 'edited' && gateId === 'plan-gate') return 'invalid';
+        if (decision.decision === 'approve' && gateId === 'drifted-gate') return { drifted: ['gen.mjs'] };
+        return gateId === 'g1' ? 'ok' : 'stale';
+      },
       onGateEvent: () => null,
+      gateFiles: async (runId, gateId) => {
+        if (runId !== 'run-live') return 'no-session';
+        if (gateId !== 'g1') return 'stale';
+        return {
+          gateId,
+          files: [
+            {
+              path: 'test/gen.test.mjs',
+              frozenSha256: 'a'.repeat(64),
+              sha256OnDisk: 'b'.repeat(64),
+              content: 'edited content',
+              truncated: false,
+              dirty: true,
+            },
+          ],
+        };
+      },
+      writeGateFile: async (runId, gateId, write) => {
+        if (runId !== 'run-live') return 'no-session';
+        if (gateId !== 'g1') return 'stale';
+        if (write.path !== 'test/gen.test.mjs') return 'bad-path';
+        calls.push(`write:${write.path}`);
+        return { written: write.path, sha256: 'c'.repeat(64) };
+      },
       createWorktree: async (name) => {
         calls.push(`wt-create:${name}`);
         return { name, path: `/w/${name}`, branch: `goaly/${name}`, head: 'x', dirty: false, runs: 0, prunable: false };
@@ -270,6 +298,65 @@ describe('route — interactive routes (ADR 0015), against a scripted UiActions'
     // revise REQUIRES non-empty feedback (the HumanSealGate rule, schema-enforced).
     expect(
       await route(ctx, 'POST', '/api/runs/run-live/gate/g1', q, { decision: 'revise' }),
+    ).toMatchObject({ status: 400 });
+  });
+
+  it('gate edited: valid patch accepted; plan gate 400; approve-with-drift 409 names the files (ADR 0016)', async () => {
+    const { actions } = makeActions();
+    const ctx = ctxWith(actions);
+    expect(
+      await route(ctx, 'POST', '/api/runs/run-live/gate/g1', q, {
+        decision: 'edited',
+        patch: { setup: null, commands: [{ index: 0, command: 'npm test' }] },
+      }),
+    ).toMatchObject({ status: 200 });
+    // An unknown patch field refuses fail-closed (.strict()).
+    expect(
+      await route(ctx, 'POST', '/api/runs/run-live/gate/g1', q, {
+        decision: 'edited',
+        patch: { goal: 'weaker goal' },
+      }),
+    ).toMatchObject({ status: 400 });
+    // Plan gates never accept manual edits.
+    expect(
+      await route(ctx, 'POST', '/api/runs/run-live/gate/plan-gate', q, { decision: 'edited' }),
+    ).toMatchObject({ status: 400 });
+    // Approve with drifted files: 409 + the file list; the gate stays parked.
+    const drift = await route(ctx, 'POST', '/api/runs/run-live/gate/drifted-gate', q, { decision: 'approve' });
+    expect(drift).toMatchObject({ status: 409, body: { drifted: ['gen.mjs'] } });
+  });
+
+  it('gate files: GET serves contents with dirty flags; PUT writes only allowlisted paths', async () => {
+    const { actions, calls } = makeActions();
+    const ctx = ctxWith(actions);
+    expect(await route(ctx, 'GET', '/api/runs/run-live/gate/g1/files', q)).toMatchObject({
+      status: 200,
+      body: { gateId: 'g1', files: [{ path: 'test/gen.test.mjs', dirty: true }] },
+    });
+    expect(await route(ctx, 'GET', '/api/runs/run-other/gate/g1/files', q)).toMatchObject({ status: 404 });
+    expect(await route(ctx, 'GET', '/api/runs/run-live/gate/old/files', q)).toMatchObject({ status: 409 });
+
+    expect(
+      await route(ctx, 'PUT', '/api/runs/run-live/gate/g1/files', q, {
+        path: 'test/gen.test.mjs',
+        content: 'new content',
+      }),
+    ).toMatchObject({ status: 200, body: { written: 'test/gen.test.mjs' } });
+    expect(calls).toContain('write:test/gen.test.mjs');
+    // A non-allowlisted path refuses (only the parked contract's authored files are writable).
+    expect(
+      await route(ctx, 'PUT', '/api/runs/run-live/gate/g1/files', q, {
+        path: 'src/index.ts',
+        content: 'hijack',
+      }),
+    ).toMatchObject({ status: 400, body: { error: expect.stringContaining('not an authored file') } });
+    // Unknown body fields refuse fail-closed.
+    expect(
+      await route(ctx, 'PUT', '/api/runs/run-live/gate/g1/files', q, {
+        path: 'test/gen.test.mjs',
+        content: 'x',
+        mode: '0777',
+      }),
     ).toMatchObject({ status: 400 });
   });
 

@@ -101,7 +101,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     let body: unknown;
-    if (method === 'POST') {
+    if (method === 'POST' || method === 'PUT') {
       try {
         body = await readJsonBody(req);
       } catch (e) {
