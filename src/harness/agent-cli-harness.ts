@@ -22,6 +22,7 @@ export class AgentCliHarness implements HarnessAdapter {
   readonly #codec: AgentCliCodec;
   readonly #exec: AgentExecFn;
   readonly #model: string | undefined;
+  readonly #forceStream: boolean;
 
   constructor(
     codec: AgentCliCodec,
@@ -43,9 +44,22 @@ export class AgentCliHarness implements HarnessAdapter {
       opts.exec ??
       defaultAgentExec(codec.command, timeoutMs, codec.promptOnStdin, opts.cwd, opts.idleTimeoutMs);
     this.#model = opts.model;
+    // The idle/heartbeat timeout re-arms on child stdout chunks, but a buffered CLI emits nothing
+    // until the turn ends — so with an idle timeout set BUT no stream tap, a long progressing turn is
+    // wrongly reaped. Force per-turn streaming whenever an idle timeout is configured so the heartbeat
+    // actually sees output (the sandbox path passes idleTimeoutMs here too, alongside its injected exec).
+    this.#forceStream = opts.idleTimeoutMs !== undefined;
   }
 
   run(prompt: string, sessionId?: SessionId, onEvent?: AgentEventSink): Promise<HarnessRunResult> {
-    return runCodecHarness(this.#codec, this.#exec, this.#model, prompt, sessionId, onEvent);
+    return runCodecHarness(
+      this.#codec,
+      this.#exec,
+      this.#model,
+      prompt,
+      sessionId,
+      onEvent,
+      this.#forceStream,
+    );
   }
 }

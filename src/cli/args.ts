@@ -687,6 +687,13 @@ function collectResumeExtension(flags: RawFlags, config: RunConfig): RunExtensio
 /** Fields that may be sourced inline / from a file / from stdin; a CLI source overrides config. */
 const MULTI_SOURCE_FIELDS = ['goal', 'intent', 'rubric'] as const;
 
+/**
+ * Stand-in goal used when `--resume` is given without one. On resume the RunConfig parseArgs builds is
+ * discarded — main.ts continues from the frozen run log's config — so the goal is never read; this only
+ * satisfies `CliInput`'s non-empty-goal schema. It must never surface (a real resume overwrites it).
+ */
+const RESUMED_GOAL_PLACEHOLDER = '(resumed run — goal is read from the frozen run log)';
+
 export async function parseArgs(
   argv: string[],
   readers: InputReaders = defaultReaders,
@@ -752,8 +759,22 @@ export async function parseArgs(
   // Goal/intent/rubric may come from inline flags, files, or stdin — resolve to strings first.
   const resolved = await resolveInputSources(flags, readers);
 
+  // On --resume the goal (and the whole contract) is read back from the FROZEN run log, not the CLI:
+  // parseArgs still builds a RunConfig here, but main.ts discards it for the log's effective config.
+  // So a goal is NOT required when resuming — synthesize a placeholder that will be overwritten. A
+  // genuinely missing goal on a FRESH run is a clean usage error, not the raw ZodError that
+  // `CliInput.parse({ goal: undefined })` would otherwise throw (which escapes as an ugly stack).
+  const resuming = str(flags, 'resume') !== undefined;
+  if (resolved.goal === undefined && !resuming) {
+    throw new UsageError(
+      'a goal is required — pass it positionally (goaly "<goal>"), or with --goal / --goal-file / ' +
+        '--goal - (stdin)',
+    );
+  }
+  const goalForParse = resolved.goal ?? RESUMED_GOAL_PLACEHOLDER;
+
   const cliInput = CliInput.parse({
-    goal: resolved.goal,
+    goal: goalForParse,
     ...(str(flags, 'verify-cmd') !== undefined ? { verifyCmd: str(flags, 'verify-cmd') } : {}),
     ...(flags['generate'] !== undefined ? { generate: true } : {}),
     ...(str(flags, 'smoke') !== undefined ? { smoke: str(flags, 'smoke') } : {}),

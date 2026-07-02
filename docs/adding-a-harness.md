@@ -266,9 +266,12 @@ whenever the caller passes `onEvent`, feeds it each stdout chunk, `end()`s it, a
 issue-#24 token estimator. Your only streaming-aware choice is in `harnessArgs`/`readonlyArgs`: when a
 CLI's stream mode is a *different flag* (claude & droid switch `--output-format json` →
 `stream-json` when streaming; codex's `--json` is already a stream), branch on the `stream` parameter.
-The **final-result parse is unchanged** — `fieldExtractor` still recovers the same `output` from the
-stream's closing line, so a non-streaming caller sees byte-identical behavior. See
-`src/llm/streaming.test.ts` and `src/agent-cli/codec.test.ts` for the test pattern.
+The `stream` parameter is `true` when a live `onEvent` tap is attached **or** when an idle/heartbeat
+timeout is configured (the harness forces per-turn streaming so the heartbeat re-arms on stdout, even
+with no tap) — either way your codec just emits its streaming output format. The **final-result parse
+is unchanged** — `fieldExtractor` still recovers the same `output` from the stream's closing line, so a
+non-streaming caller sees byte-identical behavior. See `src/llm/streaming.test.ts` and
+`src/agent-cli/codec.test.ts` for the test pattern.
 
 ### 4. Interactive-resume hint — `interactiveResume(id)` *(optional, Capability A)*
 

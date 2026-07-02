@@ -571,7 +571,8 @@ cat ./GOAL.md | goaly run --goal - --generate
 # Choose a harness, cap iterations, set a budget, resume a crashed run:
 goaly run --goal "..." --verify-cmd "pytest -q" --harness codex --max-iterations 8 \
              --budget-tokens 500000 --workspace ./myrepo
-goaly run --goal "..." --resume run-<id> --workspace ./myrepo
+# Resume needs only the run id — the goal (and the rest of the contract) is read from the frozen log:
+goaly run --resume run-<id> --workspace ./myrepo
 
 # Follow up on a FINISHED run: a new, re-verified goal that knows what just happened (it seeds the
 # new contract's authoring with a compaction of the prior run, and runs in the same workspace):
@@ -737,7 +738,12 @@ token budget for that turn (it reports `tokensUnknown`). `--harness-idle-timeout
 the agent only after **N ms with no stream output** — a turn that is actively editing keeps resetting
 the heartbeat and survives, while a genuinely stalled one is still reaped (fail-closed: the loop
 always terminates). When both are set, the wall-clock `--harness-timeout-ms` remains the absolute
-backstop. Recommended for long, build-heavy runs.
+backstop. Recommended for long, build-heavy runs. **You don't need `--stream`/`--stream-transcript`
+for it to work:** the heartbeat re-arms on the agent CLI's stdout, and a CLI left in its buffered
+output mode emits nothing until the turn ends — so goaly **auto-enables the CLI's per-turn streaming
+whenever an idle timeout is set**, ensuring the heartbeat actually sees progress (a side benefit: the
+streamed turn also surfaces token usage the buffered mode omits). Displaying/persisting that stream is
+still opt-in via `--stream`/`--stream-transcript`.
 
 ### Reliability: preflight, retries, interrupts, crash-safety
 
