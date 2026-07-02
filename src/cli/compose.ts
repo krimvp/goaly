@@ -16,6 +16,7 @@ import { GeneratedFilesGuard } from '../verify/generated-guard';
 import { JudgeVerifier } from '../verify/judge';
 import { AgentApprover } from '../verify/agent-approver';
 import { AgentCompiler } from '../compile/agent-compiler';
+import { classifyUsageShape } from '../compile/usage-gate';
 import { SeededCompiler, SeededPlanner } from '../followup/seeded';
 import { AutoSealGate, HumanSealGate } from '../compile/seal-gates';
 import { AgentPlanner } from '../plan/agent-planner';
@@ -374,6 +375,12 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
         llm: llmFor(models.compiler, 'compile'),
         writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
         ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
+        // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered like
+        // the authoring call) arms the gate on a confident build-and-use goal so a bar that a parallel
+        // reimplementation could green is refused at compile (COMPILE_FAILED → re-authored with a usage
+        // assertion). Fail-open, so it never blocks a non-build-and-use run.
+        classifyShape: (goal, intent) =>
+          classifyUsageShape(llmFor(models.compiler, 'compile'), goal, intent),
       }),
       seed,
     ),

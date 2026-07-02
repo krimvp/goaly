@@ -361,6 +361,21 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   in-repo, runnable** bar — author over the repo's existing tooling, keep helpers inside the
   workspace, and don't write rubrics that judge runtime/visual behavior a grader can't execute. A
   rejected bar feeds the bounded compile-retry loop above, so the compiler can self-correct.
+- **A "build-and-use" goal can't be greened by a parallel reimplementation.** When the goal is to
+  *build a reusable artifact (a module/engine/library/API) **and use it***, a worker can satisfy a
+  naive numeric/behavioral bar by re-deriving the logic straight inside the higher-level solvers and
+  **never calling the artifact** — both keys pass while the thing the goal is about is dead code. An
+  **independent shape classifier** (a separate, neutral LLM call over the *goal only*, so an authoring
+  model can't opt itself out) decides whether the goal is build-and-use; when it is, the compiler must
+  author a **runtime usage assertion** — a spy/call-through check that instruments the artifact's public
+  entry points and asserts the verified result is produced *through* them (a reimplementation records
+  zero calls and **fails**), embedded in a frozen test file. A `--generate` contract that lacks that
+  assertion (or declares target symbols that aren't actually spied in a frozen file) is refused at
+  compile (`COMPILE_FAILED`) and re-authored *with* the assertion by the bounded compile-retry loop.
+  The classifier is **fail-open** (any error/uncertainty → treated as not-build-and-use, so it never
+  blocks a legitimate run); it only bites on a confident build-and-use verdict. This is why the
+  "no static `grep`/source-text check as the bar" steering carves out **runtime** usage assertions:
+  they *run* the code, so they aren't a gameable source scan.
 - **Independence is checked, not assumed.** goaly warns loudly when the "two independent keys" collapse
   onto one model (e.g. a bare `--model X`, which would make the approver share the worker's/judge's
   blind spots); pass `--approver-model` (or a different `--llm-provider`) to separate them. Under
