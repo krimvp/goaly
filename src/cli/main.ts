@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { parseArgs, USAGE, UsageError, type ParsedArgs } from './args';
+import { parseArgs, USAGE, UsageError, type ParsedArgs, type UiCommand } from './args';
+import { startUiServer } from '../ui/server';
 import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
 import { runRuns } from './runs';
@@ -176,6 +177,10 @@ export async function main(argv: string[]): Promise<number> {
       (s) => process.stdout.write(s),
       (s) => process.stderr.write(s),
     );
+  }
+
+  if (parsed.command === 'ui' && parsed.ui !== undefined) {
+    return runUi(parsed.ui, parsed.workspace);
   }
 
   // --worktree: re-root the ENTIRE run at a managed worktree BEFORE anything reads
@@ -435,6 +440,35 @@ export async function main(argv: string[]): Promise<number> {
     await egressProxy?.close();
     await runLock.release();
   }
+}
+
+/**
+ * `goaly ui`: start the local web server and stay up until Ctrl-C/SIGTERM. The server is
+ * read-only over the write-ahead logs, so stopping it never affects any run it was watching.
+ */
+async function runUi(ui: UiCommand, workspace: string): Promise<number> {
+  let server;
+  try {
+    server = await startUiServer({
+      workspaceRoot: workspace,
+      ...(ui.port !== undefined ? { port: ui.port } : {}),
+    });
+  } catch (e) {
+    process.stderr.write(`goaly ui: ${e instanceof Error ? e.message : String(e)}\n`);
+    return 2;
+  }
+  process.stderr.write(
+    `goaly ui listening on ${server.url} (workspace: ${workspace})\nPress Ctrl-C to stop.\n`,
+  );
+  return new Promise<number>((resolve) => {
+    const stop = (): void => {
+      process.removeListener('SIGINT', stop);
+      process.removeListener('SIGTERM', stop);
+      void server.close().then(() => resolve(0));
+    };
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
+  });
 }
 
 /**

@@ -52,6 +52,7 @@ stays resumable). See [Usage](#usage) for every flag.
 - [Phased goals](#phased-goals---phased) · [Worktrees](#worktrees---worktree) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
 - [Reliability](#reliability-preflight-retries-interrupts-crash-safety) — preflight, retries, Ctrl-C, crash-safety
 - [Operator control](#watching-steering--extending-a-run-operator-control) — watch live, steer with `--note`, extend caps on `--resume`
+- [Web UI](#web-ui-goaly-ui) — `goaly ui`: runs, live feeds, and worktrees in the browser
 - [Develop](#develop) · [Embedding](#embedding) — contributing and the library API
 - [Glossary](#appendix-glossary) — every project-specific term & idiom, plain-language
 
@@ -685,6 +686,9 @@ goaly "make the parser handle empty input"
 goaly runs list
 goaly runs show run-<id>
 goaly runs resume-cmd run-<id>   # print how to continue the run's CLI session (e.g. claude --resume <id>)
+
+# Or in the browser: runs across the workspace AND its worktrees, live SSE feeds, worktree panel:
+goaly ui                         # http://127.0.0.1:4180, localhost-only, read-only
 ```
 
 ### Config file
@@ -1125,6 +1129,37 @@ frozen contract still solely governs DONE**; inheritance only seeds the agent's 
 bar. It is valid only with the same `--harness` as the prior run (session ids are harness-specific)
 and is ignored under `--phased`. The end-of-run banner also prints a **"Continue this session:"**
 hint (the same mapping as `runs resume-cmd`) so the next step is one copy-paste away.
+
+### Web UI (`goaly ui`)
+
+Everything the read-only subcommands show — plus live tails — in the browser:
+
+```bash
+goaly ui                       # serve http://127.0.0.1:4180 over this workspace's runs
+goaly ui --port 5000 --workspace ./myrepo
+```
+
+- **Runs table, across every root.** One section for the main workspace and one per managed
+  [worktree](#worktrees---worktree), most-recent first, with status badges and a pulsing **LIVE**
+  badge for a run some process is currently driving. Corrupt logs are **flagged, never dropped**
+  (the same fail-closed read as `runs list`).
+- **Run detail.** The frozen contract (rungs + hash + setup), Seal decisions, every iteration's
+  verifier verdict and Sign-off approval/veto, the failure/stuck reason, spend totals, and the
+  exact `--resume` command — the `runs show` projection, rendered.
+- **Live event feed.** The write-ahead log tailed over **SSE** (the browser twin of
+  `goaly runs watch`): contract → seal → each agent turn / verdict / veto as they land. Works for
+  runs started in **any terminal** — the tail is strictly read-only (it never takes the run lock).
+  When a run records a per-turn transcript (`--stream-transcript`), its tool calls and messages
+  stream into the feed too.
+- **Worktrees panel.** Name / branch / HEAD / dirty / runs-count for every managed worktree,
+  `PRUNABLE` flagged.
+
+The server is the same replay-fold the CLI uses — **the disk is the source of truth**, so it can be
+started and stopped freely without affecting any run. It binds `127.0.0.1` only and — because a
+no-auth localhost server is reachable from any page your browser has open — refuses requests with a
+non-local `Host` (DNS-rebinding) or a cross-site `Origin`, fail-closed
+([ADR 0014](docs/adr/0014-local-web-ui.md)). Embedders get the same server via
+`startUiServer({ workspaceRoot })`.
 
 ### Adding a harness
 

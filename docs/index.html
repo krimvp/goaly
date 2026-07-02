@@ -178,6 +178,17 @@
         next step is one copy-paste away.</p>
       </div>
       <div class="card">
+        <h3>The web UI</h3>
+        <p><code>goaly ui</code> serves a local browser view of everything the run log knows: a
+        <b>runs table across the workspace and every worktree</b> (live badges included), per-run
+        detail (the frozen contract, each iteration's verifier verdict + Sign-off, spend), and a
+        <b>live event feed over SSE</b> — the write-ahead log tailed read-only, so it follows runs
+        started in <em>any</em> terminal and never disturbs them. The disk stays the source of
+        truth: the server renders the same replay-fold <code>runs show</code> uses. Localhost-only,
+        with fail-closed Host/Origin guards.
+        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0014-local-web-ui.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0014 →</a></p>
+      </div>
+      <div class="card">
         <h3>Watch it &amp; steer it</h3>
         <p>You're never locked out of a run: <code>goaly runs watch &lt;id&gt;</code> tails the
         write-ahead log <b>live from any terminal</b> (each agent turn, verdict, and veto — read-only,

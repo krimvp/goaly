@@ -194,6 +194,17 @@ export {
   type WorktreeInfo,
 } from './workspace/worktree-manager';
 export { runWorktree, renderWorktreeTable, type WorktreeCommand } from './cli/worktree-cmd';
+export { startUiServer, DEFAULT_UI_PORT, type UiServer, type UiServerOptions } from './ui/server';
+export type {
+  RootRef,
+  RunsIndex,
+  ApiRunListItem,
+  RunDetailResponse,
+  WorktreesResponse,
+  TranscriptResponse,
+  VersionResponse,
+  SseFrame,
+} from './ui/api-schema';
 export { runBestOf, selectWinner, type CandidateResult, type BestOfWinner } from './driver/tournament';
 export { FileRunLog } from './runlog/file-runlog';
 export { DeterministicVerifier } from './verify/deterministic';

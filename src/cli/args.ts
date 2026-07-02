@@ -56,12 +56,20 @@ export type StepTimeouts = {
   setupMs?: number;
 };
 
+/** The `goaly ui` subcommand: the local web UI server (ADR 0014). */
+export type UiCommand = {
+  /** Port to listen on (default 4180). */
+  readonly port: number | undefined;
+};
+
 export type ParsedArgs = {
-  command: 'run' | 'help' | 'runs' | 'worktree';
+  command: 'run' | 'help' | 'runs' | 'worktree' | 'ui';
   /** The read-only inspection subcommand; present only when `command === 'runs'`. */
   runs: RunsCommand | undefined;
   /** The worktree-management subcommand; present only when `command === 'worktree'`. */
   worktree: WorktreeCommand | undefined;
+  /** The web-UI subcommand; present only when `command === 'ui'`. */
+  ui: UiCommand | undefined;
   /**
    * Run inside a goaly-managed worktree (`--worktree [<name>]`): the run's whole workspace —
    * state dir, run lock, harness cwd, diff scope — is re-rooted at `.goaly/worktrees/<name>`
@@ -201,6 +209,8 @@ Usage:
   goaly worktree create <name> [--base <ref>] [--workspace <dir>]
   goaly worktree list [--workspace <dir>]
   goaly worktree remove <name> [--force] [--delete-branch] [--workspace <dir>]
+
+  goaly ui [--port N] [--workspace <dir>]
 
   goaly help
 
@@ -566,7 +576,17 @@ Worktrees (run on an isolated copy of the repo; merge back with plain git):
                             (without --force). The branch is KEPT by default for merge-back;
                             --delete-branch removes it too (unmerged commits then need --force).
   WARNING: worktrees live inside the git-ignored .goaly dir — 'git clean -dfx' on the main tree
-  deletes them (committed work survives on the goaly/<name> branch; uncommitted work does not).`;
+  deletes them (committed work survives on the goaly/<name> branch; uncommitted work does not).
+
+Web UI (a local, read-anywhere view of runs — the browser twin of 'runs list/show/watch'):
+  goaly ui [--port N]       serve a local web UI (default http://127.0.0.1:4180) over this
+                            workspace's runs AND every managed worktree's runs: a live runs table,
+                            per-run detail (frozen contract, iteration ladder, sign-off verdicts,
+                            spend), a live event feed (the write-ahead log tailed over SSE — works
+                            for runs started in ANY terminal, read-only), and the worktrees panel.
+                            Binds 127.0.0.1 only; requests with a non-local Host or a cross-site
+                            Origin are refused (fail-closed). Ctrl-C stops the server; runs it was
+                            watching are unaffected.`;
 
 export type RawFlags = Record<string, string | boolean>;
 
@@ -741,6 +761,9 @@ export async function parseArgs(
   if (command === 'worktree') {
     return worktreeResult(parseWorktreeCommand(rest));
   }
+  if (command === 'ui') {
+    return uiResult(parseUiCommand(rest));
+  }
   // `run` is optional: an argv that doesn't lead with a known subcommand (`runs`/`help`) is an
   // implicit run, whose first token may be a positional goal (`goaly "my goal"`) or a flag
   // (`goaly -d "my goal"`). A bare `goaly` already returned help above.
@@ -879,6 +902,7 @@ export async function parseArgs(
     command: 'run',
     runs: undefined,
     worktree: undefined,
+    ui: undefined,
     worktreeRun: parseWorktreeRun(flags),
     config,
     harness,
@@ -1296,6 +1320,28 @@ function worktreeResult(parsed: { worktree: WorktreeCommand; workspace: string }
   return { ...baseArgs('worktree', undefined, parsed.workspace), worktree: parsed.worktree };
 }
 
+function uiResult(parsed: { ui: UiCommand; workspace: string }): ParsedArgs {
+  return { ...baseArgs('ui', undefined, parsed.workspace), ui: parsed.ui };
+}
+
+/** Parse `goaly ui [--port N] [--workspace <dir>]`, each validated fail-closed at the seam. */
+function parseUiCommand(rest: string[]): { ui: UiCommand; workspace: string } {
+  const flags = parseFlags(rest).flags;
+  const rawPort = str(flags, 'port');
+  let port: number | undefined;
+  if (rawPort !== undefined) {
+    const parsed = z.coerce.number().int().min(1).max(65535).safeParse(rawPort);
+    if (!parsed.success) {
+      throw new UsageError(`--port: expected an integer in 1..65535, got '${rawPort}'`);
+    }
+    port = parsed.data;
+  }
+  return {
+    ui: { port },
+    workspace: str(flags, 'workspace') ?? process.cwd(),
+  };
+}
+
 /**
  * The shared {@link ParsedArgs} scaffold for the non-`run` commands (help / runs). The run-specific
  * fields are placeholders never read for those commands — only `command`, `runs` and `workspace`
@@ -1310,6 +1356,7 @@ function baseArgs(
     command,
     runs,
     worktree: undefined,
+    ui: undefined,
     worktreeRun: undefined,
     // a placeholder config; never used for the help / runs commands.
     config: cliInputToRunConfig(CliInput.parse({ goal: 'help', verifyCmd: 'true' })),
