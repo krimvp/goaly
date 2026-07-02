@@ -204,9 +204,15 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   `requiredTools` pre-flight), and budget. Tune it
   with `--stuck-no-diff`, `--stuck-repeat-threshold`, `--stuck-oscillation`, `--stuck-crash-threshold`,
   `--stuck-unevaluable-threshold`.
-  Use `--diff-ignore` to
-  keep verifier-produced artifacts (coverage dirs, `__pycache__`, build output) out of the tree hash
-  so they can't make a no-op agent look like it changed something. A no-diff iteration is **excused**
+  **By default** goaly already keeps a conservative set of ephemeral verifier artifacts out of the tree
+  hash — Python bytecode/`__pycache__` and the pytest/mypy/ruff caches, plus JS `.nyc_output`/`htmlcov`
+  (`*.pyc`, `*__pycache__*`, `*.pytest_cache*`, `*.mypy_cache*`, `*.ruff_cache*`, `*.nyc_output*`,
+  `*htmlcov*`) — so a verify command that regenerates them between iterations can't make a no-op agent
+  turn look like it changed something. The defaults are deliberately narrow: they never touch build
+  output (`build/`, `dist/`, `target/` — a build goal's deliverable must stay visible) and avoid the
+  bare word `coverage` (which would over-match a real `coverage_report.py`). Use `--diff-ignore
+  "<p1,p2,…>"` to add your own artifact paths on top (deduped with the defaults); each is a git
+  pathspec where `*` spans `/`. A no-diff iteration is **excused**
   when the agent never had a fair chance to act — the previous turn **timed out**, **crashed**, or was
   **truncated** (it hit its turn/wall-clock cap mid-work), or the ladder is green and a **fresh Sign-off
   veto** is the only blocker — so a correct, actionable critique (or a run that simply ran out of room)
@@ -361,6 +367,21 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   in-repo, runnable** bar — author over the repo's existing tooling, keep helpers inside the
   workspace, and don't write rubrics that judge runtime/visual behavior a grader can't execute. A
   rejected bar feeds the bounded compile-retry loop above, so the compiler can self-correct.
+- **A "build-and-use" goal can't be greened by a parallel reimplementation.** When the goal is to
+  *build a reusable artifact (a module/engine/library/API) **and use it***, a worker can satisfy a
+  naive numeric/behavioral bar by re-deriving the logic straight inside the higher-level solvers and
+  **never calling the artifact** — both keys pass while the thing the goal is about is dead code. An
+  **independent shape classifier** (a separate, neutral LLM call over the *goal only*, so an authoring
+  model can't opt itself out) decides whether the goal is build-and-use; when it is, the compiler must
+  author a **runtime usage assertion** — a spy/call-through check that instruments the artifact's public
+  entry points and asserts the verified result is produced *through* them (a reimplementation records
+  zero calls and **fails**), embedded in a frozen test file. A `--generate` contract that lacks that
+  assertion (or declares target symbols that aren't actually spied in a frozen file) is refused at
+  compile (`COMPILE_FAILED`) and re-authored *with* the assertion by the bounded compile-retry loop.
+  The classifier is **fail-open** (any error/uncertainty → treated as not-build-and-use, so it never
+  blocks a legitimate run); it only bites on a confident build-and-use verdict. This is why the
+  "no static `grep`/source-text check as the bar" steering carves out **runtime** usage assertions:
+  they *run* the code, so they aren't a gameable source scan.
 - **Independence is checked, not assumed.** goaly warns loudly when the "two independent keys" collapse
   onto one model (e.g. a bare `--model X`, which would make the approver share the worker's/judge's
   blind spots); pass `--approver-model` (or a different `--llm-provider`) to separate them. Under
@@ -556,7 +577,8 @@ cat ./GOAL.md | goaly run --goal - --generate
 # Choose a harness, cap iterations, set a budget, resume a crashed run:
 goaly run --goal "..." --verify-cmd "pytest -q" --harness codex --max-iterations 8 \
              --budget-tokens 500000 --workspace ./myrepo
-goaly run --goal "..." --resume run-<id> --workspace ./myrepo
+# Resume needs only the run id — the goal (and the rest of the contract) is read from the frozen log:
+goaly run --resume run-<id> --workspace ./myrepo
 
 # Follow up on a FINISHED run: a new, re-verified goal that knows what just happened (it seeds the
 # new contract's authoring with a compaction of the prior run, and runs in the same workspace):
@@ -722,7 +744,12 @@ token budget for that turn (it reports `tokensUnknown`). `--harness-idle-timeout
 the agent only after **N ms with no stream output** — a turn that is actively editing keeps resetting
 the heartbeat and survives, while a genuinely stalled one is still reaped (fail-closed: the loop
 always terminates). When both are set, the wall-clock `--harness-timeout-ms` remains the absolute
-backstop. Recommended for long, build-heavy runs.
+backstop. Recommended for long, build-heavy runs. **You don't need `--stream`/`--stream-transcript`
+for it to work:** the heartbeat re-arms on the agent CLI's stdout, and a CLI left in its buffered
+output mode emits nothing until the turn ends — so goaly **auto-enables the CLI's per-turn streaming
+whenever an idle timeout is set**, ensuring the heartbeat actually sees progress (a side benefit: the
+streamed turn also surfaces token usage the buffered mode omits). Displaying/persisting that stream is
+still opt-in via `--stream`/`--stream-transcript`.
 
 ### Reliability: preflight, retries, interrupts, crash-safety
 

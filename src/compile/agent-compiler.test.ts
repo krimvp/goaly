@@ -450,6 +450,88 @@ describe('AgentCompiler — authoring timeout hint (follow-on G)', () => {
   });
 });
 
+describe('AgentCompiler — anti-reimplementation usage gate', () => {
+  const buildAndUse = async () => ({ buildAndUse: true, targetArtifact: 'World', reason: 'r' });
+  const notBuildAndUse = async () => ({ buildAndUse: false, targetArtifact: null, reason: 'r' });
+
+  it('carries the usage/anti-reimplementation steering in the authoring system prompt', async () => {
+    const llm = new FakeLlm([JSON.stringify({ command: 'npm test', rubric: '' })]);
+    const compiler = new AgentCompiler({ llm });
+    await compiler.compile(makeConfig({ verifier: { kind: 'generate' } }));
+    const system = llm.requests[0]?.system ?? '';
+    expect(system).toContain('usageAssertion');
+    expect(system).toMatch(/reimplementation/i);
+    expect(system).toMatch(/spies the real API|instruments/i);
+  });
+
+  it('rejects a build-and-use contract that declares no usage assertion (→ COMPILE_FAILED)', async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({
+        command: 'python -m pytest tests/t.py',
+        rubric: 'solvers correct',
+        files: [{ path: 'tests/t.py', content: 'def test_orbit(): assert solve()' }],
+      }),
+    ]);
+    const compiler = new AgentCompiler({ llm, writeFile: async () => {}, classifyShape: buildAndUse });
+    await expect(
+      compiler.compile(makeConfig({ verifier: { kind: 'generate' } })),
+    ).rejects.toThrow(/BUILD-AND-USE/);
+  });
+
+  it('rejects a build-and-use contract whose declared symbol is not embedded in a frozen file', async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({
+        command: 'python -m pytest tests/t.py',
+        rubric: 'r',
+        files: [{ path: 'tests/t.py', content: 'def test(): assert solve()' }],
+        usageAssertion: { targetSymbols: ['World.step'], description: 'spy step' },
+      }),
+    ]);
+    const compiler = new AgentCompiler({ llm, writeFile: async () => {}, classifyShape: buildAndUse });
+    await expect(
+      compiler.compile(makeConfig({ verifier: { kind: 'generate' } })),
+    ).rejects.toThrow(/not referenced/);
+  });
+
+  it('accepts a build-and-use contract with a usage assertion embedded in a frozen file', async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({
+        command: 'python -m pytest tests/t.py',
+        rubric: 'r',
+        files: [
+          {
+            path: 'tests/t.py',
+            content: 'orig = World.step\ncalls = []\nWorld.step = lambda *a: calls.append(1)\nassert calls',
+          },
+        ],
+        usageAssertion: { targetSymbols: ['World.step'], description: 'spy World.step, assert invoked' },
+      }),
+    ]);
+    const compiler = new AgentCompiler({ llm, writeFile: async () => {}, classifyShape: buildAndUse });
+    const contract = await compiler.compile(makeConfig({ verifier: { kind: 'generate' } }));
+    expect(contract.generatedFiles).toHaveLength(1);
+  });
+
+  it('does not require a usage assertion when the goal is not build-and-use', async () => {
+    const llm = new FakeLlm([JSON.stringify({ command: 'npm test', rubric: '' })]);
+    const compiler = new AgentCompiler({ llm, classifyShape: notBuildAndUse });
+    const contract = await compiler.compile(makeConfig({ verifier: { kind: 'generate' } }));
+    expect(contract.rungs[0]).toEqual({ kind: 'deterministic', command: 'npm test' });
+  });
+
+  it('skips the gate entirely when no classifier is injected (backward-compatible default)', async () => {
+    // No classifyShape → the gate is off, so even a build-and-use-shaped goal with no usageAssertion
+    // compiles. Real runs wire the classifier in compose.ts; this keeps the scripted unit tests pure.
+    const llm = new FakeLlm([JSON.stringify({ command: 'npm test', rubric: '' })]);
+    const compiler = new AgentCompiler({ llm });
+    const contract = await compiler.compile(
+      makeConfig({ verifier: { kind: 'generate', intent: 'build an engine and use it' } }),
+    );
+    expect(contract.rungs).toHaveLength(1);
+    expect(llm.requests).toHaveLength(1); // only the authoring call, no shape call
+  });
+});
+
 describe('AgentCompiler — feedback on an existing verifier', () => {
   it('ignores Seal feedback (no LLM call, deterministic recompile)', async () => {
     // Arrange

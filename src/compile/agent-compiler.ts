@@ -5,6 +5,8 @@ import { freezeContract, sha256Hex } from '../util/hash';
 import type { LlmProvider } from '../llm/provider';
 import type { VerifierCompiler } from './compiler';
 import { extractRequiredTools } from './required-tools';
+import { extractBalancedJson } from './json-extract';
+import { UsageAssertion, enforceUsageAssertion, type UsageShape } from './usage-gate';
 
 /** Schema for the JSON the authoring LLM must emit (validated fail-closed). */
 const GeneratedVerification = z.object({
@@ -31,6 +33,14 @@ const GeneratedVerification = z.object({
       }),
     )
     .optional(),
+  /**
+   * For a BUILD-AND-USE goal (build a reusable artifact AND use it), the declaration of the runtime
+   * usage assertion the authored tests carry — proving the consumer routes through the artifact's
+   * public API rather than a parallel reimplementation. The usage gate requires it (and that its
+   * `targetSymbols` actually appear in an authored file) when the shape classifier flags build-and-use.
+   * Omitted for non-build-and-use goals.
+   */
+  usageAssertion: UsageAssertion.optional(),
 });
 type GeneratedVerification = z.infer<typeof GeneratedVerification>;
 
@@ -38,7 +48,8 @@ const SYSTEM_PROMPT =
   'You author verification for software goals. Reply with ONLY a single JSON object, ' +
   'no prose, no markdown fences. Shape: ' +
   '{ "command": string, "rubric": string, "setup"?: string, ' +
-  '"requiredTools"?: string[], "files"?: Array<{ "path": string, "content": string }> }. ' +
+  '"requiredTools"?: string[], "files"?: Array<{ "path": string, "content": string }>, ' +
+  '"usageAssertion"?: { "targetSymbols": string[], "description": string } }. ' +
   'The command must exit 0 exactly when the goal is achieved.\n' +
   'Guardrails for a RUNNABLE bar (issue #55):\n' +
   '- The files you author are VERIFICATION ONLY — test files, fixtures, or a check script. NEVER ' +
@@ -48,7 +59,21 @@ const SYSTEM_PROMPT =
   'then registers as no change. Your command MUST therefore FAIL on the CURRENT tree (the ' +
   'implementation does not exist yet) and pass only once the worker has written it.\n' +
   "- Author the command over the repo's EXISTING tooling (its test / build / lint runner). Do not " +
-  'require ad-hoc shell scripts, nor `grep`/structural source checks as the bar.\n' +
+  'require an ad-hoc shell script, nor a STATIC `grep`/source-text check, as the bar (a static ' +
+  'source scan is gameable). A RUNTIME usage assertion that spies the real API and asserts it was ' +
+  'actually invoked is NOT a static source scan — it runs the code — and is REQUIRED for build-and-use ' +
+  'goals (see the next guardrail).\n' +
+  '- USAGE / ANTI-REIMPLEMENTATION. When the goal is to BUILD a reusable artifact (a module, engine, ' +
+  'library, class, or API) AND then USE it to accomplish something, a worker can satisfy a naive bar by ' +
+  'writing a PARALLEL reimplementation inside the higher-level solvers/consumers that NEVER calls the ' +
+  'artifact — greening the bar while the artifact the goal is about is dead code. Defeat this: author a ' +
+  "RUNTIME usage assertion that instruments (spies/wraps/monkeypatches) the artifact's PUBLIC entry " +
+  'points to count calls, runs the consumer, and asserts those entry points were actually invoked ' +
+  '(call-count > 0) while producing the verified result — a reimplementation records zero calls and ' +
+  'FAILS. Put that assertion in an authored (frozen) test file, and DECLARE it in "usageAssertion": ' +
+  '{ "targetSymbols": [the artifact public symbols the consumer MUST exercise, e.g. "World.step", ' +
+  '"resolve_collision"], "description": how the test asserts they are invoked }. Include ' +
+  '"usageAssertion" whenever the goal is build-and-use; omit it only when it is not.\n' +
   '- Write any helper or test file INSIDE the workspace using a RELATIVE path; never reference an ' +
   'absolute or out-of-repo path such as /tmp.\n' +
   '- The rubric must be checkable by RUNNING that command. Do not author a rubric that judges ' +
@@ -70,44 +95,6 @@ const SYSTEM_PROMPT =
   '— the language toolchain and test runner (e.g. ["cargo"], ["python","pytest"], ["go"], ' +
   '["node","npm"]). These are what goaly probes (and installs, or aborts on) before the loop; do NOT ' +
   'list shell builtins or coreutils. Omit when the command relies only on builtins.';
-
-/**
- * Extract the first balanced JSON object from a string. Tolerant of surrounding prose
- * or markdown fences the LLM may emit despite instructions. Returns the substring, or
- * undefined if no balanced object is found. String-literal aware (ignores braces in strings).
- */
-function extractBalancedJson(text: string): string | undefined {
-  const start = text.indexOf('{');
-  if (start === -1) return undefined;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i += 1) {
-    const ch = text[i];
-    if (ch === undefined) break;
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === '\\') {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === '{') {
-      depth += 1;
-    } else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        return text.slice(start, i + 1);
-      }
-    }
-  }
-  return undefined;
-}
 
 /**
  * Reject a verification command that trivially exits 0 without measuring anything.
@@ -254,16 +241,28 @@ export class AgentCompiler implements VerifierCompiler {
   readonly #llm: LlmProvider;
   readonly #writeFile: ((relPath: string, content: string) => Promise<void>) | undefined;
   readonly #verifyDir: string | undefined;
+  readonly #classifyShape:
+    | ((goal: string, intent: string | undefined) => Promise<UsageShape>)
+    | undefined;
 
   constructor(opts: {
     llm: LlmProvider;
     writeFile?: (relPath: string, content: string) => Promise<void>;
     /** Preferred directory (relative to the repo root) for authored verification files (issue #52). */
     verifyDir?: string;
+    /**
+     * Independent goal-shape classifier for the anti-reimplementation usage gate. When provided (the
+     * real runs wire it in `compose.ts`), a confident build-and-use goal must carry a runtime usage
+     * assertion or the compile fails closed (→ COMPILE_FAILED, self-corrected by the compile-retry
+     * loop). Left undefined the gate is skipped — unit tests opt in by injecting a stub, so the extra
+     * LLM call never perturbs the scripted `FakeLlm` queues of the existing tests.
+     */
+    classifyShape?: (goal: string, intent: string | undefined) => Promise<UsageShape>;
   }) {
     this.#llm = opts.llm;
     this.#writeFile = opts.writeFile;
     this.#verifyDir = opts.verifyDir;
+    this.#classifyShape = opts.classifyShape;
   }
 
   async compile(config: ContractInput, feedback?: string): Promise<CompiledContract> {
@@ -357,6 +356,21 @@ export class AgentCompiler implements VerifierCompiler {
           'command "npx --no-install vitest run …" or "node ./node_modules/.bin/vitest run …"; or the ' +
           "repo's own \"npm test\").",
       );
+    }
+
+    // Anti-reimplementation usage gate: for a confident BUILD-AND-USE goal, the authored bar must carry
+    // a runtime usage assertion embedded in a frozen file, or the worker could green the bar with a
+    // parallel reimplementation that never touches the artifact. The classifier is independent (a
+    // separate, neutral call over the goal) and fail-open; a violation throws → the Driver maps it to a
+    // COMPILE_FAILED the bounded compile-retry loop re-authors with the assertion. Runs before writing
+    // any file so a rejected contract leaves no partial files on disk (like the guards above).
+    if (this.#classifyShape !== undefined) {
+      const shape = await this.#classifyShape(config.goal, intent);
+      enforceUsageAssertion({
+        shape,
+        usageAssertion: generated.usageAssertion,
+        files: generated.files ?? [],
+      });
     }
 
     // Pin each authored file by the hash of the exact content we write, so the integrity guard can detect

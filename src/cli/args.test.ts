@@ -86,6 +86,26 @@ describe('parseArgs', () => {
     expect(a.config.maxCompileRetries).toBe(4);
   });
 
+  describe('goal requirement', () => {
+    it('--resume needs no goal (it comes from the frozen run log)', async () => {
+      const a = await parseArgs(['run', '--resume', 'run-abc']);
+      expect(a.resumeRunId).toBe('run-abc');
+      // A placeholder goal satisfies the schema but is discarded by main.ts on resume.
+      expect(a.config.goal.length).toBeGreaterThan(0);
+    });
+
+    it('--resume still accepts an explicit goal (documented usage)', async () => {
+      const a = await parseArgs(['run', '--goal', 'still here', '--resume', 'run-abc']);
+      expect(a.resumeRunId).toBe('run-abc');
+      expect(a.config.goal).toBe('still here');
+    });
+
+    it('a fresh run with no goal is a clean usage error, not a raw ZodError', async () => {
+      await expect(parseArgs(['run', '--generate'])).rejects.toThrow(UsageError);
+      await expect(parseArgs(['run', '--generate'])).rejects.toThrow(/goal is required/);
+    });
+  });
+
   it('defaults maxCompileRetries to 2 when the flag is absent (issue #51)', async () => {
     const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
     expect(a.config.maxCompileRetries).toBe(2);

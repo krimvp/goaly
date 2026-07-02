@@ -165,6 +165,16 @@ export async function runCodecHarness(
   prompt: string,
   sessionId?: SessionId,
   onEvent?: AgentEventSink,
+  /**
+   * Force the CLI into its per-turn STREAMING output mode even when no `onEvent` tap is attached
+   * (issue: idle-timeout footgun). The idle/heartbeat timeout re-arms on child stdout chunks, but a
+   * CLI in its buffered `--output-format json` mode emits nothing until the turn ends — so a long,
+   * progressing turn gets reaped at the idle deadline. When an idle timeout is configured, the harness
+   * sets this so the CLI streams per-turn JSONL (heartbeat keeps re-arming). Parsing is unaffected:
+   * `classify` always parses the full `stdout`, which tolerates the stream-json envelope with or
+   * without a tap (a bonus: the streamed `result` event also carries usage the buffered mode omits).
+   */
+  forceStream?: boolean,
 ): Promise<HarnessRunResult> {
   const { sink, estimator } = streamingEstimator(onEvent);
   const tap = sink !== undefined ? new StreamTap(codec.streamExtractor, sink) : undefined;
@@ -179,7 +189,7 @@ export async function runCodecHarness(
     prompt,
     model,
     ...(resumeId !== undefined ? { sessionId: resumeId } : {}),
-    stream: tap !== undefined,
+    stream: tap !== undefined || forceStream === true,
   });
 
   let result: AgentExecResult;

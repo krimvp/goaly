@@ -249,10 +249,11 @@ Diff baseline (issue #47 — keep a run's diff small without touching the user's
 
 Stuck-detection tuning:
   --diff-ignore "<p1,p2,…>"  comma-separated extra paths kept OUT of the working-tree hash that
-                             drives no-diff/oscillation detection, beyond the always-excluded
-                             .goaly state dir. List verifier-produced artifacts (e.g.
-                             "coverage,__pycache__,dist") so a verifier's side effects between
-                             iterations don't make a no-op agent look like it changed something.
+                             drives no-diff/oscillation detection, ADDED to the always-excluded
+                             .goaly state dir and the built-in ephemeral-artifact defaults (Python
+                             bytecode/__pycache__, pytest/mypy/ruff caches, JS .nyc_output/htmlcov).
+                             List your own verifier side effects so they don't make a no-op agent
+                             look like it changed something. Each is a git pathspec (* spans /).
   --stuck-no-diff <bool>          toggle the no-diff abort (default true). Even when on, a no-diff
                                   iteration is NOT terminal if the previous turn timed out, or if the
                                   ladder is green and a FRESH veto is the only blocker — the agent
@@ -687,6 +688,13 @@ function collectResumeExtension(flags: RawFlags, config: RunConfig): RunExtensio
 /** Fields that may be sourced inline / from a file / from stdin; a CLI source overrides config. */
 const MULTI_SOURCE_FIELDS = ['goal', 'intent', 'rubric'] as const;
 
+/**
+ * Stand-in goal used when `--resume` is given without one. On resume the RunConfig parseArgs builds is
+ * discarded — main.ts continues from the frozen run log's config — so the goal is never read; this only
+ * satisfies `CliInput`'s non-empty-goal schema. It must never surface (a real resume overwrites it).
+ */
+const RESUMED_GOAL_PLACEHOLDER = '(resumed run — goal is read from the frozen run log)';
+
 export async function parseArgs(
   argv: string[],
   readers: InputReaders = defaultReaders,
@@ -752,8 +760,22 @@ export async function parseArgs(
   // Goal/intent/rubric may come from inline flags, files, or stdin — resolve to strings first.
   const resolved = await resolveInputSources(flags, readers);
 
+  // On --resume the goal (and the whole contract) is read back from the FROZEN run log, not the CLI:
+  // parseArgs still builds a RunConfig here, but main.ts discards it for the log's effective config.
+  // So a goal is NOT required when resuming — synthesize a placeholder that will be overwritten. A
+  // genuinely missing goal on a FRESH run is a clean usage error, not the raw ZodError that
+  // `CliInput.parse({ goal: undefined })` would otherwise throw (which escapes as an ugly stack).
+  const resuming = str(flags, 'resume') !== undefined;
+  if (resolved.goal === undefined && !resuming) {
+    throw new UsageError(
+      'a goal is required — pass it positionally (goaly "<goal>"), or with --goal / --goal-file / ' +
+        '--goal - (stdin)',
+    );
+  }
+  const goalForParse = resolved.goal ?? RESUMED_GOAL_PLACEHOLDER;
+
   const cliInput = CliInput.parse({
-    goal: resolved.goal,
+    goal: goalForParse,
     ...(str(flags, 'verify-cmd') !== undefined ? { verifyCmd: str(flags, 'verify-cmd') } : {}),
     ...(flags['generate'] !== undefined ? { generate: true } : {}),
     ...(str(flags, 'smoke') !== undefined ? { smoke: str(flags, 'smoke') } : {}),
