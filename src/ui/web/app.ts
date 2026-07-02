@@ -3,6 +3,7 @@ import { useEffect, useState } from 'preact/hooks';
 import htm from 'htm';
 import { api } from './api';
 import { RunsPage, RunDetailPage, WorktreesPage } from './views';
+import { StartRunPage } from './views-interactive';
 
 const html = htm.bind(h);
 
@@ -11,7 +12,11 @@ const html = htm.bind(h);
  * API. State lives on the server's disk (the write-ahead logs); the client only renders it.
  */
 
-type Route = { page: 'runs' } | { page: 'run'; runId: string } | { page: 'worktrees' };
+type Route =
+  | { page: 'runs' }
+  | { page: 'run'; runId: string }
+  | { page: 'worktrees' }
+  | { page: 'new' };
 
 function parseRoute(hash: string): Route {
   const path = hash.replace(/^#\/?/, '');
@@ -20,6 +25,7 @@ function parseRoute(hash: string): Route {
     return { page: 'run', runId: decodeURIComponent(runMatch[1]) };
   }
   if (path === 'worktrees') return { page: 'worktrees' };
+  if (path === 'new') return { page: 'new' };
   return { page: 'runs' };
 }
 
@@ -44,7 +50,8 @@ function App(): VNode {
     <header class="top">
       <h1><a href="#/runs">🎯 goaly</a></h1>
       <nav>
-        <a href="#/runs" class=${route.page !== 'worktrees' ? 'active' : ''}>runs</a>
+        <a href="#/runs" class=${route.page === 'runs' || route.page === 'run' ? 'active' : ''}>runs</a>
+        <a href="#/new" class=${route.page === 'new' ? 'active' : ''}>+ new run</a>
         <a href="#/worktrees" class=${route.page === 'worktrees' ? 'active' : ''}>worktrees</a>
       </nav>
       <span class="version">${version !== '' ? `v${version}` : ''}</span>
@@ -53,7 +60,9 @@ function App(): VNode {
       ? html`<${RunDetailPage} runId=${route.runId} key=${route.runId} />`
       : route.page === 'worktrees'
         ? html`<${WorktreesPage} />`
-        : html`<${RunsPage} />`}
+        : route.page === 'new'
+          ? html`<${StartRunPage} />`
+          : html`<${RunsPage} />`}
   </div>` as VNode;
 }
 

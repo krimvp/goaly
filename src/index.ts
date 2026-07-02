@@ -195,16 +195,27 @@ export {
 } from './workspace/worktree-manager';
 export { runWorktree, renderWorktreeTable, type WorktreeCommand } from './cli/worktree-cmd';
 export { startUiServer, DEFAULT_UI_PORT, type UiServer, type UiServerOptions } from './ui/server';
-export type {
-  RootRef,
-  RunsIndex,
-  ApiRunListItem,
-  RunDetailResponse,
-  WorktreesResponse,
-  TranscriptResponse,
-  VersionResponse,
-  SseFrame,
+export {
+  StartRunRequest,
+  GateDecision,
+  ResumeRequest,
+  WorktreeCreateRequest,
+  type RootRef,
+  type RunsIndex,
+  type ApiRunListItem,
+  type RunDetailResponse,
+  type WorktreesResponse,
+  type TranscriptResponse,
+  type VersionResponse,
+  type SseFrame,
+  type PendingGate,
+  type StartRunResponse,
 } from './ui/api-schema';
+export { UiGates } from './ui/ui-gates';
+// Aliased: `SessionStore` is already the goaly-code harness's session-persistence type above.
+export { SessionStore as UiSessionStore, RootBusyError, type UiRunSession } from './ui/sessions';
+export { makeUiActions, type UiActions, type StartOutcome } from './ui/start-run';
+export { executeRun, type RunIo, type RunResult } from './cli/run-cmd';
 export { runBestOf, selectWinner, type CandidateResult, type BestOfWinner } from './driver/tournament';
 export { FileRunLog } from './runlog/file-runlog';
 export { DeterministicVerifier } from './verify/deterministic';

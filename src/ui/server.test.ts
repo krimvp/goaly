@@ -145,6 +145,33 @@ describe('startUiServer — end-to-end over real HTTP (port 0, in-process)', () 
     expect(crossOrigin.status).toBe(403);
   });
 
+  it('state-changing requests need X-Goaly-Ui: 1 (CSRF defense in depth) — 403 without it', async () => {
+    const noHeader = await fetch(`${server.url}/api/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ goal: 'g', verifyCmd: 'true' }),
+    });
+    expect(noHeader.status).toBe(403);
+    expect(((await noHeader.json()) as { error: string }).error).toContain('X-Goaly-Ui');
+    // With the header it reaches the router (this server has no actions injected but a REAL
+    // default one — refuse cleanly on the busy/parse path, never 403).
+    const withHeader = await fetch(`${server.url}/api/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-goaly-ui': '1' },
+      body: JSON.stringify({ nonsense: true }),
+    });
+    expect(withHeader.status).toBe(400);
+  });
+
+  it('a non-JSON or oversized body is a 400, fail-closed', async () => {
+    const badJson = await fetch(`${server.url}/api/runs`, {
+      method: 'POST',
+      headers: { 'x-goaly-ui': '1' },
+      body: 'not json',
+    });
+    expect(badJson.status).toBe(400);
+  });
+
   it('serves the SPA shell when assets exist, and an API-only hint when they do not', async () => {
     // This checkout may or may not have dist/ui built; force both cases with an override.
     const assetsDir = await mkdtemp(join(tmpdir(), 'goaly-ui-assets-'));

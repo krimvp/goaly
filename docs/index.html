@@ -183,10 +183,14 @@
         <b>runs table across the workspace and every worktree</b> (live badges included), per-run
         detail (the frozen contract, each iteration's verifier verdict + Sign-off, spend), and a
         <b>live event feed over SSE</b> — the write-ahead log tailed read-only, so it follows runs
-        started in <em>any</em> terminal and never disturbs them. The disk stays the source of
-        truth: the server renders the same replay-fold <code>runs show</code> uses. Localhost-only,
-        with fail-closed Host/Origin guards.
-        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0014-local-web-ui.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0014 →</a></p>
+        started in <em>any</em> terminal and never disturbs them. It also <b>drives</b> runs: start
+        one (optionally into a worktree) through the <em>same</em> code path as the CLI, hold the
+        <b>Seal in a browser modal</b> (approve / revise / reject — a real <code>SealGate</code>
+        implementation, never a bypass), stop cooperatively, and resume with a note + raised
+        operational caps. One live run per tree, worktrees for parallelism. Localhost-only, with
+        fail-closed Host/Origin/<code>X-Goaly-Ui</code> guards.
+        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0014-local-web-ui.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0014 →</a>
+        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0015-ui-owned-runs.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0015 →</a></p>
       </div>
       <div class="card">
         <h3>Watch it &amp; steer it</h3>

@@ -1,10 +1,11 @@
 import { h, type VNode } from 'preact';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import htm from 'htm';
-import type { RunsIndex, RunDetailResponse, WorktreesResponse, SseFrame, RootRef } from '../api-schema';
+import type { RunsIndex, RunDetailResponse, WorktreesResponse, SseFrame, RootRef, PendingGate } from '../api-schema';
 import type { RunLogEntry } from '../../runlog/runlog';
 import { api, subscribeRunEvents } from './api';
 import { feedLine, streamLine, fmtDate, statusBadgeClass, truncate, type FeedLine } from './format';
+import { SealModal, ResumePanel } from './views-interactive';
 
 const html = htm.bind(h);
 
@@ -13,7 +14,11 @@ function rootLabel(root: RootRef): string {
 }
 
 /** Poll a fetcher on an interval (the runs table's live badges without one SSE per row). */
-function usePolled<T>(fetcher: () => Promise<T>, intervalMs: number): { data: T | undefined; error: string | undefined } {
+function usePolled<T>(
+  fetcher: () => Promise<T>,
+  intervalMs: number,
+  refreshKey = 0,
+): { data: T | undefined; error: string | undefined } {
   const [data, setData] = useState<T | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   useEffect(() => {
@@ -38,7 +43,7 @@ function usePolled<T>(fetcher: () => Promise<T>, intervalMs: number): { data: T 
       clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshKey]);
   return { data, error };
 }
 
@@ -93,8 +98,11 @@ export function RunsPage(): VNode {
 export function RunDetailPage({ runId }: { runId: string }): VNode {
   const [detail, setDetail] = useState<RunDetailResponse | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [actionError, setActionError] = useState<string | undefined>(undefined);
   const [lines, setLines] = useState<FeedLine[]>([]);
   const [live, setLive] = useState<boolean | undefined>(undefined);
+  const [gate, setGate] = useState<PendingGate | null>(null);
+  const [stopping, setStopping] = useState(false);
   const iterations = useRef(0);
   const feedEl = useRef<HTMLDivElement | null>(null);
 
@@ -111,19 +119,36 @@ export function RunDetailPage({ runId }: { runId: string }): VNode {
         if (entry.event.tag === 'AGENT_RAN') iterations.current += 1;
         const line = feedLine(entry, iterations.current);
         if (line !== null) setLines((prev) => [...prev, line]);
+        if (entry.event.tag === 'CONTRACT_COMPILED' || entry.event.tag === 'SEAL_DECIDED') refetch();
       } else if (frame.event === 'stream') {
         const line = streamLine(frame.data);
         if (line !== null) setLines((prev) => [...prev, line]);
       } else if (frame.event === 'liveness') {
         setLive(frame.data.live);
+      } else if (frame.event === 'gate') {
+        setGate(frame.data);
+      } else if (frame.event === 'gate-resolved') {
+        setGate(null);
       } else if (frame.event === 'terminal') {
         setLive(false);
+        setGate(null);
+        setStopping(false);
         refetch(); // pick up the final status / usage totals
       }
     });
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
+
+  const stop = async (): Promise<void> => {
+    setActionError(undefined);
+    try {
+      await api.stopRun(runId);
+      setStopping(true); // cooperative: the ABORTED lands in the feed when the step finishes
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   useEffect(() => {
     feedEl.current?.scrollTo({ top: feedEl.current.scrollHeight });
@@ -132,13 +157,32 @@ export function RunDetailPage({ runId }: { runId: string }): VNode {
   if (error !== undefined) return html`<div class="error-box">${error}</div>` as VNode;
   if (detail === undefined) return html`<div class="empty">loading…</div>` as VNode;
   const d = detail.detail;
+  const isLive = live ?? detail.live;
   return html`<div>
+    ${gate !== null
+      ? html`<${SealModal}
+          runId=${runId}
+          gate=${gate}
+          key=${gate.gateId}
+          onResolved=${(gateId: string): void =>
+            // Clear ONLY the answered gate: after a revise, the re-presented contract's NEW gate
+            // frame can arrive over SSE before the POST response — it must not be clobbered.
+            setGate((prev) => (prev !== null && prev.gateId === gateId ? null : prev))}
+        />`
+      : ''}
+    ${actionError !== undefined ? html`<div class="error-box">${actionError}</div>` : ''}
     <div class="card">
       <dl class="kv">
         <dt>run</dt><dd class="mono">${d.runId}</dd>
         <dt>status</dt><dd>
           <span class=${statusBadgeClass(d.status)}>${d.status}</span>
-          ${(live ?? detail.live) ? html` <span class="badge live">LIVE</span>` : ''}
+          ${isLive ? html` <span class="badge live">LIVE</span>` : ''}
+          ${gate !== null ? html` <span class="badge incomplete">AWAITING SEAL</span>` : ''}
+          ${isLive
+            ? html` <button class="linkish danger" disabled=${stopping} onClick=${(): void => void stop()}>
+                ${stopping ? 'stopping (finishing the current step)…' : 'stop'}
+              </button>`
+            : ''}
         </dd>
         <dt>goal</dt><dd>${d.goal}</dd>
         ${d.reason !== undefined ? html`<dt>reason</dt><dd>${d.reason}</dd>` : ''}
@@ -189,6 +233,8 @@ export function RunDetailPage({ runId }: { runId: string }): VNode {
         </div>`
       : ''}
 
+    ${!isLive && d.status !== 'DONE' ? html`<${ResumePanel} runId=${runId} />` : ''}
+
     <h2>live feed</h2>
     <div class="feed" ref=${feedEl}>
       ${lines.length === 0 ? html`<span class="muted">waiting for events…</span>` : ''}
@@ -200,28 +246,66 @@ export function RunDetailPage({ runId }: { runId: string }): VNode {
 // ---- worktrees panel ---------------------------------------------------------
 
 export function WorktreesPage(): VNode {
-  const { data, error } = usePolled<WorktreesResponse>(() => api.worktrees(), 5000);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const { data, error } = usePolled<WorktreesResponse>(() => api.worktrees(), 5000, refreshKey);
+  const [newName, setNewName] = useState('');
+  const [actionError, setActionError] = useState<string | undefined>(undefined);
+
+  const create = async (event: Event): Promise<void> => {
+    event.preventDefault();
+    setActionError(undefined);
+    try {
+      await api.createWorktree(newName);
+      setNewName('');
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const remove = async (name: string, force: boolean): Promise<void> => {
+    setActionError(undefined);
+    try {
+      await api.removeWorktree(name, { force });
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      // The manager's refusal ladder (live run / dirty without force) surfaces verbatim.
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   if (error !== undefined) return html`<div class="error-box">${error}</div>` as VNode;
   if (data === undefined) return html`<div class="empty">loading…</div>` as VNode;
-  if (data.worktrees.length === 0) {
-    return html`<div class="empty">
-      No worktrees. Create one with <code>goaly worktree create ${'<name>'}</code> — or run with
-      <code>--worktree ${'<name>'}</code> and it is created for you.
-    </div>` as VNode;
-  }
-  return html`<table class="list">
-    <thead><tr><th>name</th><th>branch</th><th>head</th><th>dirty</th><th>runs</th><th>path</th></tr></thead>
-    <tbody>
-      ${data.worktrees.map(
-        (w) => html`<tr>
-          <td>${w.name}</td>
-          <td class="mono">${w.branch}</td>
-          <td class="mono">${w.head}</td>
-          <td>${w.prunable ? html`<span class="badge corrupt">PRUNABLE</span>` : w.dirty ? 'yes' : 'no'}</td>
-          <td>${w.runs}</td>
-          <td class="mono muted">${w.path}</td>
-        </tr>`,
-      )}
-    </tbody>
-  </table>` as VNode;
+  return html`<div>
+    ${actionError !== undefined ? html`<div class="error-box" style="white-space:pre-wrap">${actionError}</div>` : ''}
+    <form class="field-row" onSubmit=${create}>
+      <input type="text" required placeholder="new worktree name" class="mono" value=${newName}
+        onInput=${(e: Event): void => setNewName((e.target as HTMLInputElement).value)} />
+      <button class="linkish primary" type="submit">create worktree</button>
+    </form>
+    ${data.worktrees.length === 0
+      ? html`<div class="empty">
+          No worktrees yet. Create one above — or start a run with the worktree option and it is
+          created for you.
+        </div>`
+      : html`<table class="list">
+          <thead><tr><th>name</th><th>branch</th><th>head</th><th>dirty</th><th>runs</th><th>path</th><th></th></tr></thead>
+          <tbody>
+            ${data.worktrees.map(
+              (w) => html`<tr>
+                <td>${w.name}</td>
+                <td class="mono">${w.branch}</td>
+                <td class="mono">${w.head}</td>
+                <td>${w.prunable ? html`<span class="badge corrupt">PRUNABLE</span>` : w.dirty ? 'yes' : 'no'}</td>
+                <td>${w.runs}</td>
+                <td class="mono muted">${w.path}</td>
+                <td>
+                  <button class="linkish" onClick=${(): void => void remove(w.name, false)}>remove</button>
+                  ${w.dirty ? html` <button class="linkish danger" onClick=${(): void => void remove(w.name, true)}>force</button>` : ''}
+                </td>
+              </tr>`,
+            )}
+          </tbody>
+        </table>`}
+  </div>` as VNode;
 }

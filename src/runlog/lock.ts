@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rm } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const LOCK_FILE = 'run.lock';
@@ -87,6 +87,30 @@ export async function runLockActive(
 ): Promise<boolean> {
   const pid = await readHolderPid(join(runDir, LOCK_FILE));
   return pid !== null && isPidAlive(pid);
+}
+
+/**
+ * Is ANY run under this state dir currently held by a live process? The "one live run per tree"
+ * guard (ADR 0015): per-run locks stop two drivers on one run, but nothing else stops two agents
+ * editing one working tree — the UI refuses to start a second run in an occupied root, and
+ * worktree removal refuses while an agent is inside. Read-only; a missing state dir is `false`.
+ */
+export async function anyRunLockActive(
+  stateDir: string,
+  isPidAlive: (pid: number) => boolean = defaultIsPidAlive,
+): Promise<boolean> {
+  let names: string[];
+  try {
+    names = (await readdir(stateDir, { withFileTypes: true }))
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    if (await runLockActive(join(stateDir, name), isPidAlive)) return true;
+  }
+  return false;
 }
 
 async function readHolderPid(path: string): Promise<number | null> {

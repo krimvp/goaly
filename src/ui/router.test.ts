@@ -188,11 +188,124 @@ describe('route — the goaly ui API', () => {
     expect(res).toMatchObject({ status: 200, body: { worktrees: [{ name: 'feat' }] } });
   });
 
-  it('non-GET is 405; unknown API routes 404; non-API paths fall through to static', async () => {
+  it('without actions, state-changing routes answer 503 (read-only server); unknown routes 404', async () => {
     const ctx = makeCtx({});
-    expect(await route(ctx, 'POST', '/api/runs', q)).toMatchObject({ status: 405 });
+    expect(await route(ctx, 'POST', '/api/runs', q)).toMatchObject({ status: 503 });
     expect(await route(ctx, 'GET', '/api/nope', q)).toMatchObject({ status: 404 });
     expect(await route(ctx, 'GET', '/', q)).toEqual({ kind: 'static' });
     expect(await route(ctx, 'GET', '/app.js', q)).toEqual({ kind: 'static' });
+  });
+});
+
+describe('route — interactive routes (ADR 0015), against a scripted UiActions', () => {
+  function makeActions(): { actions: import('./start-run').UiActions; calls: string[] } {
+    const calls: string[] = [];
+    const actions: import('./start-run').UiActions = {
+      start: async (req) => {
+        calls.push(`start:${req.goal}`);
+        return { ok: true, runId: 'run-new' };
+      },
+      resume: async (runId, req) => {
+        calls.push(`resume:${runId}:${req.note ?? ''}`);
+        return { ok: true, runId };
+      },
+      stop: (runId) => {
+        calls.push(`stop:${runId}`);
+        return runId === 'run-live';
+      },
+      pendingGate: (runId) =>
+        runId === 'run-live'
+          ? { gateId: 'g1', kind: 'seal', contract: { rungs: [] } as never }
+          : null,
+      resolveGate: (runId, gateId) =>
+        runId !== 'run-live' ? 'no-session' : gateId === 'g1' ? 'ok' : 'stale',
+      onGateEvent: () => null,
+      createWorktree: async (name) => {
+        calls.push(`wt-create:${name}`);
+        return { name, path: `/w/${name}`, branch: `goaly/${name}`, head: 'x', dirty: false, runs: 0, prunable: false };
+      },
+      removeWorktree: async (name, o) => {
+        calls.push(`wt-remove:${name}:${o.force}:${o.deleteBranch}`);
+      },
+      shutdown: () => {},
+    };
+    return { actions, calls };
+  }
+
+  const ctxWith = (actions: import('./start-run').UiActions): RouterCtx => ({
+    ...makeCtx({}),
+    actions,
+  });
+
+  it('POST /api/runs Zod-parses the body fail-closed (.strict()) and 201s a valid start', async () => {
+    const { actions, calls } = makeActions();
+    const ctx = ctxWith(actions);
+    const ok = await route(ctx, 'POST', '/api/runs', q, { goal: 'g', verifyCmd: 'true' });
+    expect(ok).toMatchObject({ status: 201, body: { runId: 'run-new' } });
+    expect(calls).toContain('start:g');
+    // Missing verification source, both sources, and unknown fields all refuse with 400.
+    expect(await route(ctx, 'POST', '/api/runs', q, { goal: 'g' })).toMatchObject({ status: 400 });
+    expect(
+      await route(ctx, 'POST', '/api/runs', q, { goal: 'g', verifyCmd: 'x', generate: true }),
+    ).toMatchObject({ status: 400 });
+    expect(
+      await route(ctx, 'POST', '/api/runs', q, { goal: 'g', verifyCmd: 'x', hackTheBar: true }),
+    ).toMatchObject({ status: 400 });
+  });
+
+  it('gate routes: GET pending, POST decision (404 unknown run, 409 stale id, 400 bad body)', async () => {
+    const { actions } = makeActions();
+    const ctx = ctxWith(actions);
+    expect(await route(ctx, 'GET', '/api/runs/run-live/gate', q)).toMatchObject({ status: 200, body: { gateId: 'g1' } });
+    expect(await route(ctx, 'GET', '/api/runs/run-other/gate', q)).toMatchObject({ status: 404 });
+    expect(
+      await route(ctx, 'POST', '/api/runs/run-live/gate/g1', q, { decision: 'approve' }),
+    ).toMatchObject({ status: 200 });
+    expect(
+      await route(ctx, 'POST', '/api/runs/run-live/gate/old', q, { decision: 'approve' }),
+    ).toMatchObject({ status: 409 });
+    expect(
+      await route(ctx, 'POST', '/api/runs/run-other/gate/g1', q, { decision: 'approve' }),
+    ).toMatchObject({ status: 404 });
+    // revise REQUIRES non-empty feedback (the HumanSealGate rule, schema-enforced).
+    expect(
+      await route(ctx, 'POST', '/api/runs/run-live/gate/g1', q, { decision: 'revise' }),
+    ).toMatchObject({ status: 400 });
+  });
+
+  it('stop: 202 for a UI-owned live run, 404 otherwise (with the terminal hint)', async () => {
+    const { actions } = makeActions();
+    const ctx = ctxWith(actions);
+    expect(await route(ctx, 'POST', '/api/runs/run-live/stop', q)).toMatchObject({ status: 202 });
+    const miss = await route(ctx, 'POST', '/api/runs/run-other/stop', q);
+    expect(miss).toMatchObject({ status: 404 });
+    expect(JSON.stringify((miss as { body: unknown }).body)).toContain('--resume');
+  });
+
+  it('resume rides the extension schema (operational caps only; unknown fields refuse)', async () => {
+    const { actions, calls } = makeActions();
+    const ctx = ctxWith(actions);
+    expect(
+      await route(ctx, 'POST', '/api/runs/run-x/resume', q, { note: 'hint', maxIterations: 9 }),
+    ).toMatchObject({ status: 201 });
+    expect(calls).toContain('resume:run-x:hint');
+    // The bar is structurally unreachable: a "goal" field is an unknown key → 400.
+    expect(
+      await route(ctx, 'POST', '/api/runs/run-x/resume', q, { goal: 'weaker goal' }),
+    ).toMatchObject({ status: 400 });
+  });
+
+  it('worktree mutation: POST create (201/400), DELETE with boolean query (refusals → 409)', async () => {
+    const { actions, calls } = makeActions();
+    const ctx = ctxWith(actions);
+    expect(await route(ctx, 'POST', '/api/worktrees', q, { name: 'feat' })).toMatchObject({ status: 201 });
+    expect(await route(ctx, 'POST', '/api/worktrees', q, { name: '../x' })).toMatchObject({ status: 400 });
+    expect(
+      await route(ctx, 'DELETE', '/api/worktrees/feat', new URLSearchParams('force=true')),
+    ).toMatchObject({ status: 200 });
+    expect(calls).toContain('wt-remove:feat:true:false');
+    expect(
+      await route(ctx, 'DELETE', '/api/worktrees/feat', new URLSearchParams('force=maybe')),
+    ).toMatchObject({ status: 400 });
   });
 });

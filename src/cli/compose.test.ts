@@ -92,6 +92,24 @@ describe('composeDeps — phased wiring (issue #48)', () => {
     const agentP = composeDeps(makeConfig({ phased: true }), opts());
     expect(agentP.planner?.constructor.name).toBe('AgentPlanner');
   });
+
+  it('an injected sealGate/planGate (ADR 0015) wins over the autonomous switch; absent ⇒ unchanged', () => {
+    class MyGate {
+      approveContract = async (): Promise<{ kind: 'approve' }> => ({ kind: 'approve' });
+      approvePlan = async (): Promise<{ kind: 'approve' }> => ({ kind: 'approve' });
+    }
+    const gate = new MyGate();
+    const injected = composeDeps(
+      makeConfig({ phased: true, autonomous: true }),
+      opts({ sealGate: gate, planGate: gate }),
+    );
+    expect(injected.seal).toBe(gate);
+    expect(injected.planGate).toBe(gate);
+    // Absent ⇒ the classic selection is untouched.
+    const classic = composeDeps(makeConfig({ autonomous: true }), opts());
+    expect(classic.seal.constructor.name).toBe('AutoSealGate');
+    expect(composeDeps(makeConfig(), opts()).seal.constructor.name).toBe('HumanSealGate');
+  });
 });
 
 describe('composeDeps — per-reviewer approver models (follow-up to issue #84)', () => {

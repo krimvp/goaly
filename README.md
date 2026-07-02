@@ -687,8 +687,9 @@ goaly runs list
 goaly runs show run-<id>
 goaly runs resume-cmd run-<id>   # print how to continue the run's CLI session (e.g. claude --resume <id>)
 
-# Or in the browser: runs across the workspace AND its worktrees, live SSE feeds, worktree panel:
-goaly ui                         # http://127.0.0.1:4180, localhost-only, read-only
+# Or in the browser: runs across the workspace AND its worktrees, live SSE feeds, start runs with
+# a browser Seal modal, stop/resume, worktree panel:
+goaly ui                         # http://127.0.0.1:4180, localhost-only
 ```
 
 ### Config file
@@ -1152,14 +1153,32 @@ goaly ui --port 5000 --workspace ./myrepo
   When a run records a per-turn transcript (`--stream-transcript`), its tool calls and messages
   stream into the feed too.
 - **Worktrees panel.** Name / branch / HEAD / dirty / runs-count for every managed worktree,
-  `PRUNABLE` flagged.
+  `PRUNABLE` flagged — with create / remove (the manager's refusal ladder surfaces verbatim: a live
+  run or a dirty tree refuses, exactly like the CLI).
+- **Start runs — and hold the Seal in your hand.** The start form takes a goal, a `--verify-cmd`
+  or `--generate`, harness, caps, and an optional worktree; the run executes **in-process through
+  the exact same code path as the CLI** (same guards, same run lock, same write-ahead log — a
+  server crash leaves it `--resume`-able like any run). A **non-autonomous** run parks at a
+  **browser Seal modal**: the frozen contract (rungs, hash, setup, authored files) presented for
+  **approve / revise-with-feedback / reject**, exactly the CLI prompt's semantics — a third
+  `SealGate` *implementation*, never a bypass: the contract still freezes and the decision still
+  lands in the log. Each parked gate carries a one-time `gateId`, so a double-submit can never
+  answer a later gate.
+- **Stop & resume from the browser.** Stop is the same cooperative between-steps interrupt as
+  Ctrl-C (the ABORTED lands in the feed; nothing is lost); the resume panel continues any non-live
+  run — terminal-started ones included — with an optional `--note` and raised **operational** caps
+  (the ADR 0012 extension schema, which structurally has no field for the goal/verifier/rubric).
+- **One live run per tree.** Starting a second run in an occupied root is refused (409) with a
+  pointer at worktrees — per-run locks stop double drivers, this stops two agents editing one tree.
 
 The server is the same replay-fold the CLI uses — **the disk is the source of truth**, so it can be
-started and stopped freely without affecting any run. It binds `127.0.0.1` only and — because a
-no-auth localhost server is reachable from any page your browser has open — refuses requests with a
-non-local `Host` (DNS-rebinding) or a cross-site `Origin`, fail-closed
-([ADR 0014](docs/adr/0014-local-web-ui.md)). Embedders get the same server via
-`startUiServer({ workspaceRoot })`.
+started and stopped freely; UI-owned runs stay resumable if it dies. It binds `127.0.0.1` only
+and — because a no-auth localhost server is reachable from any page your browser has open — refuses
+requests with a non-local `Host` (DNS-rebinding) or a cross-site `Origin`, and requires an
+`X-Goaly-Ui: 1` header on every state-changing request (a cross-site form can never attach one) —
+all fail-closed ([ADR 0014](docs/adr/0014-local-web-ui.md),
+[ADR 0015](docs/adr/0015-ui-owned-runs.md)). Embedders get the same server via
+`startUiServer({ workspaceRoot })`, and the same shared run entrypoint via `executeRun()`.
 
 ### Adding a harness
 

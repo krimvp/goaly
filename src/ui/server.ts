@@ -1,17 +1,22 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import type { Logger } from '../log/logger';
+import { killActiveChildren } from '../util/spawn';
 import { route, type RouterCtx } from './router';
 import { resolveAssetsDir, readAsset } from './assets';
 import { tailRun, NoSuchRunError, type TailDeps } from './sse';
-import type { SseFrame, VersionResponse } from './api-schema';
+import { makeUiActions, type UiActions } from './start-run';
+import type { PendingGate, SseFrame, VersionResponse } from './api-schema';
 
 /**
- * The `goaly ui` local web server (ADR 0014): a thin `node:http` layer over the run-log
- * projections + the SSE tail. Binds 127.0.0.1 by default and — because a localhost server with no
- * auth is reachable from any web page the browser has open — enforces two request guards even for
- * reads: the Host header must be a local one (DNS-rebinding guard) and a present Origin header
- * must be same-origin (cross-site guard). Both fail closed with 403.
+ * The `goaly ui` local web server (ADR 0014/0015): a thin `node:http` layer over the run-log
+ * projections + the SSE tail, plus the interactive actions (start / gates / stop / resume — runs
+ * execute IN-PROCESS through the same `executeRun` the CLI uses). Binds 127.0.0.1 by default and —
+ * because a localhost server with no auth is reachable from any web page the browser has open —
+ * enforces request guards even for reads: the Host header must be local (DNS-rebinding guard), a
+ * present Origin must be same-origin (cross-site guard), and every state-changing request must
+ * additionally carry `X-Goaly-Ui: 1` (a custom header a cross-site form can never attach). All
+ * fail closed with 403.
  */
 export type UiServerOptions = {
   workspaceRoot: string;
@@ -28,6 +33,10 @@ export type UiServerOptions = {
   listWorktrees?: RouterCtx['listWorktrees'];
   /** Injected SSE tail knobs (tests). */
   tail?: TailDeps;
+  /** Injected interactive actions (tests). Default: the real in-process run machinery. */
+  actions?: UiActions;
+  /** Serve READ-ONLY (no start/stop/gates/worktree mutation). Default: interactive. */
+  readOnly?: boolean;
 };
 
 export type UiServer = {
@@ -39,15 +48,27 @@ export type UiServer = {
 
 export const DEFAULT_UI_PORT = 4180;
 
+/** Request bodies above this are refused (fail-closed) — no legitimate request comes close. */
+const MAX_BODY_BYTES = 1024 * 1024;
+
 export async function startUiServer(options: UiServerOptions): Promise<UiServer> {
   const host = options.host ?? '127.0.0.1';
   const assetsDir = await resolveAssetsDir(options.assetsDir);
+  const actions =
+    options.readOnly === true
+      ? undefined
+      : (options.actions ??
+        makeUiActions({
+          workspaceRoot: options.workspaceRoot,
+          ...(options.logger !== undefined ? { logger: options.logger } : {}),
+        }));
   const ctx: RouterCtx = {
     workspaceRoot: options.workspaceRoot,
     version: await readVersion(),
     ...(options.inspect !== undefined ? { inspect: options.inspect } : {}),
     ...(options.isActive !== undefined ? { isActive: options.isActive } : {}),
     ...(options.listWorktrees !== undefined ? { listWorktrees: options.listWorktrees } : {}),
+    ...(actions !== undefined ? { actions } : {}),
   };
 
   const server = createServer((req, res) => {
@@ -63,13 +84,33 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   });
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const method = req.method ?? 'GET';
     if (!requestAllowed(req)) {
       res.writeHead(403, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'forbidden (non-local Host or cross-site Origin)' }));
       return;
     }
+    // State-changing requests additionally need the custom header (CSRF defense in depth: a
+    // cross-site <form> can never set it, and setting it via fetch forces a CORS preflight the
+    // Origin guard already rejects).
+    if (method !== 'GET' && req.headers['x-goaly-ui'] !== '1') {
+      res.writeHead(403, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'forbidden (missing X-Goaly-Ui header)' }));
+      return;
+    }
+
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-    const outcome = await route(ctx, req.method ?? 'GET', url.pathname, url.searchParams);
+    let body: unknown;
+    if (method === 'POST') {
+      try {
+        body = await readJsonBody(req);
+      } catch (e) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: e instanceof Error ? e.message : 'invalid body' }));
+        return;
+      }
+    }
+    const outcome = await route(ctx, method, url.pathname, url.searchParams, body);
 
     if (outcome.kind === 'json') {
       res.writeHead(outcome.status, { 'content-type': 'application/json' });
@@ -88,6 +129,11 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     await serveStatic(res, url.pathname);
   }
 
+  /**
+   * The SSE stream: the disk tail (entries / stream / liveness / terminal) MERGED with the
+   * session's live gate events (a parked Seal is server memory, not log state). A simple
+   * queue+wakeup joins the two sources; client disconnect aborts both.
+   */
   async function serveSse(res: ServerResponse, runDir: string, runId: string, tail: TailDeps): Promise<void> {
     res.writeHead(200, {
       'content-type': 'text/event-stream',
@@ -96,17 +142,64 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     });
     const abort = new AbortController();
     res.on('close', () => abort.abort());
-    try {
-      for await (const frame of tailRun(runDir, runId, tail, abort.signal)) {
-        if (abort.signal.aborted) break;
-        res.write(renderSseFrame(frame));
+
+    const queue: SseFrame[] = [];
+    let wake: (() => void) | undefined;
+    let tailDone = false;
+    let tailError: unknown;
+    const push = (frame: SseFrame): void => {
+      queue.push(frame);
+      wake?.();
+    };
+
+    // Live gate push for UI-owned runs; a parked gate is replayed on connect so a page refresh
+    // mid-Seal still shows the modal.
+    const pending = actions?.pendingGate(runId);
+    if (pending !== undefined && pending !== null) push({ event: 'gate', data: pending });
+    const unsubscribeGates =
+      actions?.onGateEvent(runId, (event) => {
+        push(
+          'resolved' in event
+            ? { event: 'gate-resolved', data: { gateId: event.resolved } }
+            : { event: 'gate', data: event as PendingGate },
+        );
+      }) ?? null;
+
+    void (async () => {
+      try {
+        for await (const frame of tailRun(runDir, runId, tail, abort.signal)) push(frame);
+      } catch (e) {
+        tailError = e;
+      } finally {
+        tailDone = true;
+        wake?.();
       }
-    } catch (e) {
-      // The run vanished or its log is corrupt mid-tail: end the stream with a terminal error
-      // event (headers are already out, so a status code is no longer possible).
-      const message = e instanceof NoSuchRunError ? e.message : `run log unreadable: ${String(e)}`;
-      res.write(renderSseFrame({ event: 'terminal', data: { stateTag: 'ERROR', error: message } }));
+    })();
+
+    try {
+      while (!abort.signal.aborted) {
+        while (queue.length > 0) {
+          const frame = queue.shift();
+          if (frame !== undefined) res.write(renderSseFrame(frame));
+        }
+        if (tailDone) break;
+        await new Promise<void>((resolveWake) => {
+          wake = resolveWake;
+          if (queue.length > 0 || tailDone || abort.signal.aborted) resolveWake();
+        });
+        wake = undefined;
+      }
+      if (tailError !== undefined && !abort.signal.aborted) {
+        // The run vanished or its log is corrupt mid-tail: end the stream with a terminal error
+        // event (headers are already out, so a status code is no longer possible).
+        const message =
+          tailError instanceof NoSuchRunError
+            ? tailError.message
+            : `run log unreadable: ${String(tailError)}`;
+        res.write(renderSseFrame({ event: 'terminal', data: { stateTag: 'ERROR', error: message } }));
+      }
     } finally {
+      unsubscribeGates?.();
       res.end();
     }
   }
@@ -143,14 +236,20 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   return {
     url: `http://${host}:${port}`,
     port,
-    close: () => closeServer(server),
+    close: async () => {
+      // Cooperative-stop every UI-owned run (each stays resumable via its write-ahead log), then
+      // reap any live child process groups — mirroring the CLI's second-signal sweep.
+      actions?.shutdown();
+      await closeServer(server);
+      killActiveChildren();
+    },
   };
 }
 
 /**
  * Request guards for a no-auth localhost server: without these, any web page could read run logs
- * (DNS rebinding defeats the "it's only on localhost" assumption) — and, once the interactive
- * routes exist, start runs that execute code. Reads and writes are guarded alike.
+ * (DNS rebinding defeats the "it's only on localhost" assumption) — and, with the interactive
+ * routes, start runs that execute code. Reads and writes are guarded alike.
  */
 export function requestAllowed(req: Pick<IncomingMessage, 'headers'>): boolean {
   const host = req.headers.host;
@@ -175,6 +274,24 @@ function isLocalHost(hostHeader: string): boolean {
 function renderSseFrame(frame: SseFrame): string {
   if (frame.event === 'heartbeat') return ': keepalive\n\n';
   return `event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`;
+}
+
+/** Read + JSON-parse a request body, fail-closed on size and syntax. */
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = chunk as Buffer;
+    total += buf.length;
+    if (total > MAX_BODY_BYTES) throw new Error('request body too large');
+    chunks.push(buf);
+  }
+  if (total === 0) return undefined;
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+  } catch {
+    throw new Error('request body is not valid JSON');
+  }
 }
 
 /** Best-effort package identity for `/api/version` — 'unknown' when the manifest isn't found. */

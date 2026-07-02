@@ -23,6 +23,7 @@ import { StaticPlanner } from '../plan/static-planner';
 import { AutoPlanGate, HumanPlanGate } from '../plan/plan-gates';
 import type { Planner } from '../plan/planner';
 import type { PlanGate } from '../plan/plan-gate';
+import type { SealGate } from '../compile/seal';
 import { GitWorkspace, realExec } from '../workspace/git-workspace';
 import { GitWorktreeHost } from '../workspace/git-worktree-host';
 import { excludeFromGit } from '../workspace/git-exclude';
@@ -177,6 +178,14 @@ export type ComposeOptions = {
    * unaffected (every attempt is still frozen + Sealed on its own). Absent ⇒ a normal fresh run.
    */
   followupSeed?: string;
+  /**
+   * Inject the Seal gate (ADR 0015: the goaly-ui browser gate; tests inject fakes). A gate
+   * IMPLEMENTATION, never a bypass — the contract still freezes and `SEAL_DECIDED` still logs
+   * (invariant #5). Absent ⇒ the classic selection on `config.autonomous`.
+   */
+  sealGate?: SealGate;
+  /** Inject the plan-Seal gate (phased runs), same rules as {@link sealGate}. */
+  planGate?: PlanGate;
 };
 
 /**
@@ -340,9 +349,11 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
             : new AgentPlanner({ llm: llmFor(models.planner, 'plan') }),
           seed,
         ),
-        planGate: config.autonomous
-          ? new AutoPlanGate()
-          : new HumanPlanGate({ allowRevise: config.maxPlanRevisions > 0 }),
+        planGate:
+          options.planGate ??
+          (config.autonomous
+            ? new AutoPlanGate()
+            : new HumanPlanGate({ allowRevise: config.maxPlanRevisions > 0 })),
       }
     : undefined;
 
@@ -377,9 +388,11 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       }),
       seed,
     ),
-    seal: config.autonomous
-      ? new AutoSealGate()
-      : new HumanSealGate({ allowRevise: config.maxSealRevisions > 0 }),
+    seal:
+      options.sealGate ??
+      (config.autonomous
+        ? new AutoSealGate()
+        : new HumanSealGate({ allowRevise: config.maxSealRevisions > 0 })),
     ...(phasedSeams !== undefined ? phasedSeams : {}),
     harness:
       options.harness === 'goaly-code'

@@ -578,15 +578,22 @@ Worktrees (run on an isolated copy of the repo; merge back with plain git):
   WARNING: worktrees live inside the git-ignored .goaly dir — 'git clean -dfx' on the main tree
   deletes them (committed work survives on the goaly/<name> branch; uncommitted work does not).
 
-Web UI (a local, read-anywhere view of runs — the browser twin of 'runs list/show/watch'):
+Web UI (observe, start & steer runs from the browser):
   goaly ui [--port N]       serve a local web UI (default http://127.0.0.1:4180) over this
                             workspace's runs AND every managed worktree's runs: a live runs table,
                             per-run detail (frozen contract, iteration ladder, sign-off verdicts,
                             spend), a live event feed (the write-ahead log tailed over SSE — works
-                            for runs started in ANY terminal, read-only), and the worktrees panel.
-                            Binds 127.0.0.1 only; requests with a non-local Host or a cross-site
-                            Origin are refused (fail-closed). Ctrl-C stops the server; runs it was
-                            watching are unaffected.`;
+                            for runs started in ANY terminal, read-only), and the worktrees panel
+                            (create/remove). Runs can be STARTED from the browser too — they
+                            execute through the exact same path as the CLI (same guards, lock,
+                            write-ahead log); a non-autonomous run parks at a browser Seal modal
+                            (approve / revise / reject — a real SealGate implementation, never a
+                            bypass), and any non-live run can be resumed with a --note + raised
+                            operational caps. One live run per tree (use worktrees to parallelize).
+                            Binds 127.0.0.1 only; a non-local Host, a cross-site Origin, or a
+                            state-changing request without the X-Goaly-Ui header is refused
+                            (fail-closed). Ctrl-C stops the server; UI-owned runs stop cleanly and
+                            stay resumable, watched runs are unaffected.`;
 
 export type RawFlags = Record<string, string | boolean>;
 

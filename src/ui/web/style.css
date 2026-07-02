@@ -90,3 +90,34 @@ button.linkish {
   border-radius: 6px; padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.85rem;
 }
 button.linkish:hover { border-color: var(--accent-dim); }
+button.linkish.primary { border-color: var(--accent-dim); color: var(--accent); }
+button.linkish.danger { border-color: #7a3b37; color: var(--red); }
+button.linkish:disabled { opacity: 0.5; cursor: default; }
+
+/* forms (start-run, resume, worktree create) */
+label { display: block; margin: 0.6rem 0; font-size: 0.9rem; color: var(--muted); }
+label.inline { display: flex; align-items: center; gap: 0.5rem; color: var(--text); }
+input[type='text'], input[type='number'], textarea, select {
+  display: block; width: 100%; margin-top: 0.25rem;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px; padding: 0.45rem 0.6rem;
+  font: inherit; font-size: 0.9rem;
+}
+label.inline input { width: auto; margin: 0; }
+textarea { resize: vertical; }
+input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent-dim); }
+.field-row { display: flex; gap: 1rem; align-items: end; flex-wrap: wrap; }
+.field-row > label { flex: 1 1 10rem; }
+.start-form { max-width: 46rem; }
+
+/* the seal modal */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(4, 6, 10, 0.75);
+  display: flex; align-items: center; justify-content: center; z-index: 10;
+}
+.modal { max-width: 44rem; width: calc(100% - 2rem); max-height: 85vh; overflow-y: auto; }
+.contract {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 0.7rem 1rem; margin: 0.6rem 0; font-size: 0.9rem; overflow-wrap: anywhere;
+}
+.contract ol { margin: 0.4rem 0; padding-left: 1.4rem; }
