@@ -115,11 +115,20 @@ export class JudgeVerifier implements Verifier {
 
     const samples: JudgeOutput[] = [];
     for (let i = 0; i < this.#quorum; i += 1) {
-      const { text: raw } = await this.#llm.complete({
-        system: SYSTEM_PROMPT,
-        prompt,
-        temperature,
-      });
+      // Each sample is individually guarded: one thrown/timed-out call drops THAT sample only,
+      // exactly like an unparseable one — it must never discard the sibling samples that already
+      // succeeded (a quorum exists to absorb precisely this kind of partial failure). Zero
+      // surviving samples still fall through to the fail-closed unevaluable red below.
+      let raw: string;
+      try {
+        ({ text: raw } = await this.#llm.complete({
+          system: SYSTEM_PROMPT,
+          prompt,
+          temperature,
+        }));
+      } catch {
+        continue;
+      }
       const extracted = extractJson(raw);
       if (extracted === null) continue;
       const parsed = JudgeOutput.safeParse(extracted);

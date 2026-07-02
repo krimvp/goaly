@@ -3,7 +3,7 @@ import { DiffHash, SessionId, ContractHash, RunId } from './ids';
 import { CompiledContract } from './contract';
 import { PhasePlan } from './plan';
 import { Verdict, ApprovalVerdict, SealDecision } from './verdict';
-import { RunConfig } from './config';
+import { RunConfig, StuckPolicy } from './config';
 import { TokenUsage, TokenBreakdown, UsageReport } from './usage';
 
 /** What a harness adapter returns. `diffHash` is computed by the Workspace, not here. */
@@ -210,8 +210,38 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     /** The winning candidate's tree SHA (promoted into the canonical workspace). */
     tree: DiffHash,
   }),
+  /**
+   * The operator EXTENDED or STEERED the run at a `--resume` boundary (operator control, ADR 0012).
+   * Like CHECKPOINTED it is a Driver-side MARKER, NEVER fed to `step()` — replay applies it as a
+   * CONFIG OVERLAY (caps / stuck thresholds) BEFORE the fold, so a raised `--max-iterations` or
+   * `--budget-tokens` simply makes the fold not terminate at the old cap, and surfaces the `note`
+   * into the next agent prompt (an un-consumed note is one with no AGENT_RAN after it). Only the
+   * OPERATIONAL knobs are extendable — never the goal / verifier / rubric: the frozen contract stays
+   * frozen (invariant #2), and both keys still gate DONE. Appended write-ahead at resume time so the
+   * extension is auditable and every later replay/inspection folds with the same effective config.
+   */
+  z.object({
+    tag: z.literal('RUN_EXTENDED'),
+    /** New iteration cap (replaces the config's `maxIterations`). */
+    maxIterations: z.number().int().positive().optional(),
+    /** New token budget cap (replaces `budget.tokens`; past snapshots are re-judged against it). */
+    budgetTokens: z.number().int().positive().optional(),
+    /** New wall-clock budget cap (replaces `budget.wallClockMs`). */
+    budgetWallMs: z.number().int().positive().optional(),
+    /** Stuck-policy overrides (each field replaces its counterpart; absent fields keep the prior). */
+    stuck: StuckPolicy.partial().optional(),
+    /** Operator guidance appended to the NEXT agent prompt (worker steering, never the contract). */
+    note: z.string().min(1).optional(),
+  }),
 ]);
 export type OrchestratorEvent = z.infer<typeof OrchestratorEvent>;
+
+/**
+ * The payload of a RUN_EXTENDED marker (ADR 0012), minus its tag — the shape the CLI collects from
+ * explicit `--resume`-time flags and the Driver persists write-ahead. Operational knobs + a worker
+ * note only; the frozen contract fields are unrepresentable here by construction (invariant #2).
+ */
+export type RunExtension = Omit<Extract<OrchestratorEvent, { tag: 'RUN_EXTENDED' }>, 'tag'>;
 
 /** Inputs the Driver must gather (workspace diff) before running the approver. */
 export type ApprovalInput = {

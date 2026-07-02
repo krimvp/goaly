@@ -11,6 +11,11 @@ import { asRunId, type RunId } from '../domain/ids';
 import type { RunOutcome } from '../domain/events';
 import type { RunConfig } from '../domain/config';
 import { readRun } from '../runlog/inspect';
+import { FileRunLog } from '../runlog/file-runlog';
+import { extendedRunConfig, applyRunExtension } from '../runlog/replay';
+import { acquireRunLock, RunLockedError, type RunLock } from '../runlog/lock';
+import { killActiveChildren } from '../util/spawn';
+import { preflightRun } from './preflight';
 import { compactRun } from '../followup/compaction';
 import { resumeHint, renderResumeHint, type ResumeHint } from './resume-cmd';
 import { resolveModels } from './models';
@@ -94,8 +99,46 @@ async function resolveFollowup(
 }
 
 /**
- * CLI entry. Returns a process exit code (0 = DONE, 1 = FAILED/ABORTED, 2 = usage error) so the
- * thin bin launcher stays trivial and `main` is unit-testable.
+ * Graceful-interrupt wiring (Ctrl-C / SIGTERM). The FIRST signal requests a cooperative stop: the
+ * Driver finishes the in-flight step (its event lands write-ahead) and resolves to a typed ABORTED
+ * with the resume command — nothing is lost and the user is told exactly how to continue. A SECOND
+ * signal force-exits (130) after reaping any live child process groups (a group-spawned agent CLI
+ * does not share the terminal's process group, so without the sweep it would outlive goaly and
+ * keep editing/spending). Exposed for tests; `main` installs/removes it around `drive()`.
+ */
+export function makeInterruptController(
+  runId: string,
+  warn: (s: string) => void,
+  forceExit: () => void = () => {
+    killActiveChildren();
+    process.exit(130);
+  },
+): { onSignal: () => void; interrupted: () => boolean } {
+  let signals = 0;
+  return {
+    onSignal: (): void => {
+      signals += 1;
+      if (signals === 1) {
+        warn(
+          `\ngoaly: interrupt received — finishing the current step, then stopping cleanly ` +
+            `(press Ctrl-C again to exit immediately).\n` +
+            `goaly: resume later with: goaly --resume ${runId} (plus your original flags)\n`,
+        );
+        return;
+      }
+      warn(`\ngoaly: exiting immediately — resume with: goaly --resume ${runId}\n`);
+      forceExit();
+    },
+    interrupted: (): boolean => signals > 0,
+  };
+}
+
+/** Exit code for a run stopped by Ctrl-C/SIGTERM (128 + SIGINT), distinct from FAILED/ABORTED (1). */
+const EXIT_INTERRUPTED = 130;
+
+/**
+ * CLI entry. Returns a process exit code (0 = DONE, 1 = FAILED/ABORTED, 2 = usage error,
+ * 130 = interrupted) so the thin bin launcher stays trivial and `main` is unit-testable.
  */
 export async function main(argv: string[]): Promise<number> {
   let parsed;
@@ -153,11 +196,80 @@ export async function main(argv: string[]): Promise<number> {
   // --inherit-session) seed the session. A normal run passes through unchanged.
   const followup = await resolveFollowup(parsed, (s) => process.stderr.write(s));
   if (!followup.ok) return followup.code;
-  const runConfig = followup.config;
+
+  // First-run preflight (fail-fast, before any spend): git repo present, harness / LLM-provider
+  // CLI on PATH — the mistakes that used to surface only AFTER a compile + agent turn, as cryptic
+  // spawn/plumbing errors. Cheap (milliseconds), skipped for the runs/help commands above.
+  {
+    const problem = await preflightRun({
+      harness: parsed.harness,
+      llmProvider: parsed.llmProvider,
+      workspace: parsed.workspace,
+    });
+    if (problem !== null) {
+      process.stderr.write(`goaly: ${problem}\n`);
+      return 2;
+    }
+  }
 
   const resuming = parsed.resumeRunId !== undefined;
   const runId: RunId =
     parsed.resumeRunId !== undefined ? asRunId(parsed.resumeRunId) : asRunId(`run-${randomUUID()}`);
+
+  // Validate --resume BEFORE creating anything (the run lock would otherwise mkdir a run dir for a
+  // typo'd id): a missing run gets a pointer to `runs list`; a corrupt log a clear parse error —
+  // mirroring the --from-run guards above instead of failing deep inside the resume fold.
+  // A resumed run continues with the LOG's effective config (header + any logged RUN_EXTENDED
+  // overlays + this invocation's explicit extension), NOT this invocation's re-parsed defaults — so
+  // the budget meter, best-of wiring, etc. match exactly what the resume fold will compute.
+  let runConfig = followup.config;
+  if (parsed.resumeRunId !== undefined) {
+    const stateDir = path.join(parsed.workspace, STATE_DIR);
+    const prior = await readRun(stateDir, parsed.resumeRunId);
+    if (prior === null) {
+      process.stderr.write(
+        `goaly: --resume ${parsed.resumeRunId}: no such run in ${stateDir} — ` +
+          `list runs with: goaly runs list --workspace ${parsed.workspace}\n`,
+      );
+      return 2;
+    }
+    if (!prior.ok) {
+      process.stderr.write(
+        `goaly: --resume ${parsed.resumeRunId}: run log is corrupt: ${prior.error}\n`,
+      );
+      return 2;
+    }
+    // Extending a DONE run is meaningless (both keys already turned) — route to the follow-up path.
+    if (prior.detail.status === 'DONE' && parsed.resumeExtend !== undefined) {
+      process.stderr.write(
+        `goaly: --resume ${parsed.resumeRunId}: this run is DONE — there is nothing to extend. ` +
+          `Build on it with: goaly "<follow-up goal>" --from-run ${parsed.resumeRunId}\n`,
+      );
+      return 2;
+    }
+    const stored = await new FileRunLog(path.join(stateDir, parsed.resumeRunId)).read();
+    if (stored !== null) {
+      const effective = extendedRunConfig(stored.header.config, stored.entries);
+      runConfig =
+        parsed.resumeExtend !== undefined
+          ? applyRunExtension(effective, parsed.resumeExtend)
+          : effective;
+    }
+  }
+
+  // Exclusive per-run lock: two goaly processes appending to one run log would interleave duplicate
+  // seq values and corrupt it logically. A crashed holder self-heals (stale-pid detection); a LIVE
+  // holder refuses to start with a clear message (fail-closed, invariant #4).
+  let runLock: RunLock;
+  try {
+    runLock = await acquireRunLock(path.join(parsed.workspace, STATE_DIR, runId));
+  } catch (e) {
+    if (e instanceof RunLockedError) {
+      process.stderr.write(`goaly: ${e.message}\n`);
+      return 2;
+    }
+    throw e;
+  }
 
   // Start the egress proxy (issue #39) when the sandbox policy uses an allowlist. It's IO (a running
   // server), so it lives at the composition EDGE — started here, threaded into both jailed seams,
@@ -218,7 +330,12 @@ export async function main(argv: string[]): Promise<number> {
 
     // Human-facing startup banner, routed through the logger so it respects --log-level and lands
     // in the diagnostics file too. The run outcome below stays on stdout (the machine-facing result).
+    // The runId + resume command are printed UP FRONT so a crash/Ctrl-C at any point leaves the
+    // continuation path on screen (the headline resilience feature must be discoverable).
     deps.logger?.info('cli starting', {
+      runId,
+      resumeWith: `goaly --resume ${runId}`,
+      watchWith: `goaly runs watch ${runId}`,
       harness: parsed.harness,
       autonomous: parsed.config.autonomous,
       ...(parsed.configSources.length > 0 ? { configFile: parsed.configSources.join(', ') } : {}),
@@ -226,7 +343,28 @@ export async function main(argv: string[]): Promise<number> {
       ...startupFields(parsed),
     });
 
-    const outcome = await drive(deps, runConfig, runId, { resume: resuming, harness: parsed.harness });
+    // Graceful interrupt: first Ctrl-C stops between steps (clean ABORTED + resume hint); second
+    // force-exits. Installed only around the run itself, and always removed in the finally below.
+    const interrupt = makeInterruptController(runId, (s) => process.stderr.write(s));
+    process.on('SIGINT', interrupt.onSignal);
+    process.on('SIGTERM', interrupt.onSignal);
+
+    let outcome;
+    try {
+      outcome = await drive(
+        { ...deps, interrupted: interrupt.interrupted },
+        runConfig,
+        runId,
+        {
+          resume: resuming,
+          harness: parsed.harness,
+          ...(parsed.resumeExtend !== undefined ? { extend: parsed.resumeExtend } : {}),
+        },
+      );
+    } finally {
+      process.removeListener('SIGINT', interrupt.onSignal);
+      process.removeListener('SIGTERM', interrupt.onSignal);
+    }
 
     // Surface the egress audit trail: any denied host:port the jail tried to reach (issue #39).
     if (egressProxy !== undefined && egressProxy.denied.length > 0) {
@@ -244,10 +382,43 @@ export async function main(argv: string[]): Promise<number> {
     // command (or the goaly-code → --from-run route). Stays quiet when there is no real session.
     const hint = resumeHint(parsed.harness, outcome.sessionId, runId);
     process.stdout.write(`${formatOutcome(outcome, cost, hint)}\n`);
-    return outcome.status === 'DONE' ? 0 : 1;
+    if (outcome.status === 'DONE') return 0;
+    return interrupt.interrupted() ? EXIT_INTERRUPTED : 1;
   } finally {
     await egressProxy?.close();
+    await runLock.release();
   }
+}
+
+/**
+ * A one-line, always-on "what do I do now" for the common terminal reasons — the zero-cost,
+ * non-LLM complement to `--explain`. A first-time user seeing `status: ABORTED / reason:
+ * STUCK_NO_DIFF` should not need to read the architecture docs to know the next step. Matched on
+ * the typed reason prefixes/tags the reducer and stuck detectors emit; unknown reasons get no hint.
+ */
+export function nextStepHint(o: RunOutcome): string | undefined {
+  const reason = o.reason ?? '';
+  const inspect = `inspect with: goaly runs show ${o.runId}`;
+  const resume = `goaly --resume ${o.runId}`;
+  if (o.status === 'DONE' || reason.length === 0) return undefined;
+  if (reason.includes('interrupted by user')) return undefined; // the reason already says how to resume
+  // Every "…and continue" hint names the EXACT extension flag: a terminal run replays back to the
+  // same terminal state on a plain resume — only a --resume extension (ADR 0012) un-terminates it.
+  const table: readonly (readonly [RegExp, string])[] = [
+    [/STUCK_HARNESS_CRASH/, `the agent CLI kept crashing — run it once by hand to check install/auth, then continue: ${resume} --stuck-crash-threshold 4`],
+    [/CONTRACT_UNEVALUABLE/, `the verification could not RUN (environment problem, not a code red) — fix the tool/network it names, then continue: ${resume} --stuck-unevaluable-threshold 4`],
+    [/TOOLS_MISSING/, `install the tools named above (or rerun with --install-missing-tools true)`],
+    [/SETUP_FAILED/, `fix the setup command, or override it with --setup-cmd / disable it with --no-setup`],
+    [/CONTRACT_UNSOUND/, `the frozen verification itself is broken on this tree — start a fresh run with a corrected goal or an explicit --verify-cmd`],
+    [/budget exceeded/, `raise the cap and continue: ${resume} --budget-tokens <N> (or --budget-wall-ms <N>)`],
+    [/reached maxIterations/, `continue with more room: ${resume} --max-iterations <N> --note "<guidance>", or ${inspect}`],
+    [/no-diff/, `the agent stopped changing the tree — steer it: ${resume} --stuck-no-diff false --note "<hint>", or refine the goal in a follow-up: --from-run ${o.runId}`],
+    [/oscillation/, `the agent is flip-flopping between two states — ${inspect}; steer it: ${resume} --stuck-oscillation false --note "<which way to go>"`],
+    [/STUCK_REPEATED_FAILURE|identical .*failures/, `the same verifier failure repeated — steer it: ${resume} --stuck-repeat-threshold 6 --note "<hint>", or ${inspect}`],
+    [/compile failed|PLAN_FAILED|plan failed/i, `the contract/plan could not be authored — check the --llm-provider CLI runs & is authenticated, then retry`],
+  ];
+  for (const [pattern, hint] of table) if (pattern.test(reason)) return hint;
+  return undefined;
 }
 
 export function formatOutcome(o: RunOutcome, cost?: CostView, resume?: ResumeHint): string {
@@ -259,6 +430,8 @@ export function formatOutcome(o: RunOutcome, cost?: CostView, resume?: ResumeHin
     `contract:    ${o.contractHash ?? '(none — failed before compile)'}`,
   ];
   if (o.reason !== undefined) lines.push(`reason:      ${o.reason}`);
+  const hint = nextStepHint(o);
+  if (hint !== undefined) lines.push(`next:        ${hint}`);
   if (o.usage !== undefined) lines.push(...formatUsage(o.usage, cost));
   // Capability A end-of-run banner: only printed when there is something useful to continue with
   // (a real interactive-resume command, or the goaly-code follow-up route). Quiet otherwise.

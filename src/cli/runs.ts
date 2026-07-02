@@ -12,6 +12,7 @@ import {
 } from '../runlog/inspect';
 import { formatUsage } from './usage-format';
 import { resumeHint, renderResumeHint } from './resume-cmd';
+import { runsWatch } from './watch';
 
 /**
  * Render the read-only `goaly runs` subcommands (issue #14). A pure presentation layer over the
@@ -26,13 +27,20 @@ export async function runRuns(
 ): Promise<number> {
   if (cmd.kind === 'list') return runsList(stateDir, out);
   if (cmd.kind === 'resume-cmd') return runsResumeCmd(cmd.runId, cmd.harness, stateDir, out, err);
+  if (cmd.kind === 'watch') return runsWatch(cmd.runId, stateDir, out, err);
   return runsShow(cmd.runId, stateDir, out, err);
 }
 
 async function runsList(stateDir: string, out: (s: string) => void): Promise<number> {
   const items = await listRuns(stateDir);
   if (items.length === 0) {
-    out(`No runs found in ${stateDir}\n`);
+    // Runs are stored PER WORKSPACE — the most common reason for an empty list is simply being in
+    // a different directory than the one the run was started in. Say so.
+    out(
+      `No runs found in ${stateDir}\n` +
+        `(runs are stored per-workspace under <dir>/.goaly — if your run was started elsewhere, ` +
+        `pass --workspace <dir>)\n`,
+    );
     return 0;
   }
   out(`${renderRunsTable(items)}\n`);

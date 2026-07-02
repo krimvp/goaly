@@ -1,5 +1,6 @@
-import type { Command, OrchestratorEvent, RunOutcome } from '../domain/events';
+import type { Command, OrchestratorEvent, RunExtension, RunOutcome } from '../domain/events';
 import { OrchestratorEvent as OrchestratorEventSchema } from '../domain/events';
+import type { RunLogEntry } from '../runlog/runlog';
 import type { RunConfig } from '../domain/config';
 import type { CompiledContract } from '../domain/contract';
 import type { ContractHash, RunId, SessionId } from '../domain/ids';
@@ -42,6 +43,20 @@ const SENTINEL_PREV_HASH: DiffHash = DiffHash.parse('0000000');
 const SENTINEL_POST_HASH: DiffHash = DiffHash.parse('0000001');
 
 /**
+ * Transient-crash absorption for one agent turn: a CRASHED harness run (the CLI exited abnormally —
+ * the shape a momentary rate-limit / network / auth blip produces) is retried once after a short
+ * backoff BEFORE the crash reaches the reducer. Without it, two quick back-to-back blips burn the
+ * whole `stuckCrashThreshold` (default 2) in seconds and abort an otherwise-healthy run. Retrying
+ * here is an EFFECT policy (the Driver's job), so the reducer, the stuck detectors, and the run-log
+ * semantics are untouched — a crash that survives the retry still counts toward the streak exactly
+ * as before. Timeouts are NOT retried (the wall-clock cap is the run's own guard).
+ */
+const HARNESS_CRASH_RETRIES = 1;
+const HARNESS_CRASH_BACKOFF_MS = 2000;
+
+const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
  * Everything the Driver needs to perform effects. The ladder is built once from the frozen
  * contract via `makeLadder` (the composition root knows how to assemble deterministic +
  * judge rungs); the Driver treats it as an opaque Verifier.
@@ -71,6 +86,19 @@ export type DriverDeps = {
   worktrees?: WorktreeHost;
   clock: Clock;
   budget: BudgetMeter;
+  /**
+   * Backoff sleep used by the harness crash-retry (see {@link HARNESS_CRASH_RETRIES}). Injectable
+   * so tests never wait a real timer; defaults to a real `setTimeout`.
+   */
+  sleep?: (ms: number) => Promise<void>;
+  /**
+   * Cooperative interrupt probe (Ctrl-C / SIGTERM): polled between steps — and before a crash-retry
+   * — so a graceful shutdown finishes the in-flight effect, persists its event write-ahead, and
+   * resolves to a typed ABORTED (with a resume path) instead of dying mid-iteration. Absent ⇒ never
+   * interrupted. The write-ahead log makes even a HARD kill safe (at-least-once resume); this just
+   * turns the common case into a clean, resumable exit with a clear outcome.
+   */
+  interrupted?: () => boolean;
   /**
    * Meters LLM-step token spend (compiler / judge / approver). The composition root wraps each
    * workflow-step provider with `meterLlm` feeding this one meter; the Driver reads it per command
@@ -125,6 +153,12 @@ export type DriveOptions = {
    * wiring, never the frozen contract; absent ⇒ the header omits it (old behavior unchanged).
    */
   harness?: string;
+  /**
+   * Operator extension/steering for THIS resume (ADR 0012). Ignored on a fresh run and on a log
+   * that doesn't exist yet. Appended as a RUN_EXTENDED marker BEFORE the resume fold, so a raised
+   * cap un-terminates a FAILED-at-cap / budget-ABORTED run and a `note` reaches the next prompt.
+   */
+  extend?: RunExtension;
 };
 
 /**
@@ -143,6 +177,7 @@ export async function drive(
   let seq: number;
   let ladder: Verifier | null = null;
   let contractHash: ContractHash | null = null;
+  let pendingNote: string | null = null;
   const log = deps.logger ?? noopLogger;
   const llmMeter = deps.llmMeter ?? new LlmTokenMeter();
   // Capture the run's START baseline BEFORE any internal checkpoint (or the resume re-point below)
@@ -177,26 +212,22 @@ export async function drive(
     resume: options.resume === true,
   });
 
-  if (options.resume === true) {
-    const resumed = await resume(deps, config);
-    state = resumed.state;
-    commands = resumed.commands;
-    seq = resumed.seq;
-    contractHash = resumed.contractHash;
-    if (resumed.contract !== null) ladder = deps.makeLadder(resumed.contract);
-    // Re-point both baselines from the resumed fold (issue #47/#49): the active baseline to the last
-    // internal checkpoint (overriding any compose-time `--baseline`, since the logged checkpoint reflects
-    // real progress), and the approver's cumulative baseline to the current phase's start.
-    baseline.hydrateResume(resumed);
-  } else {
-    [state, commands] = initial(config);
-    seq = 0;
-    await deps.runlog.writeHeader({
+  // The pre-loop IO (reading the log to resume; writing the fresh header) must resolve to a typed
+  // ABORTED like every other seam — a disk-full/corrupt-log throw here used to escape `drive()`
+  // entirely (the only rejection path left), reaching the caller as a raw stack trace.
+  try {
+    ({ state, commands, seq, contractHash, ladder, pendingNote } = await bootstrap(
+      deps, config, runId, options, baseline, log,
+    ));
+  } catch (e) {
+    log.error('run bootstrap failed (fail-closed → ABORTED)', { reason: errorMessage(e) });
+    return {
+      status: 'ABORTED',
+      reason: `run bootstrap failed: ${errorMessage(e)}`,
+      iterations: 0,
+      contractHash: null,
       runId,
-      startedAt: deps.clock.now(),
-      config,
-      ...(options.harness !== undefined ? { harness: options.harness } : {}),
-    });
+    };
   }
 
   // Worktree floor (issue #85, locked decision #8): best-of-N needs a resolvable HEAD — `git worktree`
@@ -219,12 +250,37 @@ export async function drive(
 
   try {
     while (!isTerminal(state)) {
+      // Cooperative interrupt: stop BETWEEN steps (the previous event is already durable), so the
+      // user gets a clean ABORTED with the resume path instead of a mid-iteration kill.
+      if (deps.interrupted?.() === true) {
+        log.warn('interrupt requested — stopping before the next step', { runId });
+        const extras = await buildOutcomeExtras(deps);
+        return {
+          status: 'ABORTED',
+          reason: `interrupted by user — resume this run with: --resume ${runId}`,
+          iterations: iterationCount(state),
+          contractHash: contractHash ?? null,
+          runId,
+          ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
+          ...(extras.sessionId !== undefined ? { sessionId: extras.sessionId } : {}),
+        };
+      }
       if (commands.length !== 1) {
         throw new Error(
           `driver invariant: non-terminal state ${state.tag} emitted ${commands.length} commands (expected 1)`,
         );
       }
-      const command = commands[0]!;
+      let command = commands[0]!;
+      // Consume an un-consumed operator note (ADR 0012) on the FIRST agent turn after resume —
+      // whichever step it turns out to be. Worker steering only; the contract/ladder never see it.
+      if (
+        pendingNote !== null &&
+        (command.tag === 'RUN_AGENT' || command.tag === 'RUN_AGENT_BEST_OF')
+      ) {
+        command = withOperatorNote(command, pendingNote);
+        pendingNote = null;
+        log.info('operator note appended to the next agent prompt', {});
+      }
       log.debug('perform command', { command: command.tag, state: state.tag });
 
       // Best-of-N (issue #85): the Driver performs the WHOLE tournament here — it appends its own
@@ -600,7 +656,25 @@ async function perform(
           deps.onStreamEvent !== undefined
             ? (event: Parameters<PhasedStreamSink>[1]): void => deps.onStreamEvent?.('agent', event)
             : undefined;
-        const run = await deps.harness.run(command.prompt, command.sessionId, onEvent);
+        let run = await deps.harness.run(command.prompt, command.sessionId, onEvent);
+        // Transient-crash absorption: retry a crashed turn once after a short backoff, accounting
+        // the abandoned attempt's spend first (usually none — a crash rarely reports usage). A
+        // crash that survives the retry flows to the reducer unchanged (stuck detection governs).
+        const sleep = deps.sleep ?? realSleep;
+        for (
+          let retry = 0;
+          run.status === 'crashed' && retry < HARNESS_CRASH_RETRIES && deps.interrupted?.() !== true;
+          retry++
+        ) {
+          const abandonedEstimate =
+            run.tokenSource === 'estimated' && run.tokensUsed !== undefined ? run.tokensUsed : 0;
+          deps.budget.record(run.tokensUsed, abandonedEstimate);
+          log.warn('harness crashed — retrying once after backoff (transient blips must not burn the crash streak)', {
+            backoffMs: HARNESS_CRASH_BACKOFF_MS,
+          });
+          await sleep(HARNESS_CRASH_BACKOFF_MS);
+          run = await deps.harness.run(command.prompt, command.sessionId, onEvent);
+        }
         // An estimated harness count (issue #24) still counts against the cap, marked so the
         // snapshot/report can show it as approximate.
         const estimated =
@@ -702,6 +776,91 @@ async function runVerifierFailClosed(
   }
 }
 
+// ---- bootstrap / resume / replay ------------------------------------------
+
+type Bootstrapped = {
+  state: OrchestratorState;
+  commands: Command[];
+  seq: number;
+  contractHash: ContractHash | null;
+  ladder: Verifier | null;
+  /** Un-consumed operator note (ADR 0012) to append to the NEXT agent turn's prompt; null if none. */
+  pendingNote: string | null;
+};
+
+/**
+ * The pre-loop IO in one guarded place: on `--resume`, fold the log, rebuild the ladder, re-point
+ * the baselines, and re-arm the budget meter with prior spend; on a fresh run, write the header.
+ * Called inside `drive()`'s bootstrap try/catch so any throw here (corrupt log, disk full) resolves
+ * to a typed ABORTED rather than the last remaining rejection path out of `drive()`.
+ */
+async function bootstrap(
+  deps: DriverDeps,
+  config: RunConfig,
+  runId: RunId,
+  options: DriveOptions,
+  baseline: Baseline,
+  log: Logger,
+): Promise<Bootstrapped> {
+  if (options.resume !== true) {
+    const [state, commands] = initial(config);
+    await deps.runlog.writeHeader({
+      runId,
+      startedAt: deps.clock.now(),
+      config,
+      ...(options.harness !== undefined ? { harness: options.harness } : {}),
+    });
+    return { state, commands, seq: 0, contractHash: null, ladder: null, pendingNote: null };
+  }
+
+  const resumed = await resume(deps, config, runId, options.extend);
+  // An extension that did not un-terminate the run (e.g. a note on a stuck abort whose tripping
+  // detector was not raised) is loud, not silent — the outcome will still be the terminal one.
+  if (options.extend !== undefined && isTerminal(resumed.state)) {
+    log.warn('resume extension did not un-terminate the run — the terminal outcome stands', {
+      state: resumed.state.tag,
+    });
+  }
+  // Re-point both baselines from the resumed fold (issue #47/#49): the active baseline to the last
+  // internal checkpoint (overriding any compose-time `--baseline`, since the logged checkpoint reflects
+  // real progress), and the approver's cumulative baseline to the current phase's start.
+  baseline.hydrateResume(resumed);
+  // Re-arm the LIVE budget meter with the prior spend, so `--budget-tokens` caps the RUN, not
+  // each process: a run resumed near its cap must not get a fresh budget every restart.
+  if (
+    resumed.priorSpend !== null &&
+    (resumed.priorSpend.tokens > 0 || resumed.priorSpend.unknownCalls > 0)
+  ) {
+    deps.budget.record(resumed.priorSpend.tokens, resumed.priorSpend.estimatedTokens ?? 0, {
+      unknownCalls: resumed.priorSpend.unknownCalls,
+    });
+    log.info('resume: prior token spend re-armed against the budget', {
+      tokens: resumed.priorSpend.tokens,
+      ...(resumed.priorSpend.unknownCalls > 0
+        ? { unknownCalls: resumed.priorSpend.unknownCalls }
+        : {}),
+    });
+  }
+  return {
+    state: resumed.state,
+    commands: resumed.commands,
+    seq: resumed.seq,
+    contractHash: resumed.contractHash,
+    ladder: resumed.contract !== null ? deps.makeLadder(resumed.contract) : null,
+    pendingNote: resumed.pendingNote,
+  };
+}
+
+/**
+ * Append an un-consumed operator note (ADR 0012) to an agent turn's prompt. Steering is WORKER
+ * guidance only: it decorates the prompt the reducer already built — never the frozen contract,
+ * the ladder, or the approver's inputs — so both keys still gate DONE unchanged.
+ */
+function withOperatorNote(command: Command, note: string): Command {
+  if (command.tag !== 'RUN_AGENT' && command.tag !== 'RUN_AGENT_BEST_OF') return command;
+  return { ...command, prompt: `${command.prompt}\n\n# Operator note (added at resume)\n${note}` };
+}
+
 // ---- resume / replay ------------------------------------------------------
 
 type Resumed = {
@@ -714,13 +873,28 @@ type Resumed = {
   baseline: DiffHash | null;
   /** The current phase's start tree SHA (last PHASE_ADVANCED), for re-pinning the approver (#49). */
   phaseBaseline: DiffHash | null;
+  /**
+   * The prior run's TOTAL token spend folded from the log, so `drive()` can re-arm the LIVE budget
+   * meter. Without this a resumed run restarted `--budget-tokens` from zero — a run resumed near
+   * its cap got a whole fresh budget, and repeated resumes could overshoot it arbitrarily. Null on
+   * a fresh/unreadable log. (Wall-clock deliberately restarts per process: the gap between crash
+   * and resume is idle time, not spend — see ADR 0011.)
+   */
+  priorSpend: TokenUsage | null;
+  /** Un-consumed operator note from the replay fold (ADR 0012); null when none is pending. */
+  pendingNote: string | null;
 };
 
 /**
  * Reconstruct state by folding the pure reducer over the persisted event stream, then
  * continue. No completed iteration is repeated — replay applies `step` only, never `perform`.
  */
-async function resume(deps: DriverDeps, config: RunConfig): Promise<Resumed> {
+async function resume(
+  deps: DriverDeps,
+  config: RunConfig,
+  runId: RunId,
+  extend?: RunExtension,
+): Promise<Resumed> {
   const stored = await deps.runlog.read();
   if (stored === null) {
     const [state, commands] = initial(config);
@@ -732,24 +906,67 @@ async function resume(deps: DriverDeps, config: RunConfig): Promise<Resumed> {
       contract: null,
       baseline: null,
       phaseBaseline: null,
+      priorSpend: null,
+      pendingNote: null,
     };
+  }
+
+  // Operator extension (ADR 0012): validate + persist the RUN_EXTENDED marker write-ahead FIRST,
+  // so the fold below (and every later replay / `runs show` / watch) sees the same effective config.
+  let entries = stored.entries;
+  if (extend !== undefined && hasExtension(extend)) {
+    const event = OrchestratorEventSchema.parse({ tag: 'RUN_EXTENDED', ...extend });
+    // The marker never feeds the reducer, so folding a draft entry first is safe — its
+    // `stateTagAfter` is derived from the fold WITH the extension applied.
+    const draft: RunLogEntry[] = [
+      ...entries,
+      {
+        runId,
+        seq: entries.length + 1,
+        ts: deps.clock.now(),
+        contractHash: entries[entries.length - 1]?.contractHash ?? null,
+        event,
+        stateTagAfter: 'COMPILING', // placeholder — replaced below from the fold
+      },
+    ];
+    const folded = replay(stored.header.config, draft);
+    const entry: RunLogEntry = { ...draft[draft.length - 1]!, stateTagAfter: folded.state.tag };
+    await deps.runlog.append(entry);
+    entries = [...stored.entries, entry];
   }
 
   // Same replay-fold the read-only `runs` inspection uses — a single source of truth so an
   // inspected run's state matches exactly what resume reconstructs here.
-  const { state, commands, contract, contractHash, baseline, phaseBaseline } = replay(
+  const { state, commands, contract, contractHash, baseline, phaseBaseline, pendingNote } = replay(
     stored.header.config,
-    stored.entries,
+    entries,
   );
+  const priorSpend = summarizeUsage(
+    entries.map((entry) => entry.event),
+    stored.header.config.budget,
+  ).total;
   return {
     state,
     commands,
-    seq: stored.entries.length,
+    seq: entries.length,
     contractHash,
     contract,
     baseline,
     phaseBaseline,
+    priorSpend,
+    pendingNote,
   };
+}
+
+/** Does this extension actually carry anything to persist? An empty object is a no-op resume. */
+function hasExtension(x: RunExtension): boolean {
+  return (
+    x.maxIterations !== undefined ||
+    x.budgetTokens !== undefined ||
+    x.budgetWallMs !== undefined ||
+    (x.stuck !== undefined && Object.keys(x.stuck).length > 0) ||
+    x.note !== undefined
+  );
 }
 
 function buildOutcome(state: OrchestratorState, runId: RunId): RunOutcome {

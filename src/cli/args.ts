@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CliInput, cliInputToRunConfig, type RunConfig } from '../domain/config';
+import type { RunExtension } from '../domain/events';
 import { SandboxPolicy } from '../sandbox/policy';
 import { LogLevel } from '../log/logger';
 import { ModelSelection, type ModelSelectionInput } from './models';
@@ -28,7 +29,8 @@ export type LlmProviderChoice = AgentCli | 'openai';
 export type RunsCommand =
   | { readonly kind: 'list' }
   | { readonly kind: 'show'; readonly runId: string }
-  | { readonly kind: 'resume-cmd'; readonly runId: string; readonly harness: string | undefined };
+  | { readonly kind: 'resume-cmd'; readonly runId: string; readonly harness: string | undefined }
+  | { readonly kind: 'watch'; readonly runId: string };
 
 /**
  * Per-step subprocess kill-timeouts in milliseconds (pure wiring — never enters the contract).
@@ -135,6 +137,13 @@ export type ParsedArgs = {
    * token, so an unset var is allowed (no `Authorization` header is sent).
    */
   llmApiKeyEnv: string;
+  /**
+   * Operator extension/steering for a `--resume` (ADR 0012): the cap / stuck-policy flags the user
+   * EXPLICITLY passed alongside `--resume` (raises `maxIterations` / budget / thresholds for the
+   * resumed run), plus an optional `--note` appended to the next agent prompt. Undefined on a fresh
+   * run or a plain resume. Operational knobs only — never the goal / verifier / rubric.
+   */
+  resumeExtend: RunExtension | undefined;
 };
 
 export const USAGE = `goaly — run a coding agent until a frozen success contract is met.
@@ -166,13 +175,15 @@ Usage:
                [--sandbox[=none|auto|bwrap|firejail|container]]
                [--sandbox-net none|allow|allow:<host,…>]
                [--sandbox-image <ref>] [--sandbox-runtime docker|podman]
-               [--cost-table <path>] [--baseline <ref>] [--delta-verify] [--workspace <dir>] [--resume <runId>]
+               [--cost-table <path>] [--baseline <ref>] [--delta-verify] [--workspace <dir>]
+               [--resume <runId> [--note "<text>"]]
                [--from-run <runId> [--inherit-session]]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
                [--stream] [--stream-transcript] [--stream-file <path>] [--explain] [--explain-model <m>]
 
   goaly runs list [--workspace <dir>]
   goaly runs show <runId> [--workspace <dir>]
+  goaly runs watch <runId> [--workspace <dir>]
   goaly runs resume-cmd <runId> [--harness <name>] [--workspace <dir>]
 
   goaly help
@@ -374,8 +385,9 @@ Seal (contract approval):
                               (--generate, the claude LLM provider, the claude harness) already
                               apply with no flag, so -d's only effect is auto-accepting the contract.
 
-  Note: piping the goal via stdin (--goal -) leaves no stdin for the interactive prompt;
-  pair it with --autonomous, or read the goal from a file (--goal-file) instead.
+  Note: piping the goal via stdin (--goal -) leaves no stdin for the interactive prompt, so a
+  non-autonomous run refuses to start (fail-closed): pair it with --autonomous, or read the goal
+  from a file (--goal-file) instead.
 
 Per-step timeouts (subprocess kill-timeouts in milliseconds; all optional, pure wiring):
   --harness-timeout-ms N      cap the harness (coding-agent) subprocess (default 600000 = 10 min)
@@ -385,9 +397,10 @@ Per-step timeouts (subprocess kill-timeouts in milliseconds; all optional, pure 
                               that legitimately exceed the wall-clock cap. The wall-clock
                               --harness-timeout-ms stays the absolute backstop. Default: off.
   --llm-timeout-ms N       cap each LLM step: judge / approver / compiler (default 600000)
-  --verify-timeout-ms N    cap the verify command (default: unbounded). A timeout is a
-                           fail-closed non-zero exit, i.e. a verifier FAIL — never a green. Also caps
-                           each deterministic rung run during the Fix #2 pre-flight.
+  --verify-timeout-ms N    cap the verify command (default 600000 = 10 min). A timeout is a
+                           fail-closed could-not-evaluate — never a green — so a hanging check can
+                           never hang the whole run. Also caps each deterministic rung run during
+                           the Fix #2 pre-flight.
   --setup-timeout-ms N     cap the one-time --setup-cmd bootstrap (default 600000 = 10 min). A
                            timeout is a fail-closed SETUP_FAILED.
 
@@ -470,6 +483,22 @@ Plain-language run narration (opt-in observability — issue #8):
   --explain-model <m>  model for the --explain observer only (cascades like the other LLM-step
                     models: --explain-model → --llm-model → --model).
 
+Resume, steer & extend (operator control over ONE run — the frozen contract never changes):
+  --resume <runId>    re-enter an INCOMPLETE run's loop exactly where the write-ahead log left it
+                      (crash, Ctrl-C, kill — nothing completed is repeated). Pass any of the flags
+                      below WITH --resume to extend/steer the resumed run; each is recorded in the
+                      log (a RUN_EXTENDED marker) so the extension is auditable and later resumes
+                      keep it. Only these OPERATIONAL knobs are extendable — never the goal, the
+                      verifier, or the rubric (the contract stays frozen; both keys still gate DONE):
+                        --max-iterations N      also REVIVES a run that FAILED at its iteration cap
+                        --budget-tokens N       also revives a budget-ABORTED run (spend re-judged
+                        --budget-wall-ms N        against the new cap; prior spend still counts)
+                        --stuck-* flags         raise/toggle a tripped stuck detector to continue
+                      Live in another terminal: goaly runs watch <runId>.
+  --note "<text>"     (with --resume) operator guidance appended to the NEXT agent prompt — steer
+                      the worker without touching the bar. Combine with Ctrl-C for mid-run steering:
+                      interrupt, then 'goaly --resume <id> --note "try the other approach"'.
+
 Follow-up after a run ends (build on a finished run — keeps every invariant by construction):
   --from-run <runId>  start a NEW run whose contract is authored AWARE of a finished run: a concise,
                       deterministic COMPACTION of the prior run (its goal, frozen bar, outcome) is fed
@@ -491,6 +520,11 @@ Run history & inspection (read-only — pure replay of the write-ahead run log, 
   goaly runs show <runId>   the frozen contract (+ hash), Seal outcome, the per-iteration
                             verifier-ladder results and Sign-off verdicts, the stuck/failure reason,
                             and totals — reconstructed by the same replay-fold that --resume uses.
+  goaly runs watch <runId>  attach to a run from ANOTHER terminal and follow it LIVE: one line per
+                            event (contract, seal, each agent turn / verify verdict / sign-off) as
+                            it lands in the write-ahead log. Read-only (never takes the run lock).
+                            Exits 0 at the terminal state; exits 1 when the run is incomplete and
+                            no live process is driving it (names the --resume command).
   goaly runs resume-cmd <runId>  print the command to CONTINUE the run's underlying CLI session in its
                             OWN interactive mode (e.g. 'claude --resume <id>', 'codex resume <id>').
                             Read-only; for a goaly-code run it routes you to --from-run --inherit-session.
@@ -600,6 +634,54 @@ function boolFlag(flags: RawFlags, key: string): boolean | undefined {
   if (v === 'true' || v === '1' || v === 'yes') return true;
   if (v === 'false' || v === '0' || v === 'no') return false;
   throw new UsageError(`--${key}: expected true or false, got '${String(v)}'`);
+}
+
+/**
+ * Collect the operator extension for a `--resume` (ADR 0012) from EXPLICITLY-passed CLI flags
+ * (never the config-file overlay — an extension is a per-invocation operator act). The values are
+ * read off the already-validated RunConfig (so every coercion/floor is applied once); only flags
+ * actually present become part of the extension — absent ones keep whatever the run log's
+ * effective config says. `--note` is resume-only: on a fresh run there is no next-turn boundary to
+ * attach it to, so it fails closed with the fix.
+ */
+function collectResumeExtension(flags: RawFlags, config: RunConfig): RunExtension | undefined {
+  const resuming = str(flags, 'resume') !== undefined;
+  const note = str(flags, 'note');
+  if (!resuming) {
+    if (note !== undefined) {
+      throw new UsageError(
+        '--note steers a RESUMED run (it is appended to the next agent prompt) — pair it with ' +
+          '--resume <runId>. To guide a fresh run, put the guidance in the goal or --intent.',
+      );
+    }
+    return undefined;
+  }
+  const has = (key: string): boolean => flags[key] !== undefined;
+  const stuck = {
+    ...(has('stuck-no-diff') ? { noDiff: config.stuckPolicy.noDiff } : {}),
+    ...(has('stuck-repeat-threshold')
+      ? { repeatFailureThreshold: config.stuckPolicy.repeatFailureThreshold }
+      : {}),
+    ...(has('stuck-oscillation') ? { oscillation: config.stuckPolicy.oscillation } : {}),
+    ...(has('stuck-crash-threshold')
+      ? { harnessCrashThreshold: config.stuckPolicy.harnessCrashThreshold }
+      : {}),
+    ...(has('stuck-unevaluable-threshold')
+      ? { unevaluableThreshold: config.stuckPolicy.unevaluableThreshold }
+      : {}),
+  };
+  const extension: RunExtension = {
+    ...(has('max-iterations') ? { maxIterations: config.maxIterations } : {}),
+    ...(has('budget-tokens') && config.budget.tokens !== undefined
+      ? { budgetTokens: config.budget.tokens }
+      : {}),
+    ...(has('budget-wall-ms') && config.budget.wallClockMs !== undefined
+      ? { budgetWallMs: config.budget.wallClockMs }
+      : {}),
+    ...(Object.keys(stuck).length > 0 ? { stuck } : {}),
+    ...(note !== undefined ? { note } : {}),
+  };
+  return Object.keys(extension).length > 0 ? extension : undefined;
 }
 
 /** Fields that may be sourced inline / from a file / from stdin; a CLI source overrides config. */
@@ -736,11 +818,27 @@ export async function parseArgs(
   });
 
   const harness = parseHarness(str(flags, 'harness'));
+  const config = cliInputToRunConfig(cliInput);
+  // Explicitness for the resume extension is judged on CLI flags ONLY (never the config-file
+  // overlay): a `.goalyrc` default like "budget-tokens" must not append a RUN_EXTENDED marker to
+  // the log on every resume — an extension is an explicit per-invocation operator act.
+  const resumeExtend = collectResumeExtension(cliFlags, config);
+
+  // Piping a field via stdin (`--goal -`) drains the ONLY stdin stream, so the interactive Seal
+  // prompt that a non-autonomous run needs would read EOF / hang. That used to be a doc-note
+  // footgun; fail closed here with the exact fix instead of deadlocking at the gate.
+  const stdinField = MULTI_SOURCE_FIELDS.find((f) => flags[f] === '-');
+  if (stdinField !== undefined && !config.autonomous) {
+    throw new UsageError(
+      `--${stdinField} - reads from stdin, leaving no stdin for the interactive Seal prompt. ` +
+        `Add --autonomous (the contract is still frozen & logged), or use --${stdinField}-file.`,
+    );
+  }
 
   return {
     command: 'run',
     runs: undefined,
-    config: cliInputToRunConfig(cliInput),
+    config,
     harness,
     models: parseModels(flags),
     llmProvider: parseLlmProvider(str(flags, 'llm-provider')),
@@ -749,6 +847,7 @@ export async function parseArgs(
     verifyDir: str(flags, 'verify-dir'),
     planFile: str(flags, 'plan-file'),
     resumeRunId: str(flags, 'resume'),
+    resumeExtend,
     fromRunId: str(flags, 'from-run'),
     inheritSession: flags['inherit-session'] !== undefined,
     logLevel: parseLogLevel(str(flags, 'log-level')),
@@ -1063,8 +1162,15 @@ function parseRunsCommand(rest: string[]): { runs: RunsCommand; workspace: strin
       workspace: str(flags, 'workspace') ?? process.cwd(),
     };
   }
+  if (sub === 'watch') {
+    const runId = subRest[0];
+    if (runId === undefined || runId.startsWith('--')) {
+      throw new UsageError('runs watch requires a <runId> (e.g. goaly runs watch run-1234)');
+    }
+    return { runs: { kind: 'watch', runId }, workspace: runsWorkspace(subRest.slice(1)) };
+  }
   throw new UsageError(
-    `unknown runs subcommand: ${sub ?? '(none)'} (expected list | show | resume-cmd)`,
+    `unknown runs subcommand: ${sub ?? '(none)'} (expected list | show | resume-cmd | watch)`,
   );
 }
 
@@ -1119,5 +1225,6 @@ function baseArgs(
     configSources: [],
     baseUrl: undefined,
     llmApiKeyEnv: 'OPENAI_API_KEY',
+    resumeExtend: undefined,
   };
 }

@@ -168,7 +168,7 @@ const DiffHash  = z.string().regex(/^[0-9a-f]{7,64}$/).brand<'DiffHash'>();
 | Run config file | `RunConfigSchema` (verifier discriminated union, budget, stuckPolicy) | reject |
 | **Harness stdout JSON** (hostile) | `HarnessOutputSchema.safeParse` | **don't throw** → `status:'truncated'/'crashed'` so the reducer treats it as a failed run |
 | LLM judge / approver output | `JudgeOutputSchema` / `ApprovalVerdictSchema` per quorum sample | drop unparseable (judge) / fail-closed (approver) |
-| Run log on **resume** | `RunLogEntrySchema.parse` (log is untrusted-on-read) | reject corrupt entry |
+| Run log on **resume** | `RunLogEntrySchema.parse` (log is untrusted-on-read) | reject corrupt entry — except a torn (unterminated) FINAL line, the signature of a crash mid-append, which is dropped on read and truncated by the writer's next append (write-ahead: that transition never became durable; resume re-performs the one effect) |
 
 `JudgeOutputSchema` is `{pass, confidence∈[0,1], failing_criteria[]}` with a `.refine` that
 `failing_criteria` is empty iff `pass` — schema-enforced consistency.

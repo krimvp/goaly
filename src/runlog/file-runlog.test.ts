@@ -137,4 +137,93 @@ describe('FileRunLog', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('drops a torn (unterminated) final line instead of rejecting the log', async () => {
+    const dir = await freshDir();
+    try {
+      const log = new FileRunLog(dir);
+      const header = makeHeader();
+      await log.writeHeader(header);
+      await log.append(gateEntry(0));
+      await log.append(agentRanEntry(1));
+      // Simulate a crash mid-append: a partial JSON prefix with NO terminating newline.
+      const torn = JSON.stringify(agentRanEntry(2)).slice(0, 40);
+      await appendFile(join(dir, 'log.jsonl'), torn, 'utf8');
+
+      const result = await log.read();
+      expect(result?.entries).toEqual([gateEntry(0), agentRanEntry(1)]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('repairs a torn tail on the next append so later reads stay valid', async () => {
+    const dir = await freshDir();
+    try {
+      const log = new FileRunLog(dir);
+      await log.writeHeader(makeHeader());
+      await log.append(gateEntry(0));
+      const torn = JSON.stringify(agentRanEntry(1)).slice(0, 25);
+      await appendFile(join(dir, 'log.jsonl'), torn, 'utf8');
+
+      // A NEW process (fresh FileRunLog) resumes and appends: the torn tail must be truncated
+      // first, never fused with the new entry into one corrupt line.
+      const resumed = new FileRunLog(dir);
+      await resumed.append(agentRanEntry(1));
+
+      const result = await resumed.read();
+      expect(result?.entries).toEqual([gateEntry(0), agentRanEntry(1)]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers when the whole log is a single torn first line', async () => {
+    const dir = await freshDir();
+    try {
+      const log = new FileRunLog(dir);
+      await log.writeHeader(makeHeader());
+      await writeFile(join(dir, 'log.jsonl'), '{"partial', 'utf8');
+
+      const read = await log.read();
+      expect(read?.entries).toEqual([]);
+
+      const resumed = new FileRunLog(dir);
+      await resumed.append(gateEntry(0));
+      expect((await resumed.read())?.entries).toEqual([gateEntry(0)]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still rejects a TERMINATED corrupt line even when it is the final line', async () => {
+    const dir = await freshDir();
+    try {
+      const log = new FileRunLog(dir);
+      await log.writeHeader(makeHeader());
+      await log.append(gateEntry(0));
+      // Terminated (newline'd) garbage is real corruption, not a torn append — fail closed.
+      await appendFile(join(dir, 'log.jsonl'), '{ not valid json\n', 'utf8');
+      await expect(log.read()).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('repairs a torn tail longer than one scan chunk (newline beyond 4KB from the end)', async () => {
+    const dir = await freshDir();
+    try {
+      const log = new FileRunLog(dir);
+      await log.writeHeader(makeHeader());
+      await log.append(gateEntry(0));
+      // A torn tail larger than the 4096-byte backward-scan chunk.
+      await appendFile(join(dir, 'log.jsonl'), `{"pad":"${'x'.repeat(10_000)}`, 'utf8');
+
+      const resumed = new FileRunLog(dir);
+      await resumed.append(agentRanEntry(1));
+      expect((await resumed.read())?.entries).toEqual([gateEntry(0), agentRanEntry(1)]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

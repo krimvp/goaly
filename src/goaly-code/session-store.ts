@@ -9,7 +9,7 @@
  * hostile session id can never escape the session directory (defense-in-depth at the seam).
  */
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir, open, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import type { SessionId } from '../domain/ids';
@@ -33,7 +33,21 @@ export interface SessionFs {
 
 const nodeSessionFs: SessionFs = {
   readFile: (file) => readFile(file, 'utf8'),
-  writeFile: (file, data) => writeFile(file, data, 'utf8'),
+  // ATOMIC save (tmp → fsync → rename): `save()` rewrites the WHOLE message log every turn, so a
+  // plain in-place write torn by a crash would truncate the file — and the fail-closed `load()`
+  // would then silently degrade the ENTIRE conversation to a fresh session (losing every turn, not
+  // just the last). With rename-in-place the previous complete log survives any crash mid-save.
+  writeFile: async (file, data) => {
+    const tmp = `${file}.tmp-${process.pid}`;
+    const handle = await open(tmp, 'w');
+    try {
+      await handle.writeFile(data, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(tmp, file);
+  },
   mkdir: async (dir) => {
     await mkdir(dir, { recursive: true });
   },

@@ -165,6 +165,30 @@
         <code>codex resume &lt;id&gt;</code>, and so on. The end-of-run banner shows it too, so the
         next step is one copy-paste away.</p>
       </div>
+      <div class="card">
+        <h3>Watch it &amp; steer it</h3>
+        <p>You're never locked out of a run: <code>goaly runs watch &lt;id&gt;</code> tails the
+        write-ahead log <b>live from any terminal</b> (each agent turn, verdict, and veto — read-only,
+        never disturbs the run). Ctrl-C stops cleanly between steps, then
+        <code>--resume &lt;id&gt; --note "…"</code> hands the worker your guidance on its next turn.
+        A run that hit an <em>operational</em> limit isn't a dead end — <code>--resume</code> with
+        <code>--max-iterations</code> / <code>--budget-tokens</code> / <code>--stuck-*</code>
+        continues it in place, auditable in the log. The extension schema simply <b>has no field for
+        the goal or verifier</b>: you can add room, never lower the frozen bar.
+        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0012-operator-control.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0012 →</a></p>
+      </div>
+      <div class="card">
+        <h3>Reliable by default</h3>
+        <p>Fail closed, but never fail eagerly: a millisecond <b>preflight</b> catches a missing
+        CLI / non-git workspace <em>before</em> any token is spent; transient 429/network/CLI blips
+        are <b>retried with backoff</b> at every transport (a crashed agent turn once, LLM steps
+        twice, <code>Retry-After</code> honored) while timeouts stay hard; <b>Ctrl-C stops
+        cleanly</b> between steps and prints the <code>--resume</code> command (a second one
+        force-exits and reaps children); the fsync'd <b>write-ahead log survives a crash at any
+        byte</b> (a torn tail is repaired, a run lock stops double drivers), and
+        <code>--budget-tokens</code> survives <code>--resume</code>. Every failed run ends with a
+        one-line <code>next:</code> hint. <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0011-reliability-hardening.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0011 →</a></p>
+      </div>
     </div>
   </div>
 </section>

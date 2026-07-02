@@ -85,6 +85,9 @@ export function neutralAgentExec(
     }
     const r = await runProcess(binary, rest, {
       timeoutMs,
+      // The jail wrapper (bwrap/firejail/container) is itself a parent of the agent CLI and its
+      // tools — group-kill on timeout so no descendant can hold the pipes open past the cap.
+      killGroup: true,
       ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
       ...(promptOnStdin ? { input: input.prompt } : {}),
       ...(onStdout !== undefined ? { onStdout } : {}),

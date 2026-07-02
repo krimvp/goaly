@@ -229,4 +229,40 @@ describe('JudgeVerifier', () => {
     expect(verdict.pass).toBe(true);
     expect(verdict.confidence).toBeCloseTo(0.9, 5);
   });
+
+  it('drops a THROWN sample but votes on the surviving ones (partial quorum failure)', async () => {
+    const scripted = [passSample(0.9), new Error('LLM CLI timed out'), passSample(0.8)];
+    let i = 0;
+    const llm = {
+      name: 'flaky-llm',
+      complete: async () => {
+        const r = scripted[i];
+        i += 1;
+        if (r instanceof Error) throw r;
+        return { text: r ?? passSample(0.9) };
+      },
+    };
+    const judge = new JudgeVerifier({ rubric: 'r', quorum: 3, confidenceFloor: 0.5, llm });
+
+    const verdict = await judge.verify(ws, 'goal', 'r');
+
+    // One transient sample failure must not discard the two good samples (never throws upstream).
+    expect(verdict.pass).toBe(true);
+    expect(verdict.confidence).toBeCloseTo((0.9 + 0.8) / 2, 5);
+  });
+
+  it('fails closed as unevaluable when EVERY sample throws', async () => {
+    const llm = {
+      name: 'dead-llm',
+      complete: async (): Promise<{ text: string }> => {
+        throw new Error('provider down');
+      },
+    };
+    const judge = new JudgeVerifier({ rubric: 'r', quorum: 3, confidenceFloor: 0.5, llm });
+
+    const verdict = await judge.verify(ws, 'goal', 'r');
+
+    expect(verdict.pass).toBe(false);
+    expect(verdict.evaluable).toBe(false);
+  });
 });

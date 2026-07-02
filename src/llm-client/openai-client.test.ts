@@ -4,7 +4,7 @@ import type { ChatRequest } from './schema';
 
 /** A scripted fetch: each call shifts the next canned outcome (a response or a thrown network error). */
 type Canned =
-  | { kind: 'res'; status: number; body: unknown | string }
+  | { kind: 'res'; status: number; body: unknown | string; headers?: Record<string, string> }
   | { kind: 'throw'; error: string };
 
 function fakeFetch(script: Canned[]): { fetch: FetchLike; calls: Array<{ url: string; init: Parameters<FetchLike>[1] }> } {
@@ -17,7 +17,8 @@ function fakeFetch(script: Canned[]): { fetch: FetchLike; calls: Array<{ url: st
     if (c === undefined) throw new Error('no canned response');
     if (c.kind === 'throw') throw new Error(c.error);
     const text = typeof c.body === 'string' ? c.body : JSON.stringify(c.body);
-    return { ok: c.status >= 200 && c.status < 300, status: c.status, text: async () => text };
+    const headers = { get: (name: string) => c.headers?.[name.toLowerCase()] ?? null };
+    return { ok: c.status >= 200 && c.status < 300, status: c.status, text: async () => text, headers };
   };
   return { fetch, calls };
 }
@@ -96,6 +97,62 @@ describe('OpenAiClient', () => {
     ]);
     await client(fetch).chat(REQ);
     expect(calls).toHaveLength(2);
+  });
+
+  it('backs off exponentially between attempts', async () => {
+    const slept: number[] = [];
+    const { fetch } = fakeFetch([
+      { kind: 'res', status: 503, body: 'down' },
+      { kind: 'res', status: 503, body: 'down' },
+      { kind: 'res', status: 200, body: okBody() },
+    ]);
+    const c = new OpenAiClient({
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'k',
+      fetch,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    await c.chat(REQ);
+    expect(slept).toEqual([500, 1000]);
+  });
+
+  it('honors a Retry-After header on 429 when longer than the base backoff (capped)', async () => {
+    const slept: number[] = [];
+    const { fetch } = fakeFetch([
+      { kind: 'res', status: 429, body: 'rate limited', headers: { 'retry-after': '7' } },
+      { kind: 'res', status: 200, body: okBody() },
+    ]);
+    const c = new OpenAiClient({
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'k',
+      fetch,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    await c.chat(REQ);
+    expect(slept).toEqual([7000]);
+  });
+
+  it('caps an absurd Retry-After and ignores a garbage one', async () => {
+    const slept: number[] = [];
+    const { fetch } = fakeFetch([
+      { kind: 'res', status: 429, body: 'x', headers: { 'retry-after': '99999' } },
+      { kind: 'res', status: 429, body: 'x', headers: { 'retry-after': 'Wed, 21 Oct 2026' } },
+      { kind: 'res', status: 200, body: okBody() },
+    ]);
+    const c = new OpenAiClient({
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'k',
+      fetch,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    await c.chat(REQ);
+    expect(slept).toEqual([60_000, 1000]); // capped at 60s; then garbage → base exponential backoff
   });
 
   it('retries on a thrown network error then succeeds', async () => {

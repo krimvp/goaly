@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { formatOutcome, main } from './main';
+import { formatOutcome, main, makeInterruptController, nextStepHint } from './main';
 import { formatUsage } from './usage-format';
 import { STATE_DIR } from './compose';
 import { FileRunLog } from '../runlog/file-runlog';
@@ -123,6 +123,61 @@ describe('formatOutcome', () => {
   });
 });
 
+describe('nextStepHint — always-on next-step guidance for terminal outcomes', () => {
+  const aborted = (reason: string): RunOutcome =>
+    outcome({ status: 'ABORTED', reason, usage: undefined });
+
+  it('maps the typed stuck/prepare reasons to actionable hints', () => {
+    expect(nextStepHint(aborted('STUCK_HARNESS_CRASH: claude: command not found'))).toContain(
+      'run it once by hand',
+    );
+    expect(nextStepHint(aborted('CONTRACT_UNEVALUABLE: pytest could not be started'))).toContain(
+      'could not RUN',
+    );
+    expect(nextStepHint(aborted('budget exceeded'))).toContain('--budget-tokens');
+    expect(
+      nextStepHint(outcome({ status: 'FAILED', reason: 'reached maxIterations (12) without satisfying the contract', usage: undefined })),
+    ).toContain('--max-iterations');
+    // The stuck hints name the exact extension flag — a plain resume would replay to the same abort.
+    expect(nextStepHint(aborted('no-diff: working tree unchanged after an iteration'))).toContain(
+      '--stuck-no-diff false',
+    );
+    expect(nextStepHint(aborted('STUCK_HARNESS_CRASH: boom'))).toContain('--stuck-crash-threshold');
+  });
+
+  it('stays quiet on DONE, unknown reasons, and user interrupts (already self-describing)', () => {
+    expect(nextStepHint(outcome())).toBeUndefined();
+    expect(nextStepHint(aborted('some novel reason'))).toBeUndefined();
+    expect(nextStepHint(aborted('interrupted by user — resume this run with: --resume run-x'))).toBeUndefined();
+  });
+
+  it('formatOutcome renders the hint as a next: line', () => {
+    const text = formatOutcome(aborted('budget exceeded'));
+    expect(text).toContain('next:');
+    expect(text).toContain('--budget-tokens');
+  });
+});
+
+describe('makeInterruptController', () => {
+  it('first signal warns with the resume command and flips interrupted; second force-exits', () => {
+    const warned: string[] = [];
+    let forced = 0;
+    const c = makeInterruptController('run-abc', (s) => warned.push(s), () => {
+      forced += 1;
+    });
+
+    expect(c.interrupted()).toBe(false);
+    c.onSignal();
+    expect(c.interrupted()).toBe(true);
+    expect(warned.join('')).toContain('--resume run-abc');
+    expect(warned.join('')).toContain('finishing the current step');
+    expect(forced).toBe(0);
+
+    c.onSignal();
+    expect(forced).toBe(1);
+  });
+});
+
 describe('main() — --baseline validation (issue #47)', () => {
   let root: string;
 
@@ -167,6 +222,105 @@ describe('main() — --baseline validation (issue #47)', () => {
     );
     expect(code).toBe(2);
     expect(err).toContain('--baseline no-such-ref');
+  });
+});
+
+describe('main() — resume extension end-to-end (operator control, ADR 0012)', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'goaly-main-extend-'));
+    const git = (...args: string[]): void => {
+      const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test User');
+    await writeFile(join(root, 'f.txt'), 'x\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function captureAll(fn: () => Promise<number>): Promise<{ code: number; out: string }> {
+    const writes: string[] = [];
+    const origOut = process.stdout.write.bind(process.stdout);
+    const origErr = process.stderr.write.bind(process.stderr);
+    const capture = ((s: string | Uint8Array): boolean => {
+      writes.push(typeof s === 'string' ? s : Buffer.from(s).toString());
+      return true;
+    }) as typeof process.stdout.write;
+    process.stdout.write = capture;
+    process.stderr.write = capture;
+    try {
+      return { code: await fn(), out: writes.join('') };
+    } finally {
+      process.stdout.write = origOut;
+      process.stderr.write = origErr;
+    }
+  }
+
+  it('revives a stuck-aborted run via --resume with a stuck override + note (zero LLM)', async () => {
+    // Run 1: the fake harness edits nothing and the deterministic bar is red → no-diff ABORTED
+    // after iteration 1. (A red ladder never reaches Sign-off, so no LLM is ever invoked.)
+    const first = await captureAll(() =>
+      main(['run', 'g', '--verify-cmd', 'false', '--harness', 'fake', '--autonomous',
+        '--max-iterations', '2', '--workspace', root]),
+    );
+    expect(first.code).toBe(1);
+    expect(first.out).toContain('no-diff');
+    const runId = /── goaly run (run-[0-9a-f-]+) ──/.exec(first.out)?.[1];
+    expect(runId).toBeDefined();
+
+    // Resume with an operator override + note: the fold revives past the no-diff abort, runs
+    // iteration 2 (still red), and now terminates at the iteration cap instead.
+    const second = await captureAll(() =>
+      main(['run', 'g', '--verify-cmd', 'false', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--resume', runId!,
+        '--stuck-no-diff', 'false', '--note', 'the fixture is in f.txt']),
+    );
+    expect(second.code).toBe(1);
+    expect(second.out).toContain('iterations:  2');
+    expect(second.out).toContain('reached maxIterations');
+  });
+
+  it('refuses to extend a DONE run, pointing at --from-run', async () => {
+    // Fabricate a DONE run log directly (no LLM/harness involved): both keys turned.
+    const contract = makeFakeContract({ goal: 'g' });
+    const log = new FileRunLog(join(root, STATE_DIR, 'run-done'));
+    await log.writeHeader({
+      runId: RunId.parse('run-done'),
+      startedAt: 1,
+      config: makeConfig({ goal: 'g' }),
+      harness: 'fake',
+    });
+    const base = { runId: RunId.parse('run-done'), contractHash: contract.contractHash };
+    await log.append({ ...base, seq: 1, ts: 1, event: { tag: 'CONTRACT_COMPILED', contract }, stateTagAfter: 'AWAIT_SEAL' });
+    await log.append({ ...base, seq: 2, ts: 2, event: { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }, stateTagAfter: 'RUNNING_AGENT' });
+    await log.append({
+      ...base, seq: 3, ts: 3,
+      event: {
+        tag: 'AGENT_RAN',
+        run: { output: 'ok', sessionId: SessionId.parse('s1'), status: 'completed' },
+        prevDiffHash: DiffHash.parse('0000000'),
+        diffHash: DiffHash.parse('0000001'),
+        budget: { exceeded: false },
+      },
+      stateTagAfter: 'VERIFYING',
+    });
+    await log.append({ ...base, seq: 4, ts: 4, event: { tag: 'VERIFIED', verdict: { pass: true, confidence: 1, detail: 'green' } }, stateTagAfter: 'AWAIT_SIGNOFF' });
+    await log.append({ ...base, seq: 5, ts: 5, event: { tag: 'SIGNOFF_DECIDED', approval: { veto: false } }, stateTagAfter: 'DONE' });
+
+    const res = await captureAll(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--resume', 'run-done', '--max-iterations', '5']),
+    );
+    expect(res.code).toBe(2);
+    expect(res.out).toContain('nothing to extend');
+    expect(res.out).toContain('--from-run');
   });
 });
 
@@ -216,6 +370,58 @@ describe('main() — follow-up (Capability C) guards & resume-cmd (Capability A)
     expect(code).toBe(2);
     expect(err).toContain('--from-run run-nope');
     expect(err).toContain('no such run');
+  });
+
+  it('refuses to start (exit 2) when another live process holds the run lock', async () => {
+    // A real (resumable) run log in a real git repo, so preflight and the --resume existence check
+    // both pass and the run-lock guard is what fires.
+    const git = (...args: string[]): void => {
+      const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    git('init', '-q');
+    const log = new FileRunLog(join(root, STATE_DIR, 'run-locked'));
+    await log.writeHeader({
+      runId: RunId.parse('run-locked'),
+      startedAt: 1,
+      config: makeConfig(),
+      harness: 'fake',
+    });
+    // Pre-hold the lock with pid 1 (always alive, and never this test process).
+    await writeFile(join(root, STATE_DIR, 'run-locked', 'run.lock'), '1\n', 'utf8');
+    const { code, err } = await captureStderr(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--resume', 'run-locked']),
+    );
+    expect(code).toBe(2);
+    expect(err).toContain('another goaly process');
+  });
+
+  it('exits 2 with a pointer to runs list when --resume names a non-existent run', async () => {
+    const git = (...args: string[]): void => {
+      const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    git('init', '-q');
+    const { code, err } = await captureStderr(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--resume', 'run-nope']),
+    );
+    expect(code).toBe(2);
+    expect(err).toContain('--resume run-nope');
+    expect(err).toContain('no such run');
+    expect(err).toContain('runs list');
+  });
+
+  it('exits 2 with git guidance when the workspace is not a git repository', async () => {
+    // `root` is a bare temp dir (no git init) — the preflight must say so BEFORE any spend.
+    const { code, err } = await captureStderr(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root]),
+    );
+    expect(code).toBe(2);
+    expect(err).toContain('not a git repository');
+    expect(err).toContain('git init');
   });
 
   it('exits 2 when --inherit-session is used without --from-run', async () => {

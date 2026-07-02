@@ -133,6 +133,10 @@ export function defaultAgentExec(
   return async (args, input, onStdout) => {
     const r = await runProcess(command, args, {
       timeoutMs,
+      // Agent CLIs spawn their own tools/tests, which inherit the stdio pipes. Killing only the
+      // CLI on a timeout would orphan those children and (because the pipes stay open) hang the
+      // run forever past its own cap — group-kill the whole tree instead (see runProcess).
+      killGroup: true,
       ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
       // Run the agent IN the workspace, not goaly's own cwd. Otherwise the agent edits whatever
       // directory goaly was invoked from, and a `--workspace` that differs from that cwd (e.g. under

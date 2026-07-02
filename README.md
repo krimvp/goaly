@@ -42,13 +42,16 @@ goaly -d "add a /health endpoint returning 200"
 goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
 ```
 
-Exit codes: `0` DONE · `1` FAILED/ABORTED · `2` usage error. See [Usage](#usage) for every flag.
+Exit codes: `0` DONE · `1` FAILED/ABORTED · `2` usage error · `130` interrupted (Ctrl-C — the run
+stays resumable). See [Usage](#usage) for every flag.
 
 ## Contents
 
 - [How it works](#how-it-works) — the loop, the two gates, the verify ladder
 - [Install](#install) · [Usage](#usage) — every flag and mode
 - [Phased goals](#phased-goals---phased) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
+- [Reliability](#reliability-preflight-retries-interrupts-crash-safety) — preflight, retries, Ctrl-C, crash-safety
+- [Operator control](#watching-steering--extending-a-run-operator-control) — watch live, steer with `--note`, extend caps on `--resume`
 - [Develop](#develop) · [Embedding](#embedding) — contributing and the library API
 - [Glossary](#appendix-glossary) — every project-specific term & idiom, plain-language
 
@@ -697,11 +700,13 @@ never enters the frozen contract):
 | `--harness-timeout-ms` | the harness (coding-agent) subprocess — hard wall-clock cap | `600000` (10 min) |
 | `--harness-idle-timeout-ms` | the harness subprocess — **idle/heartbeat** cap | off |
 | `--llm-timeout-ms` | each LLM step — judge / approver / compiler | `600000` (10 min) |
-| `--verify-timeout-ms` | the verify command | unbounded |
+| `--verify-timeout-ms` | the verify command | `600000` (10 min) |
 
-A verify command that exceeds its timeout is SIGKILL'd and reported as a **non-zero exit — i.e. a
-verifier FAIL, never a green** (fail-closed, invariant #4). Each value must be a positive integer
-number of milliseconds.
+A verify command that exceeds its timeout is SIGKILL'd (whole process group) and reported as a
+**fail-closed could-not-evaluate — never a green** (invariant #4). It defaults to the same 10-minute
+cap as the other steps so a hanging check (a test awaiting the network, a spawned server that never
+exits) can never hang the whole run; raise it for genuinely long verifications. Each value must be a
+positive integer number of milliseconds.
 
 **Heavy/parallel `--generate` authoring may need a larger `--llm-timeout-ms`.** The compiler authors
 the whole frozen contract in one LLM call; for a large goal — or many runs sharing one endpoint — that
@@ -718,6 +723,44 @@ the agent only after **N ms with no stream output** — a turn that is actively 
 the heartbeat and survives, while a genuinely stalled one is still reaped (fail-closed: the loop
 always terminates). When both are set, the wall-clock `--harness-timeout-ms` remains the absolute
 backstop. Recommended for long, build-heavy runs.
+
+### Reliability: preflight, retries, interrupts, crash-safety
+
+goaly is built to **fail closed but not fail eagerly**: a wrong green must be impossible, and a
+transient blip must not kill an hours-long run. What that means in practice (all defaults, no flags
+needed — [ADR 0011](docs/adr/0011-reliability-hardening.md) records the full policy):
+
+- **Fail-fast preflight (before any spend).** A `run` refuses to start — with the exact fix — when
+  the workspace is not a git repository (`git init …`), or the `--harness` / `--llm-provider` CLI is
+  not on `PATH` (install/authenticate it, or switch harness). A typo'd `--resume` id and a
+  stdin-fed goal without `--autonomous` (which would deadlock the interactive Seal prompt) are also
+  caught up front. The `fake` harness skips the CLI probes.
+- **Transient failures are absorbed, not terminal.** The OpenAI-compatible transport retries
+  429/5xx/network errors with exponential backoff and honors `Retry-After` (capped at 60 s); the
+  CLI-backed LLM steps (compiler / judge / approver) retry a non-zero exit or unparseable output
+  with bounded backoff; a judge-quorum sample that throws drops **that sample only** (its healthy
+  siblings still vote); and a **crashed harness turn is retried once** after a short backoff before
+  it counts toward the stuck-crash streak. Timeouts are never retried — the wall-clock cap is the
+  run's own guard. Persistent failure still terminates exactly as before: retries absorb blips,
+  stuck detection governs walls.
+- **Ctrl-C is safe and resumable.** The startup banner prints the run id and resume command up
+  front. The first Ctrl-C / SIGTERM stops **between steps**: the in-flight step finishes, its event
+  lands write-ahead, and the outcome is a typed `ABORTED` naming `--resume <runId>` (exit `130`). A
+  second Ctrl-C exits immediately — after reaping any live child process groups, so an agent CLI
+  can never outlive goaly and keep editing or spending.
+- **Crash-safety end to end.** Every run-log append is fsync'd write-ahead; a line torn by a crash
+  mid-append is tolerated on read and repaired on the next append (write-ahead semantics: that
+  transition never happened — resume re-performs the one effect). A per-run **lock file** stops two
+  goaly processes from driving the same run (stale locks from dead processes self-heal). goaly-code
+  session saves are atomic (`tmp → fsync → rename`). A terminated-but-corrupt log line still fails
+  closed — tolerance is only for the torn tail.
+- **Budgets survive `--resume`.** The prior token spend is folded out of the log and re-armed
+  against `--budget-tokens`, so a run resumed near its cap doesn't restart with a fresh budget.
+  (The wall-clock budget deliberately restarts per process — the crash-to-resume gap is idle time,
+  not spend.)
+- **Terminal outcomes tell you the next step.** A failed/aborted run prints an always-on one-line
+  `next:` hint — what `STUCK_*` / `CONTRACT_UNEVALUABLE` / budget / `maxIterations` mean and the
+  exact `--resume` / `runs show` command — the zero-cost complement to `--explain`.
 
 ### Diff baseline (`--baseline`)
 
@@ -938,6 +981,46 @@ narrator can never starve or perturb the loop. **Off by default** — it costs o
 checkpoint; `--explain-model <m>` selects its model (cascading `--explain-model → --llm-model →
 --model`). Embedders can inject their own observer via `composeDeps({ observer })`.
 
+### Watching, steering & extending a run (operator control)
+
+You are never locked out of a run — before, during, or after ([ADR 0012](docs/adr/0012-operator-control.md)).
+The frozen contract is exactly as untouchable as ever: everything below steers the **worker** or the
+**operational caps**, never the bar, so both keys still gate DONE.
+
+**Watch it live, from any terminal.** Every run's startup banner names the command; it renders one
+line per event as it lands in the write-ahead log (agent turns, verifier verdicts, sign-off vetoes):
+
+```bash
+goaly runs watch run-<id>        # read-only; exits 0 when the run finishes
+```
+
+**Steer it mid-run.** Ctrl-C stops cleanly between steps (nothing is lost), then resume with
+guidance — the note is appended to the worker's next prompt and recorded in the log:
+
+```bash
+^C
+goaly --resume run-<id> --note "the fixture belongs in test/fixtures, not src"
+```
+
+**Extend it after it stops.** A run that ended at an *operational* limit is not a dead end: pass the
+raised cap **with** `--resume` and the run continues where it stood — prior work, session, and spend
+all intact. Each extension is persisted (an auditable `RUN_EXTENDED` log marker), so later plain
+resumes keep it:
+
+```bash
+goaly --resume run-<id> --max-iterations 25             # revive FAILED at the iteration cap
+goaly --resume run-<id> --budget-tokens 900000          # revive a budget abort (prior spend still counts)
+goaly --resume run-<id> --stuck-no-diff false --note "try editing src/parser.ts directly"
+                                                        # revive a stuck abort, with direction
+```
+
+Only the operational knobs are extendable (`--max-iterations`, `--budget-tokens`,
+`--budget-wall-ms`, the `--stuck-*` thresholds) — the goal, verifier, and rubric are structurally
+not part of an extension, so autonomy never becomes "renegotiate the bar." A DONE run refuses to
+extend and points you at `--from-run`. Rule of thumb: **same goal, more room → `--resume` with
+caps/note; new or refined goal → `--from-run`** (a fresh contract, compiled aware of what just
+happened — see [Following up](#following-up-after-a-run-ends---from-run)).
+
 ### Inspecting past runs
 
 The write-ahead run log is also queryable after the fact, with **read-only** subcommands that
@@ -947,6 +1030,7 @@ what they render is exactly the state the Driver computed:
 ```bash
 goaly runs list                  # a table of past runs under ./.goaly
 goaly runs show run-<id>         # full detail for one run
+goaly runs watch run-<id>        # follow a LIVE run's events from another terminal
 goaly runs resume-cmd run-<id>   # how to continue this run's CLI session interactively
 goaly runs list --workspace ./myrepo   # look elsewhere for the .goaly directory
 ```
@@ -1065,6 +1149,12 @@ The library works headless; the CLI is a thin caller. Import from the package ro
 ```ts
 import { drive, composeDeps, freezeContract, type DriverDeps } from 'goaly';
 ```
+
+Two optional `DriverDeps` hooks matter to embedders: `interrupted: () => boolean` (poll-based
+cooperative shutdown — when it turns true, `drive()` finishes the in-flight step, persists it
+write-ahead, and resolves to a typed `ABORTED` naming the resume path) and
+`sleep: (ms) => Promise<void>` (the crash-retry backoff timer — inject a no-op in tests). Both
+default sensibly; the CLI wires `interrupted` to SIGINT/SIGTERM.
 
 Subscribe to the live stream programmatically with `composeDeps({ onStreamEvent })`, or have goaly
 persist it and read it back offline — the same canonical `AgentStreamEvent` shape across every
