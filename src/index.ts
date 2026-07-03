@@ -14,6 +14,7 @@ export {
   type DriveOptions,
   type CheckpointDeps,
 } from './driver/driver';
+export { noopTelemetry, type Telemetry, type TelemetryEvent } from './telemetry/telemetry';
 export {
   composeDeps,
   buildLadder,

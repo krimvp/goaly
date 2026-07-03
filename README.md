@@ -1067,6 +1067,17 @@ narrator can never starve or perturb the loop. **Off by default** — it costs o
 checkpoint; `--explain-model <m>` selects its model (cascading `--explain-model → --llm-model →
 --model`). Embedders can inject their own observer via `composeDeps({ observer })`.
 
+**Telemetry** (`DriverDeps.telemetry`) is the lowest-level observability seam: a synchronous,
+fire-and-forget sink (`Telemetry.record(event: TelemetryEvent)`) the main run flow feeds one
+datapoint per lifecycle beat — `run_started`, one `lifecycle` event per folded reducer event
+(compile → run → verify → sign-off …), and `run_finished` at the terminal outcome. Unlike
+`--explain` it makes **no LLM call** and unlike `--stream` it carries **no agent content** — just
+tags, state, and the Driver clock — so an embedder can meter phase timings, event counts, or drop
+rates cheaply. It is **pure observability**: never fed to the reducer, never written to the run log
+(resume stays a fold over `OrchestratorEvent`), and unable to touch the frozen contract or the
+two-key DONE. Every call is **guarded**, so a throwing sink degrades to "no telemetry" rather than
+crashing a run (fail-closed, invariant #4). Absent ⇒ a no-op sink (off by default).
+
 ### Watching, steering & extending a run (operator control)
 
 You are never locked out of a run — before, during, or after ([ADR 0012](docs/adr/0012-operator-control.md)).
