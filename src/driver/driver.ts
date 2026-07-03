@@ -31,6 +31,7 @@ import { noopLogger, type Logger } from '../log/logger';
 import type { PhasedStreamSink } from '../agent-cli/stream';
 import type { Observer } from '../observe/observer';
 import { errorMessage } from '../util/errors';
+import { noopTelemetry, type Telemetry, type TelemetryEvent } from '../telemetry/telemetry';
 import { prepareWorkspace, type PrepareTimeouts } from './prepare';
 import { Baseline, recordCheckpoint, type CheckpointDeps } from './baseline';
 
@@ -143,6 +144,15 @@ export type DriverDeps = {
    * Absent ⇒ no narration (the default).
    */
   observer?: Observer;
+  /**
+   * Optional telemetry sink: a synchronous, fire-and-forget observability seam fed one datapoint
+   * per lifecycle beat (run start, each folded reducer event, terminal outcome). Like {@link logger}
+   * and {@link observer} it is strictly OFF the control flow — never fed to the reducer, never
+   * written to the replay log, and unable to touch the frozen contract or the two-key DONE. The
+   * Driver guards every call, so a throwing sink degrades to "no telemetry" rather than crashing a
+   * run (invariant #4). Absent ⇒ telemetry is disabled (a no-op sink).
+   */
+  telemetry?: Telemetry;
 };
 
 export type DriveOptions = {
@@ -181,6 +191,27 @@ export async function drive(
   let pendingNote: string | null = null;
   const log = deps.logger ?? noopLogger;
   const llmMeter = deps.llmMeter ?? new LlmTokenMeter();
+  // Telemetry (pure observability seam): a fire-and-forget sink for lifecycle datapoints. Strictly
+  // OFF the control flow — never fed to the reducer, never on the durability path, never able to
+  // touch the frozen contract or the two-key DONE. Every call is GUARDED: a throwing sink degrades
+  // to "no telemetry" instead of taking down a run (invariant #4, fail-closed).
+  const telemetry = deps.telemetry ?? noopTelemetry;
+  const emitTelemetry = (event: TelemetryEvent): void => {
+    try {
+      telemetry.record(event);
+    } catch (e) {
+      log.debug('telemetry sink error (ignored)', { reason: errorMessage(e) });
+    }
+  };
+  const emitRunFinished = (o: RunOutcome): void =>
+    emitTelemetry({
+      kind: 'run_finished',
+      runId,
+      status: o.status,
+      iterations: o.iterations,
+      ts: deps.clock.now(),
+    });
+  emitTelemetry({ kind: 'run_started', runId, resume: options.resume === true, ts: deps.clock.now() });
   // Capture the run's START baseline BEFORE any internal checkpoint (or the resume re-point below)
   // advances it. On a FRESH run this is `--baseline`/HEAD as compose applied it. On --resume it is
   // whatever compose re-applied THIS invocation: `--baseline` is not persisted in the log, so a resumed
@@ -222,13 +253,15 @@ export async function drive(
     ));
   } catch (e) {
     log.error('run bootstrap failed (fail-closed → ABORTED)', { reason: errorMessage(e) });
-    return {
+    const outcome: RunOutcome = {
       status: 'ABORTED',
       reason: `run bootstrap failed: ${errorMessage(e)}`,
       iterations: 0,
       contractHash: null,
       runId,
     };
+    emitRunFinished(outcome);
+    return outcome;
   }
 
   // Worktree floor (issue #85, locked decision #8): best-of-N needs a resolvable HEAD — `git worktree`
@@ -239,13 +272,15 @@ export async function drive(
     const floor = await bestOfFloor(deps);
     if (floor !== null) {
       log.error('best-of-N refused to start (fail-closed)', { reason: floor });
-      return {
+      const outcome: RunOutcome = {
         status: 'ABORTED',
         reason: floor,
         iterations: iterationCount(state),
         contractHash: contractHash ?? null,
         runId,
       };
+      emitRunFinished(outcome);
+      return outcome;
     }
   }
 
@@ -256,7 +291,7 @@ export async function drive(
       if (deps.interrupted?.() === true) {
         log.warn('interrupt requested — stopping before the next step', { runId });
         const extras = await buildOutcomeExtras(deps);
-        return {
+        const outcome: RunOutcome = {
           status: 'ABORTED',
           reason: `interrupted by user — resume this run with: --resume ${runId}`,
           iterations: iterationCount(state),
@@ -265,6 +300,8 @@ export async function drive(
           ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
           ...(extras.sessionId !== undefined ? { sessionId: extras.sessionId } : {}),
         };
+        emitRunFinished(outcome);
+        return outcome;
       }
       if (commands.length !== 1) {
         throw new Error(
@@ -327,6 +364,11 @@ export async function drive(
       state = next;
       commands = nextCommands;
 
+      // Telemetry lifecycle beat (pure observability): one datapoint per performed-and-folded event —
+      // the compile → run → verify → sign-off progression an embedder meters. Guarded and off the
+      // replay log, so it can never affect the run's outcome.
+      emitTelemetry({ kind: 'lifecycle', runId, event: event.tag, stateAfter: state.tag, ts: deps.clock.now() });
+
       // Advance the baselines after the transition: the approver's cumulative baseline at a --phased
       // boundary, and (under --delta-verify) an internal checkpoint after a continuation iteration so
       // the next judge sees only its delta. All of that — including the fail-closed rollback — lives in
@@ -352,7 +394,7 @@ export async function drive(
     // rather than reject — so the caller always gets a RunOutcome.
     log.error('driver error (fail-closed → ABORTED)', { reason: errorMessage(e) });
     const extras = await buildOutcomeExtras(deps);
-    return {
+    const outcome: RunOutcome = {
       status: 'ABORTED',
       reason: `driver error: ${errorMessage(e)}`,
       iterations: iterationCount(state),
@@ -361,6 +403,8 @@ export async function drive(
       ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
       ...(extras.sessionId !== undefined ? { sessionId: extras.sessionId } : {}),
     };
+    emitRunFinished(outcome);
+    return outcome;
   }
 
   const outcome = buildOutcome(state, runId);
@@ -375,6 +419,7 @@ export async function drive(
     ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
     ...(extras.sessionId !== undefined ? { sessionId: extras.sessionId } : {}),
   };
+  emitRunFinished(finalOutcome);
   // Final `--explain` checkpoint (issue #8): narrate the terminal outcome — especially a stuck
   // ABORTED. Same advisory, fail-closed contract as the per-iteration narration above.
   await observe(deps.observer, (o) => o.onOutcome(finalOutcome), log);
