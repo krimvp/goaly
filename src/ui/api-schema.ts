@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { RunDetail, RunSummary } from '../runlog/inspect';
 import { WorktreeName, type WorktreeInfo } from '../workspace/worktree-manager';
+import type { WorktreeChanges } from '../workspace/landing';
 import type { RunLogEntry, RunLogHeader } from '../runlog/runlog';
 import type { StreamTranscriptEntry } from '../runlog/stream-transcript';
 import type { CompiledContract } from '../domain/contract';
@@ -172,6 +173,74 @@ export const WorktreeCreateRequest = z
   .object({ name: WorktreeName, base: z.string().min(1).optional() })
   .strict();
 export type WorktreeCreateRequest = z.infer<typeof WorktreeCreateRequest>;
+
+// ---- post-run landing (ADR 0017) -------------------------------------------
+
+/** `GET /api/worktrees/:name/changes` — the read-only landing projection (see `LandingManager`). */
+export type WorktreeChangesResponse = WorktreeChanges;
+
+/** `POST /api/worktrees/:name/commit` — commit the worktree's changes onto its branch. */
+export const CommitRequest = z.object({ message: z.string().min(1).max(10_000) }).strict();
+export type CommitRequest = z.infer<typeof CommitRequest>;
+
+/** `POST /api/worktrees/:name/merge` — merge the branch into main; optional commit-if-dirty message. */
+export const MergeRequest = z
+  .object({ commitMessage: z.string().min(1).max(10_000).optional() })
+  .strict();
+export type MergeRequest = z.infer<typeof MergeRequest>;
+
+/** `POST /api/worktrees/:name/pr` — commit-if-dirty, push, then `gh pr create`. */
+export const OpenPrRequest = z
+  .object({
+    title: z.string().min(1).max(1_000),
+    body: z.string().max(50_000).optional(),
+    base: z.string().min(1).max(255).optional(),
+    commitMessage: z.string().min(1).max(10_000).optional(),
+  })
+  .strict();
+export type OpenPrRequest = z.infer<typeof OpenPrRequest>;
+
+/** `POST /api/worktrees/:name/pr` 200 body. */
+export type OpenPrResponse = { url: string };
+
+/**
+ * `POST /api/worktrees/:name/pr/draft` — the agent drafts a PR title + body from the worktree diff
+ * (the "agent fills in the MR" step). `goal` gives the model context (the run's goal); `harness`
+ * picks which CLI backs the completion (defaults to `claude`). Both optional, `.strict()`.
+ */
+export const PrDraftRequest = z
+  .object({
+    goal: z.string().max(100_000).optional(),
+    harness: z.enum(['claude', 'codex', 'droid', 'pi', 'goaly-code', 'fake']).optional(),
+  })
+  .strict();
+export type PrDraftRequest = z.infer<typeof PrDraftRequest>;
+
+/** `POST /api/worktrees/:name/pr/draft` 200 body — pre-fills the Open PR form for review. */
+export type PrDraftResponse = { title: string; body: string };
+
+// ---- main-workspace landing (ADR 0017) -------------------------------------
+// A run made WITHOUT --worktree lands in the main workspace on its checked-out branch. `changes`
+// and `commit` reuse the worktree shapes (GET /api/workspace/changes, POST /api/workspace/commit
+// with CommitRequest); a PR must first EJECT the work onto a fresh goaly/<name> branch.
+
+/**
+ * `POST /api/workspace/pr` — eject the main workspace's uncommitted changes onto a new
+ * `goaly/<name>` branch, push, open the PR, and return the workspace to its original branch.
+ */
+export const WorkspacePrRequest = z
+  .object({
+    name: WorktreeName,
+    title: z.string().min(1).max(1_000),
+    body: z.string().max(50_000).optional(),
+    base: z.string().min(1).max(255).optional(),
+    commitMessage: z.string().min(1).max(10_000).optional(),
+  })
+  .strict();
+export type WorkspacePrRequest = z.infer<typeof WorkspacePrRequest>;
+
+/** `POST /api/workspace/pr` 200 body — the PR URL and the branch the work was ejected onto. */
+export type WorkspacePrResponse = { url: string; branch: string };
 
 /** `DELETE /api/worktrees/:name?force=&deleteBranch=` boolean query params. */
 export const BoolQueryParam = z

@@ -12,6 +12,11 @@ import {
   GateFileWrite,
   ResumeRequest,
   WorktreeCreateRequest,
+  CommitRequest,
+  MergeRequest,
+  OpenPrRequest,
+  PrDraftRequest,
+  WorkspacePrRequest,
   BoolQueryParam,
   type ApiRunListItem,
   type RunsIndex,
@@ -20,7 +25,9 @@ import {
   type VersionResponse,
 } from './api-schema';
 import { readStreamTranscript } from '../runlog/stream-transcript';
-import { WorktreeError } from '../workspace/worktree-manager';
+import { WorktreeError, WorktreeName } from '../workspace/worktree-manager';
+import { LandingManager, LandingError, type WorktreeChanges } from '../workspace/landing';
+import { PrDraftError } from '../llm/pr-draft';
 import type { UiActions } from './start-run';
 
 /**
@@ -43,6 +50,10 @@ export type RouterCtx = {
   isActive?: (runDir: string) => Promise<boolean>;
   /** Injected worktree enumeration (tests). Default: the real WorktreeManager. */
   listWorktrees?: () => Promise<WorktreeInfo[]>;
+  /** Injected landing change-set reader (tests). Default: the real LandingManager. */
+  worktreeChanges?: (name: string) => Promise<WorktreeChanges>;
+  /** Injected MAIN-workspace change-set reader (tests). Default: the real LandingManager. */
+  workspaceChanges?: () => Promise<WorktreeChanges>;
   /** Injected transcript reader (tests). */
   readTranscript?: typeof readStreamTranscript;
   /**
@@ -75,6 +86,11 @@ export async function route(
     if (pathname === '/api/runs') return runsIndex(ctx);
     if (pathname === '/api/worktrees') return worktrees(ctx);
 
+    const changesMatch = /^\/api\/worktrees\/([^/]+)\/changes$/.exec(pathname);
+    if (changesMatch !== null) return worktreeChanges(ctx, decodeURIComponent(changesMatch[1] ?? ''));
+
+    if (pathname === '/api/workspace/changes') return workspaceChanges(ctx);
+
     const gateFilesMatch = /^\/api\/runs\/([^/]+)\/gate\/([^/]+)\/files$/.exec(pathname);
     if (gateFilesMatch !== null) {
       const runId = parseRunId(gateFilesMatch[1]);
@@ -102,6 +118,27 @@ export async function route(
 
   if (method === 'POST' && pathname === '/api/runs') return startRun(actions, body);
   if (method === 'POST' && pathname === '/api/worktrees') return createWorktree(actions, body);
+
+  if (method === 'POST') {
+    const draftMatch = /^\/api\/worktrees\/([^/]+)\/pr\/draft$/.exec(pathname);
+    if (draftMatch !== null) {
+      const name = parseWorktreeName(draftMatch[1]);
+      if (name === null) return { kind: 'json', status: 400, body: { error: 'invalid worktree name' } };
+      return draftPr(actions, name, body);
+    }
+    const landMatch = /^\/api\/worktrees\/([^/]+)\/(commit|merge|pr)$/.exec(pathname);
+    if (landMatch !== null) {
+      const name = parseWorktreeName(landMatch[1]);
+      if (name === null) return { kind: 'json', status: 400, body: { error: 'invalid worktree name' } };
+      if (landMatch[2] === 'commit') return commitWorktree(actions, name, body);
+      if (landMatch[2] === 'merge') return mergeWorktree(actions, name, body);
+      return openPr(actions, name, body);
+    }
+    // The MAIN-workspace landing routes (a run made without --worktree).
+    if (pathname === '/api/workspace/commit') return commitWorkspace(actions, body);
+    if (pathname === '/api/workspace/pr') return openPrFromMain(actions, body);
+    if (pathname === '/api/workspace/pr/draft') return draftPrWorkspace(actions, body);
+  }
 
   if (method === 'DELETE') {
     const wtMatch = /^\/api\/worktrees\/([^/]+)$/.exec(pathname);
@@ -366,6 +403,94 @@ async function createWorktree(actions: UiActions, body: unknown): Promise<ApiRes
     if (e instanceof WorktreeError) return { kind: 'json', status: 422, body: { error: e.message } };
     throw e;
   }
+}
+
+// ---- post-run landing (ADR 0017) -------------------------------------------
+
+function parseWorktreeName(raw: string | undefined): string | null {
+  const parsed = WorktreeName.safeParse(decodeURIComponent(raw ?? ''));
+  return parsed.success ? parsed.data : null;
+}
+
+async function worktreeChanges(ctx: RouterCtx, rawName: string): Promise<ApiResponse> {
+  const parsed = WorktreeName.safeParse(rawName);
+  if (!parsed.success) return { kind: 'json', status: 400, body: { error: 'invalid worktree name' } };
+  const read = ctx.worktreeChanges ?? ((n: string) => new LandingManager({ root: ctx.workspaceRoot }).changes(n));
+  try {
+    return { kind: 'json', status: 200, body: await read(parsed.data) };
+  } catch (e) {
+    // A missing worktree / not-a-repo fails closed as a 404-ish 422 (the panel just won't render).
+    if (e instanceof LandingError) return { kind: 'json', status: 422, body: { error: e.message } };
+    throw e;
+  }
+}
+
+/** Map a landing action's throw onto the router's status ladder (mirrors the worktree handlers). */
+async function runLanding<T>(fn: () => Promise<T>): Promise<ApiResponse> {
+  try {
+    return { kind: 'json', status: 200, body: await fn() };
+  } catch (e) {
+    // A LandingError is an operator-facing refusal (dirty / no remote / conflict / live run); a
+    // PrDraftError is the model returning nothing usable — both are 422, not a 500.
+    if (e instanceof LandingError || e instanceof PrDraftError) {
+      return { kind: 'json', status: 422, body: { error: e.message } };
+    }
+    throw e;
+  }
+}
+
+async function draftPr(actions: UiActions, name: string, body: unknown): Promise<ApiResponse> {
+  const parsed = PrDraftRequest.safeParse(body ?? {});
+  if (!parsed.success) return { kind: 'json', status: 400, body: { error: firstIssue(parsed.error) } };
+  return runLanding(() => actions.draftPr(name, parsed.data));
+}
+
+// ---- main-workspace landing (ADR 0017) -------------------------------------
+
+async function workspaceChanges(ctx: RouterCtx): Promise<ApiResponse> {
+  const read = ctx.workspaceChanges ?? (() => new LandingManager({ root: ctx.workspaceRoot }).changesMain());
+  try {
+    return { kind: 'json', status: 200, body: await read() };
+  } catch (e) {
+    if (e instanceof LandingError) return { kind: 'json', status: 422, body: { error: e.message } };
+    throw e;
+  }
+}
+
+async function commitWorkspace(actions: UiActions, body: unknown): Promise<ApiResponse> {
+  const parsed = CommitRequest.safeParse(body);
+  if (!parsed.success) return { kind: 'json', status: 400, body: { error: firstIssue(parsed.error) } };
+  return runLanding(() => actions.commitWorkspace(parsed.data.message));
+}
+
+async function openPrFromMain(actions: UiActions, body: unknown): Promise<ApiResponse> {
+  const parsed = WorkspacePrRequest.safeParse(body);
+  if (!parsed.success) return { kind: 'json', status: 400, body: { error: firstIssue(parsed.error) } };
+  return runLanding(() => actions.openPrFromMain(parsed.data));
+}
+
+async function draftPrWorkspace(actions: UiActions, body: unknown): Promise<ApiResponse> {
+  const parsed = PrDraftRequest.safeParse(body ?? {});
+  if (!parsed.success) return { kind: 'json', status: 400, body: { error: firstIssue(parsed.error) } };
+  return runLanding(() => actions.draftPrWorkspace(parsed.data));
+}
+
+async function commitWorktree(actions: UiActions, name: string, body: unknown): Promise<ApiResponse> {
+  const parsed = CommitRequest.safeParse(body);
+  if (!parsed.success) return { kind: 'json', status: 400, body: { error: firstIssue(parsed.error) } };
+  return runLanding(() => actions.commitWorktree(name, parsed.data.message));
+}
+
+async function mergeWorktree(actions: UiActions, name: string, body: unknown): Promise<ApiResponse> {
+  const parsed = MergeRequest.safeParse(body ?? {});
+  if (!parsed.success) return { kind: 'json', status: 400, body: { error: firstIssue(parsed.error) } };
+  return runLanding(() => actions.mergeWorktree(name, parsed.data));
+}
+
+async function openPr(actions: UiActions, name: string, body: unknown): Promise<ApiResponse> {
+  const parsed = OpenPrRequest.safeParse(body);
+  if (!parsed.success) return { kind: 'json', status: 400, body: { error: firstIssue(parsed.error) } };
+  return runLanding(() => actions.openPr(name, parsed.data));
 }
 
 async function removeWorktree(actions: UiActions, name: string, query: URLSearchParams): Promise<ApiResponse> {

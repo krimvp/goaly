@@ -4,6 +4,8 @@ import { route, type RouterCtx } from './router';
 import type { RunListItem, RunReadResult, RunSummary, RunDetail } from '../runlog/inspect';
 import { RunId, ContractHash } from '../domain/ids';
 import type { WorktreeInfo } from '../workspace/worktree-manager';
+import { LandingError } from '../workspace/landing';
+import { PrDraftError } from '../llm/pr-draft';
 
 const summary = (runId: string, overrides: Partial<RunSummary> = {}): RunSummary => ({
   runId: RunId.parse(runId),
@@ -66,6 +68,8 @@ function makeCtx(opts: {
   readByStateDir?: Record<string, Record<string, RunReadResult>>;
   worktrees?: WorktreeInfo[];
   live?: Set<string>;
+  worktreeChanges?: RouterCtx['worktreeChanges'];
+  workspaceChanges?: RouterCtx['workspaceChanges'];
 }): RouterCtx {
   return {
     workspaceRoot: '/ws',
@@ -76,6 +80,8 @@ function makeCtx(opts: {
     },
     isActive: async (runDir) => opts.live?.has(runDir) ?? false,
     listWorktrees: async () => opts.worktrees ?? [],
+    ...(opts.worktreeChanges ? { worktreeChanges: opts.worktreeChanges } : {}),
+    ...(opts.workspaceChanges ? { workspaceChanges: opts.workspaceChanges } : {}),
   };
 }
 
@@ -188,6 +194,31 @@ describe('route — the goaly ui API', () => {
     expect(res).toMatchObject({ status: 200, body: { worktrees: [{ name: 'feat' }] } });
   });
 
+  it('GET /api/worktrees/:name/changes returns the landing projection (read-only OK)', async () => {
+    const ctx = makeCtx({
+      worktreeChanges: async (name) => ({
+        branch: `goaly/${name}`,
+        head: 'aaaa1111',
+        dirty: true,
+        ahead: 0,
+        files: [{ status: '??', path: 'new.ts' }],
+        untracked: 1,
+        diff: '',
+        diffTruncated: false,
+        remote: false,
+        ghAvailable: false,
+        canPr: false,
+      }),
+    });
+    const res = await route(ctx, 'GET', '/api/worktrees/feat/changes', q);
+    expect(res).toMatchObject({ status: 200, body: { branch: 'goaly/feat', dirty: true, canPr: false } });
+  });
+
+  it('GET /api/worktrees/:name/changes rejects a bad worktree name (400)', async () => {
+    const res = await route(makeCtx({}), 'GET', '/api/worktrees/..%2Fx/changes', q);
+    expect(res).toMatchObject({ status: 400 });
+  });
+
   it('without actions, state-changing routes answer 503 (read-only server); unknown routes 404', async () => {
     const ctx = makeCtx({});
     expect(await route(ctx, 'POST', '/api/runs', q)).toMatchObject({ status: 503 });
@@ -254,6 +285,68 @@ describe('route — interactive routes (ADR 0015), against a scripted UiActions'
       },
       removeWorktree: async (name, o) => {
         calls.push(`wt-remove:${name}:${o.force}:${o.deleteBranch}`);
+      },
+      worktreeChanges: async (name) => {
+        calls.push(`changes:${name}`);
+        return {
+          branch: `goaly/${name}`,
+          head: 'abc12345',
+          dirty: true,
+          ahead: 0,
+          files: [{ status: ' M', path: 'src/x.ts' }],
+          untracked: 0,
+          diff: 'diff --git a/src/x.ts b/src/x.ts',
+          diffTruncated: false,
+          remote: true,
+          ghAvailable: true,
+          canPr: true,
+        };
+      },
+      commitWorktree: async (name, message) => {
+        calls.push(`commit:${name}:${message}`);
+        if (name === 'clean') throw new LandingError('worktree is clean — nothing to commit');
+        return { head: 'newhead1' };
+      },
+      mergeWorktree: async (name, o) => {
+        calls.push(`merge:${name}:${o.commitMessage ?? ''}`);
+        return { merged: `goaly/${name}`, head: 'mergedhd' };
+      },
+      openPr: async (name, o) => {
+        calls.push(`pr:${name}:${o.title}`);
+        return { url: `https://github.com/krimvp/goaly/pull/1` };
+      },
+      draftPr: async (name, req) => {
+        calls.push(`draft:${name}:${req.harness ?? ''}`);
+        if (name === 'empty') throw new PrDraftError('nothing to describe — the worktree has no changes');
+        return { title: 'feat: a thing', body: 'Summary.\n\n- did a thing' };
+      },
+      workspaceChanges: async () => {
+        calls.push('ws-changes');
+        return {
+          branch: 'main',
+          head: 'deadbeef',
+          dirty: true,
+          ahead: 0,
+          files: [{ status: ' M', path: 'src/y.ts' }],
+          untracked: 0,
+          diff: 'diff --git a/src/y.ts b/src/y.ts',
+          diffTruncated: false,
+          remote: true,
+          ghAvailable: true,
+          canPr: true,
+        };
+      },
+      commitWorkspace: async (message) => {
+        calls.push(`ws-commit:${message}`);
+        return { head: 'wshead12' };
+      },
+      openPrFromMain: async (req) => {
+        calls.push(`ws-pr:${req.name}:${req.title}`);
+        return { url: 'https://github.com/krimvp/goaly/pull/2', branch: `goaly/${req.name}` };
+      },
+      draftPrWorkspace: async (req) => {
+        calls.push(`ws-draft:${req.harness ?? ''}`);
+        return { title: 'feat: ws', body: 'ws body' };
       },
       shutdown: () => {},
     };
@@ -394,5 +487,91 @@ describe('route — interactive routes (ADR 0015), against a scripted UiActions'
     expect(
       await route(ctx, 'DELETE', '/api/worktrees/feat', new URLSearchParams('force=maybe')),
     ).toMatchObject({ status: 400 });
+  });
+
+  it('landing: POST commit/merge/pr dispatch to the actions and 200 on success', async () => {
+    const { actions, calls } = makeActions();
+    const ctx = ctxWith(actions);
+    expect(await route(ctx, 'POST', '/api/worktrees/feat/commit', q, { message: 'ship it' })).toMatchObject({
+      status: 200,
+      body: { head: 'newhead1' },
+    });
+    expect(calls).toContain('commit:feat:ship it');
+    expect(await route(ctx, 'POST', '/api/worktrees/feat/merge', q, {})).toMatchObject({ status: 200 });
+    expect(calls).toContain('merge:feat:');
+    expect(await route(ctx, 'POST', '/api/worktrees/feat/pr', q, { title: 'A PR' })).toMatchObject({
+      status: 200,
+      body: { url: 'https://github.com/krimvp/goaly/pull/1' },
+    });
+    expect(calls).toContain('pr:feat:A PR');
+  });
+
+  it('landing: commit requires a non-empty message (400), and a LandingError maps to 422', async () => {
+    const { actions } = makeActions();
+    const ctx = ctxWith(actions);
+    expect(await route(ctx, 'POST', '/api/worktrees/feat/commit', q, {})).toMatchObject({ status: 400 });
+    expect(await route(ctx, 'POST', '/api/worktrees/feat/pr', q, { title: '' })).toMatchObject({ status: 400 });
+    // The scripted actions throw a LandingError for the 'clean' worktree → the router answers 422.
+    expect(await route(ctx, 'POST', '/api/worktrees/clean/commit', q, { message: 'x' })).toMatchObject({
+      status: 422,
+    });
+  });
+
+  it('landing: POST routes 503 on a read-only server', async () => {
+    const ctx = makeCtx({});
+    expect(await route(ctx, 'POST', '/api/worktrees/feat/commit', q, { message: 'x' })).toMatchObject({
+      status: 503,
+    });
+  });
+
+  it('draft: POST /pr/draft returns the agent-drafted title+body (harness forwarded)', async () => {
+    const { actions, calls } = makeActions();
+    const ctx = ctxWith(actions);
+    const res = await route(ctx, 'POST', '/api/worktrees/feat/pr/draft', q, { goal: 'g', harness: 'codex' });
+    expect(res).toMatchObject({ status: 200, body: { title: 'feat: a thing' } });
+    expect(calls).toContain('draft:feat:codex');
+    // A PrDraftError (nothing to describe) maps to 422, not a 500.
+    expect(await route(ctx, 'POST', '/api/worktrees/empty/pr/draft', q, {})).toMatchObject({ status: 422 });
+    // Bad body (unknown field / bad harness) is a 400; read-only server is 503.
+    expect(await route(ctx, 'POST', '/api/worktrees/feat/pr/draft', q, { harness: 'nope' })).toMatchObject({
+      status: 400,
+    });
+    expect(await route(makeCtx({}), 'POST', '/api/worktrees/feat/pr/draft', q, {})).toMatchObject({ status: 503 });
+  });
+
+  it('main-workspace landing: GET changes + POST commit/pr/draft dispatch to the actions', async () => {
+    const { actions, calls } = makeActions();
+    const ctx = ctxWith(actions);
+    // GET changes (read) works via the injected workspaceChanges seam; without it, the action seam.
+    const changesCtx = makeCtx({ workspaceChanges: () => actions.workspaceChanges() });
+    expect(await route(changesCtx, 'GET', '/api/workspace/changes', q)).toMatchObject({
+      status: 200,
+      body: { branch: 'main', canPr: true },
+    });
+    expect(await route(ctx, 'POST', '/api/workspace/commit', q, { message: 'on main' })).toMatchObject({
+      status: 200,
+      body: { head: 'wshead12' },
+    });
+    expect(calls).toContain('ws-commit:on main');
+    expect(await route(ctx, 'POST', '/api/workspace/pr', q, { name: 'myfix', title: 'A PR' })).toMatchObject({
+      status: 200,
+      body: { url: 'https://github.com/krimvp/goaly/pull/2', branch: 'goaly/myfix' },
+    });
+    expect(calls).toContain('ws-pr:myfix:A PR');
+    expect(await route(ctx, 'POST', '/api/workspace/pr/draft', q, { harness: 'claude' })).toMatchObject({
+      status: 200,
+      body: { title: 'feat: ws' },
+    });
+    expect(calls).toContain('ws-draft:claude');
+  });
+
+  it('main-workspace landing: bad body 400, missing branch name 400, read-only 503', async () => {
+    const { actions } = makeActions();
+    const ctx = ctxWith(actions);
+    expect(await route(ctx, 'POST', '/api/workspace/commit', q, {})).toMatchObject({ status: 400 });
+    expect(await route(ctx, 'POST', '/api/workspace/pr', q, { title: 'no name' })).toMatchObject({ status: 400 });
+    expect(await route(makeCtx({}), 'POST', '/api/workspace/pr', q, { name: 'x', title: 't' })).toMatchObject({
+      status: 503,
+    });
   });
 });

@@ -10,6 +10,13 @@ import type {
   GateFilesResponse,
   PendingGate,
   StartRunResponse,
+  WorktreeChangesResponse,
+  OpenPrRequest,
+  OpenPrResponse,
+  PrDraftRequest,
+  PrDraftResponse,
+  WorkspacePrRequest,
+  WorkspacePrResponse,
 } from '../api-schema';
 import type { WorktreeInfo } from '../../workspace/worktree-manager';
 
@@ -80,6 +87,25 @@ export const api = {
       'DELETE',
       `/api/worktrees/${encodeURIComponent(name)}?force=${opts.force === true}&deleteBranch=${opts.deleteBranch === true}`,
     ),
+  // ---- post-run landing (ADR 0017) ----
+  worktreeChanges: (name: string): Promise<WorktreeChangesResponse> =>
+    getJson(`/api/worktrees/${encodeURIComponent(name)}/changes`),
+  commitWorktree: (name: string, message: string): Promise<{ head: string }> =>
+    send('POST', `/api/worktrees/${encodeURIComponent(name)}/commit`, { message }),
+  mergeWorktree: (name: string, opts: { commitMessage?: string }): Promise<{ merged: string; head: string }> =>
+    send('POST', `/api/worktrees/${encodeURIComponent(name)}/merge`, opts),
+  openPr: (name: string, req: OpenPrRequest): Promise<OpenPrResponse> =>
+    send('POST', `/api/worktrees/${encodeURIComponent(name)}/pr`, req),
+  draftPr: (name: string, req: PrDraftRequest): Promise<PrDraftResponse> =>
+    send('POST', `/api/worktrees/${encodeURIComponent(name)}/pr/draft`, req),
+  // ---- main-workspace landing (a run made without --worktree) ----
+  workspaceChanges: (): Promise<WorktreeChangesResponse> => getJson('/api/workspace/changes'),
+  commitWorkspace: (message: string): Promise<{ head: string }> =>
+    send('POST', '/api/workspace/commit', { message }),
+  openPrFromMain: (req: WorkspacePrRequest): Promise<WorkspacePrResponse> =>
+    send('POST', '/api/workspace/pr', req),
+  draftPrWorkspace: (req: PrDraftRequest): Promise<PrDraftResponse> =>
+    send('POST', '/api/workspace/pr/draft', req),
 };
 
 /**
