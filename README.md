@@ -49,9 +49,10 @@ stays resumable). See [Usage](#usage) for every flag.
 
 - [How it works](#how-it-works) — the loop, the two gates, the verify ladder
 - [Install](#install) · [Usage](#usage) — every flag and mode
-- [Phased goals](#phased-goals---phased) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
+- [Phased goals](#phased-goals---phased) · [Worktrees](#worktrees---worktree) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
 - [Reliability](#reliability-preflight-retries-interrupts-crash-safety) — preflight, retries, Ctrl-C, crash-safety
 - [Operator control](#watching-steering--extending-a-run-operator-control) — watch live, steer with `--note`, extend caps on `--resume`
+- [Web UI](#web-ui-goaly-ui) — `goaly ui`: runs, live feeds, and worktrees in the browser
 - [Develop](#develop) · [Embedding](#embedding) — contributing and the library API
 - [Glossary](#appendix-glossary) — every project-specific term & idiom, plain-language
 
@@ -109,9 +110,17 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   the judge, turning "it actually runs" from a diff-reading judge's guess into an ungameable key, and
   is frozen into the contract like any rung. (Plain `--verify-cmd "npm test && node smoke.mjs"` does
   the same; `--smoke` just gives the runtime check its own labeled rung with its own failure feedback.)
-- **Seal is the human's say over the bar.** Before the loop you can approve the frozen contract,
-  **reject** it (abort), or give **free-text feedback to revise** it — goaly re-authors the contract
-  and re-presents it, bounded by `--max-seal-revisions` (default 10; `0` disables revision).
+- **Seal is the human's say over the bar — a full review station.** Before the loop you can
+  **approve** the frozen contract, **reject** it (abort), give **free-text feedback to revise** it
+  (goaly re-authors and re-presents, bounded by `--max-seal-revisions`, default 10; `0` disables
+  revision) — or **edit the artifacts yourself**. Answer **`e` (edited)** after changing the
+  authored verification files in your own editor: goaly re-reads them from disk, re-pins their
+  content hashes, **re-freezes** the contract (a new, logged `contractHash`) and re-presents it —
+  without this, a manual edit would trip the anti-tamper guard on iteration 1. A refreeze costs no
+  LLM tokens and never consumes the revise cap; iterate until you're happy, and only the contract
+  you finally approve enters the loop ([ADR 0016](docs/adr/0016-seal-review-station.md)). The
+  [web UI](#web-ui-goaly-ui) goes further: it renders the authored files' **contents**, lets you
+  edit them (and the setup/verify commands and rubric) **in the browser**, and re-freezes on click.
   `--autonomous` skips this pause entirely, never the freeze.
 - **Required-tools preflight, before anything else.** Every contract carries a frozen **`requiredTools`**
   manifest — the external programs the verification assumes already exist on PATH (`cargo`, `python`,
@@ -347,6 +356,47 @@ each iteration, with --candidates N:
   **`--sandbox`** jails each of the N execs through the same launcher. Best-of-N needs a **committed
   HEAD** — `git worktree` can't check out an unborn tree, so a `--candidates > 1` run on a HEAD-less repo
   **refuses to start** (fail-closed) with a clear message; make an initial commit or use `--candidates 1`.
+
+## Worktrees (`--worktree`)
+
+Sometimes the run shouldn't touch your working tree at all — you keep editing while goaly builds, or
+you want several runs going at once without them stepping on each other. `goaly` manages light,
+**named, persistent git worktrees** for exactly that: `--worktree <name>` re-roots the **entire run**
+at an isolated checkout of the repo, and the work merges back with plain git.
+
+```bash
+goaly "add a /health endpoint" --worktree health      # create (or reuse) + run inside it
+goaly "try the other approach" --worktree             # bare flag: auto-named (wt-<8 hex>)
+
+goaly worktree create feature-x --base main           # create one up front (default base: HEAD)
+goaly worktree list                                   # NAME / BRANCH / HEAD / DIRTY / RUNS / PATH
+goaly worktree remove feature-x                       # refuses if dirty; branch kept for merge-back
+goaly worktree remove feature-x --force --delete-branch
+```
+
+- **Where they live.** Each worktree is `git worktree add`-ed at `.goaly/worktrees/<name>` on branch
+  **`goaly/<name>`** — inside the already git-ignored `.goaly` state dir, so nothing shows in
+  `git status` and everything goaly manages sits in one place. (Corollary: `git clean -dfx` on the
+  main tree deletes the checkouts — committed work survives on the `goaly/<name>` branch;
+  uncommitted work does not. `worktree list` flags such orphaned registrations as `PRUNABLE`.)
+- **The whole run is re-rooted.** One early rewrite points the run's workspace at the worktree, so
+  the run log (`<worktree>/.goaly/<runId>/`), the run lock, the agent's cwd, the verifier, and the
+  diff scope all live there — the main tree is never read or written by the run. Resume it with the
+  **same** `--worktree <name>` (the log lives inside the worktree); the startup banner prints the
+  exact command.
+- **Merge-back is plain git — no magic.** Runs never commit, so a finished worktree run leaves its
+  changes uncommitted on `goaly/<name>`; the end-of-run hint shows the two steps
+  (`git -C <worktree> add -A && git -C <worktree> commit …`, then `git merge goaly/<name>`).
+  Removing a worktree **keeps the branch by default** for exactly this reason; `--delete-branch`
+  opts out (an unmerged branch then needs `--force`).
+- **Fail-closed safety.** Creating over an existing worktree, an unresolvable `--base`, or an
+  invalid name (names are one safe path/branch component: `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`, no
+  `..`) all refuse with a clear message. `remove` refuses while a **live goaly run** is inside
+  (always — even `--force`) and refuses a dirty tree without `--force`, naming how to keep the work.
+- **Distinct from best-of-N.** `--candidates` makes **ephemeral, detached** worktrees for one
+  iteration's tournament and tears them down; `--worktree` is the **persistent, named** counterpart
+  a whole run (and you) can live in. They compose: a `--worktree` run with `--candidates 3` runs its
+  tournament off the worktree's tree.
 
 ## Hardening against reward-hacking
 
@@ -596,6 +646,11 @@ goaly run --goal "..." --verify-cmd "npm test" --delta-verify
 # ladder (needs a committed HEAD; composes with --phased / --delta-verify / --sandbox):
 goaly run --goal "..." --verify-cmd "npm test" --candidates 3   # or --best-of 3
 
+# Run in an isolated, named worktree (.goaly/worktrees/health, branch goaly/health) — the main
+# tree is never touched; merge back with plain git when it's done:
+goaly "add a /health endpoint" --verify-cmd "npm test" --worktree health
+goaly worktree list                          # manage them: create / list / remove
+
 # Author verification into test/, give the compiler more self-correction, and loosen no-diff for an
 # exploratory build (authored files are auto git-excluded, so your `git status` stays clean):
 goaly run --goal "..." --generate --autonomous --verify-dir test \
@@ -661,6 +716,10 @@ goaly "make the parser handle empty input"
 goaly runs list
 goaly runs show run-<id>
 goaly runs resume-cmd run-<id>   # print how to continue the run's CLI session (e.g. claude --resume <id>)
+
+# Or in the browser: runs across the workspace AND its worktrees, live SSE feeds, start runs with
+# a browser Seal modal, stop/resume, worktree panel:
+goaly ui                         # http://127.0.0.1:4180, localhost-only
 ```
 
 ### Config file
@@ -1106,6 +1165,67 @@ frozen contract still solely governs DONE**; inheritance only seeds the agent's 
 bar. It is valid only with the same `--harness` as the prior run (session ids are harness-specific)
 and is ignored under `--phased`. The end-of-run banner also prints a **"Continue this session:"**
 hint (the same mapping as `runs resume-cmd`) so the next step is one copy-paste away.
+
+### Web UI (`goaly ui`)
+
+Everything the read-only subcommands show — plus live tails — in the browser:
+
+```bash
+goaly ui                       # serve http://127.0.0.1:4180 over this workspace's runs
+goaly ui --port 5000 --workspace ./myrepo
+```
+
+- **Runs table, across every root.** One section for the main workspace and one per managed
+  [worktree](#worktrees---worktree), most-recent first, with status badges and a pulsing **LIVE**
+  badge for a run some process is currently driving. Corrupt logs are **flagged, never dropped**
+  (the same fail-closed read as `runs list`).
+- **Run detail.** The frozen contract (rungs + hash + setup), Seal decisions, every iteration's
+  verifier verdict and Sign-off approval/veto, the failure/stuck reason, spend totals, and the
+  exact `--resume` command — the `runs show` projection, rendered.
+- **Live event feed.** The write-ahead log tailed over **SSE** (the browser twin of
+  `goaly runs watch`): contract → seal → each agent turn / verdict / veto as they land. Works for
+  runs started in **any terminal** — the tail is strictly read-only (it never takes the run lock).
+  When a run records a per-turn transcript (`--stream-transcript`), its tool calls and messages
+  stream into the feed too.
+- **Worktrees panel.** Name / branch / HEAD / dirty / runs-count for every managed worktree,
+  `PRUNABLE` flagged — with create / remove (the manager's refusal ladder surfaces verbatim: a live
+  run or a dirty tree refuses, exactly like the CLI).
+- **Start runs — and hold the Seal in your hand.** The start form takes a goal, a `--verify-cmd`
+  or `--generate`, harness, caps, and an optional worktree; the run executes **in-process through
+  the exact same code path as the CLI** (same guards, same run lock, same write-ahead log — a
+  server crash leaves it `--resume`-able like any run). A **non-autonomous** run parks at a
+  **browser Seal modal**: the frozen contract (rungs, hash, setup, authored files) presented for
+  **approve / revise-with-feedback / reject**, exactly the CLI prompt's semantics — a third
+  `SealGate` *implementation*, never a bypass: the contract still freezes and the decision still
+  lands in the log. Each parked gate carries a one-time `gateId`, so a double-submit can never
+  answer a later gate.
+- **The Seal modal is a review station ([ADR 0016](docs/adr/0016-seal-review-station.md)).**
+  Every artifact the run will use is reviewable *by content* before you approve: each authored
+  verification file renders with its **full contents** and an **in-browser editor**, and the
+  contract's operator-editable fields (setup command, deterministic verify commands, rubric) are
+  edit-in-place. **"Re-freeze & review"** saves your edits through the same guarded, git-excluding
+  writer the compiler uses (writes are allowlisted to exactly the parked contract's authored
+  files), re-pins the hashes, and re-presents a freshly frozen contract — iterate as many times as
+  you like (a refreeze costs no LLM tokens and never consumes the revise cap). Edits made in your
+  **own editor** are picked up too: a *"changed on disk since frozen"* badge appears, and
+  **"refresh from disk"** re-freezes from the current tree. Approving with drifted files is
+  refused (409, *"re-freeze first"*) so a stale approval never wastes an agent iteration. Only the
+  contract you finally approve starts executing.
+- **Stop & resume from the browser.** Stop is the same cooperative between-steps interrupt as
+  Ctrl-C (the ABORTED lands in the feed; nothing is lost); the resume panel continues any non-live
+  run — terminal-started ones included — with an optional `--note` and raised **operational** caps
+  (the ADR 0012 extension schema, which structurally has no field for the goal/verifier/rubric).
+- **One live run per tree.** Starting a second run in an occupied root is refused (409) with a
+  pointer at worktrees — per-run locks stop double drivers, this stops two agents editing one tree.
+
+The server is the same replay-fold the CLI uses — **the disk is the source of truth**, so it can be
+started and stopped freely; UI-owned runs stay resumable if it dies. It binds `127.0.0.1` only
+and — because a no-auth localhost server is reachable from any page your browser has open — refuses
+requests with a non-local `Host` (DNS-rebinding) or a cross-site `Origin`, and requires an
+`X-Goaly-Ui: 1` header on every state-changing request (a cross-site form can never attach one) —
+all fail-closed ([ADR 0014](docs/adr/0014-local-web-ui.md),
+[ADR 0015](docs/adr/0015-ui-owned-runs.md)). Embedders get the same server via
+`startUiServer({ workspaceRoot })`, and the same shared run entrypoint via `executeRun()`.
 
 ### Adding a harness
 

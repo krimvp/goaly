@@ -223,6 +223,14 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(await ws.fileHash('../escape.txt')).toBeNull();
   });
 
+  it('readFile returns file content, and null for missing/escaping paths (the refreeze read, ADR 0016)', async () => {
+    const ws = new GitWorkspace(root);
+    await writeFile(join(root, 'gen.test.ts'), 'edited by the operator');
+    expect(await ws.readFile('gen.test.ts')).toBe('edited by the operator');
+    expect(await ws.readFile('nope.test.ts')).toBeNull();
+    expect(await ws.readFile('../escape.txt')).toBeNull();
+  });
+
   it('exec runner is injectable (no real process spawned)', async () => {
     const calls: string[][] = [];
     const ws = new GitWorkspace(root, async (cmd, args) => {

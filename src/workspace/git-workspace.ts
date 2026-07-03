@@ -330,6 +330,11 @@ export class GitWorkspace implements Workspace {
   }
 
   async fileHash(relPath: string): Promise<string | null> {
+    const content = await this.readFile(relPath);
+    return content === null ? null : sha256Hex(content);
+  }
+
+  async readFile(relPath: string): Promise<string | null> {
     // Resolve under the root and refuse anything that escapes it — a pinned path is compiler-
     // authored but we treat it as untrusted (a traversal becomes a fail-closed "missing" → FAIL).
     const rootResolved = resolve(this.#root);
@@ -338,8 +343,7 @@ export class GitWorkspace implements Workspace {
       return null;
     }
     try {
-      const content = await readFile(resolved, 'utf8');
-      return sha256Hex(content);
+      return await readFile(resolved, 'utf8');
     } catch {
       // Missing/unreadable file is fail-closed: the guard reports it as a moved/deleted bar.
       return null;

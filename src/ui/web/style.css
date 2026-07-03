@@ -1,0 +1,123 @@
+/* goaly ui — matches the docs/ landing page's dark terminal aesthetic. */
+:root {
+  --bg: #0b0e14;
+  --panel: #11151f;
+  --panel-2: #161b28;
+  --line: #232a3a;
+  --text: #d7dce6;
+  --muted: #8b94a7;
+  --accent: #4cc38a;
+  --accent-dim: #2c7a56;
+  --red: #e5534b;
+  --amber: #d4a72c;
+  --blue: #539bf5;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, .mono { font-family: var(--mono); font-size: 0.92em; }
+
+.shell { max-width: 1100px; margin: 0 auto; padding: 0 1.2rem 4rem; }
+header.top {
+  display: flex; align-items: baseline; gap: 1.2rem;
+  padding: 1.1rem 0 0.9rem; border-bottom: 1px solid var(--line);
+  margin-bottom: 1.4rem; flex-wrap: wrap;
+}
+header.top h1 { font-size: 1.15rem; margin: 0; letter-spacing: 0.02em; }
+header.top h1 a { color: var(--text); }
+header.top nav { display: flex; gap: 1rem; }
+header.top nav a { color: var(--muted); font-size: 0.92rem; }
+header.top nav a.active { color: var(--accent); }
+header.top .version { margin-left: auto; color: var(--muted); font-size: 0.8rem; }
+
+h2 { font-size: 1rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin: 1.6rem 0 0.7rem; }
+
+table.list { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+table.list th {
+  text-align: left; color: var(--muted); font-weight: 500; font-size: 0.78rem;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--line);
+}
+table.list td { padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.list tr.row:hover { background: var(--panel); cursor: pointer; }
+
+.badge {
+  display: inline-block; padding: 0.05rem 0.55rem; border-radius: 999px;
+  font-size: 0.75rem; font-weight: 600; letter-spacing: 0.03em;
+  border: 1px solid var(--line); color: var(--muted);
+}
+.badge.done { color: var(--accent); border-color: var(--accent-dim); }
+.badge.failed, .badge.aborted, .badge.corrupt { color: var(--red); border-color: #7a3b37; }
+.badge.incomplete { color: var(--amber); border-color: #7a6320; }
+.badge.live {
+  color: var(--accent); border-color: var(--accent-dim);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse { 50% { opacity: 0.45; } }
+
+.card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 1rem 1.2rem; margin: 0.9rem 0;
+}
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.15rem 1.2rem; font-size: 0.92rem; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+
+.feed {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 0.8rem 1rem; font-family: var(--mono); font-size: 0.82rem;
+  max-height: 30rem; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.feed .t { color: var(--muted); }
+.feed .pass { color: var(--accent); }
+.feed .fail { color: var(--red); }
+.feed .phase { color: var(--blue); }
+
+.iter { border-left: 2px solid var(--line); padding-left: 0.9rem; margin: 0.7rem 0; }
+.iter .head { font-weight: 600; font-size: 0.9rem; }
+.muted { color: var(--muted); }
+.error-box { border: 1px solid #7a3b37; color: var(--red); border-radius: 8px; padding: 0.6rem 0.9rem; margin: 0.8rem 0; }
+.empty { color: var(--muted); padding: 1.4rem 0; }
+button.linkish {
+  background: none; border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.85rem;
+}
+button.linkish:hover { border-color: var(--accent-dim); }
+button.linkish.primary { border-color: var(--accent-dim); color: var(--accent); }
+button.linkish.danger { border-color: #7a3b37; color: var(--red); }
+button.linkish:disabled { opacity: 0.5; cursor: default; }
+
+/* forms (start-run, resume, worktree create) */
+label { display: block; margin: 0.6rem 0; font-size: 0.9rem; color: var(--muted); }
+label.inline { display: flex; align-items: center; gap: 0.5rem; color: var(--text); }
+input[type='text'], input[type='number'], textarea, select {
+  display: block; width: 100%; margin-top: 0.25rem;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px; padding: 0.45rem 0.6rem;
+  font: inherit; font-size: 0.9rem;
+}
+label.inline input { width: auto; margin: 0; }
+textarea { resize: vertical; }
+input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent-dim); }
+.field-row { display: flex; gap: 1rem; align-items: end; flex-wrap: wrap; }
+.field-row > label { flex: 1 1 10rem; }
+.start-form { max-width: 46rem; }
+
+/* the seal modal */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(4, 6, 10, 0.75);
+  display: flex; align-items: center; justify-content: center; z-index: 10;
+}
+.modal { max-width: 44rem; width: calc(100% - 2rem); max-height: 85vh; overflow-y: auto; }
+.contract {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 0.7rem 1rem; margin: 0.6rem 0; font-size: 0.9rem; overflow-wrap: anywhere;
+}
+.contract ol { margin: 0.4rem 0; padding-left: 1.4rem; }

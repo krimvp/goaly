@@ -152,6 +152,18 @@
         HEAD.</p>
       </div>
       <div class="card">
+        <h3>Named worktrees</h3>
+        <p><code>--worktree &lt;name&gt;</code> re-roots the <b>entire run</b> — run log, lock, agent
+        cwd, verifier, diff scope — at an isolated checkout under
+        <code>.goaly/worktrees/&lt;name&gt;</code> on branch <code>goaly/&lt;name&gt;</code>, so the
+        main tree is never touched and several runs can go at once. Manage them with
+        <code>goaly worktree create / list / remove</code>; runs never commit, so <b>merge-back is
+        plain git</b> (the end-of-run hint shows the commit + <code>git merge goaly/&lt;name&gt;</code>
+        steps, and remove keeps the branch by default). Fail-closed throughout: removal refuses a
+        live run inside (always) or a dirty tree (without <code>--force</code>).
+        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0013-named-worktrees.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0013 →</a></p>
+      </div>
+      <div class="card">
         <h3>No cheating by reimplementation</h3>
         <p>Ask goaly to <b>build a reusable artifact and use it</b> and a worker could satisfy a naive
         bar by re-deriving the logic inside the higher-level solvers and <b>never calling the artifact</b>
@@ -176,6 +188,27 @@
         session in its own interactive mode — <code>claude --resume &lt;id&gt;</code>,
         <code>codex resume &lt;id&gt;</code>, and so on. The end-of-run banner shows it too, so the
         next step is one copy-paste away.</p>
+      </div>
+      <div class="card">
+        <h3>The web UI</h3>
+        <p><code>goaly ui</code> serves a local browser view of everything the run log knows: a
+        <b>runs table across the workspace and every worktree</b> (live badges included), per-run
+        detail (the frozen contract, each iteration's verifier verdict + Sign-off, spend), and a
+        <b>live event feed over SSE</b> — the write-ahead log tailed read-only, so it follows runs
+        started in <em>any</em> terminal and never disturbs them. It also <b>drives</b> runs: start
+        one (optionally into a worktree) through the <em>same</em> code path as the CLI, hold the
+        <b>Seal in a browser modal</b> (approve / revise / reject — a real <code>SealGate</code>
+        implementation, never a bypass), stop cooperatively, and resume with a note + raised
+        operational caps. The Seal modal is a full <b>review station</b>: authored verification
+        files render with their <em>contents</em>, editable in the browser or in your own editor,
+        alongside the setup/verify commands and rubric — <b>"re-freeze &amp; review"</b> re-pins
+        the hashes into a freshly frozen contract (logged, zero LLM cost) as many rounds as you
+        like, and only the contract you finally approve starts executing (the CLI prompt's
+        <code>[e]dited</code> answer is the same mechanism). One live run per tree, worktrees for
+        parallelism. Localhost-only, with fail-closed Host/Origin/<code>X-Goaly-Ui</code> guards.
+        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0014-local-web-ui.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0014 →</a>
+        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0015-ui-owned-runs.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0015 →</a>
+        <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0016-seal-review-station.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0016 →</a></p>
       </div>
       <div class="card">
         <h3>Watch it &amp; steer it</h3>

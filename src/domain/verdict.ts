@@ -81,7 +81,31 @@ export const ApprovalVerdict = z
 export type ApprovalVerdict = z.infer<typeof ApprovalVerdict>;
 
 /**
- * Seal decision over the freshly compiled (and about-to-be-frozen) contract. Three
+ * Operator edits to the contract's operator-editable FIELDS at the Seal review station
+ * (ADR 0016). Deliberately has NO `goal` field — a goal change re-scopes the run and goes through
+ * the LLM `revise` path, so the goal is unrepresentable here by construction (the same trick that
+ * keeps the frozen contract unreachable through `RUN_EXTENDED`). Every field is optional: an
+ * absent field keeps the compiled value.
+ */
+export const SealEditPatch = z
+  .object({
+    /** Replace the one-time setup command; `null` clears it; absent keeps it. */
+    setup: z.union([z.string().min(1), z.null()]).optional(),
+    /** Replace the overall rubric (may be empty, matching `CompiledContract.rubric`). */
+    rubric: z.string().optional(),
+    /**
+     * Replace deterministic rung commands by index into `contract.rungs`. An index that is out of
+     * range or points at a judge rung fails the refreeze closed (never a silent partial apply).
+     */
+    commands: z
+      .array(z.object({ index: z.number().int().min(0), command: z.string().min(1) }).strict())
+      .optional(),
+  })
+  .strict();
+export type SealEditPatch = z.infer<typeof SealEditPatch>;
+
+/**
+ * Seal decision over the freshly compiled (and about-to-be-frozen) contract. Four
  * mutually exclusive outcomes:
  *  - `approve`: the freeze stands and the loop starts.
  *  - `reject`: abort the run (the loop never starts).
@@ -89,10 +113,16 @@ export type ApprovalVerdict = z.infer<typeof ApprovalVerdict>;
  *    at Seal. This is *pre-approval* renegotiation only — the contract that finally enters
  *    the loop is still frozen and never rewritten mid-loop (invariant #2). Each revise round
  *    produces its own logged `contractHash`; only the approved one is ever verified against.
+ *  - `edited`: the operator changed artifacts MANUALLY (authored verification files on disk,
+ *    and/or contract fields via `patch`) — re-read the files, re-pin their hashes, apply the
+ *    patch, re-freeze a NEW contract (new `contractHash`, logged), and re-present at Seal
+ *    (ADR 0016). Costs no LLM tokens and does not consume the `maxSealRevisions` cap; still
+ *    strictly pre-approval, so the freeze semantics are identical to `revise`.
  */
 export const SealDecision = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('approve') }),
   z.object({ kind: z.literal('reject'), reason: z.string().min(1) }),
   z.object({ kind: z.literal('revise'), feedback: z.string().min(1) }),
+  z.object({ kind: z.literal('edited'), patch: SealEditPatch.optional() }),
 ]);
 export type SealDecision = z.infer<typeof SealDecision>;

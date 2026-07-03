@@ -1,4 +1,5 @@
 import { SessionId, DiffHash } from '../domain/ids';
+import { sha256Hex } from '../util/hash';
 import { HarnessRunResult, type BudgetSnapshot, type ApprovalInput } from '../domain/events';
 import { type Verdict, type ApprovalVerdict, type SealDecision } from '../domain/verdict';
 import type { CompiledContract, Rung, UnhashedContract } from '../domain/contract';
@@ -213,6 +214,7 @@ export class FakeWorkspace implements Workspace {
   #diffText: string;
   readonly #cmdResults: CommandResult[];
   readonly #fileHashes: Map<string, string> = new Map();
+  readonly #fileContents: Map<string, string> = new Map();
   /** What {@link isEmptyOfSource} reports (Fix B1). Defaults to false — an existing (not from-scratch) tree. */
   #emptyOfSource = false;
   /** Every baseline `setBaseline()`/`checkpoint()` adopted, in order — for asserting resume wiring. */
@@ -260,6 +262,20 @@ export class FakeWorkspace implements Workspace {
     if (sha256 === null) this.#fileHashes.delete(relPath);
     else this.#fileHashes.set(relPath, sha256);
   }
+  /**
+   * Stub a file's CONTENT (the manual-edit refreeze reads this, ADR 0016); `null` clears it
+   * (simulates deletion). Also keeps {@link fileHash} consistent by pinning the content's sha256,
+   * so the integrity guard and a refreeze agree on the same fake file.
+   */
+  setFileContent(relPath: string, content: string | null): void {
+    if (content === null) {
+      this.#fileContents.delete(relPath);
+      this.#fileHashes.delete(relPath);
+    } else {
+      this.#fileContents.set(relPath, content);
+      this.#fileHashes.set(relPath, sha256Hex(content));
+    }
+  }
   async diffHash(): Promise<DiffHash> {
     return DiffHash.parse(this.#hash);
   }
@@ -273,6 +289,9 @@ export class FakeWorkspace implements Workspace {
   }
   async fileHash(relPath: string): Promise<string | null> {
     return this.#fileHashes.get(relPath) ?? null;
+  }
+  async readFile(relPath: string): Promise<string | null> {
+    return this.#fileContents.get(relPath) ?? null;
   }
   /** Toggle the from-scratch signal the prepare phase reads (Fix B1). */
   setEmptyOfSource(empty: boolean): void {

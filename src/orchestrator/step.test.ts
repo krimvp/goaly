@@ -308,6 +308,68 @@ describe('step() transitions', () => {
     expect(aborted).toMatchObject({ tag: 'ABORTED' });
   });
 
+  it('Seal edited → COMPILING + REFREEZE_CONTRACT carrying the parked contract (ADR 0016)', () => {
+    const [s0] = initial(makeConfig());
+    const [s1] = step(s0, { tag: 'CONTRACT_COMPILED', contract });
+    const [s2, cmds] = step(s1, { tag: 'SEAL_DECIDED', decision: { kind: 'edited' } });
+    expect(s2).toMatchObject({ tag: 'COMPILING', reviseRound: 0, compileRound: 0 });
+    expect(cmds).toEqual([{ tag: 'REFREEZE_CONTRACT', contract }]);
+  });
+
+  it('Seal edited forwards the field patch on the command', () => {
+    const patch = { setup: null, commands: [{ index: 0, command: 'npm test -- --run' }] };
+    const [s0] = initial(makeConfig());
+    const [s1] = step(s0, { tag: 'CONTRACT_COMPILED', contract });
+    const [, cmds] = step(s1, { tag: 'SEAL_DECIDED', decision: { kind: 'edited', patch } });
+    expect(cmds[0]).toEqual({ tag: 'REFREEZE_CONTRACT', contract, patch });
+  });
+
+  it('edited never consumes the revise cap — refreezes work even at maxSealRevisions: 0', () => {
+    const config = makeConfig({ maxSealRevisions: 0 });
+    let state = step(initial(config)[0], { tag: 'CONTRACT_COMPILED', contract })[0];
+    // Two refreeze rounds in a row, each re-presenting at Seal — no cap ever trips.
+    for (let round = 0; round < 2; round++) {
+      const [compiling, cmds] = step(state, { tag: 'SEAL_DECIDED', decision: { kind: 'edited' } });
+      expect(compiling).toMatchObject({ tag: 'COMPILING', reviseRound: 0 });
+      expect(cmds[0]).toMatchObject({ tag: 'REFREEZE_CONTRACT' });
+      state = step(compiling, { tag: 'CONTRACT_COMPILED', contract })[0];
+      expect(state).toMatchObject({ tag: 'AWAIT_SEAL', reviseRound: 0 });
+    }
+  });
+
+  it('edited after revises keeps reviseRound intact, so revise budget is unaffected', () => {
+    const config = makeConfig({ maxSealRevisions: 2 });
+    let state = step(initial(config)[0], { tag: 'CONTRACT_COMPILED', contract })[0];
+    state = step(state, { tag: 'SEAL_DECIDED', decision: { kind: 'revise', feedback: 'a' } })[0];
+    state = step(state, { tag: 'CONTRACT_COMPILED', contract })[0];
+    // A refreeze between revises leaves reviseRound at 1...
+    const [compiling] = step(state, { tag: 'SEAL_DECIDED', decision: { kind: 'edited' } });
+    expect(compiling).toMatchObject({ tag: 'COMPILING', reviseRound: 1 });
+    state = step(compiling, { tag: 'CONTRACT_COMPILED', contract })[0];
+    // ...so a second revise is still within the cap of 2.
+    const [afterRevise] = step(state, { tag: 'SEAL_DECIDED', decision: { kind: 'revise', feedback: 'b' } });
+    expect(afterRevise).toMatchObject({ tag: 'COMPILING', reviseRound: 2 });
+  });
+
+  it('a failed refreeze rides the bounded compile-retry machinery (COMPILE_FAILED path)', () => {
+    const config = makeConfig({ maxCompileRetries: 0 });
+    let state = step(initial(config)[0], { tag: 'CONTRACT_COMPILED', contract })[0];
+    const [compiling] = step(state, { tag: 'SEAL_DECIDED', decision: { kind: 'edited' } });
+    const [failed] = step(compiling, { tag: 'COMPILE_FAILED', reason: 'refreeze failed: file missing' });
+    expect(failed).toMatchObject({ tag: 'FAILED', reason: 'refreeze failed: file missing' });
+  });
+
+  it('plan Seal edited is a fail-closed typed ABORTED (plans are LLM-revise only)', () => {
+    const config = makeConfig({ phased: true });
+    const plan = { phases: [{ goal: 'p1' }], planHash: 'p'.repeat(64) } as never;
+    const [s0] = initial(config);
+    const [s1] = step(s0, { tag: 'PLAN_COMPILED', plan });
+    expect(s1.tag).toBe('AWAIT_PLAN_SEAL');
+    const [aborted] = step(s1, { tag: 'PLAN_SEAL_DECIDED', decision: { kind: 'edited' } });
+    expect(aborted).toMatchObject({ tag: 'ABORTED' });
+    if (aborted.tag === 'ABORTED') expect(aborted.reason).toContain('manual plan editing');
+  });
+
   it('AGENT_RAN → VERIFYING + RUN_VERIFIER, threading the session id', () => {
     const ra = runningAgent();
     const [next, cmds] = step(ra, agentRan('0000000', '0000001'));

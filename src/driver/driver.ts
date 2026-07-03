@@ -9,6 +9,7 @@ import type { Verdict } from '../domain/verdict';
 import type { TokenUsage, UsageReport } from '../domain/usage';
 import { isTerminal, iterationCount, type OrchestratorState } from '../orchestrator/state';
 import { initial, step } from '../orchestrator/step';
+import { performRefreeze } from './refreeze';
 import { replay } from '../runlog/replay';
 import type { VerifierCompiler } from '../compile/compiler';
 import type { SealGate } from '../compile/seal';
@@ -609,6 +610,27 @@ async function perform(
           event: { tag: 'COMPILE_FAILED', reason: errorMessage(e), ...(llm !== undefined ? { llm } : {}) },
         };
       }
+    }
+
+    case 'REFREEZE_CONTRACT': {
+      // Manual-edit refreeze (ADR 0016): re-read the authored files, re-pin their hashes, apply
+      // the operator's field patch, re-freeze. No LLM call, no metering. A fresh ladder is
+      // MANDATORY: RUN_VERIFIER prefers the cached ladder, which would otherwise still pin the
+      // OLD generatedFiles hashes and red every iteration via the integrity guard.
+      const result = await performRefreeze(deps.workspace, command.contract, command.patch);
+      if (result.ok) {
+        log.info('contract refrozen from operator edits', {
+          contractHash: result.contract.contractHash,
+        });
+        return {
+          event: { tag: 'CONTRACT_COMPILED', contract: result.contract },
+          ladder: deps.makeLadder(result.contract),
+        };
+      }
+      // Fail-closed and LOUD: the failure lands in the write-ahead log as COMPILE_FAILED, riding
+      // the existing bounded compile-retry machinery — the recovery recompile is re-presented at
+      // the Seal, never executed unseen.
+      return { event: { tag: 'COMPILE_FAILED', reason: result.reason } };
     }
 
     case 'REQUEST_SEAL': {

@@ -32,6 +32,11 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
   errors is **fail-closed** (`pass:false`). _avoid:_ a list the orchestrator iterates itself.
 - **Seal** — the contract gate: a human (default) or auto-accept (`--autonomous`) approves
   the frozen contract **once** before the loop. _avoid:_ per-iteration approval.
+- **Refreeze** — the Seal's manual-edit round (`edited`, ADR 0016): re-read the authored
+  verification files from disk, re-pin their content hashes, apply the operator's field edits,
+  and freeze a **new** contract (new `contractHash`, logged) that is re-presented at the Seal.
+  Strictly **pre-approval**; costs no LLM tokens; never consumes the revise cap. _avoid:_
+  mutating a frozen contract; any post-approval change.
 - **Sign-off** — the result gate: the independent **Approver**, every iteration, **veto-only**.
   _avoid:_ Seal; a promoter (it can never turn a red into a green).
 - **Two Keys** — DONE requires both keys to turn: the frozen verifier passes **and** the

@@ -50,6 +50,24 @@ describe('HumanSealGate', () => {
     expect(asked[0]).toContain('[a]pprove');
   });
 
+  it('"e"/"edited" answer the gate with the manual-edit refreeze decision (ADR 0016)', async () => {
+    for (const answer of ['e', 'edited', ' E ']) {
+      const gate = new HumanSealGate({ ask: async () => answer, out: () => {} });
+      expect(await gate.approveContract(makeFakeContract())).toEqual({ kind: 'edited' });
+    }
+    // Offered in the prompt so the operator can discover it.
+    const { ask, asked } = scriptedAsk(['a']);
+    await new HumanSealGate({ ask, out: () => {} }).approveContract(makeFakeContract());
+    expect(asked[0]).toContain('[e]dited');
+  });
+
+  it('"e" works even when revise is disabled (edited never consumes the revise cap)', async () => {
+    const { ask, asked } = scriptedAsk(['e']);
+    const gate = new HumanSealGate({ ask, out: () => {}, allowRevise: false });
+    expect(await gate.approveContract(makeFakeContract())).toEqual({ kind: 'edited' });
+    expect(asked[0]).toContain('[e]dited');
+  });
+
   it('still treats legacy "YES" (any case/whitespace) as approve', async () => {
     // Arrange
     const gate = new HumanSealGate({ ask: async () => '  YES \n', out: () => {} });
@@ -114,7 +132,7 @@ describe('HumanSealGate', () => {
     // Assert — "f" is not an approve token, so it rejects; only one question is asked.
     expect(decision.kind).toBe('reject');
     expect(asked).toHaveLength(1);
-    expect(asked[0]).toContain('[y/N]');
+    expect(asked[0]).toContain('[y]es');
   });
 
   it('prints the full contract before asking', async () => {
