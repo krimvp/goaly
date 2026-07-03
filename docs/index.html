@@ -164,6 +164,18 @@
         <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0013-named-worktrees.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0013 →</a></p>
       </div>
       <div class="card">
+        <h3>No cheating by reimplementation</h3>
+        <p>Ask goaly to <b>build a reusable artifact and use it</b> and a worker could satisfy a naive
+        bar by re-deriving the logic inside the higher-level solvers and <b>never calling the artifact</b>
+        — both keys pass while the thing you asked for is dead code. An <b>independent shape classifier</b>
+        (a neutral call over the <i>goal only</i>) flags build-and-use goals, and the compiler must then
+        author a <b>runtime usage assertion</b>: it spies the artifact's public entry points and asserts
+        the verified result is produced <i>through</i> them — a reimplementation records zero calls and
+        <b>fails</b>. A contract missing that assertion is refused at compile
+        (<code>COMPILE_FAILED</code>) and re-authored with it. Fail-open, so it never blocks a
+        non-build-and-use run.</p>
+      </div>
+      <div class="card">
         <h3>Follow up after it ends</h3>
         <p><code>goaly "now also handle empty input" --from-run &lt;id&gt;</code> starts a <b>new,
         re-verified</b> goal that knows what just happened: a compaction of the prior run seeds the

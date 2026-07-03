@@ -120,6 +120,37 @@ describe('ClaudeCodeAdapter streaming', () => {
     expect(plain.output).toBe('final answer');
     expect(events.map((e) => e.kind)).toEqual(['session', 'message', 'usage', 'done']);
   });
+
+  it('forces stream-json when an idle timeout is set, even with no onEvent sink (heartbeat footgun)', async () => {
+    // The idle/heartbeat timeout re-arms on child stdout chunks; a buffered CLI emits nothing until
+    // the turn ends, so a long progressing turn would be reaped. With an idle timeout configured the
+    // harness must stream per-turn even without a stream sink so the heartbeat sees output.
+    const seenArgs: string[][] = [];
+    const exec = async (args: string[]) => {
+      seenArgs.push(args);
+      return { stdout: claudeStreamJson, stderr: '', code: 0 };
+    };
+
+    const result = await new AgentCliHarness(claudeCodec, { exec, idleTimeoutMs: 1000 }).run('go');
+
+    expect(seenArgs[0]).toContain('stream-json');
+    expect(seenArgs[0]).toContain('--verbose');
+    // Parsing is unaffected: the final result is still recovered from the stream-json stdout.
+    expect(result.output).toBe('final answer');
+  });
+
+  it('stays buffered (plain json) when no idle timeout and no onEvent sink', async () => {
+    const seenArgs: string[][] = [];
+    const exec = async (args: string[]) => {
+      seenArgs.push(args);
+      return { stdout: claudeJson, stderr: '', code: 0 };
+    };
+
+    await new AgentCliHarness(claudeCodec, { exec }).run('go');
+
+    expect(seenArgs[0]).toContain('json');
+    expect(seenArgs[0]).not.toContain('stream-json');
+  });
 });
 
 describe('token estimation fallback (issue #24)', () => {

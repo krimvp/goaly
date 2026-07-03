@@ -83,6 +83,7 @@ describe('follow-up as a new verifiable goal (Capability C — compose + drive)'
     });
     const followLlm = new FakeLlm([
       '{"command":"printf ok","rubric":"empty input is handled"}', // compiler authors the new bar
+      '{"buildAndUse":false,"targetArtifact":null,"reason":"n/a"}', // usage-gate shape classification
       '{"pass":true,"confidence":1,"failing_criteria":[]}', // judge rung
       '{"veto":false}', // Sign-off approver
     ]);

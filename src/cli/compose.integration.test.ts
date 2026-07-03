@@ -121,6 +121,8 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
       noLogConsole: true,
       llm: new FakeLlm([
         { text: '{"command":"printf ok","rubric":"is it done"}', tokensUsed: 800 },
+        // usage-gate shape classification (a second compile-phase call, metered under the compiler).
+        { text: '{"buildAndUse":false,"targetArtifact":null,"reason":"n/a"}', tokensUsed: 100 },
         { text: '{"pass":true,"confidence":1,"failing_criteria":[]}', tokensUsed: 1200 },
         { text: '{"veto":false}', tokensUsed: 400 },
       ]),
@@ -133,19 +135,20 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
     expect(usage).toBeDefined();
     // Harness is the noop fake → one call, tokens unknown (not zero).
     expect(usage?.harness).toEqual({ tokens: 0, calls: 1, unknownCalls: 1 });
-    expect(usage?.compiler).toEqual({ tokens: 800, calls: 1, unknownCalls: 0 });
+    // Compiler layer = authoring (800) + the usage-gate shape classification (100).
+    expect(usage?.compiler).toEqual({ tokens: 900, calls: 2, unknownCalls: 0 });
     expect(usage?.verifier).toEqual({ tokens: 1200, calls: 1, unknownCalls: 0 });
     expect(usage?.approver).toEqual({ tokens: 400, calls: 1, unknownCalls: 0 });
-    expect(usage?.llm.tokens).toBe(2400);
-    expect(usage?.total.tokens).toBe(2400);
+    expect(usage?.llm.tokens).toBe(2500);
+    expect(usage?.total.tokens).toBe(2500);
 
-    // The compiler's 800 LLM tokens are recorded into the budget BEFORE the agent runs, so the
-    // --budget-tokens cap governs total spend (harness + LLM steps), not just the harness.
+    // The compiler's 900 LLM tokens (authoring + shape) are recorded into the budget BEFORE the agent
+    // runs, so the --budget-tokens cap governs total spend (harness + LLM steps), not just the harness.
     const stored = await deps.runlog.read();
     const ran = stored?.entries.find((e) => e.event.tag === 'AGENT_RAN');
     expect(ran?.event.tag).toBe('AGENT_RAN');
     if (ran?.event.tag === 'AGENT_RAN') {
-      expect(ran.event.budget.tokensSpent).toBe(800);
+      expect(ran.event.budget.tokensSpent).toBe(900);
     }
   });
 
@@ -161,6 +164,7 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
     const runId = asRunId('run-cli-usage-resume');
     const llmScript = [
       { text: '{"command":"printf ok","rubric":"is it done"}', tokensUsed: 800 },
+      { text: '{"buildAndUse":false,"targetArtifact":null,"reason":"n/a"}', tokensUsed: 100 },
       { text: '{"pass":true,"confidence":1,"failing_criteria":[]}', tokensUsed: 1200 },
       { text: '{"veto":false}', tokensUsed: 400 },
     ];
@@ -192,7 +196,7 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
 
     expect(resumed.status).toBe('DONE');
     expect(resumed.usage).toEqual(first.usage);
-    expect(resumed.usage?.total.tokens).toBe(2400);
+    expect(resumed.usage?.total.tokens).toBe(2500);
   });
 
   it('threads --baseline through to the workspace diff (issue #47)', async () => {
@@ -246,6 +250,8 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
       llm: new FakeLlm([
         // compiler: a build/test bar (red until impl.txt exists) + a from-scratch-failing authored setup.
         '{"command":"test -f impl.txt","rubric":"is it built","setup":"test -f go.mod"}',
+        // usage-gate shape classification (not build-and-use → the gate is a no-op here).
+        '{"buildAndUse":false,"targetArtifact":null,"reason":"n/a"}',
         // judge rung (only reached on iteration 2, once the deterministic rung is green).
         '{"pass":true,"confidence":1,"failing_criteria":[]}',
         // Sign-off approver: the second key does not veto.

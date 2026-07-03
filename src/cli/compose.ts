@@ -16,6 +16,7 @@ import { GeneratedFilesGuard } from '../verify/generated-guard';
 import { JudgeVerifier } from '../verify/judge';
 import { AgentApprover } from '../verify/agent-approver';
 import { AgentCompiler } from '../compile/agent-compiler';
+import { classifyUsageShape } from '../compile/usage-gate';
 import { SeededCompiler, SeededPlanner } from '../followup/seeded';
 import { AutoSealGate, HumanSealGate } from '../compile/seal-gates';
 import { AgentPlanner } from '../plan/agent-planner';
@@ -199,6 +200,29 @@ export class EndpointConfigError extends Error {}
 export const STATE_DIR = '.goaly';
 
 /**
+ * Verifier-produced artifacts kept OUT of the working-tree hash (and the diff the approver reviews) by
+ * default, on top of the user's `--diff-ignore`. A verify command routinely drops these between
+ * iterations (bytecode/test/type caches), and a no-op agent turn that only regenerates them would
+ * otherwise look like it "changed" the tree — defeating no-diff stuck detection. Deliberately narrow:
+ * only ephemeral test/cache/bytecode markers that are NEVER source and NEVER a deliverable. It omits
+ * build output (`build/`, `dist/`, `target/`) — a build goal's legitimate product must stay visible so
+ * a tree-only-of-build-output turn can't masquerade as progress — and avoids the bare word "coverage"
+ * (it would over-match a real source file like `coverage_report.py`). Each entry is a git pathspec
+ * where `*` spans `/`, so `*__pycache__*` catches nested caches at any depth. Verified in
+ * `compose.diff-ignore.test.ts`.
+ */
+export const DEFAULT_DIFF_IGNORE: readonly string[] = [
+  '*__pycache__*',
+  '*.pyc',
+  '*.pyo',
+  '*.pytest_cache*',
+  '*.mypy_cache*',
+  '*.ruff_cache*',
+  '*.nyc_output*',
+  '*htmlcov*',
+];
+
+/**
  * Default kill-timeout for the verify command (and each pre-flight deterministic rung) — the same
  * 10 minutes the harness and LLM steps default to. Before this default existed, a verify command
  * that hung (a test awaiting the network, a spawned server that never exits) hung the whole run
@@ -261,10 +285,11 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   // plain LlmProvider, and an injected test `llm` is metered just the same.
   const llmMeter = new LlmTokenMeter();
   const clock = new SystemClock();
-  // Keep the orchestrator's own state dir AND any user-listed verifier artifacts out of the
-  // tree hash, so stuck-detection sees only the agent's real work — not coverage dirs / build output
-  // a verifier drops between iterations. Deduped so an explicit `.goaly` in --diff-ignore is a no-op.
-  const excludes = [...new Set([STATE_DIR, ...config.diffIgnore])];
+  // Keep the orchestrator's own state dir, a default set of ephemeral verifier artifacts (bytecode /
+  // test / type caches — see DEFAULT_DIFF_IGNORE), AND any user-listed `--diff-ignore` paths out of the
+  // tree hash, so stuck-detection sees only the agent's real work — not caches a verifier drops between
+  // iterations. Deduped so an explicit `.goaly`/default in --diff-ignore is a no-op.
+  const excludes = [...new Set([STATE_DIR, ...DEFAULT_DIFF_IGNORE, ...config.diffIgnore])];
   // Build the sandbox launcher ONCE (issue #9). `none` ⇒ identity; any other mode is detected
   // fail-closed (an absent mechanism makes the run refuse to start — never silently unsandboxed).
   const launcher = makeSandboxLauncher(options);
@@ -385,6 +410,12 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
         llm: llmFor(models.compiler, 'compile'),
         writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
         ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
+        // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered like
+        // the authoring call) arms the gate on a confident build-and-use goal so a bar that a parallel
+        // reimplementation could green is refused at compile (COMPILE_FAILED → re-authored with a usage
+        // assertion). Fail-open, so it never blocks a non-build-and-use run.
+        classifyShape: (goal, intent) =>
+          classifyUsageShape(llmFor(models.compiler, 'compile'), goal, intent),
       }),
       seed,
     ),
