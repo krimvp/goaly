@@ -121,3 +121,14 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
   padding: 0.7rem 1rem; margin: 0.6rem 0; font-size: 0.9rem; overflow-wrap: anywhere;
 }
 .contract ol { margin: 0.4rem 0; padding-left: 1.4rem; }
+
+/* post-run landing panel (ADR 0017) */
+.notice {
+  border: 1px solid var(--accent-dim); color: var(--accent);
+  border-radius: 8px; padding: 0.6rem 0.9rem;
+}
+pre.diff {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 0.6rem 0.8rem; margin: 0.5rem 0 0; max-height: 24rem; overflow: auto;
+  font-family: var(--mono); font-size: 0.82rem; line-height: 1.4; white-space: pre;
+}

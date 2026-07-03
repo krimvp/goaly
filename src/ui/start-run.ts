@@ -8,6 +8,11 @@ import { readRun } from '../runlog/inspect';
 import { asRunId } from '../domain/ids';
 import type { SealDecision } from '../domain/verdict';
 import { WorktreeManager, WorktreeError, type WorktreeInfo } from '../workspace/worktree-manager';
+import { LandingManager, type WorktreeChanges, type MergeOpts, type OpenPrOpts } from '../workspace/landing';
+import { makeLlmProvider } from '../cli/compose';
+import type { LlmProvider } from '../llm/provider';
+import type { LlmProviderChoice } from '../cli/args';
+import { draftPr as draftPrFromDiff } from '../llm/pr-draft';
 import { readWorkspaceFile, writeVerificationFile } from '../workspace/workspace-files';
 import { sha256Hex } from '../util/hash';
 import type { CompiledContract } from '../domain/contract';
@@ -19,9 +24,11 @@ import type {
   GateFileWrite,
   GateFilesResponse,
   PendingGate,
+  PrDraftRequest,
   ResumeRequest,
   RootRef,
   StartRunRequest,
+  WorkspacePrRequest,
 } from './api-schema';
 
 /**
@@ -73,9 +80,43 @@ export type UiActions = {
   ): Promise<{ written: string; sha256: string } | 'no-session' | 'stale' | 'invalid' | 'bad-path'>;
   createWorktree(name: string, base?: string): Promise<WorktreeInfo>;
   removeWorktree(name: string, opts: { force: boolean; deleteBranch: boolean }): Promise<void>;
+  /** The read-only landing change set of a worktree (ADR 0017). */
+  worktreeChanges(name: string): Promise<WorktreeChanges>;
+  /** Commit a worktree's changes onto its branch (post-run landing). */
+  commitWorktree(name: string, message: string): Promise<{ head: string }>;
+  /** Merge a worktree's branch back into the main workspace (post-run landing). */
+  mergeWorktree(name: string, opts: MergeOpts): Promise<{ merged: string; head: string }>;
+  /** Open a PR for a worktree's branch (commit-if-dirty → push → `gh pr create`). */
+  openPr(name: string, opts: OpenPrOpts): Promise<{ url: string }>;
+  /** Draft a PR title + body from the worktree diff via the LLM ("the agent fills in the MR"). */
+  draftPr(name: string, req: PrDraftRequest): Promise<{ title: string; body: string }>;
+  /** The read-only landing change set of the MAIN workspace (a run made without --worktree). */
+  workspaceChanges(): Promise<WorktreeChanges>;
+  /** Commit the main workspace's changes onto its current branch. */
+  commitWorkspace(message: string): Promise<{ head: string }>;
+  /** Eject the main workspace's changes onto goaly/<name>, push, and open a PR (then return home). */
+  openPrFromMain(req: WorkspacePrRequest): Promise<{ url: string; branch: string }>;
+  /** Draft a PR title + body from the MAIN workspace diff via the LLM. */
+  draftPrWorkspace(req: PrDraftRequest): Promise<{ title: string; body: string }>;
   /** Stop every live UI-owned run (server shutdown). */
   shutdown(): void;
 };
+
+/** Map a run's harness to the LLM provider that drafts its PR — non-CLI harnesses fall back to claude. */
+function draftProviderChoice(harness: string | undefined): LlmProviderChoice {
+  return harness === 'codex' || harness === 'droid' || harness === 'pi' || harness === 'claude'
+    ? harness
+    : 'claude';
+}
+
+/** Wall-clock cap on the PR-draft completion, so a hung agent CLI never wedges the request. */
+const DRAFT_TIMEOUT_MS = 120_000;
+
+/** The landing surface `makeUiActions` delegates to — injectable so tests need no `gh`/remote. */
+export type LandingActions = Pick<
+  LandingManager,
+  'changes' | 'commit' | 'merge' | 'openPr' | 'changesMain' | 'commitMain' | 'openPrFromMain'
+>;
 
 export function makeUiActions(opts: {
   workspaceRoot: string;
@@ -83,10 +124,19 @@ export function makeUiActions(opts: {
   logger?: Logger;
   /** Injected run executor (tests). Default: the real shared CLI run path. */
   execute?: typeof executeRun;
+  /** Injected landing surface (tests). Default: the real LandingManager over the workspace. */
+  landing?: LandingActions;
+  /** Injected LLM factory for PR drafting (tests). Default: the run-harness-backed provider. */
+  llmFor?: (harness: string | undefined) => LlmProvider;
 }): UiActions {
   const sessions = opts.sessions ?? new SessionStore();
   const execute = opts.execute ?? executeRun;
   const manager = new WorktreeManager({ root: opts.workspaceRoot });
+  const landing = opts.landing ?? new LandingManager({ root: opts.workspaceRoot });
+  const llmFor =
+    opts.llmFor ??
+    ((harness: string | undefined): LlmProvider =>
+      makeLlmProvider(draftProviderChoice(harness), undefined, { timeoutMs: DRAFT_TIMEOUT_MS }));
 
   async function launch(
     argv: string[],
@@ -300,6 +350,24 @@ export function makeUiActions(opts: {
     createWorktree: (name, base) => manager.create(name, base),
     removeWorktree: async (name, o) => {
       await manager.remove(name, o);
+    },
+
+    worktreeChanges: (name) => landing.changes(name),
+    commitWorktree: (name, message) => landing.commit(name, message),
+    mergeWorktree: (name, o) => landing.merge(name, o),
+    openPr: (name, o) => landing.openPr(name, o),
+    async draftPr(name, req) {
+      // Read the (untrusted) diff off the worktree, then let the run's harness draft the title+body.
+      const { diff, files } = await landing.changes(name);
+      return draftPrFromDiff(llmFor(req.harness), { ...(req.goal !== undefined ? { goal: req.goal } : {}), files, diff });
+    },
+
+    workspaceChanges: () => landing.changesMain(),
+    commitWorkspace: (message) => landing.commitMain(message),
+    openPrFromMain: (req) => landing.openPrFromMain(req),
+    async draftPrWorkspace(req) {
+      const { diff, files } = await landing.changesMain();
+      return draftPrFromDiff(llmFor(req.harness), { ...(req.goal !== undefined ? { goal: req.goal } : {}), files, diff });
     },
 
     shutdown: () => sessions.stopAll(),

@@ -1,7 +1,16 @@
 import { h, type VNode } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import htm from 'htm';
-import type { RunsIndex, RunDetailResponse, WorktreesResponse, SseFrame, RootRef, PendingGate } from '../api-schema';
+import type {
+  RunsIndex,
+  RunDetailResponse,
+  WorktreesResponse,
+  SseFrame,
+  RootRef,
+  PendingGate,
+  WorktreeChangesResponse,
+  PrDraftRequest,
+} from '../api-schema';
 import type { RunLogEntry } from '../../runlog/runlog';
 import { api, subscribeRunEvents } from './api';
 import { feedLine, streamLine, fmtDate, statusBadgeClass, truncate, type FeedLine } from './format';
@@ -235,10 +244,222 @@ export function RunDetailPage({ runId }: { runId: string }): VNode {
 
     ${!isLive && d.status !== 'DONE' ? html`<${ResumePanel} runId=${runId} />` : ''}
 
+    ${!isLive
+      ? html`<${LandingPanel} target=${detail.root} goal=${d.goal} harness=${d.harness} />`
+      : ''}
+
     <h2>live feed</h2>
     <div class="feed" ref=${feedEl}>
       ${lines.length === 0 ? html`<span class="muted">waiting for events…</span>` : ''}
       ${lines.map((l) => html`<div><span class="t">${l.at}</span>  <span class=${l.tone === 'plain' ? '' : l.tone}>${l.text}</span></div>`)}
+    </div>
+  </div>` as VNode;
+}
+
+// ---- post-run landing panel (ADR 0017) ---------------------------------------
+
+/**
+ * Shown on a finished run: goaly's job ends at DONE, but the work still has to be shipped. Renders
+ * the change set (files + diff) and the landing actions over the run's checkout. For a **worktree**
+ * run the actions are commit / merge into main / open a PR over the `goaly/<name>` branch. For a
+ * **main-workspace** run (no `--worktree`) there is no branch to PR into itself, so "open a PR"
+ * ejects the changes onto a fresh `goaly/<name>` branch and returns you to your branch; merge is
+ * not offered.
+ */
+export function LandingPanel({
+  target,
+  goal,
+  harness,
+}: {
+  target: RootRef;
+  goal?: string;
+  harness?: string;
+}): VNode {
+  const isMain = target.kind === 'main';
+  const [changes, setChanges] = useState<WorktreeChangesResponse | undefined>(undefined);
+  const [loadError, setLoadError] = useState<string | undefined>(undefined);
+  const [showDiff, setShowDiff] = useState(false);
+  const [commitMsg, setCommitMsg] = useState('');
+  const [prBranch, setPrBranch] = useState(''); // main only: the goaly/<name> to eject onto
+  const [prTitle, setPrTitle] = useState('');
+  const [prBody, setPrBody] = useState('');
+  const [prBase, setPrBase] = useState('');
+  const [busy, setBusy] = useState<string | undefined>(undefined);
+  const [actionError, setActionError] = useState<string | undefined>(undefined);
+  const [notice, setNotice] = useState<VNode | string | undefined>(undefined);
+
+  const refresh = async (): Promise<void> => {
+    try {
+      setChanges(isMain ? await api.workspaceChanges() : await api.worktreeChanges(target.name));
+      setLoadError(undefined);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target.kind, isMain ? '' : target.name]);
+
+  // Wrap a landing action: single-flight (busy tag), reset messaging, refetch changes after.
+  const act = (tag: string, fn: () => Promise<VNode | string>) => async (event?: Event): Promise<void> => {
+    event?.preventDefault();
+    setBusy(tag);
+    setActionError(undefined);
+    setNotice(undefined);
+    try {
+      setNotice(await fn());
+      await refresh();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const commit = act('commit', async () => {
+    const { head } = isMain
+      ? await api.commitWorkspace(commitMsg)
+      : await api.commitWorktree(target.name, commitMsg);
+    setCommitMsg('');
+    return `committed — new head ${head}`;
+  });
+  const merge = act('merge', async () => {
+    if (isMain) return ''; // never rendered for main
+    const { head } = await api.mergeWorktree(target.name, commitMsg !== '' ? { commitMessage: commitMsg } : {});
+    return `merged into the main workspace (now at ${head})`;
+  });
+  const openPr = act('pr', async () => {
+    if (isMain) {
+      const { url, branch } = await api.openPrFromMain({
+        name: prBranch,
+        title: prTitle,
+        ...(prBody !== '' ? { body: prBody } : {}),
+        ...(prBase !== '' ? { base: prBase } : {}),
+        ...(commitMsg !== '' ? { commitMessage: commitMsg } : {}),
+      });
+      return html`opened PR from <span class="mono">${branch}</span> — <a href=${url} target="_blank" rel="noopener noreferrer">${url}</a> (your workspace is back on <span class="mono">${changes?.branch}</span>)` as VNode;
+    }
+    const { url } = await api.openPr(target.name, {
+      title: prTitle,
+      ...(prBody !== '' ? { body: prBody } : {}),
+      ...(prBase !== '' ? { base: prBase } : {}),
+      ...(commitMsg !== '' ? { commitMessage: commitMsg } : {}),
+    });
+    return html`opened PR — <a href=${url} target="_blank" rel="noopener noreferrer">${url}</a>` as VNode;
+  });
+
+  // The agent drafts the PR title + body from the diff and fills the form; the human still reviews
+  // and clicks "open PR" (publishing stays a deliberate human act).
+  const draft = async (): Promise<void> => {
+    setBusy('draft');
+    setActionError(undefined);
+    setNotice(undefined);
+    try {
+      const req = {
+        ...(goal !== undefined ? { goal } : {}),
+        ...(harness !== undefined ? { harness: harness as PrDraftRequest['harness'] } : {}),
+      };
+      const { title, body } = isMain ? await api.draftPrWorkspace(req) : await api.draftPr(target.name, req);
+      setPrTitle(title);
+      setPrBody(body);
+      setNotice('the agent drafted the PR below — review and edit, then open it');
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  if (loadError !== undefined) {
+    return html`<div class="card"><h2 style="margin-top:0">landing</h2>
+      <div class="muted">could not read the changes: ${loadError}</div></div>` as VNode;
+  }
+  if (changes === undefined) return html`<div class="card muted">loading changes…</div>` as VNode;
+
+  const anyBusy = busy !== undefined;
+  const where = isMain ? `main workspace, on ${changes.branch}` : changes.branch;
+  return html`<div class="card">
+    <h2 style="margin-top:0">landing <span class="mono muted">${where}</span></h2>
+    <div class="muted" style="margin-bottom:0.5rem">
+      goaly is done — this is the post-DONE step: ship the work. head ${changes.head} ·
+      ${isMain
+        ? html`${changes.ahead} unpushed commit${changes.ahead === 1 ? '' : 's'}`
+        : html`${changes.ahead} commit${changes.ahead === 1 ? '' : 's'} ahead of main`} ·
+      ${changes.dirty ? html`<strong>uncommitted changes present</strong>` : 'clean'}
+    </div>
+
+    ${changes.files.length === 0
+      ? html`<div class="muted">no uncommitted changes here.</div>`
+      : html`<div>
+          <table class="list"><thead><tr><th>status</th><th>file</th></tr></thead>
+            <tbody>
+              ${changes.files.map(
+                (f) => html`<tr><td class="mono">${f.status}</td><td class="mono">${f.path}</td></tr>`,
+              )}
+            </tbody>
+          </table>
+          ${changes.untracked > 0
+            ? html`<div class="muted" style="margin-top:0.3rem">
+                ${changes.untracked} new (untracked) file${changes.untracked === 1 ? '' : 's'} — content isn't in the
+                diff below yet; it's included when you commit.
+              </div>`
+            : ''}
+          ${changes.diff !== ''
+            ? html`<div style="margin-top:0.4rem">
+                <button class="linkish" onClick=${(): void => setShowDiff((v) => !v)}>
+                  ${showDiff ? 'hide' : 'show'} diff
+                </button>
+                ${showDiff
+                  ? html`<pre class="diff">${changes.diff}${changes.diffTruncated ? '\n… (diff truncated)' : ''}</pre>`
+                  : ''}
+              </div>`
+            : ''}
+        </div>`}
+
+    ${actionError !== undefined ? html`<div class="error-box" style="margin-top:0.6rem">${actionError}</div>` : ''}
+    ${notice !== undefined ? html`<div class="notice" style="margin-top:0.6rem">${notice}</div>` : ''}
+
+    <div class="landing-actions" style="margin-top:0.8rem">
+      <label class="muted">commit message (used by commit; and by ${isMain ? 'PR' : 'merge / PR'} when the tree is dirty)</label>
+      <input type="text" class="mono" placeholder="goaly: ${isMain ? prBranch || 'work' : target.name}" value=${commitMsg}
+        onInput=${(e: Event): void => setCommitMsg((e.target as HTMLInputElement).value)} />
+      <div class="row" style="margin-top:0.5rem; gap:0.5rem; display:flex; flex-wrap:wrap">
+        <button class="linkish primary" disabled=${anyBusy || commitMsg === ''} onClick=${(): void => void commit()}>
+          ${busy === 'commit' ? 'committing…' : isMain ? `commit to ${changes.branch}` : 'commit'}
+        </button>
+        ${isMain
+          ? ''
+          : html`<button class="linkish" disabled=${anyBusy} onClick=${(): void => void merge()}>
+              ${busy === 'merge' ? 'merging…' : 'merge into main'}
+            </button>`}
+      </div>
+
+      <form onSubmit=${openPr} style="margin-top:0.8rem; border-top:1px solid var(--line); padding-top:0.6rem">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; gap:0.5rem; flex-wrap:wrap">
+          <label class="muted">
+            open a pull request${changes.canPr ? '' : ' (needs an origin remote + the gh CLI)'}
+            ${isMain ? html`<br /><span style="font-size:0.85em">ejects your changes onto a new <span class="mono">goaly/&lt;name&gt;</span> branch, then returns you to <span class="mono">${changes.branch}</span></span>` : ''}
+          </label>
+          <button type="button" class="linkish" disabled=${anyBusy || changes.files.length === 0}
+            title="let the agent write the title & body from the diff" onClick=${(): void => void draft()}>
+            ${busy === 'draft' ? 'drafting…' : '✨ draft with the agent'}
+          </button>
+        </div>
+        ${isMain
+          ? html`<input type="text" class="mono" required placeholder="branch name (creates goaly/<name>)" value=${prBranch}
+              onInput=${(e: Event): void => setPrBranch((e.target as HTMLInputElement).value)} />`
+          : ''}
+        <input type="text" required placeholder="PR title" value=${prTitle}
+          onInput=${(e: Event): void => setPrTitle((e.target as HTMLInputElement).value)} />
+        <textarea placeholder="PR body (optional)" rows="3" value=${prBody}
+          onInput=${(e: Event): void => setPrBody((e.target as HTMLTextAreaElement).value)}></textarea>
+        <input type="text" class="mono" placeholder=${isMain ? `base branch (optional — defaults to ${changes.branch})` : 'base branch (optional — defaults to the repo default)'} value=${prBase}
+          onInput=${(e: Event): void => setPrBase((e.target as HTMLInputElement).value)} />
+        <button class="linkish primary" type="submit" disabled=${anyBusy || !changes.canPr || prTitle === '' || (isMain && prBranch === '')}>
+          ${busy === 'pr' ? 'opening PR…' : isMain ? 'create branch & open PR' : 'open PR'}
+        </button>
+      </form>
     </div>
   </div>` as VNode;
 }

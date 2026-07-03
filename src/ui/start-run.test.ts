@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { makeUiActions, startArgv, resumeArgv, type UiActions } from './start-run';
+import { FakeLlm } from '../llm/provider';
 import { SessionStore } from './sessions';
 import { UiGates } from './ui-gates';
 import { makeFakeContract } from '../testing/fakes';
@@ -147,6 +148,101 @@ describe('makeUiActions — in-process UI-owned runs (fake harness, zero LLM)', 
 
     actions.stop(firstId);
     await waitSettled(firstId);
+  });
+
+  it('landing actions delegate to the real LandingManager over a worktree (changes → commit → merge)', async () => {
+    await actions.createWorktree('land');
+    const wtPath = join(root, '.goaly', 'worktrees', 'land');
+    await writeFile(join(wtPath, 'new.txt'), 'hi\n');
+
+    const before = await actions.worktreeChanges('land');
+    expect(before.branch).toBe('goaly/land');
+    expect(before.dirty).toBe(true);
+
+    const { head } = await actions.commitWorktree('land', 'add new');
+    expect(head).toMatch(/^[0-9a-f]{8}$/);
+    const after = await actions.worktreeChanges('land');
+    expect(after.dirty).toBe(false);
+    expect(after.ahead).toBe(1);
+
+    const merged = await actions.mergeWorktree('land', {});
+    expect(merged.merged).toBe('goaly/land');
+    expect(await readFile(join(root, 'new.txt'), 'utf8')).toBe('hi\n');
+  });
+
+  it('draftPr reads the worktree diff and drafts the title+body via the injected LLM', async () => {
+    const llm = new FakeLlm(['{"title":"feat: telemetry","body":"Adds a telemetry seam."}']);
+    const seen: string[] = [];
+    const injected = makeUiActions({
+      workspaceRoot: root,
+      sessions: new SessionStore(),
+      landing: {
+        changes: async (name) => {
+          seen.push(`changes:${name}`);
+          return {
+            branch: `goaly/${name}`,
+            head: 'aaaa1111',
+            dirty: true,
+            ahead: 0,
+            files: [{ status: ' M', path: 'src/x.ts' }],
+            untracked: 0,
+            diff: 'diff --git a/src/x.ts b/src/x.ts\n+telemetry',
+            diffTruncated: false,
+            remote: true,
+            ghAvailable: true,
+            canPr: true,
+          };
+        },
+        commit: async () => ({ head: 'x' }),
+        merge: async () => ({ merged: 'goaly/x', head: 'y' }),
+        openPr: async () => ({ url: 'u' }),
+        changesMain: async () => {
+          throw new Error('unused');
+        },
+        commitMain: async () => ({ head: 'x' }),
+        openPrFromMain: async () => ({ url: 'u', branch: 'goaly/x' }),
+      },
+      llmFor: () => llm,
+    });
+    const draft = await injected.draftPr('feat', { goal: 'add telemetry', harness: 'claude' });
+    expect(draft).toEqual({ title: 'feat: telemetry', body: 'Adds a telemetry seam.' });
+    expect(seen).toEqual(['changes:feat']);
+    // The run goal + the (fenced) diff both reached the model.
+    expect(llm.requests[0]!.prompt).toContain('add telemetry');
+    expect(llm.requests[0]!.prompt).toContain('<<UNTRUSTED DIFF ');
+  });
+
+  it('openPr delegates to the injected landing surface (no gh/remote needed)', async () => {
+    const calls: string[] = [];
+    const injected = makeUiActions({
+      workspaceRoot: root,
+      sessions: new SessionStore(),
+      landing: {
+        changes: async () => {
+          throw new Error('unused');
+        },
+        commit: async () => ({ head: 'x' }),
+        merge: async () => ({ merged: 'goaly/x', head: 'y' }),
+        openPr: async (name, o) => {
+          calls.push(`${name}:${o.title}:${o.base ?? ''}`);
+          return { url: 'https://github.com/o/r/pull/5' };
+        },
+        changesMain: async () => {
+          throw new Error('unused');
+        },
+        commitMain: async () => ({ head: 'x' }),
+        openPrFromMain: async (req) => {
+          calls.push(`main:${req.name}:${req.title}`);
+          return { url: 'https://github.com/o/r/pull/9', branch: `goaly/${req.name}` };
+        },
+      },
+    });
+    const res = await injected.openPr('feat', { title: 'T', base: 'main' });
+    expect(res.url).toBe('https://github.com/o/r/pull/5');
+    expect(calls).toEqual(['feat:T:main']);
+    const ws = await injected.openPrFromMain({ name: 'sidefix', title: 'WT' });
+    expect(ws).toEqual({ url: 'https://github.com/o/r/pull/9', branch: 'goaly/sidefix' });
+    expect(calls).toContain('main:sidefix:WT');
   });
 
   it('stop while parked at the Seal rejects the gate and the run unwinds (still resumable state)', { timeout: 30000 }, async () => {

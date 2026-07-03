@@ -52,7 +52,7 @@ stays resumable). See [Usage](#usage) for every flag.
 - [Phased goals](#phased-goals---phased) · [Worktrees](#worktrees---worktree) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
 - [Reliability](#reliability-preflight-retries-interrupts-crash-safety) — preflight, retries, Ctrl-C, crash-safety
 - [Operator control](#watching-steering--extending-a-run-operator-control) — watch live, steer with `--note`, extend caps on `--resume`
-- [Web UI](#web-ui-goaly-ui) — `goaly ui`: runs, live feeds, and worktrees in the browser
+- [Web UI](#web-ui-goaly-ui) — `goaly ui`: runs, live feeds, worktrees, and post-run landing (commit / merge / PR) in the browser
 - [Develop](#develop) · [Embedding](#embedding) — contributing and the library API
 - [Glossary](#appendix-glossary) — every project-specific term & idiom, plain-language
 
@@ -386,9 +386,11 @@ goaly worktree remove feature-x --force --delete-branch
   exact command.
 - **Merge-back is plain git — no magic.** Runs never commit, so a finished worktree run leaves its
   changes uncommitted on `goaly/<name>`; the end-of-run hint shows the two steps
-  (`git -C <worktree> add -A && git -C <worktree> commit …`, then `git merge goaly/<name>`).
-  Removing a worktree **keeps the branch by default** for exactly this reason; `--delete-branch`
-  opts out (an unmerged branch then needs `--force`).
+  (`git -C <worktree> add -A && git -C <worktree> commit …`, then `git merge goaly/<name>`). The
+  [web UI](#web-ui-goaly-ui) does this for you from a **Landing panel** (commit / merge / open a PR
+  — [ADR 0017](docs/adr/0017-post-run-landing.md)). Removing a worktree **keeps the branch by
+  default** for exactly this reason; `--delete-branch` opts out (an unmerged branch then needs
+  `--force`).
 - **Fail-closed safety.** Creating over an existing worktree, an unresolvable `--base`, or an
   invalid name (names are one safe path/branch component: `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`, no
   `..`) all refuse with a clear message. `remove` refuses while a **live goaly run** is inside
@@ -1215,6 +1217,26 @@ goaly ui --port 5000 --workspace ./myrepo
   Ctrl-C (the ABORTED lands in the feed; nothing is lost); the resume panel continues any non-live
   run — terminal-started ones included — with an optional `--note` and raised **operational** caps
   (the ADR 0012 extension schema, which structurally has no field for the goal/verifier/rubric).
+- **Land the work when it's done ([ADR 0017](docs/adr/0017-post-run-landing.md)).** goaly's job
+  ends at **DONE** — committing, merging, and opening a PR are the *post*-DONE step, and a finished
+  run grows a **Landing panel** for exactly that (worktree runs **and** main-workspace runs alike).
+  It shows the change set (file list + a collapsible diff) and the landing actions. For a
+  **worktree** run they operate over the `goaly/<name>` branch: **commit** the worktree's changes,
+  **merge into main** (commits-if-dirty, refuses a dirty/busy main, aborts a conflict so main is
+  never left half-merged), and **open a PR** (commit-if-dirty → push to `origin` → `gh pr create`,
+  returning the PR URL; disabled unless a remote **and** `gh` are present). For a **main-workspace**
+  run (no `--worktree`) you can't PR a branch into itself, so "open a PR" **ejects** your changes
+  onto a fresh `goaly/<name>` branch, pushes, opens the PR, and switches you **back to your branch
+  with a clean tree** (on any failure after the switch you're still returned home, the work safe on
+  the branch); merge isn't offered there. The PR's
+  **title and body are drafted by the agent** — one click sends the goal + the diff through the run's
+  own harness (the same read-only `LlmProvider` the judges use, default `claude -p`) and fills the
+  form for you to review before publishing; the diff is fenced as untrusted worker output so a
+  prompt-injection line hidden in the code can't steer the description. Every mutating action refuses
+  while a live run holds the tree (two writers is never safe), goes through the same `X-Goaly-Ui` +
+  same-origin guards, and never shells the operator's message/title (argv, not a shell — no
+  injection). Landing is deliberately outside the frozen success contract: it's what you do with a
+  result goaly already proved.
 - **One live run per tree.** Starting a second run in an occupied root is refused (409) with a
   pointer at worktrees — per-run locks stop double drivers, this stops two agents editing one tree.
 
