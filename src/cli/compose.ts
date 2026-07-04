@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DriverDeps } from '../driver/driver';
 import type { RunConfig } from '../domain/config';
@@ -16,6 +16,7 @@ import { GeneratedFilesGuard } from '../verify/generated-guard';
 import { JudgeVerifier } from '../verify/judge';
 import { AgentApprover } from '../verify/agent-approver';
 import { AgentCompiler } from '../compile/agent-compiler';
+import { CritiquedCompiler } from '../compile/critiqued-compiler';
 import { classifyUsageShape } from '../compile/usage-gate';
 import { SeededCompiler, SeededPlanner } from '../followup/seeded';
 import { AutoSealGate, HumanSealGate } from '../compile/seal-gates';
@@ -240,6 +241,32 @@ function seedCompiler(inner: VerifierCompiler, seed: string | undefined): Verifi
   return seed !== undefined ? new SeededCompiler(inner, seed) : inner;
 }
 
+/**
+ * Wrap the compiler with the `--adversarial` contract red-team when enabled; identity otherwise
+ * (a default run builds NO critic provider and pays nothing). Wraps the INNER compiler so the
+ * follow-up seed (outermost) still reaches the first authoring attempt. The panel's provider is
+ * metered under the `'compile'` phase — critique spend is part of authoring the contract, not a
+ * new spend category (mirrors how the usage-shape classifier rides the compiler's phase).
+ */
+function critiqueCompiler(
+  inner: VerifierCompiler,
+  config: RunConfig,
+  makeLlm: () => LlmProvider,
+  workspaceRoot: string,
+  logger: Logger,
+): VerifierCompiler {
+  const adv = config.adversarial;
+  if (!adv.enabled || adv.contractCritics <= 0 || adv.contractCritiqueRounds <= 0) return inner;
+  return new CritiquedCompiler({
+    inner,
+    llm: makeLlm(),
+    critics: adv.contractCritics,
+    rounds: adv.contractCritiqueRounds,
+    readFile: (rel) => readFile(path.join(workspaceRoot, rel), 'utf8'),
+    logger,
+  });
+}
+
 /** Wrap the planner with the follow-up seed (Capability C) when present; identity otherwise. */
 function seedPlanner(inner: Planner, seed: string | undefined): Planner {
   return seed !== undefined ? new SeededPlanner(inner, seed) : inner;
@@ -406,17 +433,23 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
 
   return {
     compiler: seedCompiler(
-      new AgentCompiler({
-        llm: llmFor(models.compiler, 'compile'),
-        writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
-        ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
-        // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered like
-        // the authoring call) arms the gate on a confident build-and-use goal so a bar that a parallel
-        // reimplementation could green is refused at compile (COMPILE_FAILED → re-authored with a usage
-        // assertion). Fail-open, so it never blocks a non-build-and-use run.
-        classifyShape: (goal, intent) =>
-          classifyUsageShape(llmFor(models.compiler, 'compile'), goal, intent),
-      }),
+      critiqueCompiler(
+        new AgentCompiler({
+          llm: llmFor(models.compiler, 'compile'),
+          writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
+          ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
+          // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered like
+          // the authoring call) arms the gate on a confident build-and-use goal so a bar that a parallel
+          // reimplementation could green is refused at compile (COMPILE_FAILED → re-authored with a usage
+          // assertion). Fail-open, so it never blocks a non-build-and-use run.
+          classifyShape: (goal, intent) =>
+            classifyUsageShape(llmFor(models.compiler, 'compile'), goal, intent),
+        }),
+        config,
+        () => llmFor(models.critic, 'compile'),
+        options.workspaceRoot,
+        logger,
+      ),
       seed,
     ),
     seal:
