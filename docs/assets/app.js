@@ -86,8 +86,8 @@
   const PIPE_DETAIL = {
     compile: {
       t: "COMPILE — author & freeze",
-      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. The anti-reward-hacking core.",
-      pills: ['<span class="pill pass">→ contractHash</span>'],
+      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. The anti-reward-hacking core. With --adversarial a red-team panel attacks the authored bar (vacuous command? rubric mismatch? hard-codable tests?) before Seal — critical findings trigger a bounded re-author round.",
+      pills: ['<span class="pill pass">→ contractHash</span>', '<span class="pill fail">--adversarial red-team</span>'],
     },
     seal: {
       t: "SEAL — lock the bar",
@@ -106,8 +106,8 @@
     },
     ladder: {
       t: "Verify — deterministic first",
-      d: "Checks run cheapest-and-hardest-to-game first (tests / exit codes before any LLM judge) and short-circuit on the first fail. Fail-closed.",
-      pills: ['<span class="pill pass">exit codes</span>', '<span class="pill violet">LLM judge</span>'],
+      d: "Checks run cheapest-and-hardest-to-game first (tests / exit codes before any LLM judge) and short-circuit on the first fail. Fail-closed. With --adversarial a built-in refuter rung runs LAST — a refute-first skeptic panel that attacks each candidate green and can only fail it; part of the ladder, never part of the contractHash (like the anti-tamper guard).",
+      pills: ['<span class="pill pass">exit codes</span>', '<span class="pill violet">LLM judge</span>', '<span class="pill fail">--adversarial refuters</span>'],
     },
     signoff: {
       t: "SIGN-OFF — veto-only",

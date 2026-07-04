@@ -176,6 +176,21 @@
         non-build-and-use run.</p>
       </div>
       <div class="card">
+        <h3>Adversarial review (<code>--adversarial</code>)</h3>
+        <p>Opt-in red-teaming at three points, all veto/feedback-shaped — never a third key. A
+        <b>contract red-team panel</b> attacks the authored bar before Seal (gaming/vacuity, rubric
+        mismatch, hard-code surface, reproducibility; critical findings trigger a bounded re-author);
+        on <code>--phased</code> a <b>plan critic panel</b> does the same to the plan before its Seal;
+        and a <b>refute-first panel</b> is appended as a built-in rung <em>after</em> the frozen
+        ladder — it runs only on a candidate green (never part of the <code>contractHash</code>, like
+        the anti-tamper guard) and the green survives only a strict supermajority of "could not
+        refute" votes. Pre-Seal critics are advisory (a broken panel passes through; the Seal still
+        gates); the refuters are fail-closed (a broken refuter counts as refuted). Also widens
+        Sign-off to a 3-reviewer panel unless <code>--approver-quorum</code> is set;
+        <code>--critic-model</code> puts the skeptics on their own model. Off by default —
+        a plain run is byte-for-byte unchanged.</p>
+      </div>
+      <div class="card">
         <h3>Follow up after it ends</h3>
         <p><code>goaly "now also handle empty input" --from-run &lt;id&gt;</code> starts a <b>new,
         re-verified</b> goal that knows what just happened: a compaction of the prior run seeds the

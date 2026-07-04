@@ -101,7 +101,9 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   [**fail-closed**](#g-fail-closed) — a malformed grader is never a green. When goaly **authored** the verification
   (`--generate`), an integrity **guard rung runs first** and fails closed if any generated test file
   was changed since the contract froze — the worker can't quietly rewrite the bar the frozen command
-  measures.
+  measures. Under **`--adversarial`**, a **refuter rung runs last**: a refute-first skeptic panel
+  that attacks every candidate green before Sign-off and can only fail it (built-in like the guard —
+  part of the ladder, never part of the `contractHash`; see *Hardening against reward-hacking*).
 - **Artifact-running smoke rung (`--smoke`).** For goals whose correctness only shows at *runtime* — a
   web UI, a server endpoint, a CLI's actual behavior — add `--smoke "<cmd>"`: an **extra deterministic
   rung** (a second `--verify-cmd`) that *executes* the built artifact and exits non-zero on failure.
@@ -474,6 +476,36 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   variance-reduction / collapse warnings; a one-model list (or all-identical entries) falls back to the
   single-model panel and the warnings stay. Use `--approver-model` (singular) for a single distinct
   model; `--approver-models` (plural) for a per-reviewer panel.
+- **Opt-in adversarial review at three points (`--adversarial`).** Claude-style red-teaming woven
+  into the existing seams, all veto/feedback-shaped — never a third key that can promote a red or
+  skip a gate:
+  - **Contract red-team (before Seal).** A lensed critic panel (`--adversarial-contract-critics`,
+    default `2`) attacks each freshly compiled `--generate` contract — *how would a lazy, adversarial
+    worker game this bar?* — across gaming/vacuity, rubric-command mismatch, tamper/hard-code surface
+    (it reads the authored test files' content, fenced as untrusted), and reproducibility. Any
+    **critical** finding triggers a bounded re-author round through the same feedback channel a Seal
+    "revise" uses; the (still-frozen, still-logged) result is then presented at Seal as usual. Skipped
+    for `--verify-cmd` (your own bar is not second-guessed).
+  - **Plan critique (before the plan Seal, `--phased`).** The same panel shape
+    (`--adversarial-plan-critics`, default `2`) attacks the authored plan — verifiability, ordering,
+    scope, goal-coverage — and triggers a bounded re-plan on critical findings. A `--plan-file` plan
+    is yours and is never critiqued.
+  - **Refuter rung (after a green ladder).** N refuters (`--adversarial-refuters`, default `3`) are
+    appended as a **built-in rung after every frozen rung** — like the generated-files guard, part of
+    the ladder but **never part of the `contractHash`**. The short-circuit means they run **only on a
+    candidate green**, prompted **refute-first** (when uncertain, refute) through
+    correctness/gaming/reproducibility lenses over the fenced diff; the green survives only on a
+    strict supermajority of parsed "could not refute" votes. A refuted green re-enters the loop as
+    verifier feedback and **never reaches Sign-off as a green**.
+  - **Fail direction.** The pre-Seal critics are *advisory* — a broken critic panel passes the
+    artifact through (the Seal gates still stand). The refuter rung is *fail-closed* — a thrown or
+    unparseable refuter counts as a refuted vote, and zero parseable refuters is an **unevaluable**
+    red (surfaces as `CONTRACT_UNEVALUABLE`, never blamed on the code).
+  - `--adversarial` also widens Sign-off to a 3-reviewer panel unless `--approver-quorum` is set
+    explicitly, and `--critic-model` picks one model for all critics/refuters (cascading
+    `--critic-model → --llm-model → --model`). Critic spend is metered into the run budget under the
+    step it audits (compile / plan / judge). Without the flag, none of this is built — a default run
+    is **byte-for-byte unchanged**.
 - **The verify command runs with a credential-scrubbed environment.** The verifier executes
   worker/model-authored code on your host every iteration; goaly strips credential-looking variables
   (`*_TOKEN`, `*_KEY`, `*SECRET*`, `AWS_*`, `GITHUB_*`, …) from its environment so they can't be
@@ -657,6 +689,11 @@ goaly worktree list                          # manage them: create / list / remo
 # exploratory build (authored files are auto git-excluded, so your `git status` stays clean):
 goaly run --goal "..." --generate --autonomous --verify-dir test \
              --max-compile-retries 3 --stuck-no-diff false
+
+# Red-team the run (--adversarial): a critic panel attacks the authored contract before Seal, and a
+# refute-first panel attacks every green ladder before Sign-off; put the critics on their own model
+# so the skeptics don't share the worker's blind spots:
+goaly run --goal "..." --generate --autonomous --adversarial --critic-model claude-opus-4-8
 
 # Pick a model for the harness, and a different model for the LLM steps (judge/approver/compiler):
 goaly run --goal "..." --verify-cmd "npm test" --harness claude \
@@ -965,8 +1002,8 @@ or stdin (`--goal -`). Giving a field more than one source is a usage error.
 
 **Model selection** is optional and never enters the frozen contract — it's pure wiring. `--model`
 is the global default (the harness *and* the LLM steps); `--llm-model` overrides all LLM steps; and
-`--judge-model` / `--approver-model` / `--compiler-model` (and `--explain-model` for the optional
-`--explain` observer) override a single step. Precedence per LLM
+`--judge-model` / `--approver-model` / `--compiler-model` / `--critic-model` (and `--explain-model`
+for the optional `--explain` observer) override a single step. Precedence per LLM
 step: per-step flag → `--llm-model` → `--model` → the tool's own default. `--llm-provider`
 (`claude` default, or `codex` / `droid` / `pi` / `openai`) picks which provider runs those steps —
 handy when the harness and the LLM steps should share a model namespace. **`--approver-quorum N`**
@@ -978,6 +1015,15 @@ model count, and ≥2 distinct models make the panel a genuinely independent sec
 **`--approver-lenses l1,l2,…`** overrides the panel's default review-lens taxonomy with an
 operator-supplied list (cycled across reviewers when `N > 1`, ignored at `N = 1`). All of these
 are pure wiring and never enter the frozen contract. Omit them all and every tool uses its own default.
+
+**Adversarial review.** **`--adversarial`** turns on the opt-in red-team steps (see *Hardening
+against reward-hacking*): a contract red-team panel before Seal
+(**`--adversarial-contract-critics N`**, default `2`), a plan critic panel before the plan Seal on
+`--phased` runs (**`--adversarial-plan-critics N`**, default `2`), and a refute-first panel appended
+after a green ladder (**`--adversarial-refuters N`**, default `3`; `0` skips a step). It also widens
+Sign-off to a 3-reviewer panel unless `--approver-quorum` is set explicitly. **`--critic-model <m>`**
+picks one model for every critic/refuter (cascades like the other per-step model flags). All pure
+wiring — never part of the frozen contract; without `--adversarial` a run is byte-for-byte unchanged.
 
 **Harness selection.** `--harness` (`claude` default, or `codex` / `droid` / `pi` / `goaly-code`) picks the
 write-role coding agent. `goaly-code` is the first non-CLI harness: goaly drives its own tool-use loop
