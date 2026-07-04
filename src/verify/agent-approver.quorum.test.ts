@@ -25,8 +25,8 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     expect(verdict.veto).toBe(false);
     expect(llm.requests).toHaveLength(1);
     expect(llm.requests[0]?.temperature).toBe(0);
-    // No lens addendum is woven into the single-call system prompt.
-    expect(llm.requests[0]?.system).not.toContain('REVIEW LENS');
+    // No lens addendum is appended to the single-call prompt.
+    expect(llm.requests[0]?.prompt).not.toContain('REVIEW LENS');
   });
 
   it('defaults to quorum 1 (single call) when no quorum is given', async () => {
@@ -161,10 +161,16 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     await approver.review(baseInput);
 
     expect(llm.requests).toHaveLength(3);
-    // Lenses cycle: reviewer 0 → ALPHA, 1 → BETA, 2 → ALPHA again.
-    expect(llm.requests[0]?.system).toContain('LENS_ALPHA');
-    expect(llm.requests[1]?.system).toContain('LENS_BETA');
-    expect(llm.requests[2]?.system).toContain('LENS_ALPHA');
+    // Lenses cycle: reviewer 0 → ALPHA, 1 → BETA, 2 → ALPHA again — on the PROMPT TAIL, so the
+    // panel shares a constant system + cacheable prompt prefix (reviewer 1 writes, 2..N read).
+    expect(llm.requests[0]?.prompt).toContain('LENS_ALPHA');
+    expect(llm.requests[1]?.prompt).toContain('LENS_BETA');
+    expect(llm.requests[2]?.prompt).toContain('LENS_ALPHA');
+    const systems = new Set(llm.requests.map((r) => r.system));
+    expect(systems.size).toBe(1); // panel-constant system — the cacheable-prefix invariant
+    const shared = (llm.requests[0]?.prompt ?? '').split('REVIEW LENS')[0]!;
+    expect(shared.length).toBeGreaterThan(0);
+    for (const r of llm.requests) expect(r.prompt.startsWith(shared)).toBe(true);
   });
 
   it('applies the default lens taxonomy when quorum>1 and no explicit lenses are supplied', async () => {
@@ -173,14 +179,14 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
 
     await approver.review(baseInput);
 
-    const systems = llm.requests.map((r) => r.system ?? '');
+    const prompts = llm.requests.map((r) => r.prompt);
     // Each default lens (correctness / security / goal-met / prompt-injection) is mentioned.
-    const joined = systems.join('\n').toLowerCase();
+    const joined = prompts.join('\n').toLowerCase();
     expect(joined).toContain('correctness');
     expect(joined).toContain('security');
     expect(joined).toContain('prompt-injection');
     // And each reviewer carries SOME lens addendum (no bare reviewer when quorum>1).
-    for (const s of systems) expect(s).toContain('REVIEW LENS');
+    for (const p of prompts) expect(p).toContain('REVIEW LENS');
   });
 
   it('the default taxonomy carries the adversarial lenses (spec-gaming / test-tampering / hidden-regression)', async () => {
@@ -195,7 +201,7 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     const llm = new FakeLlm([noVeto]);
     const approver = new AgentApprover({ llm, quorum: 7 });
     await approver.review(baseInput);
-    const joined = llm.requests.map((r) => r.system ?? '').join('\n');
+    const joined = llm.requests.map((r) => r.prompt).join('\n');
     expect(joined).toContain('SPEC-GAMING');
     expect(joined).toContain('TEST-TAMPERING');
     expect(joined).toContain('HIDDEN-REGRESSION');
@@ -208,7 +214,7 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     await approver.review(baseInput);
 
     expect(llm.requests).toHaveLength(1);
-    expect(llm.requests[0]?.system).not.toContain('SHOULD_NOT_APPEAR');
+    expect(llm.requests[0]?.prompt).not.toContain('SHOULD_NOT_APPEAR');
     expect(llm.requests[0]?.temperature).toBe(0);
   });
 
@@ -221,10 +227,10 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     await approver.review(baseInput);
 
     expect(llm.requests).toHaveLength(3);
-    expect(llm.requests[0]?.system).toContain('OPS_LENS_A');
-    expect(llm.requests[1]?.system).toContain('OPS_LENS_B');
-    expect(llm.requests[2]?.system).toContain('OPS_LENS_A');
-    const joined = llm.requests.map((r) => r.system ?? '').join('\n').toLowerCase();
+    expect(llm.requests[0]?.prompt).toContain('OPS_LENS_A');
+    expect(llm.requests[1]?.prompt).toContain('OPS_LENS_B');
+    expect(llm.requests[2]?.prompt).toContain('OPS_LENS_A');
+    const joined = llm.requests.map((r) => r.prompt).join('\n').toLowerCase();
     expect(joined).not.toContain('does the change actually implement the goal'); // a DEFAULT_LENSES phrase
     expect(joined).not.toContain('unsafe deserialization'); // another DEFAULT_LENSES phrase
   });

@@ -11,7 +11,7 @@ export const CRITIC_DIVERSITY_TEMPERATURE = 0.5;
 
 export type CriticPanelOpts = {
   llm: LlmProvider;
-  /** Base system prompt; each critic gets its lens woven in (like the approver's `systemFor`). */
+  /** Panel-constant system prompt; each critic's lens rides its prompt tail (like the approver's `withLens`). */
   system: string;
   prompt: string;
   /** Lens taxonomy cycled across the panel (`i % lenses.length`); empty ⇒ bare critics. */
@@ -39,13 +39,16 @@ export async function runCriticPanel(opts: CriticPanelOpts): Promise<CritiqueOut
   const outputs: CritiqueOutput[] = [];
   for (let i = 0; i < count; i += 1) {
     const lens = opts.lenses.length > 0 ? opts.lenses[i % opts.lenses.length] : undefined;
-    const system =
+    // The lens rides the TAIL of the user prompt (see `withLens` in agent-approver.ts): a
+    // panel-constant system + shared prompt prefix means critic 1 cache-writes the request and
+    // critics 2..N cache-read it; a per-critic system would defeat prefix caching entirely.
+    const prompt =
       lens === undefined || lens.trim().length === 0
-        ? opts.system
-        : `${opts.system} REVIEW LENS — focus especially on: ${lens}`;
+        ? opts.prompt
+        : `${opts.prompt}\n\nREVIEW LENS (operator instruction) — focus especially on: ${lens}`;
     let raw: string;
     try {
-      ({ text: raw } = await opts.llm.complete({ system, prompt: opts.prompt, temperature }));
+      ({ text: raw } = await opts.llm.complete({ system: opts.system, prompt, temperature }));
     } catch {
       continue;
     }

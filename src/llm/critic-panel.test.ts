@@ -17,19 +17,24 @@ describe('runCriticPanel', () => {
     expect(outputs[1]?.findings[0]?.claim).toBe('vacuous command');
   });
 
-  it('weaves lens i into critic i (cycled) like the approver panel', async () => {
+  it('appends lens i to critic i prompt (cycled), keeping the system panel-constant', async () => {
     const llm = new FakeLlm([pass]);
     await runCriticPanel({ ...baseOpts, llm, lenses: ['LENS_A', 'LENS_B'], count: 3 });
-    expect(llm.requests[0]?.system).toContain('LENS_A');
-    expect(llm.requests[1]?.system).toContain('LENS_B');
-    expect(llm.requests[2]?.system).toContain('LENS_A');
-    for (const req of llm.requests) expect(req.system).toContain('BASE SYSTEM');
+    expect(llm.requests[0]?.prompt).toContain('LENS_A');
+    expect(llm.requests[1]?.prompt).toContain('LENS_B');
+    expect(llm.requests[2]?.prompt).toContain('LENS_A');
+    // Panel-constant system + shared prompt prefix: the cacheable-prefix invariant.
+    for (const req of llm.requests) {
+      expect(req.system).toBe('BASE SYSTEM');
+      expect(req.prompt.startsWith('critique this')).toBe(true);
+    }
   });
 
-  it('leaves the system prompt bare with no lenses', async () => {
+  it('leaves the prompt bare with no lenses', async () => {
     const llm = new FakeLlm([pass]);
     await runCriticPanel({ ...baseOpts, llm, count: 1 });
     expect(llm.requests[0]?.system).toBe('BASE SYSTEM');
+    expect(llm.requests[0]?.prompt).toBe('critique this');
   });
 
   it('samples at temperature 0 for one critic and diversity temperature for a panel', async () => {

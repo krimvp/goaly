@@ -104,10 +104,16 @@ describe('AdversarialReviewRung', () => {
     await rung.verify(ws, 'the goal text', 'the rubric text');
 
     expect(llm.requests).toHaveLength(3);
-    expect(llm.requests[0]?.system).toContain(REFUTER_LENSES[0]);
-    expect(llm.requests[1]?.system).toContain(REFUTER_LENSES[1]);
-    expect(llm.requests[2]?.system).toContain(REFUTER_LENSES[2]);
+    // Lenses cycle on the PROMPT TAIL; the system stays panel-constant so refuters 2..3 cache-read
+    // the fenced-diff prefix refuter 1 wrote.
+    expect(llm.requests[0]?.prompt).toContain(REFUTER_LENSES[0]);
+    expect(llm.requests[1]?.prompt).toContain(REFUTER_LENSES[1]);
+    expect(llm.requests[2]?.prompt).toContain(REFUTER_LENSES[2]);
+    expect(new Set(llm.requests.map((r) => r.system)).size).toBe(1);
+    const shared = (llm.requests[0]?.prompt ?? '').split('REVIEW LENS')[0]!;
+    expect(shared.length).toBeGreaterThan(0);
     for (const req of llm.requests) {
+      expect(req.prompt.startsWith(shared)).toBe(true);
       expect(req.system).toContain('REFUTE');
       expect(req.prompt).toContain('<<UNTRUSTED DIFF');
       expect(req.prompt).toContain('the goal text');

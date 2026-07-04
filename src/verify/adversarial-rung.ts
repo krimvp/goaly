@@ -77,9 +77,12 @@ export class AdversarialReviewRung implements Verifier {
       const lens = REFUTER_LENSES[i % REFUTER_LENSES.length]!;
       let raw: string;
       try {
+        // The lens rides the TAIL of the user prompt (see `withLens` in agent-approver.ts): a
+        // panel-constant system + the shared fenced-diff prefix means refuter 1 cache-writes the
+        // request and refuters 2..N cache-read it; a per-refuter system would defeat prefix caching.
         ({ text: raw } = await this.#llm.complete({
-          system: `${SYSTEM_PROMPT} REVIEW LENS — focus especially on: ${lens}`,
-          prompt,
+          system: SYSTEM_PROMPT,
+          prompt: `${prompt}\n\nREVIEW LENS (operator instruction) — focus especially on: ${lens}`,
           temperature,
         }));
       } catch {

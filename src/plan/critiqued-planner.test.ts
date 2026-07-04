@@ -90,8 +90,8 @@ describe('CritiquedPlanner', () => {
 
     await planner.plan(config);
 
-    expect(llm.requests[0]?.system).toContain(PLAN_CRITIC_LENSES[0]);
-    expect(llm.requests[1]?.system).toContain(PLAN_CRITIC_LENSES[1]);
+    expect(llm.requests[0]?.prompt).toContain(PLAN_CRITIC_LENSES[0]);
+    expect(llm.requests[1]?.prompt).toContain(PLAN_CRITIC_LENSES[1]);
     const prompt = llm.requests[0]?.prompt ?? '';
     expect(prompt).toContain('build the whole widget system');
     expect(prompt).toContain('parse the input');

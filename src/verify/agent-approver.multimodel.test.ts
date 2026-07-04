@@ -98,9 +98,9 @@ describe('AgentApprover — per-reviewer model independence (reviewers list)', (
     await approver.review(baseInput);
 
     // reviewer 0 → provider a, lens ALPHA; reviewer 1 → provider b, lens BETA; reviewer 2 → a, ALPHA.
-    expect(a.requests[0]?.system).toContain('LENS_ALPHA');
-    expect(b.requests[0]?.system).toContain('LENS_BETA');
-    expect(a.requests[1]?.system).toContain('LENS_ALPHA');
+    expect(a.requests[0]?.prompt).toContain('LENS_ALPHA');
+    expect(b.requests[0]?.prompt).toContain('LENS_BETA');
+    expect(a.requests[1]?.prompt).toContain('LENS_ALPHA');
   });
 
   it('a reviewer whose provider throws becomes a VETO vote (fail-closed)', async () => {
@@ -150,7 +150,7 @@ describe('AgentApprover — per-reviewer model independence (reviewers list)', (
     // No reviewers ⇒ the single-llm quorum-1 single call, byte-for-byte.
     expect(llm.requests).toHaveLength(1);
     expect(llm.requests[0]?.temperature).toBe(0);
-    expect(llm.requests[0]?.system).not.toContain('REVIEW LENS');
+    expect(llm.requests[0]?.prompt).not.toContain('REVIEW LENS');
   });
 
   it('absent reviewers is byte-for-byte the single-llm path', async () => {
@@ -184,6 +184,6 @@ describe('AgentApprover — per-reviewer model independence (reviewers list)', (
 
     expect(only.requests).toHaveLength(1);
     expect(only.requests[0]?.temperature).toBe(0.5);
-    expect(only.requests[0]?.system).toContain('REVIEW LENS');
+    expect(only.requests[0]?.prompt).toContain('REVIEW LENS');
   });
 });

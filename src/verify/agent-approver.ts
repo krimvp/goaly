@@ -58,12 +58,19 @@ export const DEFAULT_LENSES: readonly string[] = [
 ];
 
 /**
- * Weave a lens addendum into the base system prompt for one reviewer. An empty/whitespace lens is a
- * no-op (returns the unchanged base), so the bare reviewer stays byte-for-byte the single call.
+ * Append a lens addendum to the TAIL of one reviewer's user prompt. An empty/whitespace lens is a
+ * no-op (returns the unchanged prompt), so the bare reviewer stays byte-for-byte the single call.
+ *
+ * Deliberately the prompt tail, NOT the system prompt: the system prompt is the first bytes of the
+ * request, so a per-reviewer system would give every panel member a different prefix and each call
+ * would cache-WRITE its own copy of the (large, shared) fenced diff. With a panel-constant system
+ * and the lens after the shared content, reviewer 1 writes the prefix cache and reviewers 2..N
+ * cache-READ it. The lens is operator config appended after the untrusted fence's END marker, so
+ * the injection posture is unchanged. Do not "clean this up" back into the system prompt.
  */
-function systemFor(lens: string | undefined): string {
-  if (lens === undefined || lens.trim().length === 0) return SYSTEM_PROMPT;
-  return `${SYSTEM_PROMPT} REVIEW LENS — focus especially on: ${lens}`;
+export function withLens(prompt: string, lens: string | undefined): string {
+  if (lens === undefined || lens.trim().length === 0) return prompt;
+  return `${prompt}\n\nREVIEW LENS (operator instruction) — focus especially on: ${lens}`;
 }
 
 function summarizeVerdicts(verdicts: Verdict[]): string {
@@ -208,8 +215,8 @@ export class AgentApprover implements Approver {
     try {
       raw = (
         await provider.complete({
-          system: systemFor(lens),
-          prompt: prompt ?? buildPrompt(input),
+          system: SYSTEM_PROMPT,
+          prompt: withLens(prompt ?? buildPrompt(input), lens),
           temperature,
         })
       ).text;

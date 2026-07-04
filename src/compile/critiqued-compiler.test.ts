@@ -125,8 +125,8 @@ describe('CritiquedCompiler', () => {
 
     await compiler.compile(generateConfig);
 
-    expect(llm.requests[0]?.system).toContain(CONTRACT_REDTEAM_LENSES[0]);
-    expect(llm.requests[1]?.system).toContain(CONTRACT_REDTEAM_LENSES[1]);
+    expect(llm.requests[0]?.prompt).toContain(CONTRACT_REDTEAM_LENSES[0]);
+    expect(llm.requests[1]?.prompt).toContain(CONTRACT_REDTEAM_LENSES[1]);
     const prompt = llm.requests[0]?.prompt ?? '';
     expect(prompt).toContain('verify/widget.test.ts');
     expect(prompt).toContain('expect(1).toBe(1)');
