@@ -132,6 +132,28 @@ describe('AgentCliLlmProvider — one codec-driven provider for every CLI', () =
     expect(rec[0]!.args).not.toContain('--resume');
   });
 
+  it('never trusts the AMBIENT session id (goaly nested under Claude Code)', async () => {
+    const prev = process.env['CLAUDE_CODE_SESSION_ID'];
+    process.env['CLAUDE_CODE_SESSION_ID'] = 'ambient-1';
+    try {
+      const rec: { args: string[]; input: string | undefined }[] = [];
+      // The wrapped CLI reports the ambient id instead of minting a fresh session.
+      const envelope = JSON.stringify({ result: 'text', session_id: 'ambient-1' });
+      const llm = new AgentCliLlmProvider({ codec: claudeCodec, exec: recExec(ok(envelope), rec) });
+
+      // The ambient id is dropped from the completion (an authoring caller must never store it)…
+      const out = await llm.complete({ prompt: 'p' });
+      expect(out.sessionId).toBeUndefined();
+
+      // …and refused as a resume target (fresh call, no --resume argv).
+      await llm.complete({ prompt: 'p', resumeSessionId: 'ambient-1' });
+      expect(rec[1]!.args).not.toContain('--resume');
+    } finally {
+      if (prev === undefined) delete process.env['CLAUDE_CODE_SESSION_ID'];
+      else process.env['CLAUDE_CODE_SESSION_ID'] = prev;
+    }
+  });
+
   it('a codec without read-only resume ignores resumeSessionId (fresh call, no resume argv)', async () => {
     const rec: { args: string[]; input: string | undefined }[] = [];
     const jsonl = JSON.stringify({ type: 'result', text: 'verdict', usage: { total_tokens: 1 } });
