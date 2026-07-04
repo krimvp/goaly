@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { LlmProvider } from '../llm/provider';
-import { extractBalancedJson } from './json-extract';
+import { extractBalancedJson } from '../util/json-extract';
 
 /**
  * Anti-reimplementation gate (the "reimplementation cheating" hole).

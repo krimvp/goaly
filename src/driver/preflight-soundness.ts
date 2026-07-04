@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { CompiledContract } from '../domain/contract';
 import type { LlmProvider } from '../llm/provider';
-import { extractJson } from '../verify/judge';
+import { extractJson } from '../util/json-extract';
 import { UNTRUSTED_SYSTEM_CLAUSE, wrapUntrusted } from '../verify/prompt-safety';
 import { errorMessage } from '../util/errors';
 import { noopLogger, type Logger } from '../log/logger';

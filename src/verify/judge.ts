@@ -1,58 +1,9 @@
 import { JudgeOutput, type Verdict } from '../domain/verdict';
 import type { LlmProvider } from '../llm/provider';
+import { extractJson } from '../util/json-extract';
 import type { Verifier } from '../verify/verifier';
 import type { Workspace } from '../workspace/workspace';
 import { UNTRUSTED_SYSTEM_CLAUSE, wrapUntrusted } from './prompt-safety';
-
-/**
- * Extract the first balanced JSON object from arbitrary text. Tolerates ```json fences,
- * surrounding log lines, and prose. Returns the parsed value or null when no balanced
- * `{...}` object yields valid JSON.
- */
-export function extractJson(text: string): unknown | null {
-  const start = text.indexOf('{');
-  if (start === -1) return null;
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let i = start; i < text.length; i += 1) {
-    const ch = text[i];
-    if (ch === undefined) break;
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === '\\') {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-    if (ch === '{') {
-      depth += 1;
-    } else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        const candidate = text.slice(start, i + 1);
-        try {
-          return JSON.parse(candidate) as unknown;
-        } catch {
-          return null;
-        }
-      }
-    }
-  }
-
-  return null;
-}
 
 type JudgeOpts = {
   rubric: string;

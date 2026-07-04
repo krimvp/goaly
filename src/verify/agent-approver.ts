@@ -3,6 +3,7 @@ import type { ApprovalInput } from '../domain/events';
 import type { Verdict } from '../domain/verdict';
 import type { Approver } from './approver';
 import type { LlmProvider } from '../llm/provider';
+import { extractBalancedJson } from '../util/json-extract';
 import { UNTRUSTED_SYSTEM_CLAUSE, wrapUntrusted } from './prompt-safety';
 
 const SYSTEM_PROMPT = [
@@ -80,42 +81,6 @@ function buildPrompt(input: ApprovalInput): string {
     'Is this ACTUALLY done, or did the verifier get gamed/short-circuited?',
     'Reply with ONLY the JSON {"veto": boolean, "reason"?: string}.',
   ].join('\n\n');
-}
-
-/**
- * Extracts the first balanced top-level JSON object from a string, tolerating leading/trailing
- * prose or code fences. Respects strings and escapes so braces inside string literals don't
- * unbalance the scan. Returns null when no balanced object is found.
- */
-function extractBalancedJson(text: string): string | null {
-  const start = text.indexOf('{');
-  if (start === -1) return null;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i += 1) {
-    const ch = text[i];
-    if (ch === undefined) break;
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === '\\') {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === '{') {
-      depth += 1;
-    } else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return null;
 }
 
 const GENERIC_VETO_REASON =
@@ -244,7 +209,7 @@ export class AgentApprover implements Approver {
     }
 
     const jsonText = extractBalancedJson(raw);
-    if (jsonText === null) {
+    if (jsonText === undefined) {
       return failClosed('no JSON object found in response');
     }
 

@@ -5,7 +5,7 @@ import { freezeContract, sha256Hex } from '../util/hash';
 import type { LlmProvider } from '../llm/provider';
 import type { VerifierCompiler } from './compiler';
 import { extractRequiredTools } from './required-tools';
-import { extractBalancedJson } from './json-extract';
+import { extractBalancedJson } from '../util/json-extract';
 import { UsageAssertion, enforceUsageAssertion, type UsageShape } from './usage-gate';
 
 /** Schema for the JSON the authoring LLM must emit (validated fail-closed). */

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { RunConfig } from '../domain/config';
 import { Plan, type PhasePlan } from '../domain/plan';
 import { freezePlan } from '../util/hash';
+import { extractBalancedJson } from '../util/json-extract';
 import type { LlmProvider } from '../llm/provider';
 import type { Planner } from './planner';
 
@@ -31,36 +32,6 @@ const SYSTEM_PROMPT =
   'author that phase\'s verification; "rubric" optionally guides its judge portion. Omit what you don\'t need.\n' +
   '- Do NOT include a final "make everything pass" / "run the whole test suite" phase — a cumulative ' +
   'acceptance step on the ORIGINAL goal is added automatically after your phases.';
-
-/**
- * Extract the first balanced JSON object from a string. Tolerant of surrounding prose or markdown
- * fences the LLM may emit despite instructions. String-literal aware (ignores braces inside strings).
- * Returns the substring, or undefined if no balanced object is found.
- */
-function extractBalancedJson(text: string): string | undefined {
-  const start = text.indexOf('{');
-  if (start === -1) return undefined;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i += 1) {
-    const ch = text[i];
-    if (ch === undefined) break;
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === '\\') escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === '{') depth += 1;
-    else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return undefined;
-}
 
 function parseGenerated(raw: string): Plan {
   const json = extractBalancedJson(raw);
