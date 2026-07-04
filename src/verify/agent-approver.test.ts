@@ -114,6 +114,17 @@ describe('AgentApprover', () => {
     expect(req?.system?.length ?? 0).toBeGreaterThan(0);
   });
 
+  it('frames the reviewer refute-first: attempt to refute the green before accepting it', async () => {
+    const llm = new FakeLlm(['{"veto": false}']);
+    const approver = new AgentApprover({ llm });
+
+    await approver.review(baseInput);
+
+    // The hardened Sign-off prompt demands an explicit refutation attempt, not a plausibility check.
+    expect(llm.requests[0]?.system).toContain('REFUTE');
+    expect(llm.requests[0]?.system).toContain('pass the verifier without genuinely meeting the goal');
+  });
+
   it('includes goal, rubric, diff and verdict summary in the prompt', async () => {
     const llm = new FakeLlm(['{"veto": false}']);
     const approver = new AgentApprover({ llm });

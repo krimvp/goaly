@@ -448,9 +448,11 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   times out, or returns unparseable output counts as a **veto**, and zero parseable reviewers is a
   veto — so a panel is **never weaker** than the single veto. At `N > 1` the reviewers sample at a
   small diversity temperature (`--approver-diversity-temp`, default `0.5`) and are cycled through a
-  small default lens taxonomy (correctness / security / goal-actually-met / prompt-injection) for
-  perspective spread; `N = 1` is **byte-for-byte** the historical single call (temperature 0, no
-  lens). A quorum on **one** model is **variance reduction, not perspective independence** — goaly
+  default lens taxonomy (correctness / security / goal-actually-met / prompt-injection /
+  spec-gaming / test-tampering / hidden-regression) for perspective spread; `N = 1` is
+  **byte-for-byte** the historical single call (temperature 0, no lens). Every reviewer — panel or
+  single — is prompted **refute-first**: enumerate a concrete way the diff could pass the verifier
+  without meeting the goal, and veto unless that is ruled out. A quorum on **one** model is **variance reduction, not perspective independence** — goaly
   warns when a multi-vote panel shares a model with the judge or the worker; pair `--approver-quorum`
   with `--approver-model` on a different model/provider for a genuinely independent second key.
   **Cost:** a panel multiplies approver LLM spend **~quorum×**; that spend is metered and counts
@@ -460,8 +462,8 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   with an **operator-supplied** comma-separated list, cycled across reviewers when `quorum > 1`
   (ignored at quorum 1). Each lens biases one reviewer toward a failure mode and rides the approver
   **system** prompt — it is operator config, **not** the worker-controlled diff (which stays fenced as
-  untrusted data). Absent ⇒ the default correctness / security / goal-actually-met / prompt-injection
-  lenses, byte-for-byte unchanged.
+  untrusted data). Absent ⇒ the default correctness / security / goal-actually-met / prompt-injection /
+  spec-gaming / test-tampering / hidden-regression lenses, byte-for-byte unchanged.
 - **The panel can run genuinely independent models.** `--approver-models m1,m2,…` gives the Sign-off
   panel **real per-reviewer independence**: reviewer *i* runs model *i* (cycled when the quorum
   exceeds the count), each paired with lens *i*, every one an `'approve'`-metered provider on the same

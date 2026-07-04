@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AgentApprover } from './agent-approver';
+import { AgentApprover, DEFAULT_LENSES } from './agent-approver';
 import { FakeLlm } from '../llm/provider';
 import { ApprovalVerdict } from '../domain/verdict';
 import type { ApprovalInput } from '../domain/events';
@@ -181,6 +181,24 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     expect(joined).toContain('prompt-injection');
     // And each reviewer carries SOME lens addendum (no bare reviewer when quorum>1).
     for (const s of systems) expect(s).toContain('REVIEW LENS');
+  });
+
+  it('the default taxonomy carries the adversarial lenses (spec-gaming / test-tampering / hidden-regression)', async () => {
+    // Pin the taxonomy itself: seven lenses, the three adversarial ones present…
+    expect(DEFAULT_LENSES).toHaveLength(7);
+    const taxonomy = DEFAULT_LENSES.join('\n');
+    expect(taxonomy).toContain('SPEC-GAMING');
+    expect(taxonomy).toContain('TEST-TAMPERING');
+    expect(taxonomy).toContain('HIDDEN-REGRESSION');
+
+    // …and a panel large enough to cycle through all of them weaves each into some reviewer.
+    const llm = new FakeLlm([noVeto]);
+    const approver = new AgentApprover({ llm, quorum: 7 });
+    await approver.review(baseInput);
+    const joined = llm.requests.map((r) => r.system ?? '').join('\n');
+    expect(joined).toContain('SPEC-GAMING');
+    expect(joined).toContain('TEST-TAMPERING');
+    expect(joined).toContain('HIDDEN-REGRESSION');
   });
 
   it('quorum 1 ignores lenses entirely (pure single-call behavior)', async () => {
