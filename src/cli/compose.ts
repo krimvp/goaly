@@ -11,6 +11,7 @@ import type { Verifier } from '../verify/verifier';
 import type { VerifierCompiler } from '../compile/compiler';
 import type { LlmProvider } from '../llm/provider';
 import { Ladder } from '../verify/ladder';
+import { AdversarialReviewRung } from '../verify/adversarial-rung';
 import { DeterministicVerifier } from '../verify/deterministic';
 import { GeneratedFilesGuard } from '../verify/generated-guard';
 import { JudgeVerifier } from '../verify/judge';
@@ -503,7 +504,18 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       // the rubric's test file as "absent from the diff" and false-vetoes a correct run into a
       // deadlock with the integrity guard. Re-set per phase so each phase shows its own authored files.
       workspace.setDiffIncludes(contract.generatedFiles.map((f) => f.path));
-      return buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs);
+      // The --adversarial refuter rung is a verification judgment, so its provider is metered under
+      // the 'judge' phase (no new spend category); built only when enabled — a default run pays 0.
+      const adversarial =
+        config.adversarial.enabled && config.adversarial.refuters > 0
+          ? { llm: llmFor(models.critic, 'judge'), refuters: config.adversarial.refuters }
+          : undefined;
+      return buildLadder(
+        contract,
+        llmFor(models.judge, 'judge'),
+        timeouts.verifyMs,
+        adversarial,
+      );
     },
     // Sign-off (second key, issue #84 + follow-up): a single reviewer by default (quorum 1 ⇒
     // byte-for-byte the historical call). `--approver-quorum N` runs a perspective-diverse panel
@@ -676,11 +688,19 @@ function makeOpenAiClient(
  * `verifyTimeoutMs` caps each deterministic command — including an artifact-running smoke command
  * (issue #53), which is just another deterministic rung (a timeout is a fail-closed FAIL); the model
  * and timeout are wiring and never alter the frozen rungs themselves.
+ *
+ * `adversarial` (the `--adversarial` refuter panel) APPENDS a built-in {@link AdversarialReviewRung}
+ * after every frozen rung — the same non-contract-rung precedent as the guard below: part of the
+ * ladder, never part of `contractHash`. The ladder's short-circuit means it runs only on an
+ * all-green frozen bar (so its LLM spend occurs only on candidate greens — under `--candidates > 1`
+ * that is per green candidate, deliberately: its red feeds the graded selection) and it can only
+ * FAIL that green, never promote a red.
  */
 export function buildLadder(
   contract: CompiledContract,
   llm: LlmProvider,
   verifyTimeoutMs?: number,
+  adversarial?: { llm: LlmProvider; refuters: number },
 ): Verifier {
   const rungs: Verifier[] = contract.rungs.map((rung) =>
     rung.kind === 'deterministic'
@@ -697,6 +717,9 @@ export function buildLadder(
   // command measures. No generated files ⇒ no guard (the common --verify-cmd path is unchanged).
   if (contract.generatedFiles.length > 0) {
     rungs.unshift(new GeneratedFilesGuard(contract.generatedFiles));
+  }
+  if (adversarial !== undefined && adversarial.refuters > 0) {
+    rungs.push(new AdversarialReviewRung({ llm: adversarial.llm, refuters: adversarial.refuters }));
   }
   return new Ladder(rungs);
 }
