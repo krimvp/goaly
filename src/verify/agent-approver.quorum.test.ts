@@ -39,14 +39,39 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     expect(llm.requests[0]?.temperature).toBe(0);
   });
 
-  it('calls the model `quorum` times and uses the diversity temperature when quorum>1', async () => {
-    const llm = new FakeLlm([noVeto, noVeto, noVeto]);
+  it('polls up to `quorum` reviewers at the diversity temperature while the outcome is open', async () => {
+    // A veto first keeps the outcome mathematically open through all three votes.
+    const llm = new FakeLlm([veto('keep the panel open'), noVeto, noVeto]);
     const approver = new AgentApprover({ llm, quorum: 3, diversityTemperature: 0.7 });
 
     await approver.review(baseInput);
 
     expect(llm.requests).toHaveLength(3);
     for (const req of llm.requests) expect(req.temperature).toBe(0.7);
+  });
+
+  it('early-exits a settled green: two no-vetoes of three end the panel in exactly 2 calls', async () => {
+    const llm = new FakeLlm([noVeto, noVeto, veto('never consulted')]);
+    const approver = new AgentApprover({ llm, quorum: 3 });
+
+    const verdict = await approver.review(baseInput);
+
+    // 2*2 > 3 — the third reviewer cannot change aggregate()'s answer, so it is never called.
+    expect(verdict.veto).toBe(false);
+    expect(llm.requests).toHaveLength(2);
+  });
+
+  it('early-exits a settled red: two vetoes of three end the panel in exactly 2 calls', async () => {
+    const llm = new FakeLlm([veto('reason one'), veto('reason two'), noVeto]);
+    const approver = new AgentApprover({ llm, quorum: 3 });
+
+    const verdict = await approver.review(baseInput);
+
+    // noVeto can reach at most 1 of 3 — red is settled; the reasons come from the votes cast.
+    expect(verdict.veto).toBe(true);
+    expect(verdict.reason).toContain('reason one');
+    expect(verdict.reason).toContain('reason two');
+    expect(llm.requests).toHaveLength(2);
   });
 
   it('greens only on a strict supermajority of no-veto votes (2-of-3)', async () => {
@@ -118,8 +143,10 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
   });
 
   it('dedupes the concatenated veto reasons of the panel', async () => {
+    // Quorum 5 so the red is not settled until the third veto is cast (early exit would otherwise
+    // stop a 3-panel before the distinct 'other problem' vote).
     const llm = new FakeLlm([veto('same problem'), veto('same problem'), veto('other problem')]);
-    const approver = new AgentApprover({ llm, quorum: 3 });
+    const approver = new AgentApprover({ llm, quorum: 5 });
 
     const verdict = await approver.review(baseInput);
 
@@ -151,7 +178,8 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
   });
 
   it('cycles explicit lenses across reviewers when quorum>1', async () => {
-    const llm = new FakeLlm([noVeto, noVeto, noVeto]);
+    // A veto first keeps the outcome open so all three reviewers (and the lens cycle) are observed.
+    const llm = new FakeLlm([veto('keep the panel open'), noVeto, noVeto]);
     const approver = new AgentApprover({
       llm,
       quorum: 3,
@@ -174,7 +202,8 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
   });
 
   it('applies the default lens taxonomy when quorum>1 and no explicit lenses are supplied', async () => {
-    const llm = new FakeLlm([noVeto, noVeto, noVeto, noVeto]);
+    // A veto first keeps the outcome open through all four reviewers/lenses.
+    const llm = new FakeLlm([veto('keep the panel open'), noVeto, noVeto, noVeto]);
     const approver = new AgentApprover({ llm, quorum: 4 });
 
     await approver.review(baseInput);
@@ -198,7 +227,10 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     expect(taxonomy).toContain('HIDDEN-REGRESSION');
 
     // …and a panel large enough to cycle through all of them weaves each into some reviewer.
-    const llm = new FakeLlm([noVeto]);
+    // Alternating vetoes keep the outcome mathematically open through all seven votes.
+    const llm = new FakeLlm([
+      veto('open'), noVeto, veto('open'), noVeto, veto('open'), noVeto, noVeto,
+    ]);
     const approver = new AgentApprover({ llm, quorum: 7 });
     await approver.review(baseInput);
     const joined = llm.requests.map((r) => r.prompt).join('\n');
@@ -219,7 +251,8 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
   });
 
   it('explicit operator lenses REPLACE the default taxonomy and cycle (issue #84 OQ4)', async () => {
-    const llm = new FakeLlm([noVeto, noVeto, noVeto]);
+    // A veto first keeps the outcome open so all three reviewers are observed.
+    const llm = new FakeLlm([veto('keep the panel open'), noVeto, noVeto]);
     // Two operator lenses, a 3-reviewer panel: they cycle 0→OPS_A, 1→OPS_B, 2→OPS_A, and NONE of the
     // built-in default lenses (correctness/security/prompt-injection) leaks into any reviewer.
     const approver = new AgentApprover({ llm, quorum: 3, lenses: ['OPS_LENS_A', 'OPS_LENS_B'] });

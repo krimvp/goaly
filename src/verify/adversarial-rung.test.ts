@@ -98,7 +98,8 @@ describe('AdversarialReviewRung', () => {
   });
 
   it('cycles the refuter lenses, fences the diff, and frames refute-first', async () => {
-    const llm = new FakeLlm([notRefuted(0.9)]);
+    // A refutation first keeps the outcome mathematically open through all three votes.
+    const llm = new FakeLlm([refuted(0.6, 'keep the panel open'), notRefuted(0.9), notRefuted(0.9)]);
     const rung = new AdversarialReviewRung({ llm, refuters: 3 });
 
     await rung.verify(ws, 'the goal text', 'the rubric text');
@@ -119,6 +120,36 @@ describe('AdversarialReviewRung', () => {
       expect(req.prompt).toContain('the goal text');
       expect(req.prompt).toContain('the rubric text');
     }
+  });
+
+  it('early-exits a settled green: two not-refuted of three end the panel in exactly 2 calls', async () => {
+    const llm = new FakeLlm([notRefuted(0.9), notRefuted(0.7), refuted(0.9, 'never consulted')]);
+    const rung = new AdversarialReviewRung({ llm, refuters: 3 });
+
+    const verdict = await rung.verify(ws, 'goal', 'rubric');
+
+    // 2*2 > 3 — the third refuter cannot change the aggregate, so it is never called; the
+    // confidence averages the votes actually cast.
+    expect(verdict.pass).toBe(true);
+    expect(verdict.confidence).toBeCloseTo(0.8);
+    expect(llm.requests).toHaveLength(2);
+  });
+
+  it('early-exits a settled red: two refutations of three end the panel in exactly 2 calls', async () => {
+    const llm = new FakeLlm([
+      refuted(0.9, 'hard-coded output'),
+      refuted(0.8, 'stubbed engine'),
+      notRefuted(0.9),
+    ]);
+    const rung = new AdversarialReviewRung({ llm, refuters: 3 });
+
+    const verdict = await rung.verify(ws, 'goal', 'rubric');
+
+    // notRefuted can reach at most 1 of 3 — red is settled after two refutations.
+    expect(verdict.pass).toBe(false);
+    expect(verdict.detail).toContain('hard-coded output');
+    expect(verdict.detail).toContain('stubbed engine');
+    expect(llm.requests).toHaveLength(2);
   });
 
   it('samples at temperature 0 for one refuter and the diversity temperature for a panel', async () => {

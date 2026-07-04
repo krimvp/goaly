@@ -92,6 +92,17 @@ export class AdversarialReviewRung implements Verifier {
       const parsed = RefuterVote.safeParse(extractJson(raw));
       if (parsed.success) votes.push(parsed.data);
       else failedVotes += 1;
+
+      // Early exit once the outcome is mathematically settled — the remaining refuters cannot
+      // change it (the green needs a strict supermajority of parsed not-refuted votes over the
+      // FULL panel; failed votes never count toward it). `pass` is provably identical to polling
+      // the whole panel; only the averaged confidence is taken over the votes actually cast.
+      const cast = votes.length + failedVotes;
+      const remaining = this.#refuters - cast;
+      const notRefutedSoFar = votes.filter((v) => !v.refuted).length;
+      const greenSettled = notRefutedSoFar * 2 > this.#refuters;
+      const redSettled = (notRefutedSoFar + remaining) * 2 <= this.#refuters;
+      if (greenSettled || redSettled) break;
     }
 
     if (votes.length === 0) {

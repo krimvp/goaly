@@ -195,6 +195,15 @@ export class AgentApprover implements Approver {
         this.#reviewers.length > 0 ? this.#reviewers[i % this.#reviewers.length]! : this.#llm;
       // eslint-disable-next-line no-await-in-loop
       votes.push(await this.#reviewOnce(provider, input, this.#diversityTemperature, lens, prompt));
+      // Early exit once the aggregate is mathematically settled — the remaining reviewers cannot
+      // change aggregate()'s answer (green needs a strict supermajority of no-veto over the FULL
+      // quorum; each remaining vote can only add to noVeto or not). Identical verdict, fewer LLM
+      // calls: a unanimous 3-panel stops after 2.
+      const noVeto = votes.filter((v) => !v.veto).length;
+      const remaining = this.#quorum - votes.length;
+      const greenSettled = noVeto * 2 > this.#quorum;
+      const redSettled = (noVeto + remaining) * 2 <= this.#quorum;
+      if (greenSettled || redSettled) break;
     }
     return aggregate(votes, this.#quorum);
   }

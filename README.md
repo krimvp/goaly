@@ -458,7 +458,11 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   warns when a multi-vote panel shares a model with the judge or the worker; pair `--approver-quorum`
   with `--approver-model` on a different model/provider for a genuinely independent second key.
   **Cost:** a panel multiplies approver LLM spend **~quorum×**; that spend is metered and counts
-  against **`--budget-tokens`**. A **small panel (≈3–5 reviewers)** is the recommended practical range;
+  against **`--budget-tokens`**. Two built-in mitigations: the panel **stops polling once the outcome
+  is mathematically decided** (e.g. two no-vetoes of three settle a green — the remaining votes can't
+  change the aggregate), and each reviewer's lens rides the **tail of the prompt** with a
+  panel-constant system prompt, so reviewers 2..N reuse reviewer 1's cached prompt prefix instead of
+  re-writing it. A **small panel (≈3–5 reviewers)** is the recommended practical range;
   `--approver-quorum 1` (the default) is **cost-neutral**.
 - **The lens taxonomy is overridable.** `--approver-lenses l1,l2,…` replaces the built-in lens taxonomy
   with an **operator-supplied** comma-separated list, cycled across reviewers when `quorum > 1`
@@ -504,8 +508,10 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   - `--adversarial` also widens Sign-off to a 3-reviewer panel unless `--approver-quorum` is set
     explicitly, and `--critic-model` picks one model for all critics/refuters (cascading
     `--critic-model → --llm-model → --model`). Critic spend is metered into the run budget under the
-    step it audits (compile / plan / judge). Without the flag, none of this is built — a default run
-    is **byte-for-byte unchanged**.
+    step it audits (compile / plan / judge), and the refuter/approver panels **short-circuit once
+    their outcome is mathematically decided** while sharing a **cached prompt prefix** across panel
+    members (lens on the prompt tail, panel-constant system). Without the flag, none of this is
+    built — a default run is **byte-for-byte unchanged**.
 - **The verify command runs with a credential-scrubbed environment.** The verifier executes
   worker/model-authored code on your host every iteration; goaly strips credential-looking variables
   (`*_TOKEN`, `*_KEY`, `*SECRET*`, `AWS_*`, `GITHUB_*`, …) from its environment so they can't be

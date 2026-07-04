@@ -187,7 +187,9 @@
         refute" votes. Pre-Seal critics are advisory (a broken panel passes through; the Seal still
         gates); the refuters are fail-closed (a broken refuter counts as refuted). Also widens
         Sign-off to a 3-reviewer panel unless <code>--approver-quorum</code> is set;
-        <code>--critic-model</code> puts the skeptics on their own model. Off by default —
+        <code>--critic-model</code> puts the skeptics on their own model. Cost-contained: panels
+        short-circuit once the outcome is mathematically decided, and panel members share a cached
+        prompt prefix (the lens rides the prompt tail, not the system prompt). Off by default —
         a plain run is byte-for-byte unchanged.</p>
       </div>
       <div class="card">

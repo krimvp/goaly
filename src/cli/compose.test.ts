@@ -132,8 +132,10 @@ describe('composeDeps — per-reviewer approver models (follow-up to issue #84)'
   });
 
   it('builds a per-reviewer panel that defaults the quorum to the model count', async () => {
-    // Three models, no --approver-quorum ⇒ the panel makes one call per model (quorum = 3).
-    const llm = new FakeLlm([noVetoWithTokens, noVetoWithTokens, noVetoWithTokens]);
+    // Three models, no --approver-quorum ⇒ the panel makes one call per model (quorum = 3). A veto
+    // first keeps the outcome mathematically open so all three reviewers are actually polled.
+    const vetoWithTokens = { text: '{"veto": true, "reason": "keep the panel open"}', tokensUsed: 100 };
+    const llm = new FakeLlm([vetoWithTokens, noVetoWithTokens, noVetoWithTokens]);
     const deps = composeDeps(
       makeConfig(),
       opts({ llm, models: { approverModels: ['a', 'b', 'c'] } }),
@@ -148,7 +150,15 @@ describe('composeDeps — per-reviewer approver models (follow-up to issue #84)'
   });
 
   it('cycles the panel when --approver-quorum exceeds the model count', async () => {
-    const llm = new FakeLlm(Array(5).fill(noVetoWithTokens));
+    // Interleave vetoes so the 5-vote outcome stays open until the last reviewer (no early exit).
+    const vetoWithTokens = { text: '{"veto": true, "reason": "keep the panel open"}', tokensUsed: 100 };
+    const llm = new FakeLlm([
+      vetoWithTokens,
+      noVetoWithTokens,
+      vetoWithTokens,
+      noVetoWithTokens,
+      noVetoWithTokens,
+    ]);
     const deps = composeDeps(
       makeConfig({ approver: { quorum: 5 } }),
       opts({ llm, models: { approverModels: ['a', 'b'] } }),
@@ -396,9 +406,10 @@ describe('buildLadder — verify timeout threading', () => {
 
     const verdict = await ladder.verify(workspace, 'g', 'r');
 
-    // The frozen rung ran and passed; the appended refuter panel then refuted the green.
+    // The frozen rung ran and passed; the appended refuter panel then refuted the green. With
+    // every scripted vote a refutation, the red is settled after 2 of 3 votes (early exit).
     expect(calls).toEqual([{ command: 'npm test' }]);
-    expect(refuterLlm.requests).toHaveLength(3);
+    expect(refuterLlm.requests).toHaveLength(2);
     expect(verdict.pass).toBe(false);
     expect(verdict.detail).toContain('hard-coded output');
     // The frozen bar itself passed — the depth score shows the short-circuit at the refuter rung.
