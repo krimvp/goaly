@@ -213,6 +213,66 @@ describe('parseArgs', () => {
     });
   });
 
+  describe('--adversarial review steps', () => {
+    it('is disabled by default with the documented panel sizes', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.config.adversarial).toEqual({
+        enabled: false,
+        planCritics: 2,
+        planCritiqueRounds: 1,
+        contractCritics: 2,
+        contractCritiqueRounds: 1,
+        refuters: 3,
+      });
+    });
+
+    it('--adversarial enables the steps and widens the approver quorum to 3', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--adversarial']);
+      expect(a.config.adversarial.enabled).toBe(true);
+      expect(a.config.approver.quorum).toBe(3);
+    });
+
+    it('an explicit --approver-quorum wins over the --adversarial bump', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--adversarial', '--approver-quorum', '1',
+      ]);
+      expect(a.config.approver.quorum).toBe(1);
+    });
+
+    it('without --adversarial the approver quorum stays at its default', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+      expect(a.config.approver.quorum).toBe(1);
+    });
+
+    it('parses the panel-size overrides, including 0 as an explicit skip', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--adversarial',
+        '--adversarial-plan-critics', '4',
+        '--adversarial-contract-critics', '0',
+        '--adversarial-refuters', '5',
+      ]);
+      expect(a.config.adversarial.planCritics).toBe(4);
+      expect(a.config.adversarial.contractCritics).toBe(0);
+      expect(a.config.adversarial.refuters).toBe(5);
+    });
+
+    it('rejects a negative or non-integer panel size (fail-closed, invariant #6)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--adversarial-refuters', '-1']),
+      ).rejects.toThrow(UsageError);
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--adversarial-plan-critics', '1.5']),
+      ).rejects.toThrow(UsageError);
+    });
+
+    it('parses --critic-model into the model selection', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--critic-model', 'critic-m',
+      ]);
+      expect(a.models.criticModel).toBe('critic-m');
+    });
+  });
+
   describe('--approver-models per-reviewer models (follow-up to issue #84)', () => {
     it('is absent by default', async () => {
       const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);

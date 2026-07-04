@@ -48,6 +48,7 @@ describe('RunConfig lifetime views', () => {
       diffIgnore: c.diffIgnore,
       deltaVerify: c.deltaVerify,
       approver: c.approver,
+      adversarial: c.adversarial,
     });
     expect(pickLoopPolicy(c)).toMatchObject({ maxIterations: c.maxIterations, phased: c.phased });
   });

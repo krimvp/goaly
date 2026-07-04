@@ -10,6 +10,7 @@ const models: ResolvedModels = {
   approver: 'llm-model',
   approverModels: undefined,
   planner: 'llm-model',
+  critic: 'llm-model',
   explain: 'llm-model',
 };
 
