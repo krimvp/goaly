@@ -44,6 +44,8 @@ const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r
  */
 export class AgentCliLlmProvider implements LlmProvider {
   readonly name: string;
+  /** Capability-gated by the codec: only a CLI with a read-only resume dialect can honor one. */
+  readonly supportsResume: boolean;
   readonly #codec: AgentCliCodec;
   readonly #model: string | undefined;
   readonly #exec: ExecFn;
@@ -73,6 +75,7 @@ export class AgentCliLlmProvider implements LlmProvider {
     this.#codec = opts.codec;
     this.#model = opts.model;
     this.name = `cli:${opts.codec.name}`;
+    this.supportsResume = opts.codec.readonlyResume === true;
     this.#retries = opts.retries ?? DEFAULT_RETRIES;
     this.#sleep = opts.sleep ?? realSleep;
     this.#onEvent = opts.onEvent;
@@ -113,7 +116,21 @@ export class AgentCliLlmProvider implements LlmProvider {
     // fallback when the agent CLI reports no usage.
     const { sink, estimator } = streamingEstimator(this.#onEvent);
     const tap = sink !== undefined ? new StreamTap(this.#codec.streamExtractor, sink) : undefined;
-    const args = this.#codec.readonlyArgs({ prompt, model: this.#model, stream: tap !== undefined });
+    // A resume is honored only where the codec's read-only dialect supports it, and never with the
+    // codec's unknown-session sentinel (same guard as the harness: `--resume claude-unknown` would
+    // crash the call rather than degrade to a fresh session).
+    const resume =
+      this.supportsResume &&
+      req.resumeSessionId !== undefined &&
+      req.resumeSessionId !== this.#codec.unknownSession
+        ? req.resumeSessionId
+        : undefined;
+    const args = this.#codec.readonlyArgs({
+      prompt,
+      model: this.#model,
+      stream: tap !== undefined,
+      ...(resume !== undefined ? { sessionId: resume } : {}),
+    });
     // The prompt rides on stdin only for CLIs that read it there (claude); the others carry it on argv.
     const input = this.#codec.promptOnStdin ? prompt : undefined;
     const r = await this.#exec(args, input, tap ? (chunk) => tap.push(chunk) : undefined);
@@ -149,6 +166,11 @@ export class AgentCliLlmProvider implements LlmProvider {
         // The split belongs only to a provider-REPORTED count; a local estimate has no category split.
         ...(acct.tokenSource === 'reported' && parsed.breakdown !== undefined
           ? { tokenBreakdown: parsed.breakdown }
+          : {}),
+        // Surface the CLI's session id (never the unknown sentinel) so an authoring caller can
+        // resume its own session on a revise round.
+        ...(parsed.sessionId !== undefined && parsed.sessionId !== this.#codec.unknownSession
+          ? { sessionId: parsed.sessionId }
           : {}),
       },
     };

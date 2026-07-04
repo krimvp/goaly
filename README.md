@@ -195,7 +195,13 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   path, transient parse miss) re-authors the verification with the error fed back as guidance, up to
   `--max-compile-retries` (default 2; `0` disables), before the run fails — so one bad compile output
   no longer discards a valid plan. Exhausting the budget is still a typed `FAILED`, never a skipped
-  check. (Mirrors the Seal revise loop; the reducer stays pure.)
+  check. (Mirrors the Seal revise loop; the reducer stays pure.) Where the LLM provider supports it
+  (the `claude` CLI), every re-author round — compile-retry, Seal "revise", red-team re-author, and
+  the planner's re-plan — **resumes the author's own prior session** and sends only the feedback as a
+  small delta turn, so the author keeps its context instead of re-reading everything amnesiac (falls
+  back to a fresh full-prompt call on any resume failure). Authoring-only continuity: the judge,
+  approver, and refuter panels always run **fresh, independent sessions** — that separation is a
+  security property, never an optimization target.
 - [**Stuck detection**](#g-stuck) bails before `maxIterations` with a reason: no-diff, repeat-failure (volatile
   tokens like timestamps / PIDs / temp paths are normalized away first, so a noisy-but-identical
   failure still trips it — keyed on the **verifier-failure signature, independent of the diff hash**, so

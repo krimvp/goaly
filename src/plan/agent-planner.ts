@@ -54,6 +54,13 @@ function parseGenerated(raw: string): Plan {
  */
 export class AgentPlanner implements Planner {
   readonly #llm: LlmProvider;
+  /**
+   * The provider session of the LAST authoring call, when the transport supports resume: a re-plan
+   * round (plan-Seal "revise", plan-critique re-author) resumes it with only the feedback as a
+   * delta turn, mirroring the {@link AgentCompiler}'s authoring continuity. Authoring-only — the
+   * plan gate and plan critics stay independent, fresh sessions.
+   */
+  #session: string | undefined;
 
   constructor(opts: { llm: LlmProvider }) {
     this.#llm = opts.llm;
@@ -66,11 +73,37 @@ export class AgentPlanner implements Planner {
     }
     parts.push('Author the plan as JSON only.');
 
-    const { text } = await this.#llm.complete({
-      system: SYSTEM_PROMPT,
-      prompt: parts.join('\n'),
-      temperature: 0,
-    });
+    // A revise round resumes the planner's OWN prior session where supported (delta = the feedback);
+    // fresh fallback on any resume failure — the shortcut must never cost a working re-plan round.
+    const resumeId =
+      feedback !== undefined && feedback.length > 0 && this.#llm.supportsResume === true
+        ? this.#session
+        : undefined;
+    const prompt =
+      resumeId !== undefined
+        ? `Reviewer feedback on your previous plan (revise accordingly): ${feedback}\n` +
+          'Re-emit the COMPLETE plan JSON object described at the start of this session. JSON only.'
+        : parts.join('\n');
+
+    let text: string;
+    let session: string | undefined;
+    try {
+      ({ text, sessionId: session } = await this.#llm.complete({
+        system: SYSTEM_PROMPT,
+        prompt,
+        temperature: 0,
+        ...(resumeId !== undefined ? { resumeSessionId: resumeId } : {}),
+      }));
+    } catch (e) {
+      if (resumeId === undefined) throw e;
+      this.#session = undefined;
+      ({ text, sessionId: session } = await this.#llm.complete({
+        system: SYSTEM_PROMPT,
+        prompt: parts.join('\n'),
+        temperature: 0,
+      }));
+    }
+    this.#session = session;
 
     return freezePlan(parseGenerated(text));
   }

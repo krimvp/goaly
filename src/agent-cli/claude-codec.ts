@@ -3,7 +3,7 @@
  *
  * Assumed CLI contract:
  *   harness  (write):  claude -p "<prompt>" --output-format json --permission-mode acceptEdits [--model <m>] [--resume <id>]
- *   provider (read):   claude -p --output-format json [--model <m>]   (prompt on stdin)
+ *   provider (read):   claude -p --output-format json [--model <m>] [--resume <id>]   (prompt on stdin)
  * Streaming swaps `--output-format json` → `stream-json --verbose` (per-turn JSONL). Either way the
  * closing `result` carries the SAME final text, recovered by the flat {@link parseAgentOutput} core.
  * Claude Code IS the reference Anthropic agent-SDK envelope, so its stream mapping simply IS the
@@ -48,14 +48,18 @@ export const claudeCodec: AgentCliCodec = {
     if (sessionId !== undefined) args.push('--resume', sessionId);
     return args;
   },
-  readonlyArgs({ model, stream }) {
+  readonlyArgs({ model, stream, sessionId }) {
     // The prompt is delivered on stdin (see `promptOnStdin`), so it is NOT an argv positional here.
+    // `--resume` continues a prior read-only session (authoring continuity — see `readonlyResume`);
+    // the role stays read-only either way (no `--permission-mode acceptEdits`).
     return [
       '-p',
       ...(stream ? ['--output-format', 'stream-json', '--verbose'] : ['--output-format', 'json']),
       ...(model !== undefined ? ['--model', model] : []),
+      ...(sessionId !== undefined ? ['--resume', sessionId] : []),
     ];
   },
+  readonlyResume: true,
   parse(stdout) {
     return parseAgentOutput(stdout, fieldExtractor);
   },

@@ -76,9 +76,19 @@ interface AgentCliCodec {
   readonly streamExtractor: StreamEventExtractor;   // per-turn event mapping (§3, optional)
 
   // The two argv DIALECTS — write-mode (harness role) and read-only (LLM role). `stream` asks for
-  // per-turn JSONL where the CLI distinguishes it from its normal structured output.
+  // per-turn JSONL where the CLI distinguishes it from its normal structured output. `sessionId` on
+  // the read-only dialect resumes a prior read-only session (authoring continuity for the
+  // compiler/planner revise loops) — it is only ever passed when `readonlyResume` is true.
   harnessArgs(opts: { prompt: string; model: string | undefined; sessionId?: SessionId; stream: boolean }): string[];
-  readonlyArgs(opts: { prompt: string; model: string | undefined; stream: boolean }): string[];
+  readonlyArgs(opts: { prompt: string; model: string | undefined; stream: boolean; sessionId?: string }): string[];
+
+  // OPTIONAL capability: the CLI can resume a session in its read-only/headless dialect (claude:
+  // `-p --resume <id>`). Gates `LlmProvider.supportsResume`: when true, the compiler/planner revise
+  // loops resume their own prior authoring session and send only the feedback as a delta turn
+  // (cheaper + the author keeps its context); absent/false ⇒ every read-only call is a fresh
+  // session, always a safe fallback. The verification panels (judge/approver/refuters) NEVER
+  // resume — their votes must stay independent.
+  readonly readonlyResume?: boolean;
 
   parse(stdout: string): AgentOutput | null;        // tolerant final-result parse; never throws
   classify(input: CodecClassifyInput): HarnessRunResult;  // process outcome → status (§2)

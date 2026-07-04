@@ -109,6 +109,40 @@ describe('AgentCliLlmProvider — one codec-driven provider for every CLI', () =
     expect(rec[0]!.input).toBe('only');
   });
 
+  it('claude: threads resumeSessionId as --resume and surfaces the completion sessionId', async () => {
+    const rec: { args: string[]; input: string | undefined }[] = [];
+    const envelope = JSON.stringify({ result: 'revised json', session_id: 'sess-2' });
+    const llm = new AgentCliLlmProvider({ codec: claudeCodec, exec: recExec(ok(envelope), rec) });
+
+    expect(llm.supportsResume).toBe(true);
+    const out = await llm.complete({ prompt: 'revise it', resumeSessionId: 'sess-1' });
+
+    expect(rec[0]!.args).toContain('--resume');
+    expect(rec[0]!.args[rec[0]!.args.indexOf('--resume') + 1]).toBe('sess-1');
+    expect(out.sessionId).toBe('sess-2');
+  });
+
+  it('claude: never resumes with the unknown-session sentinel (degrades to a fresh call)', async () => {
+    const rec: { args: string[]; input: string | undefined }[] = [];
+    const envelope = JSON.stringify({ result: 'fresh', session_id: 'sess-3' });
+    const llm = new AgentCliLlmProvider({ codec: claudeCodec, exec: recExec(ok(envelope), rec) });
+
+    await llm.complete({ prompt: 'p', resumeSessionId: claudeCodec.unknownSession });
+
+    expect(rec[0]!.args).not.toContain('--resume');
+  });
+
+  it('a codec without read-only resume ignores resumeSessionId (fresh call, no resume argv)', async () => {
+    const rec: { args: string[]; input: string | undefined }[] = [];
+    const jsonl = JSON.stringify({ type: 'result', text: 'verdict', usage: { total_tokens: 1 } });
+    const llm = new AgentCliLlmProvider({ codec: codexCodec, exec: recExec(ok(jsonl), rec) });
+
+    expect(llm.supportsResume).toBe(false);
+    await llm.complete({ prompt: 'p', resumeSessionId: 'sess-1' });
+
+    expect(rec[0]!.args.join(' ')).not.toContain('sess-1');
+  });
+
   it('estimates token usage from the streamed turns when the step self-reports none (issue #24)', async () => {
     // A claude stream-json reply whose closing `result` carries NO usage block.
     const streamJson = [
