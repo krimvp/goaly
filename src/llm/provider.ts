@@ -20,6 +20,15 @@ export type LlmRequest = {
    * verdict — fresh sessions there are a security property.
    */
   resumeSessionId?: string;
+  /**
+   * Ask the provider to MINT a goaly-owned session for this call (an explicit fresh id, e.g.
+   * claude's `--session-id <uuid>`) and report it back as {@link LlmCompletion.sessionId}. This is
+   * what makes authoring resume trustworthy even when goaly runs nested under Claude Code, where a
+   * bare call adopts the AMBIENT session shared by every step in the cwd: a minted session's file
+   * contains only this caller's own turns. Ignored by providers/codecs without the capability —
+   * the call is then an ordinary fresh call (and its reported id is subject to the ambient guard).
+   */
+  mintSession?: boolean;
 };
 
 /**

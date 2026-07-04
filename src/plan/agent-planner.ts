@@ -92,7 +92,9 @@ export class AgentPlanner implements Planner {
         system: SYSTEM_PROMPT,
         prompt,
         temperature: 0,
-        ...(resumeId !== undefined ? { resumeSessionId: resumeId } : {}),
+        // Fresh authoring mints a goaly-owned session (see AgentCompiler) so a later resume
+        // replays only this planner's own turns, even under an ambient-pinned CLI.
+        ...(resumeId !== undefined ? { resumeSessionId: resumeId } : { mintSession: true }),
       }));
     } catch (e) {
       if (resumeId === undefined) throw e;
@@ -101,6 +103,7 @@ export class AgentPlanner implements Planner {
         system: SYSTEM_PROMPT,
         prompt: parts.join('\n'),
         temperature: 0,
+        mintSession: true,
       }));
     }
     this.#session = session;

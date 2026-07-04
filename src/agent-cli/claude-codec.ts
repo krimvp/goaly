@@ -48,18 +48,21 @@ export const claudeCodec: AgentCliCodec = {
     if (sessionId !== undefined) args.push('--resume', sessionId);
     return args;
   },
-  readonlyArgs({ model, stream, sessionId }) {
+  readonlyArgs({ model, stream, sessionId, newSessionId }) {
     // The prompt is delivered on stdin (see `promptOnStdin`), so it is NOT an argv positional here.
-    // `--resume` continues a prior read-only session (authoring continuity — see `readonlyResume`);
-    // the role stays read-only either way (no `--permission-mode acceptEdits`).
+    // `--resume` continues a prior read-only session; `--session-id` CREATES a goaly-minted one
+    // (authoring continuity — see `readonlyResume`/`readonlyMintSession`); the role stays read-only
+    // either way (no `--permission-mode acceptEdits`).
     return [
       '-p',
       ...(stream ? ['--output-format', 'stream-json', '--verbose'] : ['--output-format', 'json']),
       ...(model !== undefined ? ['--model', model] : []),
       ...(sessionId !== undefined ? ['--resume', sessionId] : []),
+      ...(newSessionId !== undefined ? ['--session-id', newSessionId] : []),
     ];
   },
   readonlyResume: true,
+  readonlyMintSession: true,
   parse(stdout) {
     return parseAgentOutput(stdout, fieldExtractor);
   },

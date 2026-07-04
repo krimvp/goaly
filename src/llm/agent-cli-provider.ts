@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { LlmCompletion, LlmProvider, LlmRequest } from './provider';
 import { runProcess } from '../util/spawn';
 import { parseAgentOutput } from '../agent-cli/output';
@@ -141,11 +142,20 @@ export class AgentCliLlmProvider implements LlmProvider {
       req.resumeSessionId !== ambientSessionId()
         ? req.resumeSessionId
         : undefined;
+    // Mint a goaly-owned session where the codec supports an explicit id — PER ATTEMPT, never
+    // reused: the CLI rejects a second `--session-id` with the same value ("already in use"), so a
+    // retry after a transient failure must mint fresh rather than collide with the half-created
+    // session (the orphaned file is harmless). Mutually exclusive with a resume.
+    const minted =
+      resume === undefined && req.mintSession === true && this.#codec.readonlyMintSession === true
+        ? randomUUID()
+        : undefined;
     const args = this.#codec.readonlyArgs({
       prompt,
       model: this.#model,
       stream: tap !== undefined,
       ...(resume !== undefined ? { sessionId: resume } : {}),
+      ...(minted !== undefined ? { newSessionId: minted } : {}),
     });
     // The prompt rides on stdin only for CLIs that read it there (claude); the others carry it on argv.
     const input = this.#codec.promptOnStdin ? prompt : undefined;
@@ -183,13 +193,16 @@ export class AgentCliLlmProvider implements LlmProvider {
         ...(acct.tokenSource === 'reported' && parsed.breakdown !== undefined
           ? { tokenBreakdown: parsed.breakdown }
           : {}),
-        // Surface the CLI's session id (never the unknown sentinel or the ambient id) so an
-        // authoring caller can resume its own session on a revise round.
-        ...(parsed.sessionId !== undefined &&
-        parsed.sessionId !== this.#codec.unknownSession &&
-        parsed.sessionId !== ambientSessionId()
-          ? { sessionId: parsed.sessionId }
-          : {}),
+        // Surface the session id so an authoring caller can resume its own session on a revise
+        // round. A goaly-MINTED id is authoritative (we set it — immune to the ambient pin); a
+        // CLI-reported id is trusted only when it is neither the unknown sentinel nor the ambient id.
+        ...(minted !== undefined
+          ? { sessionId: minted }
+          : parsed.sessionId !== undefined &&
+              parsed.sessionId !== this.#codec.unknownSession &&
+              parsed.sessionId !== ambientSessionId()
+            ? { sessionId: parsed.sessionId }
+            : {}),
       },
     };
   }

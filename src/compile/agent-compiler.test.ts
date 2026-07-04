@@ -566,8 +566,10 @@ describe('AgentCompiler — authoring session-resume (revise rounds)', () => {
     await compiler.compile(genConfig);
     await compiler.compile(genConfig, 'cover the CLI too');
 
-    // First call: fresh full prompt, no resume.
+    // First call: fresh full prompt, no resume — and it asks for a goaly-MINTED session so the
+    // session it later resumes contains only the compiler's own turns (ambient-pin immunity).
     expect(llm.requests[0]?.resumeSessionId).toBeUndefined();
+    expect(llm.requests[0]?.mintSession).toBe(true);
     expect(llm.requests[0]?.prompt).toContain('Goal:');
     // Second call: resumes session 1, sends ONLY the feedback delta (the goal lives in the session).
     expect(llm.requests[1]?.resumeSessionId).toBe('sess-1');

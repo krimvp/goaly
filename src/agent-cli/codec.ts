@@ -102,6 +102,8 @@ export interface AgentCliCodec {
     model: string | undefined;
     stream: boolean;
     sessionId?: string | undefined;
+    /** A goaly-MINTED fresh session id to create (claude: `--session-id <uuid>`); see {@link readonlyMintSession}. */
+    newSessionId?: string | undefined;
   }): string[];
 
   /**
@@ -111,6 +113,14 @@ export interface AgentCliCodec {
    * every read-only call is a fresh session (the historical behavior, and always a safe fallback).
    */
   readonly readonlyResume?: boolean;
+
+  /**
+   * Whether this CLI accepts an EXPLICIT fresh session id in its read-only dialect (claude:
+   * `-p --session-id <uuid>`). Lets the provider mint a goaly-owned session per authoring call, so
+   * a later resume replays ONLY that caller's turns — immune to environments that pin every bare
+   * call to one ambient shared session. Absent/false ⇒ `mintSession` requests are ignored.
+   */
+  readonly readonlyMintSession?: boolean;
 
   /** Tolerantly parse this CLI's stdout into the shared {@link AgentOutput}. Never throws. */
   parse(stdout: string): AgentOutput | null;

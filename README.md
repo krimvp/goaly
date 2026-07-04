@@ -199,7 +199,10 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   (the `claude` CLI), every re-author round — compile-retry, Seal "revise", red-team re-author, and
   the planner's re-plan — **resumes the author's own prior session** and sends only the feedback as a
   small delta turn, so the author keeps its context instead of re-reading everything amnesiac (falls
-  back to a fresh full-prompt call on any resume failure). Authoring-only continuity: the judge,
+  back to a fresh full-prompt call on any resume failure). goaly **mints its own per-authoring
+  session id** (`--session-id`) rather than trusting the CLI's reported one, so the resumed session
+  provably contains only the author's turns — even nested under Claude Code, where bare CLI calls
+  all pin to one ambient shared session. Authoring-only continuity: the judge,
   approver, and refuter panels always run **fresh, independent sessions** — that separation is a
   security property, never an optimization target.
 - [**Stuck detection**](#g-stuck) bails before `maxIterations` with a reason: no-diff, repeat-failure (volatile

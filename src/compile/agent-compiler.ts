@@ -349,7 +349,10 @@ export class AgentCompiler implements VerifierCompiler {
         system: SYSTEM_PROMPT,
         prompt,
         temperature: 0,
-        ...(resumeId !== undefined ? { resumeSessionId: resumeId } : {}),
+        // A fresh authoring call asks for a goaly-MINTED session (an explicit id the provider
+        // creates) so the session it later resumes contains ONLY this compiler's own turns — even
+        // in environments that pin every bare CLI call to one ambient shared session.
+        ...(resumeId !== undefined ? { resumeSessionId: resumeId } : { mintSession: true }),
       }));
     } catch (e) {
       if (resumeId !== undefined) {
@@ -361,6 +364,7 @@ export class AgentCompiler implements VerifierCompiler {
             system: SYSTEM_PROMPT,
             prompt: fullPrompt,
             temperature: 0,
+            mintSession: true,
           }));
         } catch (e2) {
           throw withTimeoutHint(e2);
