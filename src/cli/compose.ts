@@ -21,6 +21,7 @@ import { classifyUsageShape } from '../compile/usage-gate';
 import { SeededCompiler, SeededPlanner } from '../followup/seeded';
 import { AutoSealGate, HumanSealGate } from '../compile/seal-gates';
 import { AgentPlanner } from '../plan/agent-planner';
+import { CritiquedPlanner } from '../plan/critiqued-planner';
 import { StaticPlanner } from '../plan/static-planner';
 import { AutoPlanGate, HumanPlanGate } from '../plan/plan-gates';
 import type { Planner } from '../plan/planner';
@@ -273,6 +274,29 @@ function seedPlanner(inner: Planner, seed: string | undefined): Planner {
 }
 
 /**
+ * Wrap the planner with the `--adversarial` plan critique when enabled; identity otherwise. Only
+ * the LLM AgentPlanner is ever passed here — a `--plan-file` StaticPlanner is the user's explicit
+ * plan and is never critiqued (the caller routes around this wrapper). Critic spend meters under
+ * the `'plan'` phase — critique is part of authoring the plan, not a new spend category.
+ */
+function critiquePlanner(
+  inner: Planner,
+  config: RunConfig,
+  makeLlm: () => LlmProvider,
+  logger: Logger,
+): Planner {
+  const adv = config.adversarial;
+  if (!adv.enabled || adv.planCritics <= 0 || adv.planCritiqueRounds <= 0) return inner;
+  return new CritiquedPlanner({
+    inner,
+    llm: makeLlm(),
+    critics: adv.planCritics,
+    rounds: adv.planCritiqueRounds,
+    logger,
+  });
+}
+
+/**
  * Build the sandbox launcher ONCE from the policy (issue #9). A directly-injected launcher (tests)
  * wins; otherwise {@link makeLauncher} probes the host fail-closed. `none` (the default) ⇒ identity.
  */
@@ -394,11 +418,17 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   const phasedSeams: { planner: Planner; planGate: PlanGate } | undefined = config.phased
     ? {
         // A phased follow-up authors its plan AWARE of the prior run too: the seed rides the planner's
-        // authoring feedback (SeededPlanner), exactly as it rides the compiler below.
+        // authoring feedback (SeededPlanner), exactly as it rides the compiler below. The adversarial
+        // plan critique wraps ONLY the LLM planner — a --plan-file is the user's explicit plan.
         planner: seedPlanner(
           options.planFile !== undefined
             ? new StaticPlanner({ path: options.planFile })
-            : new AgentPlanner({ llm: llmFor(models.planner, 'plan') }),
+            : critiquePlanner(
+                new AgentPlanner({ llm: llmFor(models.planner, 'plan') }),
+                config,
+                () => llmFor(models.critic, 'plan'),
+                logger,
+              ),
           seed,
         ),
         planGate:
