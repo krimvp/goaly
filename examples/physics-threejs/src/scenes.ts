@@ -31,8 +31,8 @@ export function createBoxStackScene(): World {
   const world = new World({ gravity: new Vec3(0, -9.81, 0) });
 
   const ground = new Box({
-    position: new Vec3(0, 0, 0),
-    halfExtents: new Vec3(10, 1, 10),
+    position: new Vec3(0, -0.5, 0),
+    halfExtents: new Vec3(10, 0.5, 10),
     mass: 0,
     restitution: 0.3,
   });
@@ -42,7 +42,7 @@ export function createBoxStackScene(): World {
   for (let layer = 0; layer < 3; layer++) {
     for (let col = 0; col < 4 - layer; col++) {
       const x = -1.5 + layer * 0.25 + col * (boxSize * 2 + 0.05);
-      const y = 1.5 + layer * (boxSize * 2 + 0.1);
+      const y = 1.2 + layer * (boxSize * 2 + 0.1);
       const box = new Box({
         position: new Vec3(x, y, 0),
         halfExtents: new Vec3(boxSize, boxSize, boxSize),

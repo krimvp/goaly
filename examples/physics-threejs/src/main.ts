@@ -9,6 +9,8 @@ const scenes = [
 ];
 
 let currentSceneIndex = 0;
+let timeScale = 1;
+let panelUpdaters: { [key: string]: (value: any) => void } = {};
 
 interface SceneObject {
   world: World;
@@ -130,6 +132,123 @@ function createSceneObject(index: number): SceneObject {
   return { world, meshes, cloth, clothMesh };
 }
 
+function addSlider(
+  panel: HTMLElement,
+  name: string,
+  min: number,
+  max: number,
+  initial: number,
+  onChange: (v: number) => void
+) {
+  const container = document.createElement('div');
+  container.style.marginBottom = '8px';
+
+  const label = document.createElement('label');
+  label.textContent = `${name}: `;
+  label.style.display = 'inline-block';
+  label.style.width = '90px';
+
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = String(min);
+  input.max = String(max);
+  input.step = '0.01';
+  input.value = String(initial);
+  input.style.width = '80px';
+
+  const valueDisplay = document.createElement('span');
+  valueDisplay.textContent = initial.toFixed(2);
+  valueDisplay.style.marginLeft = '5px';
+  valueDisplay.style.width = '45px';
+  valueDisplay.style.display = 'inline-block';
+
+  const onInputChange = (e: Event) => {
+    const value = parseFloat((e.target as HTMLInputElement).value);
+    onChange(value);
+    valueDisplay.textContent = value.toFixed(2);
+  };
+
+  input.addEventListener('input', onInputChange);
+
+  panelUpdaters[name] = onChange;
+
+  container.appendChild(label);
+  container.appendChild(input);
+  container.appendChild(valueDisplay);
+  panel.appendChild(container);
+}
+
+function buildPanel(sceneIndex: number) {
+  let panel = document.querySelector('[data-physics-panel]') as HTMLElement;
+  const isNewPanel = !panel;
+
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.setAttribute('data-physics-panel', 'true');
+    panel.style.cssText = `
+      position: absolute;
+      top: 60px;
+      left: 10px;
+      background: rgba(26, 26, 46, 0.95);
+      border: 1px solid #00ff88;
+      border-radius: 4px;
+      padding: 10px;
+      color: #00ff88;
+      font-family: monospace;
+      font-size: 11px;
+      pointer-events: auto;
+      z-index: 100;
+      user-select: none;
+    `;
+  } else {
+    panel.innerHTML = '';
+  }
+
+  panelUpdaters = {};
+
+  if (sceneIndex === 0) {
+    addSlider(panel, 'gravity', -20, -1, -9.81, (v) => {
+      sceneObject.world.gravity.y = v;
+    });
+    addSlider(panel, 'restitution', 0, 1, 0.8, (v) => {
+      for (const body of sceneObject.world.bodies) {
+        if (body.mass > 0) body.restitution = v;
+      }
+    });
+  } else if (sceneIndex === 1) {
+    addSlider(panel, 'gravity', -20, -1, -9.81, (v) => {
+      sceneObject.world.gravity.y = v;
+    });
+    addSlider(panel, 'restitution', 0, 1, 0.3, (v) => {
+      for (const body of sceneObject.world.bodies) {
+        if (body.mass > 0) body.restitution = v;
+      }
+    });
+  } else if (sceneIndex === 2) {
+    addSlider(panel, 'gravity', -20, -1, -9.81, (v) => {
+      sceneObject.world.gravity.y = v;
+    });
+    addSlider(panel, 'stiffness', 100, 1000, 500, (v) => {
+      for (const spring of sceneObject.world.springs) {
+        spring.stiffness = v;
+      }
+    });
+    addSlider(panel, 'damping', 0, 30, 15, (v) => {
+      for (const spring of sceneObject.world.springs) {
+        spring.damping = v;
+      }
+    });
+  }
+
+  addSlider(panel, 'timeScale', 0, 2, 1, (v) => {
+    timeScale = v;
+  });
+
+  if (isNewPanel) {
+    document.body.appendChild(panel);
+  }
+}
+
 function loadScene(index: number) {
   currentSceneIndex = index % scenes.length;
   sceneObject = createSceneObject(currentSceneIndex);
@@ -137,12 +256,14 @@ function loadScene(index: number) {
   if (sceneNameEl) {
     sceneNameEl.textContent = scenes[currentSceneIndex].name;
   }
+  timeScale = 1;
+  buildPanel(currentSceneIndex);
 }
 
 loadScene(0);
 
 function updateScene() {
-  sceneObject.world.step(1 / 60);
+  sceneObject.world.step((1 / 60) * timeScale);
 
   for (const [body, mesh] of sceneObject.meshes) {
     mesh.position.copy(body.position as any);
@@ -191,6 +312,7 @@ render();
 declare global {
   interface Window {
     __physicsSample: () => number[];
+    __physicsSetParam: (name: string, value: any) => void;
   }
 }
 
@@ -200,4 +322,12 @@ window.__physicsSample = () => {
     result.push(body.position.x, body.position.y, body.position.z);
   }
   return result;
+};
+
+window.__physicsSetParam = (name: string, value: any) => {
+  if (name === 'timeScale') {
+    timeScale = value;
+  } else if (panelUpdaters[name]) {
+    panelUpdaters[name](value);
+  }
 };
