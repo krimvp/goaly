@@ -119,3 +119,49 @@ export function createClothScene(): World {
 
   return world;
 }
+
+export function createThreeBodyScene(preset: 'small' | 'large' = 'small'): World {
+  const world = new World({ gravity: new Vec3(0, 0, 0) });
+  world.gravitationalMode = true;
+  world.gravitationalConstant = preset === 'large' ? 50 : 50;
+
+  const config = preset === 'large'
+    ? { r: 7, m: 1 }
+    : { r: 5, m: 1 };
+
+  const r = config.r;
+  const m = config.m;
+  const G = world.gravitationalConstant;
+  const v = Math.sqrt(G * m / (Math.sqrt(3) * r));
+
+  const angle1 = 0;
+  const angle2 = (2 * Math.PI) / 3;
+  const angle3 = (4 * Math.PI) / 3;
+
+  const body1 = new Sphere({
+    position: new Vec3(r * Math.cos(angle1), r * Math.sin(angle1), 0),
+    velocity: new Vec3(-v * Math.sin(angle1), v * Math.cos(angle1), 0),
+    radius: 0.3,
+    mass: m,
+  });
+
+  const body2 = new Sphere({
+    position: new Vec3(r * Math.cos(angle2), r * Math.sin(angle2), 0),
+    velocity: new Vec3(-v * Math.sin(angle2), v * Math.cos(angle2), 0),
+    radius: 0.3,
+    mass: m,
+  });
+
+  const body3 = new Sphere({
+    position: new Vec3(r * Math.cos(angle3), r * Math.sin(angle3), 0),
+    velocity: new Vec3(-v * Math.sin(angle3), v * Math.cos(angle3), 0),
+    radius: 0.3,
+    mass: m,
+  });
+
+  world.add(body1);
+  world.add(body2);
+  world.add(body3);
+
+  return world;
+}

@@ -1,11 +1,14 @@
 import * as THREE from 'three';
-import { createSpheresScene, createBoxStackScene, createClothScene } from './scenes';
-import { Sphere, Box, Particle, World } from './physics';
+import { createSpheresScene, createBoxStackScene, createClothScene, createThreeBodyScene } from './scenes';
+import { Sphere, Box, Particle, World, Vec3 } from './physics';
+
+let threeBodyPreset: 'small' | 'large' = 'small';
 
 const scenes = [
   { name: 'Bouncing Spheres', factory: createSpheresScene },
   { name: 'Box Stack', factory: createBoxStackScene },
   { name: 'Cloth', factory: createClothScene },
+  { name: 'Three Bodies', factory: () => createThreeBodyScene(threeBodyPreset) },
 ];
 
 let currentSceneIndex = 0;
@@ -17,6 +20,8 @@ interface SceneObject {
   meshes: Map<any, THREE.Object3D>;
   cloth?: THREE.BufferGeometry;
   clothMesh?: THREE.Mesh;
+  trails?: Map<any, Vec3[]>;
+  trailMeshes?: Map<any, THREE.Line>;
 }
 
 let sceneObject: SceneObject = {
@@ -89,6 +94,8 @@ function createSceneObject(index: number): SceneObject {
 
   let cloth: THREE.BufferGeometry | undefined;
   let clothMesh: THREE.Mesh | undefined;
+  let trails: Map<any, Vec3[]> | undefined;
+  let trailMeshes: Map<any, THREE.Line> | undefined;
 
   if (index === 2) {
     cloth = new THREE.BufferGeometry();
@@ -129,7 +136,22 @@ function createSceneObject(index: number): SceneObject {
     scene.add(clothMesh);
   }
 
-  return { world, meshes, cloth, clothMesh };
+  if (index === 3) {
+    trails = new Map();
+    trailMeshes = new Map();
+    for (const body of world.bodies) {
+      if (body instanceof Sphere) {
+        trails.set(body, []);
+        const geometry = new THREE.BufferGeometry();
+        const material = new THREE.LineBasicMaterial({ color: 0x00ff88, transparent: true });
+        const line = new THREE.Line(geometry, material);
+        scene.add(line);
+        trailMeshes.set(body, line);
+      }
+    }
+  }
+
+  return { world, meshes, cloth, clothMesh, trails, trailMeshes };
 }
 
 function addSlider(
@@ -176,6 +198,24 @@ function addSlider(
   container.appendChild(input);
   container.appendChild(valueDisplay);
   panel.appendChild(container);
+}
+
+function addButton(panel: HTMLElement, name: string, onClick: () => void) {
+  const button = document.createElement('button');
+  button.textContent = name;
+  button.style.cssText = `
+    margin: 5px 5px 5px 0;
+    padding: 5px 10px;
+    background: #00ff88;
+    border: 1px solid #00ff88;
+    color: #1a1a2e;
+    font-family: monospace;
+    cursor: pointer;
+    font-size: 11px;
+    border-radius: 2px;
+  `;
+  button.addEventListener('click', onClick);
+  panel.appendChild(button);
 }
 
 function buildPanel(sceneIndex: number) {
@@ -238,6 +278,22 @@ function buildPanel(sceneIndex: number) {
         spring.damping = v;
       }
     });
+  } else if (sceneIndex === 3) {
+    const currentG = sceneObject.world.gravitationalConstant;
+    addSlider(panel, 'G', 1, 200, currentG, (v) => {
+      sceneObject.world.gravitationalConstant = v;
+    });
+    const presetContainer = document.createElement('div');
+    presetContainer.style.marginBottom = '8px';
+    addButton(presetContainer, 'Preset: Small', () => {
+      threeBodyPreset = 'small';
+      loadScene(3);
+    });
+    addButton(presetContainer, 'Preset: Large', () => {
+      threeBodyPreset = 'large';
+      loadScene(3);
+    });
+    panel.appendChild(presetContainer);
   }
 
   addSlider(panel, 'timeScale', 0, 2, 1, (v) => {
@@ -282,6 +338,31 @@ function updateScene() {
     }
     (sceneObject.cloth.attributes.position as THREE.BufferAttribute).needsUpdate = true;
     sceneObject.cloth.computeVertexNormals();
+  }
+
+  if (sceneObject.trails && sceneObject.trailMeshes) {
+    const maxTrailLength = 60;
+    for (const [body, trailLine] of sceneObject.trailMeshes) {
+      const trail = sceneObject.trails.get(body);
+      if (trail) {
+        trail.push(body.position.copy());
+        if (trail.length > maxTrailLength) {
+          trail.shift();
+        }
+        const positions: number[] = [];
+        for (const pos of trail) {
+          positions.push(pos.x, pos.y, pos.z);
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+        trailLine.geometry.dispose();
+        trailLine.geometry = geometry;
+        const material = trailLine.material as THREE.LineBasicMaterial;
+        if (trail.length > 0) {
+          material.opacity = Math.min(1, trail.length / 20);
+        }
+      }
+    }
   }
 }
 

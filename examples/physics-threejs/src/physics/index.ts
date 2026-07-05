@@ -162,9 +162,15 @@ export class World {
   gravity: Vec3;
   bodies: (Sphere | Box | Particle)[] = [];
   springs: Spring[] = [];
+  gravitationalMode: boolean = false;
+  gravitationalConstant: number = 1.0;
 
-  constructor(config?: { gravity?: Vec3 }) {
+  constructor(config?: { gravity?: Vec3; nbody?: boolean; G?: number }) {
     this.gravity = config?.gravity ? config.gravity.copy() : new Vec3(0, -9.81, 0);
+    if (config?.nbody) {
+      this.gravitationalMode = true;
+      this.gravitationalConstant = config.G ?? 1.0;
+    }
   }
 
   add(body: Sphere | Box | Particle): Sphere | Box | Particle {
@@ -178,15 +184,37 @@ export class World {
 
   step(dt: number): void {
     this.applyForces();
-    this.solveSprings(dt);
+    if (!this.gravitationalMode) {
+      this.solveSprings(dt);
+      this.detectAndResolveCollisions(dt);
+    }
     this.integrate(dt);
-    this.detectAndResolveCollisions(dt);
   }
 
   private applyForces(): void {
     for (const body of this.bodies) {
       if (body.mass === 0) continue;
-      body.acceleration = this.gravity.copy();
+      body.acceleration = this.gravitationalMode ? new Vec3(0, 0, 0) : this.gravity.copy();
+    }
+
+    if (this.gravitationalMode) {
+      for (let i = 0; i < this.bodies.length; i++) {
+        const bodyI = this.bodies[i];
+        if (bodyI.mass === 0) continue;
+        for (let j = i + 1; j < this.bodies.length; j++) {
+          const bodyJ = this.bodies[j];
+          if (bodyJ.mass === 0) continue;
+          const delta = Vec3.sub(bodyJ.position, bodyI.position);
+          const distSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
+          if (distSq > 1e-10) {
+            const dist = Math.sqrt(distSq);
+            const forceMag = (this.gravitationalConstant * bodyI.mass * bodyJ.mass) / distSq;
+            const forceDir = delta.copy().scale(1 / dist);
+            bodyI.acceleration.add(Vec3.scale(forceDir, forceMag / bodyI.mass));
+            bodyJ.acceleration.add(Vec3.scale(forceDir, -forceMag / bodyJ.mass));
+          }
+        }
+      }
     }
   }
 
