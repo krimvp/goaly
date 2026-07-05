@@ -56,9 +56,9 @@ makes the whole run replayable from the log.
 | **Orchestrator** | `step(state,event)->[state,Command[]]`, `initial(config)` — *pure, sync* | whole COMPILE→Seal→loop→DECIDE graph, iteration count, stuck bookkeeping | the spine |
 | **Driver** | `drive(deps,config)->RunOutcome` | command interpreter, write-ahead persist, crash→Event, budget polling | — |
 | **HarnessAdapter** | `run(prompt, sessionId?)->RunResult` | flag dialects, JSON parsing, session resume, CC's optional Stop-hook fast-path | **#1 REAL** (CC, Codex, Fake) |
-| **Verifier / Ladder** | `verify(ws,goal,rubric)->Verdict` | shell/exit-code, test runs, LLM quorum judge; ladder *is* a Verifier (composite) | **#2 REAL** (det, judge, Fake) |
-| **Approver (Sign-off)** | `review(input)->ApprovalVerdict` (veto-only) | independent approval agent, reject-on-uncertainty bias, ideally different model | **#3 REAL** (agent, Fake) |
-| **VerifierCompiler** | `compile(goal,intent)->CompiledContract` | finds/writes tests, authors rubric, emits runnable spec; **freezes once** | (agent, Fake) |
+| **Verifier / Ladder** | `verify(ws,goal,rubric)->Verdict` | shell/exit-code, test runs, LLM quorum judge; ladder *is* a Verifier (composite); built-in non-contract rungs (anti-tamper guard first, `--adversarial` refute-first panel last) | **#2 REAL** (det, judge, Fake) |
+| **Approver (Sign-off)** | `review(input)->ApprovalVerdict` (veto-only) | independent refute-first approval agent, reject-on-uncertainty bias, optional lensed N-reviewer panel (early-exits once settled), ideally different model | **#3 REAL** (agent, Fake) |
+| **VerifierCompiler** | `compile(goal,intent)->CompiledContract` | finds/writes tests, authors rubric, emits runnable spec; deterministic lints (vacuous/out-of-repo/network/module-format) + detected workspace facts; optional red-team critique rounds (`--adversarial`, a decorator); **freezes once** | (agent, Fake) |
 | **SealGate (Seal)** | `approveContract(c)->SealDecision` | human CLI prompt vs auto-accept + loud audit log | (Human/Auto/Fake) |
 | **Clock / BudgetMeter** | `now()`, `spent()/remaining()` | system time/token metering | **#4 REAL** (System, Manual) |
 | **Workspace** | `diffHash()`, `run(cmd)` | git tree hash, command exec — *harness-independent* | (Git, Fake) |
@@ -67,7 +67,10 @@ makes the whole run replayable from the log.
 Every seam has **≥2 adapters** → all real, none mere indirection. **Deliberately not a
 seam:** the LLM *provider* inside the judge/approver — it varies *inside* those modules,
 not across the `Verifier` interface, so it stays an internal seam (don't leak internal
-seams through the interface).
+seams through the interface). Authoring session continuity (the compiler/planner minting a
+goaly-owned CLI session and resuming it across revise rounds) also lives entirely inside
+that internal seam; the verification panels never resume — vote independence is a security
+property.
 
 **Deletion test (the core):** delete the Orchestrator and the loop logic + DECIDE truth
 table + stuck bookkeeping smear across the Driver and every call site. It earns its keep —
@@ -101,8 +104,8 @@ orchestrator (DESIGN's "wrapper-first, hooks as an optimization").
 
 > The full authoring walkthrough — the codec interface, a copy-paste skeleton, and the
 > field/status/stream mapping recipes — is in [`docs/adding-a-harness.md`](docs/adding-a-harness.md).
-> The same codec also backs the read-only LLM steps (judge / approver / compiler / planner) via the
-> `LlmProvider` seam, so a CLI is wired once and plays both roles.
+> The same codec also backs the read-only LLM steps (judge / approver / compiler / planner /
+> adversarial critics) via the `LlmProvider` seam, so a CLI is wired once and plays both roles.
 
 ## The Verifier unification
 
@@ -116,6 +119,11 @@ behaviours the state machine can't distinguish:
 3. **The Ladder** — itself a `Verifier` (composite); runs rungs cheapest-first and
    **short-circuits** on the first deterministic fail (no judge call wasted). A rung that
    errors is **fail-closed** (`pass:false`) — a malformed grader is never a green.
+4. **AdversarialReviewRung** (`--adversarial`) — a built-in rung APPENDED after every
+   frozen rung (like the anti-tamper guard, part of the ladder but never part of the
+   `contractHash`): N refute-first skeptics over the fenced diff; the green survives only
+   a strict supermajority of parsed "could not refute" votes, so it can only fail a green,
+   never promote a red. Short-circuit means it spends tokens only on candidate greens.
 
 The **Approver (Sign-off)** is verdict-shaped but a *separate seam*: veto-only, fed
 independent inputs (goal + frozen rubric + diff + verdicts, **not** the worker's
