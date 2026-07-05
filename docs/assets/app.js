@@ -86,7 +86,7 @@
   const PIPE_DETAIL = {
     compile: {
       t: "COMPILE — author & freeze",
-      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. The anti-reward-hacking core. With --adversarial a red-team panel attacks the authored bar (vacuous command? rubric mismatch? hard-codable tests?) before Seal — critical findings trigger a bounded re-author round.",
+      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. The anti-reward-hacking core. Deterministically DETECTED workspace facts (module system, lockfile, manifests — never assumed, nothing injected for a non-code goal) steer the author, and a pre-freeze lint refuses an authored file that couldn't even load. With --adversarial a red-team panel attacks the authored bar (vacuous command? rubric mismatch? hard-codable tests?) before Seal — critical findings trigger a bounded re-author round.",
       pills: ['<span class="pill pass">→ contractHash</span>', '<span class="pill fail">--adversarial red-team</span>'],
     },
     seal: {

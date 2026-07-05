@@ -134,6 +134,23 @@ describe('CritiquedCompiler', () => {
     expect(prompt).toContain('<<UNTRUSTED AUTHORED FILE');
   });
 
+  it('shows the workspace facts to the red-team panel when provided', async () => {
+    const inner = new FakeCompiler(makeFakeContract());
+    const llm = new FakeLlm([pass]);
+    const compiler = new CritiquedCompiler({
+      inner,
+      llm,
+      critics: 1,
+      rounds: 1,
+      facts: 'WORKSPACE FACTS: Node package with "type": "module".',
+    });
+
+    await compiler.compile(generateConfig);
+
+    expect(llm.requests[0]?.prompt).toContain('WORKSPACE FACTS');
+    expect(llm.requests[0]?.prompt).toContain('"type": "module"');
+  });
+
   it('drops an unreadable authored file from the prompt without failing the critique', async () => {
     const contract = makeFakeContract({
       generatedFiles: [{ path: 'verify/gone.test.ts', sha256: 'b'.repeat(64) }],

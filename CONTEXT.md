@@ -29,7 +29,26 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
   verifier produced it. _avoid:_ an approval; a raw exit code.
 - **Ladder** — the composite Verifier: rungs run cheapest-and-hardest-to-game first
   (deterministic before judge), short-circuiting on the first deterministic fail. A rung that
-  errors is **fail-closed** (`pass:false`). _avoid:_ a list the orchestrator iterates itself.
+  errors is **fail-closed** (`pass:false`). Built-in non-contract rungs bracket the frozen ones:
+  the anti-tamper guard first, the `--adversarial` refuter rung last. _avoid:_ a list the
+  orchestrator iterates itself.
+- **Adversarial review** (`--adversarial`) — opt-in red-teaming at three points: a critic panel on
+  the phased plan before its Seal, a red-team panel on the compiled contract before the Seal (each
+  critical finding triggers a bounded re-author), and the refuter rung after a green ladder. All
+  veto/feedback-shaped — never a third key that can promote a red or skip a gate. _avoid:_ a
+  replacement for Sign-off; a default-on step (a plain run builds none of it).
+- **Refuter rung** (`AdversarialReviewRung`) — the built-in refute-first skeptic panel appended
+  AFTER every frozen rung: runs only on a candidate green (short-circuit), and the green survives
+  only a strict supermajority of parsed "could not refute" votes. Fail-closed (a broken refuter
+  counts as refuted); never part of the `contractHash`. _avoid:_ a contract rung; a promoter.
+- **Critic panel** — the advisory pre-Seal lensed panel (plan critic / contract red-team): critical
+  findings feed a bounded re-author through the same feedback channel a Seal "revise" uses.
+  Fail-open (a broken panel passes the artifact through — the Seal still gates). _avoid:_ a key;
+  anything that can block a run on its own.
+- **Workspace facts** — deterministic environment facts probed once from files on disk (module
+  system, lockfile, manifests) and injected into the authoring/red-team prompts. Strictly
+  *detected, never assumed*: a workspace with no recognized manifests injects nothing (a goal need
+  not be about code). _avoid:_ an LLM guess; a code-only assumption.
 - **Seal** — the contract gate: a human (default) or auto-accept (`--autonomous`) approves
   the frozen contract **once** before the loop. _avoid:_ per-iteration approval.
 - **Refreeze** — the Seal's manual-edit round (`edited`, ADR 0016): re-read the authored

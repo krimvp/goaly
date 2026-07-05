@@ -124,7 +124,7 @@ src/
   harness/     adapter, agent-cli-harness, classify       — seam #1 (codec-backed adapter)
   goaly-code/ harness, loop, tools, edit, fs-host, session-store, prompt — the NON-codec adapter (seam #1)
   llm-client/  openai-client, schema                    — OpenAI-compatible HTTP transport (fetch + Zod)
-  workspace/   workspace, git-workspace                 — harness-independent diff/run
+  workspace/   workspace, git-workspace, workspace-facts — harness-independent diff/run + detected facts
   sandbox/     policy, launcher, bwrap, firejail, container, detect — opt-in OS isolation (seam)
   runlog/      runlog, file-runlog                      — write-ahead persistence + replay
   llm/         provider, agent-cli-provider, openai-provider, critic-panel — INTERNAL seam (judge/approver/compiler/critics)

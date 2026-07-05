@@ -94,4 +94,38 @@ describe('enforceUsageAssertion', () => {
       }),
     ).not.toThrow();
   });
+
+  it('accepts a dotted declaration whose LEAF identifier is what the file actually spies', () => {
+    // Small models declare the qualified path (`World.prototype.step`) while the file (correctly)
+    // spies `step` — that spy IS the declared entry point, so the gate must not reject it as hollow.
+    const spied = [{ path: 'verify/spy.test.js', content: 'const orig = proto.step; proto.step = wrap(orig); assert(calls.step > 0)' }];
+    expect(() =>
+      enforceUsageAssertion({
+        shape: BUILD_AND_USE,
+        usageAssertion: { targetSymbols: ['World.prototype.step'], description: 'spy' },
+        files: spied,
+      }),
+    ).not.toThrow();
+  });
+
+  it('the leaf match is word-bounded — "step" inside "steps" is still hollow', () => {
+    const near = [{ path: 'verify/spy.test.js', content: 'let steps = 0; steps += 1;' }];
+    expect(() =>
+      enforceUsageAssertion({
+        shape: BUILD_AND_USE,
+        usageAssertion: { targetSymbols: ['World.prototype.step'], description: 'spy' },
+        files: near,
+      }),
+    ).toThrow(/not referenced/);
+  });
+
+  it('the hollow-assertion feedback tells the model HOW to declare symbols', () => {
+    expect(() =>
+      enforceUsageAssertion({
+        shape: BUILD_AND_USE,
+        usageAssertion: { targetSymbols: ['resolve_collision'], description: 'spy' },
+        files,
+      }),
+    ).toThrow(/literally appears in that file/);
+  });
 });

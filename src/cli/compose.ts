@@ -31,6 +31,7 @@ import type { SealGate } from '../compile/seal';
 import { GitWorkspace, realExec } from '../workspace/git-workspace';
 import { GitWorktreeHost } from '../workspace/git-worktree-host';
 import { writeVerificationFile } from '../workspace/workspace-files';
+import { detectWorkspaceFacts, type WorkspaceFacts } from '../workspace/workspace-facts';
 import { FileRunLog } from '../runlog/file-runlog';
 import { StreamTranscriptSink, STREAM_FILE } from '../runlog/stream-transcript';
 import { AgentCliHarness } from '../harness/agent-cli-harness';
@@ -256,6 +257,7 @@ function critiqueCompiler(
   makeLlm: () => LlmProvider,
   workspaceRoot: string,
   logger: Logger,
+  facts: WorkspaceFacts | undefined,
 ): VerifierCompiler {
   const adv = config.adversarial;
   if (!adv.enabled || adv.contractCritics <= 0 || adv.contractCritiqueRounds <= 0) return inner;
@@ -265,6 +267,7 @@ function critiqueCompiler(
     critics: adv.contractCritics,
     rounds: adv.contractCritiqueRounds,
     readFile: (rel) => readFile(path.join(workspaceRoot, rel), 'utf8'),
+    ...(facts !== undefined ? { facts: facts.summary } : {}),
     logger,
   });
 }
@@ -462,6 +465,11 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
         })
       : undefined);
 
+  // Deterministic workspace facts (small-model steering): probed ONCE from files on disk, injected
+  // into the compiler + red-team prompts and driving the pre-freeze module-format lint. Strictly
+  // detected, never assumed — a non-code workspace yields `undefined` and nothing is injected.
+  const workspaceFacts = detectWorkspaceFacts(options.workspaceRoot);
+
   return {
     compiler: seedCompiler(
       critiqueCompiler(
@@ -469,6 +477,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
           llm: llmFor(models.compiler, 'compile'),
           writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
           ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
+          ...(workspaceFacts !== undefined ? { facts: workspaceFacts } : {}),
           // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered like
           // the authoring call) arms the gate on a confident build-and-use goal so a bar that a parallel
           // reimplementation could green is refused at compile (COMPILE_FAILED → re-authored with a usage
@@ -480,6 +489,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
         () => llmFor(models.critic, 'compile'),
         options.workspaceRoot,
         logger,
+        workspaceFacts,
       ),
       seed,
     ),
