@@ -131,8 +131,28 @@ function hollowAssertionMessage(missing: readonly string[]): string {
     'AgentCompiler: the declared usageAssertion.targetSymbols are not referenced by any authored ' +
     `verification file (${missing.join(', ')}). The usage assertion must live in a frozen test file ` +
     'that actually spies those symbols — declaring them without embedding the spy in a frozen file ' +
-    'leaves the reimplementation hole open. Add the assertion to a file you author.'
+    'leaves the reimplementation hole open. Add the assertion to a file you author, and declare ' +
+    'each symbol using an identifier that literally appears in that file (e.g. declare "step" when ' +
+    'the file spies `World.prototype.step` or calls `world.step(...)` — not a dotted path the file ' +
+    'never spells out).'
   );
+}
+
+/**
+ * True when a declared target symbol is genuinely referenced by the authored content. Matches the
+ * symbol verbatim, or — for dotted declarations like `World.prototype.step` / `World.step` — its
+ * LEAF identifier as a whole word. Small models routinely declare the fully-qualified path while
+ * the file (correctly) spies `step`; the leaf IS the entry point being instrumented, so treating
+ * that as hollow was a false reject that burned compile-retries on a spelling convention. The leaf
+ * match is word-bounded (`step` never matches `steps`) so the gate is not weakened into substring
+ * bingo, and the verbatim match is unchanged.
+ */
+function referencesSymbol(authored: string, symbol: string): boolean {
+  if (authored.includes(symbol)) return true;
+  const leaf = symbol.split('.').pop() ?? '';
+  if (leaf.length === 0 || leaf === symbol) return false;
+  const escaped = leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`).test(authored);
 }
 
 /**
@@ -154,7 +174,9 @@ export function enforceUsageAssertion(args: {
     throw new Error(missingAssertionMessage(args.shape.targetArtifact));
   }
   const authored = args.files.map((f) => f.content).join('\n');
-  const missing = args.usageAssertion.targetSymbols.filter((sym) => !authored.includes(sym));
+  const missing = args.usageAssertion.targetSymbols.filter(
+    (sym) => !referencesSymbol(authored, sym),
+  );
   if (missing.length > 0) {
     throw new Error(hollowAssertionMessage(missing));
   }

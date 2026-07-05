@@ -650,3 +650,57 @@ describe('AgentCompiler — authoring session-resume (revise rounds)', () => {
     expect(llm.requests[2]?.prompt).toContain('tighten the bar');
   });
 });
+
+describe('AgentCompiler — workspace facts + module-format lint (small-model steering)', () => {
+  const genConfig = makeConfig({ verifier: { kind: 'generate' } });
+  const esmFacts = {
+    summary:
+      'WORKSPACE FACTS (detected deterministically from files on disk — the goal need not be about ' +
+      'code; ignore any fact irrelevant to it):\n- Node package: "type": "module".',
+    nodeModuleSystem: 'esm' as const,
+  };
+
+  it('injects the detected facts into the authoring prompt (and only when provided)', async () => {
+    const bare = new FakeLlm([JSON.stringify({ command: 'npm test', rubric: '' })]);
+    await new AgentCompiler({ llm: bare }).compile(genConfig);
+    expect(bare.requests[0]?.prompt).not.toContain('WORKSPACE FACTS');
+
+    const withFacts = new FakeLlm([JSON.stringify({ command: 'npm test', rubric: '' })]);
+    await new AgentCompiler({ llm: withFacts, facts: esmFacts }).compile(genConfig);
+    expect(withFacts.requests[0]?.prompt).toContain('WORKSPACE FACTS');
+    expect(withFacts.requests[0]?.prompt).toContain('"type": "module"');
+  });
+
+  it('refuses to freeze an authored .js file that cannot load under the detected module system', async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({
+        command: 'node verify.js',
+        rubric: '',
+        files: [{ path: 'verify.js', content: "const fs = require('fs');\nprocess.exit(0);\n" }],
+      }),
+    ]);
+    const compiler = new AgentCompiler({ llm, facts: esmFacts });
+
+    await expect(compiler.compile(genConfig)).rejects.toThrow(/cannot load/);
+  });
+
+  it('the same authored file freezes fine when no module system was detected (non-code workspace)', async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({
+        command: 'node verify.js',
+        rubric: '',
+        files: [{ path: 'verify.js', content: "const fs = require('fs');\nprocess.exit(0);\n" }],
+      }),
+    ]);
+    const writes: string[] = [];
+    const compiler = new AgentCompiler({
+      llm,
+      writeFile: async (rel) => void writes.push(rel),
+    });
+
+    const contract = await compiler.compile(genConfig);
+
+    expect(contract.generatedFiles.map((f) => f.path)).toEqual(['verify.js']);
+    expect(writes).toEqual(['verify.js']);
+  });
+});

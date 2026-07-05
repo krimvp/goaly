@@ -33,7 +33,11 @@ export const CONTRACT_REDTEAM_LENSES: readonly string[] = [
   'TAMPER/HARD-CODE SURFACE — do the authored verification files contain expected outputs or fixed ' +
     'inputs a worker could special-case, or assertions weak enough to satisfy with a stub?',
   'REPRODUCIBILITY — will this bar evaluate offline and deterministically: are all required tools ' +
-    'declared, does nothing fetch the network at verify time, is the outcome stable across re-runs?',
+    'declared, does nothing fetch the network at verify time, is the outcome stable across re-runs? ' +
+    'And will each authored file even LOAD in this workspace: check mechanically that its module ' +
+    'format matches the workspace facts (e.g. require() in an ES-module Node package crashes at ' +
+    'load), that its imports/paths resolve to files that will exist, and that the command actually ' +
+    'invokes the files as authored.',
 ];
 
 export type CritiquedCompilerOpts = {
@@ -48,6 +52,12 @@ export type CritiquedCompilerOpts = {
    * actual content, not just its name. A read failure drops that file from the prompt only.
    */
   readFile?: (rel: string) => Promise<string>;
+  /**
+   * Deterministic workspace-facts summary (see `detectWorkspaceFacts`), so the REPRODUCIBILITY
+   * lens has ground truth to check the authored files against (module system, manifests) instead
+   * of guessing. Trusted operator-side data — not worker content, so not fenced. Absent ⇒ omitted.
+   */
+  facts?: string;
   logger?: Logger;
 };
 
@@ -69,6 +79,7 @@ export class CritiquedCompiler implements VerifierCompiler {
   readonly #critics: number;
   readonly #rounds: number;
   readonly #readFile: ((rel: string) => Promise<string>) | undefined;
+  readonly #facts: string | undefined;
   readonly #logger: Logger;
 
   constructor(opts: CritiquedCompilerOpts) {
@@ -77,6 +88,7 @@ export class CritiquedCompiler implements VerifierCompiler {
     this.#critics = opts.critics;
     this.#rounds = opts.rounds;
     this.#readFile = opts.readFile;
+    this.#facts = opts.facts;
     this.#logger = opts.logger ?? noopLogger;
   }
 
@@ -131,6 +143,7 @@ export class CritiquedCompiler implements VerifierCompiler {
       `VERIFIER LADDER (in execution order):\n${describeRungs(contract.rungs)}`,
       `SETUP (one-time, not a rung): ${contract.setup ?? '(none)'}`,
       `REQUIRED TOOLS: ${contract.requiredTools.length > 0 ? contract.requiredTools.join(', ') : '(none)'}`,
+      ...(this.#facts !== undefined ? [this.#facts] : []),
     ];
     // The authored files are the tamper/hard-code surface — attack their content, fenced: the
     // authoring model may have folded repo context (worker-influenceable on a follow-up) into them.

@@ -6,6 +6,7 @@ import type { LlmProvider } from '../llm/provider';
 import type { VerifierCompiler } from './compiler';
 import { extractRequiredTools } from './required-tools';
 import { extractBalancedJson } from '../util/json-extract';
+import { findModuleFormatMismatch, type WorkspaceFacts } from '../workspace/workspace-facts';
 import { UsageAssertion, enforceUsageAssertion, type UsageShape } from './usage-gate';
 
 /** Schema for the JSON the authoring LLM must emit (validated fail-closed). */
@@ -253,6 +254,7 @@ export class AgentCompiler implements VerifierCompiler {
   readonly #classifyShape:
     | ((goal: string, intent: string | undefined) => Promise<UsageShape>)
     | undefined;
+  readonly #facts: WorkspaceFacts | undefined;
 
   constructor(opts: {
     llm: LlmProvider;
@@ -267,11 +269,19 @@ export class AgentCompiler implements VerifierCompiler {
      * LLM call never perturbs the scripted `FakeLlm` queues of the existing tests.
      */
     classifyShape?: (goal: string, intent: string | undefined) => Promise<UsageShape>;
+    /**
+     * Deterministic workspace facts (see {@link detectWorkspaceFacts}): injected into the authoring
+     * prompt so a small model doesn't have to self-discover mechanical environment constraints
+     * (module system, lockfile, manifests), and driving the pre-freeze module-format lint. Absent
+     * (a non-code workspace, or tests) ⇒ no facts injected and no lint — nothing is ever assumed.
+     */
+    facts?: WorkspaceFacts;
   }) {
     this.#llm = opts.llm;
     this.#writeFile = opts.writeFile;
     this.#verifyDir = opts.verifyDir;
     this.#classifyShape = opts.classifyShape;
+    this.#facts = opts.facts;
   }
 
   async compile(config: ContractInput, feedback?: string): Promise<CompiledContract> {
@@ -316,6 +326,12 @@ export class AgentCompiler implements VerifierCompiler {
         `Write any authored verification files under the '${this.#verifyDir}/' directory ` +
           '(a relative path inside the repo).',
       );
+    }
+    if (this.#facts !== undefined) {
+      // Deterministically detected, generically framed (with its own ignore-if-irrelevant clause):
+      // a small model won't reliably self-discover the module system or lockfile, and an authored
+      // file that can't LOAD kills the run at pre-flight instead of costing a compile-retry.
+      guidanceParts.push(this.#facts.summary);
     }
     if (feedback !== undefined && feedback.length > 0) {
       guidanceParts.push(
@@ -405,6 +421,23 @@ export class AgentCompiler implements VerifierCompiler {
           'command "npx --no-install vitest run …" or "node ./node_modules/.bin/vitest run …"; or the ' +
           "repo's own \"npm test\").",
       );
+    }
+
+    // Deterministic module-format lint (small-model steering): an authored file that cannot even
+    // LOAD under the detected Node module system (require() in an ESM package, import in a CJS one)
+    // is a broken bar that would otherwise survive to pre-flight, where it kills the WHOLE run as
+    // CONTRACT_UNSOUND — here it is one bounded compile-retry with the exact fix as feedback. Only
+    // fires when a module system was actually DETECTED (a non-code workspace lints nothing).
+    {
+      const mismatch = findModuleFormatMismatch(
+        generated.files ?? [],
+        this.#facts?.nodeModuleSystem,
+      );
+      if (mismatch !== null) {
+        throw new Error(
+          `AgentCompiler: refusing to freeze a verification file that cannot load: ${mismatch.problem}.`,
+        );
+      }
     }
 
     // Anti-reimplementation usage gate: for a confident BUILD-AND-USE goal, the authored bar must carry

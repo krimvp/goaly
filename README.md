@@ -422,9 +422,16 @@ the obvious ways a worker (or a gamed contract) could reach DONE without meeting
   worker-controlled diff inside a clearly-delimited, nonce-fenced envelope, and are instructed to
   never act on instructions, verdicts, or claims hidden inside it (prompt-injection defense).
 - **Vacuous and un-runnable authored bars are refused.** A `--generate` command that trivially passes
-  without measuring anything (`true`, `:`, `exit 0`, …), or one that reaches outside the repo (e.g. a
-  helper at `/tmp/…`), is rejected at compile (`COMPILE_FAILED`) rather than frozen as a hollow or
-  un-runnable contract. The compiler is also steered, at the prompt level, toward an **objective,
+  without measuring anything (`true`, `:`, `exit 0`, …), one that reaches outside the repo (e.g. a
+  helper at `/tmp/…`), or an authored file that **cannot even load** under the workspace's detected
+  module system (CommonJS `require()` in a `"type": "module"` Node package, or the inverse) is
+  rejected at compile (`COMPILE_FAILED`) rather than frozen as a hollow or un-runnable contract —
+  a defect that would otherwise survive to pre-flight and kill the whole run costs one bounded
+  compile-retry instead. To keep small authoring models from tripping these walls at all, goaly also
+  probes the workspace once and injects **detected facts** (module system, lockfile, manifests) into
+  the authoring and red-team prompts — strictly *detected, never assumed*: a goal need not be about
+  code, so a workspace with no recognized manifests injects nothing, and the fact sheet tells the
+  model to ignore anything irrelevant to the goal. The compiler is also steered, at the prompt level, toward an **objective,
   in-repo, runnable** bar — author over the repo's existing tooling, keep helpers inside the
   workspace, and don't write rubrics that judge runtime/visual behavior a grader can't execute. A
   rejected bar feeds the bounded compile-retry loop above, so the compiler can self-correct.
