@@ -1,6 +1,6 @@
 {
   "name": "goaly",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Harness-agnostic goal-orchestration layer: run a coding agent until a frozen success criterion is verifiably met.",
   "type": "module",
   "license": "MIT",
