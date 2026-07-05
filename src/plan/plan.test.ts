@@ -118,3 +118,40 @@ describe('plan Seal gates (issue #48)', () => {
     expect((await gate.approvePlan(plan)).kind).toBe('reject');
   });
 });
+
+describe('AgentPlanner — authoring session-resume (re-plan rounds)', () => {
+  const config = makeConfig({ verifier: { kind: 'generate' }, phased: true });
+  const planJson = (goal: string): string => JSON.stringify({ phases: [{ goal }] });
+
+  it('resumes its own session on a feedback round with a delta prompt', async () => {
+    const llm = new FakeLlm(
+      [
+        { text: planJson('one big phase'), sessionId: 'plan-sess-1' },
+        { text: planJson('two smaller phases'), sessionId: 'plan-sess-2' },
+      ],
+      { supportsResume: true },
+    );
+    const planner = new AgentPlanner({ llm });
+
+    await planner.plan(config);
+    await planner.plan(config, 'split phase one');
+
+    expect(llm.requests[0]?.resumeSessionId).toBeUndefined();
+    expect(llm.requests[0]?.prompt).toContain('Goal:');
+    expect(llm.requests[1]?.resumeSessionId).toBe('plan-sess-1');
+    expect(llm.requests[1]?.prompt).toContain('split phase one');
+    expect(llm.requests[1]?.prompt).not.toContain('Goal:');
+  });
+
+  it('sends the full prompt on a feedback round when the provider cannot resume', async () => {
+    const llm = new FakeLlm([planJson('a'), planJson('b')]);
+    const planner = new AgentPlanner({ llm });
+
+    await planner.plan(config);
+    await planner.plan(config, 'revise it');
+
+    expect(llm.requests[1]?.resumeSessionId).toBeUndefined();
+    expect(llm.requests[1]?.prompt).toContain('Goal:');
+    expect(llm.requests[1]?.prompt).toContain('revise it');
+  });
+});

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { LlmCompletion, LlmProvider, LlmRequest } from './provider';
 import { runProcess } from '../util/spawn';
 import { parseAgentOutput } from '../agent-cli/output';
@@ -25,6 +26,21 @@ const BACKOFF_MS = 1000;
 const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * The AMBIENT session id when goaly itself runs nested under Claude Code (e.g. inside a Claude Code
+ * remote environment). A spawned `claude -p` there adopts and REPORTS this id instead of minting a
+ * fresh per-call session, and every call in a cwd appends to that ONE shared session file — so
+ * resuming it would replay sibling steps' turns (the shape classifier, the red-team critics, …)
+ * into the authoring context, not the author's own conversation. Observed empirically; scrubbing
+ * the variable from the child env does NOT stop the pinning (the wrapped CLI keeps it), so the
+ * only safe policy is to never TRUST the ambient id: drop it from completions and refuse it as a
+ * resume target — authoring then degrades to fresh full-prompt calls, the pre-feature behavior.
+ */
+function ambientSessionId(): string | undefined {
+  const v = process.env['CLAUDE_CODE_SESSION_ID'];
+  return v !== undefined && v.length > 0 ? v : undefined;
+}
+
+/**
  * The ONE {@link LlmProvider} backed by a coding-agent CLI, driven entirely by that CLI's
  * {@link AgentCliCodec}. The judge / approver / compiler use a CLI's model in a READ-ONLY dialect
  * (`codec.readonlyArgs`), so they can reason over the working tree without ever mutating it. Every
@@ -44,6 +60,8 @@ const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r
  */
 export class AgentCliLlmProvider implements LlmProvider {
   readonly name: string;
+  /** Capability-gated by the codec: only a CLI with a read-only resume dialect can honor one. */
+  readonly supportsResume: boolean;
   readonly #codec: AgentCliCodec;
   readonly #model: string | undefined;
   readonly #exec: ExecFn;
@@ -73,6 +91,7 @@ export class AgentCliLlmProvider implements LlmProvider {
     this.#codec = opts.codec;
     this.#model = opts.model;
     this.name = `cli:${opts.codec.name}`;
+    this.supportsResume = opts.codec.readonlyResume === true;
     this.#retries = opts.retries ?? DEFAULT_RETRIES;
     this.#sleep = opts.sleep ?? realSleep;
     this.#onEvent = opts.onEvent;
@@ -113,7 +132,31 @@ export class AgentCliLlmProvider implements LlmProvider {
     // fallback when the agent CLI reports no usage.
     const { sink, estimator } = streamingEstimator(this.#onEvent);
     const tap = sink !== undefined ? new StreamTap(this.#codec.streamExtractor, sink) : undefined;
-    const args = this.#codec.readonlyArgs({ prompt, model: this.#model, stream: tap !== undefined });
+    // A resume is honored only where the codec's read-only dialect supports it, and never with the
+    // codec's unknown-session sentinel (same guard as the harness: `--resume claude-unknown` would
+    // crash the call rather than degrade to a fresh session) or the AMBIENT session id (below).
+    const resume =
+      this.supportsResume &&
+      req.resumeSessionId !== undefined &&
+      req.resumeSessionId !== this.#codec.unknownSession &&
+      req.resumeSessionId !== ambientSessionId()
+        ? req.resumeSessionId
+        : undefined;
+    // Mint a goaly-owned session where the codec supports an explicit id — PER ATTEMPT, never
+    // reused: the CLI rejects a second `--session-id` with the same value ("already in use"), so a
+    // retry after a transient failure must mint fresh rather than collide with the half-created
+    // session (the orphaned file is harmless). Mutually exclusive with a resume.
+    const minted =
+      resume === undefined && req.mintSession === true && this.#codec.readonlyMintSession === true
+        ? randomUUID()
+        : undefined;
+    const args = this.#codec.readonlyArgs({
+      prompt,
+      model: this.#model,
+      stream: tap !== undefined,
+      ...(resume !== undefined ? { sessionId: resume } : {}),
+      ...(minted !== undefined ? { newSessionId: minted } : {}),
+    });
     // The prompt rides on stdin only for CLIs that read it there (claude); the others carry it on argv.
     const input = this.#codec.promptOnStdin ? prompt : undefined;
     const r = await this.#exec(args, input, tap ? (chunk) => tap.push(chunk) : undefined);
@@ -150,6 +193,16 @@ export class AgentCliLlmProvider implements LlmProvider {
         ...(acct.tokenSource === 'reported' && parsed.breakdown !== undefined
           ? { tokenBreakdown: parsed.breakdown }
           : {}),
+        // Surface the session id so an authoring caller can resume its own session on a revise
+        // round. A goaly-MINTED id is authoritative (we set it — immune to the ambient pin); a
+        // CLI-reported id is trusted only when it is neither the unknown sentinel nor the ambient id.
+        ...(minted !== undefined
+          ? { sessionId: minted }
+          : parsed.sessionId !== undefined &&
+              parsed.sessionId !== this.#codec.unknownSession &&
+              parsed.sessionId !== ambientSessionId()
+            ? { sessionId: parsed.sessionId }
+            : {}),
       },
     };
   }

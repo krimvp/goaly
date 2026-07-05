@@ -70,6 +70,9 @@ export class LlmTokenMeter {
 export function meterLlm(inner: LlmProvider, meter: LlmTokenMeter): LlmProvider {
   return {
     name: inner.name,
+    // Forward the resume capability: the meter is a transparent decorator, and hiding this would
+    // silently disable authoring session-resume for every wrapped (i.e. every real) provider.
+    ...(inner.supportsResume !== undefined ? { supportsResume: inner.supportsResume } : {}),
     async complete(req: LlmRequest): Promise<LlmCompletion> {
       const completion = await inner.complete(req);
       // A completion whose count is an estimate (issue #24) feeds the estimated portion through so

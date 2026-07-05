@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { JudgeVerifier, extractJson } from './judge';
+import { JudgeVerifier } from './judge';
 import { FakeLlm } from '../llm/provider';
 import { FakeWorkspace } from '../testing/fakes';
 
@@ -10,35 +10,6 @@ const passSample = (confidence: number): string =>
 
 const failSample = (confidence: number, criteria: string[]): string =>
   JSON.stringify({ pass: false, confidence, failing_criteria: criteria });
-
-describe('extractJson', () => {
-  it('extracts a bare JSON object', () => {
-    expect(extractJson('{"a":1}')).toEqual({ a: 1 });
-  });
-
-  it('extracts JSON from ```json fences', () => {
-    const text = '```json\n{"pass":true,"confidence":0.9}\n```';
-    expect(extractJson(text)).toEqual({ pass: true, confidence: 0.9 });
-  });
-
-  it('extracts the first balanced object from surrounding log text', () => {
-    const text = 'INFO starting\nresult: {"x": {"y": 2}} trailing log';
-    expect(extractJson(text)).toEqual({ x: { y: 2 } });
-  });
-
-  it('ignores braces inside strings', () => {
-    const text = '{"detail":"contains } brace"}';
-    expect(extractJson(text)).toEqual({ detail: 'contains } brace' });
-  });
-
-  it('returns null when no object present', () => {
-    expect(extractJson('no json here')).toBeNull();
-  });
-
-  it('returns null for malformed JSON', () => {
-    expect(extractJson('{not valid}')).toBeNull();
-  });
-});
 
 describe('JudgeVerifier', () => {
   it('passes when all three quorum samples pass', async () => {

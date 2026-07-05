@@ -547,3 +547,106 @@ describe('AgentCompiler — feedback on an existing verifier', () => {
     expect(contract.rungs).toEqual([{ kind: 'deterministic', command: 'npm test' }]);
   });
 });
+
+describe('AgentCompiler — authoring session-resume (revise rounds)', () => {
+  const genConfig = makeConfig({ verifier: { kind: 'generate' } });
+  const authored = (command: string): string => JSON.stringify({ command, rubric: '' });
+  const completion = (command: string, sessionId: string): LlmCompletion => ({
+    text: authored(command),
+    sessionId,
+  });
+
+  it('resumes its own session on a feedback round with a delta prompt (resume-capable provider)', async () => {
+    const llm = new FakeLlm(
+      [completion('npm test', 'sess-1'), completion('npm test -- --coverage', 'sess-2')],
+      { supportsResume: true },
+    );
+    const compiler = new AgentCompiler({ llm });
+
+    await compiler.compile(genConfig);
+    await compiler.compile(genConfig, 'cover the CLI too');
+
+    // First call: fresh full prompt, no resume — and it asks for a goaly-MINTED session so the
+    // session it later resumes contains only the compiler's own turns (ambient-pin immunity).
+    expect(llm.requests[0]?.resumeSessionId).toBeUndefined();
+    expect(llm.requests[0]?.mintSession).toBe(true);
+    expect(llm.requests[0]?.prompt).toContain('Goal:');
+    // Second call: resumes session 1, sends ONLY the feedback delta (the goal lives in the session).
+    expect(llm.requests[1]?.resumeSessionId).toBe('sess-1');
+    expect(llm.requests[1]?.prompt).toContain('cover the CLI too');
+    expect(llm.requests[1]?.prompt).not.toContain('Goal:');
+    expect(llm.requests[1]?.prompt).toContain('COMPLETE verification JSON');
+  });
+
+  it('a chain of revise rounds follows the session forward (sess-1 → sess-2 → …)', async () => {
+    const llm = new FakeLlm(
+      [completion('npm test', 'sess-1'), completion('npm t2', 'sess-2'), completion('npm t3', 'sess-3')],
+      { supportsResume: true },
+    );
+    const compiler = new AgentCompiler({ llm });
+
+    await compiler.compile(genConfig);
+    await compiler.compile(genConfig, 'round 1 feedback');
+    await compiler.compile(genConfig, 'round 2 feedback');
+
+    expect(llm.requests[1]?.resumeSessionId).toBe('sess-1');
+    expect(llm.requests[2]?.resumeSessionId).toBe('sess-2');
+  });
+
+  it('a fresh compile (no feedback) starts a NEW session — continuity is per authoring lifecycle', async () => {
+    const llm = new FakeLlm(
+      [completion('npm test', 'sess-1'), completion('pytest -q', 'sess-9')],
+      { supportsResume: true },
+    );
+    const compiler = new AgentCompiler({ llm });
+
+    await compiler.compile(genConfig);
+    await compiler.compile(genConfig); // e.g. the next phase of a phased run
+
+    expect(llm.requests[1]?.resumeSessionId).toBeUndefined();
+    expect(llm.requests[1]?.prompt).toContain('Goal:');
+  });
+
+  it('sends the full prompt on a feedback round when the provider cannot resume (default FakeLlm)', async () => {
+    const llm = new FakeLlm([authored('npm test'), authored('npm test -- --coverage')]);
+    const compiler = new AgentCompiler({ llm });
+
+    await compiler.compile(genConfig);
+    await compiler.compile(genConfig, 'cover the CLI too');
+
+    // No session support ⇒ a delta prompt would reach an amnesiac model; the full prompt goes out.
+    expect(llm.requests[1]?.resumeSessionId).toBeUndefined();
+    expect(llm.requests[1]?.prompt).toContain('Goal:');
+    expect(llm.requests[1]?.prompt).toContain('cover the CLI too');
+  });
+
+  it('falls back to a fresh full-prompt call when the resume attempt throws (never burns the round)', async () => {
+    // A resume-capable provider that rejects the resumed call, then answers the fresh one.
+    class ResumeRejecting implements LlmProvider {
+      readonly name = 'resume-rejecting';
+      readonly supportsResume = true;
+      readonly requests: Array<{ prompt: string; resumeSessionId?: string }> = [];
+      async complete(req: {
+        prompt: string;
+        resumeSessionId?: string;
+      }): Promise<LlmCompletion> {
+        this.requests.push({ prompt: req.prompt, ...(req.resumeSessionId !== undefined ? { resumeSessionId: req.resumeSessionId } : {}) });
+        if (req.resumeSessionId !== undefined) throw new Error('stale session');
+        return { text: authored('npm test'), sessionId: `sess-${this.requests.length}` };
+      }
+    }
+    const llm = new ResumeRejecting();
+    const compiler = new AgentCompiler({ llm });
+
+    await compiler.compile(genConfig);
+    const contract = await compiler.compile(genConfig, 'tighten the bar');
+
+    expect(contract.rungs[0]).toEqual({ kind: 'deterministic', command: 'npm test' });
+    // Attempted resume (call 2), then the fresh full-prompt fallback (call 3).
+    expect(llm.requests).toHaveLength(3);
+    expect(llm.requests[1]?.resumeSessionId).toBe('sess-1');
+    expect(llm.requests[2]?.resumeSessionId).toBeUndefined();
+    expect(llm.requests[2]?.prompt).toContain('Goal:');
+    expect(llm.requests[2]?.prompt).toContain('tighten the bar');
+  });
+});

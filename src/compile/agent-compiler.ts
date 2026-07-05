@@ -5,7 +5,7 @@ import { freezeContract, sha256Hex } from '../util/hash';
 import type { LlmProvider } from '../llm/provider';
 import type { VerifierCompiler } from './compiler';
 import { extractRequiredTools } from './required-tools';
-import { extractBalancedJson } from './json-extract';
+import { extractBalancedJson } from '../util/json-extract';
 import { UsageAssertion, enforceUsageAssertion, type UsageShape } from './usage-gate';
 
 /** Schema for the JSON the authoring LLM must emit (validated fail-closed). */
@@ -241,6 +241,15 @@ export class AgentCompiler implements VerifierCompiler {
   readonly #llm: LlmProvider;
   readonly #writeFile: ((relPath: string, content: string) => Promise<void>) | undefined;
   readonly #verifyDir: string | undefined;
+  /**
+   * The provider session of the LAST authoring call, when the transport supports resume. A revise
+   * round (compile-retry, Seal "revise", red-team re-author) then RESUMES it with only the feedback
+   * as a delta turn — the model keeps its own prior reasoning and what it authored, instead of
+   * re-receiving the whole authoring prompt amnesiac. Authoring-only continuity: the gates that
+   * judge the output (usage gate, red-team, Seal, pre-flight, the two keys) all stay independent.
+   * A fresh compile (no feedback — e.g. the next phase of a phased run) starts a NEW session.
+   */
+  #session: string | undefined;
   readonly #classifyShape:
     | ((goal: string, intent: string | undefined) => Promise<UsageShape>)
     | undefined;
@@ -314,21 +323,61 @@ export class AgentCompiler implements VerifierCompiler {
       );
     }
     guidanceParts.push('Author verification as JSON only.');
+    const fullPrompt = guidanceParts.join('\n');
+
+    // A revise round resumes the compiler's OWN prior authoring session when the transport supports
+    // it (see #session): the delta prompt carries only the feedback — the goal/rules/prior attempt
+    // live in the resumed conversation, so the round costs a fraction of a full re-send. Falls back
+    // to the fresh full-prompt call on any resume failure (a stale/rejected session must not burn a
+    // compile-retry). The full prompt is ALWAYS what a fresh session receives — a delta to an
+    // amnesiac model would be meaningless, hence the supportsResume gate.
+    const resumeId =
+      feedback !== undefined && feedback.length > 0 && this.#llm.supportsResume === true
+        ? this.#session
+        : undefined;
+    const prompt =
+      resumeId !== undefined
+        ? `Reviewer feedback on your previous contract attempt (revise accordingly): ${feedback}\n` +
+          'Re-emit the COMPLETE verification JSON object described at the start of this session — ' +
+          'every field and the FULL content of every authored file, not a diff. JSON only.'
+        : fullPrompt;
 
     let raw: string;
+    let session: string | undefined;
     try {
-      ({ text: raw } = await this.#llm.complete({
+      ({ text: raw, sessionId: session } = await this.#llm.complete({
         system: SYSTEM_PROMPT,
-        prompt: guidanceParts.join('\n'),
+        prompt,
         temperature: 0,
+        // A fresh authoring call asks for a goaly-MINTED session (an explicit id the provider
+        // creates) so the session it later resumes contains ONLY this compiler's own turns — even
+        // in environments that pin every bare CLI call to one ambient shared session.
+        ...(resumeId !== undefined ? { resumeSessionId: resumeId } : { mintSession: true }),
       }));
     } catch (e) {
-      // A timed-out authoring call is still a fail-closed COMPILE_FAILED (invariant #4), but re-issuing
-      // the same heavy call burns compile-retries on a transient infra limit, not a model mistake
-      // (follow-on G: sonnet's 3× COMPILE_FAILED were LLM timeouts 10 min apart = the default
-      // --llm-timeout-ms). Surface the cause + remedy so the user raises the timeout instead.
-      throw withTimeoutHint(e);
+      if (resumeId !== undefined) {
+        // Resume failed (stale session, CLI store evicted, …): retry once as a fresh full-prompt
+        // call before surfacing anything — never trade a working revise round for the shortcut.
+        this.#session = undefined;
+        try {
+          ({ text: raw, sessionId: session } = await this.#llm.complete({
+            system: SYSTEM_PROMPT,
+            prompt: fullPrompt,
+            temperature: 0,
+            mintSession: true,
+          }));
+        } catch (e2) {
+          throw withTimeoutHint(e2);
+        }
+      } else {
+        // A timed-out authoring call is still a fail-closed COMPILE_FAILED (invariant #4), but re-issuing
+        // the same heavy call burns compile-retries on a transient infra limit, not a model mistake
+        // (follow-on G: sonnet's 3× COMPILE_FAILED were LLM timeouts 10 min apart = the default
+        // --llm-timeout-ms). Surface the cause + remedy so the user raises the timeout instead.
+        throw withTimeoutHint(e);
+      }
     }
+    this.#session = session;
 
     const generated = parseGenerated(raw);
 

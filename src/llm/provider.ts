@@ -10,6 +10,25 @@ export type LlmRequest = {
   prompt: string;
   /** Default 0 — judging/approval must be as stable as possible. */
   temperature?: number;
+  /**
+   * Resume this provider session (AUTHORING continuity only — the compiler/planner revise loops
+   * resuming their OWN prior authoring turn so a revision is a small delta instead of a full
+   * re-send). A caller may only send a delta prompt after checking {@link LlmProvider.supportsResume}
+   * — a provider without sessions ignores this field, and a delta prompt to an amnesiac model would
+   * be meaningless. NEVER used by the verification panels (judge/approver/refuters): their votes
+   * must be independent, and resuming a sibling's session would let reviewer N see reviewer N-1's
+   * verdict — fresh sessions there are a security property.
+   */
+  resumeSessionId?: string;
+  /**
+   * Ask the provider to MINT a goaly-owned session for this call (an explicit fresh id, e.g.
+   * claude's `--session-id <uuid>`) and report it back as {@link LlmCompletion.sessionId}. This is
+   * what makes authoring resume trustworthy even when goaly runs nested under Claude Code, where a
+   * bare call adopts the AMBIENT session shared by every step in the cwd: a minted session's file
+   * contains only this caller's own turns. Ignored by providers/codecs without the capability —
+   * the call is then an ordinary fresh call (and its reported id is subject to the ambient guard).
+   */
+  mintSession?: boolean;
 };
 
 /**
@@ -32,10 +51,22 @@ export type LlmCompletion = {
    * reports one. Present only for a `reported` count; lets the cost overlay price per category.
    */
   tokenBreakdown?: TokenBreakdown;
+  /**
+   * The provider session this completion belongs to, when the transport has resumable sessions
+   * (the agent-CLI provider reads it off the CLI's structured output). A caller that wants
+   * authoring continuity stores it and passes it back as {@link LlmRequest.resumeSessionId}.
+   */
+  sessionId?: string;
 };
 
 export interface LlmProvider {
   readonly name: string;
+  /**
+   * True when the transport can resume a prior session via {@link LlmRequest.resumeSessionId}
+   * (capability-gated per agent-CLI codec; the direct HTTP providers have no sessions). Callers
+   * MUST check this before sending a resume-shaped delta prompt.
+   */
+  readonly supportsResume?: boolean;
   complete(req: LlmRequest): Promise<LlmCompletion>;
 }
 
@@ -46,11 +77,14 @@ export interface LlmProvider {
  */
 export class FakeLlm implements LlmProvider {
   readonly name = 'fake-llm';
+  /** Default false so existing scripted tests keep the no-session, full-prompt behavior. */
+  readonly supportsResume: boolean;
   #i = 0;
   readonly #responses: (string | LlmCompletion)[];
   readonly requests: LlmRequest[] = [];
-  constructor(responses: (string | LlmCompletion)[]) {
+  constructor(responses: (string | LlmCompletion)[], opts?: { supportsResume?: boolean }) {
     this.#responses = responses;
+    this.supportsResume = opts?.supportsResume ?? false;
   }
   async complete(req: LlmRequest): Promise<LlmCompletion> {
     this.requests.push(req);

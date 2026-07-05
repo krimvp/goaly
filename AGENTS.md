@@ -115,11 +115,11 @@ That is why a new harness is one file and why the whole policy is testable with 
 
 ```
 src/
-  domain/      ids, config, contract, verdict, events   — types + Zod schemas (the language)
+  domain/      ids, config, contract, verdict, events, critique — types + Zod schemas (the language)
   orchestrator/ state, step, decide, stuck              — PURE reducer (the spine)
   driver/      driver, clock, budget                    — effects + seam #4
-  verify/      verifier, ladder, deterministic, judge, approver, agent-approver   — seam #2/#3
-  compile/     compiler, agent-compiler, required-tools, seal, seal-gates   — Phase 1 + freeze + Seal
+  verify/      verifier, ladder, deterministic, judge, approver, agent-approver, adversarial-rung — seam #2/#3
+  compile/     compiler, agent-compiler, critiqued-compiler, required-tools, seal, seal-gates — Phase 1 + freeze + Seal
   agent-cli/   codec, <tool>-codec, output, stream, estimate — one deep codec per CLI (seam-shared)
   harness/     adapter, agent-cli-harness, classify       — seam #1 (codec-backed adapter)
   goaly-code/ harness, loop, tools, edit, fs-host, session-store, prompt — the NON-codec adapter (seam #1)
@@ -127,7 +127,7 @@ src/
   workspace/   workspace, git-workspace                 — harness-independent diff/run
   sandbox/     policy, launcher, bwrap, firejail, container, detect — opt-in OS isolation (seam)
   runlog/      runlog, file-runlog                      — write-ahead persistence + replay
-  llm/         provider, agent-cli-provider, openai-provider — INTERNAL seam (judge/approver/compiler)
+  llm/         provider, agent-cli-provider, openai-provider, critic-panel — INTERNAL seam (judge/approver/compiler/critics)
   training/    trajectory, dataset, bench               — Slices 2–3: labeled-trajectory export + SFT dataset + eval bench
   cli/         args, compose, main                      — composition root + CLI
   testing/     fakes                                    — fakes for every seam

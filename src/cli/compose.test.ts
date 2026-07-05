@@ -132,8 +132,10 @@ describe('composeDeps — per-reviewer approver models (follow-up to issue #84)'
   });
 
   it('builds a per-reviewer panel that defaults the quorum to the model count', async () => {
-    // Three models, no --approver-quorum ⇒ the panel makes one call per model (quorum = 3).
-    const llm = new FakeLlm([noVetoWithTokens, noVetoWithTokens, noVetoWithTokens]);
+    // Three models, no --approver-quorum ⇒ the panel makes one call per model (quorum = 3). A veto
+    // first keeps the outcome mathematically open so all three reviewers are actually polled.
+    const vetoWithTokens = { text: '{"veto": true, "reason": "keep the panel open"}', tokensUsed: 100 };
+    const llm = new FakeLlm([vetoWithTokens, noVetoWithTokens, noVetoWithTokens]);
     const deps = composeDeps(
       makeConfig(),
       opts({ llm, models: { approverModels: ['a', 'b', 'c'] } }),
@@ -148,7 +150,15 @@ describe('composeDeps — per-reviewer approver models (follow-up to issue #84)'
   });
 
   it('cycles the panel when --approver-quorum exceeds the model count', async () => {
-    const llm = new FakeLlm(Array(5).fill(noVetoWithTokens));
+    // Interleave vetoes so the 5-vote outcome stays open until the last reviewer (no early exit).
+    const vetoWithTokens = { text: '{"veto": true, "reason": "keep the panel open"}', tokensUsed: 100 };
+    const llm = new FakeLlm([
+      vetoWithTokens,
+      noVetoWithTokens,
+      vetoWithTokens,
+      noVetoWithTokens,
+      noVetoWithTokens,
+    ]);
     const deps = composeDeps(
       makeConfig({ approver: { quorum: 5 } }),
       opts({ llm, models: { approverModels: ['a', 'b'] } }),
@@ -376,6 +386,72 @@ describe('buildLadder — verify timeout threading', () => {
       { command: 'npm test', opts: { timeoutMs: 30000 } },
       { command: 'node smoke.mjs', opts: { timeoutMs: 30000 } },
     ]);
+  });
+
+  it('appends the --adversarial refuter rung AFTER the frozen rungs; it can only fail a green', async () => {
+    const contract = freezeContract({
+      goal: 'g',
+      rungs: [{ kind: 'deterministic', command: 'npm test' }],
+      rubric: 'r',
+      generatedFiles: [],
+    });
+    const refuterLlm = new FakeLlm([
+      JSON.stringify({ refuted: true, confidence: 0.9, reason: 'hard-coded output' }),
+    ]);
+    const ladder = buildLadder(contract, new FakeLlm([]), undefined, {
+      llm: refuterLlm,
+      refuters: 3,
+    });
+    const { workspace, calls } = spyWorkspace(); // deterministic rung greens (exit 0)
+
+    const verdict = await ladder.verify(workspace, 'g', 'r');
+
+    // The frozen rung ran and passed; the appended refuter panel then refuted the green. With
+    // every scripted vote a refutation, the red is settled after 2 of 3 votes (early exit).
+    expect(calls).toEqual([{ command: 'npm test' }]);
+    expect(refuterLlm.requests).toHaveLength(2);
+    expect(verdict.pass).toBe(false);
+    expect(verdict.detail).toContain('hard-coded output');
+    // The frozen bar itself passed — the depth score shows the short-circuit at the refuter rung.
+    expect(verdict.rungsPassed).toBe(1);
+    expect(verdict.rungsTotal).toBe(2);
+  });
+
+  it('never consults the refuters when a frozen rung is already red (short-circuit)', async () => {
+    const contract = freezeContract({
+      goal: 'g',
+      // fileHash() → null in the spy workspace, so the guard fails closed before anything runs.
+      rungs: [{ kind: 'deterministic', command: 'npm test' }],
+      rubric: 'r',
+      generatedFiles: [{ path: 'authored.test.ts', sha256: 'a'.repeat(64) }],
+    });
+    const refuterLlm = new FakeLlm([]);
+    const ladder = buildLadder(contract, new FakeLlm([]), undefined, {
+      llm: refuterLlm,
+      refuters: 3,
+    });
+    const { workspace } = spyWorkspace();
+
+    const verdict = await ladder.verify(workspace, 'g', 'r');
+
+    expect(verdict.pass).toBe(false);
+    expect(refuterLlm.requests).toHaveLength(0); // refuter spend only on candidate greens
+  });
+
+  it('builds no refuter rung without the adversarial option (byte-for-byte default ladder)', async () => {
+    const contract = freezeContract({
+      goal: 'g',
+      rungs: [{ kind: 'deterministic', command: 'npm test' }],
+      rubric: 'r',
+      generatedFiles: [],
+    });
+    const ladder = buildLadder(contract, new FakeLlm([]));
+    const { workspace } = spyWorkspace();
+
+    const verdict = await ladder.verify(workspace, 'g', 'r');
+
+    expect(verdict.pass).toBe(true);
+    expect(verdict.rungsTotal).toBe(1); // exactly the frozen rung — no appended rung
   });
 });
 

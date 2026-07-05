@@ -1,8 +1,9 @@
 /**
  * Extract the first balanced JSON object from a string. Tolerant of surrounding prose or markdown
  * fences an LLM may emit despite instructions. Returns the substring, or undefined if no balanced
- * object is found. String-literal aware (ignores braces inside strings). Shared by the verification
- * compiler and the usage-shape classifier so both parse LLM output the same tolerant way.
+ * object is found. String-literal aware (ignores braces inside strings). The ONE shared tolerant
+ * scanner for every LLM-output seam (compiler, planner, judge, approver, usage-shape classifier),
+ * so they all parse the same way — hoisted here instead of a per-step copy.
  */
 export function extractBalancedJson(text: string): string | undefined {
   const start = text.indexOf('{');
@@ -35,4 +36,19 @@ export function extractBalancedJson(text: string): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Extract + parse the first balanced JSON object from arbitrary text. Tolerates ```json fences,
+ * surrounding log lines, and prose. Returns the parsed value, or null when no balanced `{...}`
+ * object yields valid JSON.
+ */
+export function extractJson(text: string): unknown | null {
+  const candidate = extractBalancedJson(text);
+  if (candidate === undefined) return null;
+  try {
+    return JSON.parse(candidate) as unknown;
+  } catch {
+    return null;
+  }
 }

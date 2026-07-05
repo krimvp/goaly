@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DriverDeps } from '../driver/driver';
 import type { RunConfig } from '../domain/config';
@@ -11,15 +11,18 @@ import type { Verifier } from '../verify/verifier';
 import type { VerifierCompiler } from '../compile/compiler';
 import type { LlmProvider } from '../llm/provider';
 import { Ladder } from '../verify/ladder';
+import { AdversarialReviewRung } from '../verify/adversarial-rung';
 import { DeterministicVerifier } from '../verify/deterministic';
 import { GeneratedFilesGuard } from '../verify/generated-guard';
 import { JudgeVerifier } from '../verify/judge';
 import { AgentApprover } from '../verify/agent-approver';
 import { AgentCompiler } from '../compile/agent-compiler';
+import { CritiquedCompiler } from '../compile/critiqued-compiler';
 import { classifyUsageShape } from '../compile/usage-gate';
 import { SeededCompiler, SeededPlanner } from '../followup/seeded';
 import { AutoSealGate, HumanSealGate } from '../compile/seal-gates';
 import { AgentPlanner } from '../plan/agent-planner';
+import { CritiquedPlanner } from '../plan/critiqued-planner';
 import { StaticPlanner } from '../plan/static-planner';
 import { AutoPlanGate, HumanPlanGate } from '../plan/plan-gates';
 import type { Planner } from '../plan/planner';
@@ -240,9 +243,58 @@ function seedCompiler(inner: VerifierCompiler, seed: string | undefined): Verifi
   return seed !== undefined ? new SeededCompiler(inner, seed) : inner;
 }
 
+/**
+ * Wrap the compiler with the `--adversarial` contract red-team when enabled; identity otherwise
+ * (a default run builds NO critic provider and pays nothing). Wraps the INNER compiler so the
+ * follow-up seed (outermost) still reaches the first authoring attempt. The panel's provider is
+ * metered under the `'compile'` phase — critique spend is part of authoring the contract, not a
+ * new spend category (mirrors how the usage-shape classifier rides the compiler's phase).
+ */
+function critiqueCompiler(
+  inner: VerifierCompiler,
+  config: RunConfig,
+  makeLlm: () => LlmProvider,
+  workspaceRoot: string,
+  logger: Logger,
+): VerifierCompiler {
+  const adv = config.adversarial;
+  if (!adv.enabled || adv.contractCritics <= 0 || adv.contractCritiqueRounds <= 0) return inner;
+  return new CritiquedCompiler({
+    inner,
+    llm: makeLlm(),
+    critics: adv.contractCritics,
+    rounds: adv.contractCritiqueRounds,
+    readFile: (rel) => readFile(path.join(workspaceRoot, rel), 'utf8'),
+    logger,
+  });
+}
+
 /** Wrap the planner with the follow-up seed (Capability C) when present; identity otherwise. */
 function seedPlanner(inner: Planner, seed: string | undefined): Planner {
   return seed !== undefined ? new SeededPlanner(inner, seed) : inner;
+}
+
+/**
+ * Wrap the planner with the `--adversarial` plan critique when enabled; identity otherwise. Only
+ * the LLM AgentPlanner is ever passed here — a `--plan-file` StaticPlanner is the user's explicit
+ * plan and is never critiqued (the caller routes around this wrapper). Critic spend meters under
+ * the `'plan'` phase — critique is part of authoring the plan, not a new spend category.
+ */
+function critiquePlanner(
+  inner: Planner,
+  config: RunConfig,
+  makeLlm: () => LlmProvider,
+  logger: Logger,
+): Planner {
+  const adv = config.adversarial;
+  if (!adv.enabled || adv.planCritics <= 0 || adv.planCritiqueRounds <= 0) return inner;
+  return new CritiquedPlanner({
+    inner,
+    llm: makeLlm(),
+    critics: adv.planCritics,
+    rounds: adv.planCritiqueRounds,
+    logger,
+  });
 }
 
 /**
@@ -367,11 +419,17 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   const phasedSeams: { planner: Planner; planGate: PlanGate } | undefined = config.phased
     ? {
         // A phased follow-up authors its plan AWARE of the prior run too: the seed rides the planner's
-        // authoring feedback (SeededPlanner), exactly as it rides the compiler below.
+        // authoring feedback (SeededPlanner), exactly as it rides the compiler below. The adversarial
+        // plan critique wraps ONLY the LLM planner — a --plan-file is the user's explicit plan.
         planner: seedPlanner(
           options.planFile !== undefined
             ? new StaticPlanner({ path: options.planFile })
-            : new AgentPlanner({ llm: llmFor(models.planner, 'plan') }),
+            : critiquePlanner(
+                new AgentPlanner({ llm: llmFor(models.planner, 'plan') }),
+                config,
+                () => llmFor(models.critic, 'plan'),
+                logger,
+              ),
           seed,
         ),
         planGate:
@@ -406,17 +464,23 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
 
   return {
     compiler: seedCompiler(
-      new AgentCompiler({
-        llm: llmFor(models.compiler, 'compile'),
-        writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
-        ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
-        // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered like
-        // the authoring call) arms the gate on a confident build-and-use goal so a bar that a parallel
-        // reimplementation could green is refused at compile (COMPILE_FAILED → re-authored with a usage
-        // assertion). Fail-open, so it never blocks a non-build-and-use run.
-        classifyShape: (goal, intent) =>
-          classifyUsageShape(llmFor(models.compiler, 'compile'), goal, intent),
-      }),
+      critiqueCompiler(
+        new AgentCompiler({
+          llm: llmFor(models.compiler, 'compile'),
+          writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
+          ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
+          // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered like
+          // the authoring call) arms the gate on a confident build-and-use goal so a bar that a parallel
+          // reimplementation could green is refused at compile (COMPILE_FAILED → re-authored with a usage
+          // assertion). Fail-open, so it never blocks a non-build-and-use run.
+          classifyShape: (goal, intent) =>
+            classifyUsageShape(llmFor(models.compiler, 'compile'), goal, intent),
+        }),
+        config,
+        () => llmFor(models.critic, 'compile'),
+        options.workspaceRoot,
+        logger,
+      ),
       seed,
     ),
     seal:
@@ -440,7 +504,18 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       // the rubric's test file as "absent from the diff" and false-vetoes a correct run into a
       // deadlock with the integrity guard. Re-set per phase so each phase shows its own authored files.
       workspace.setDiffIncludes(contract.generatedFiles.map((f) => f.path));
-      return buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs);
+      // The --adversarial refuter rung is a verification judgment, so its provider is metered under
+      // the 'judge' phase (no new spend category); built only when enabled — a default run pays 0.
+      const adversarial =
+        config.adversarial.enabled && config.adversarial.refuters > 0
+          ? { llm: llmFor(models.critic, 'judge'), refuters: config.adversarial.refuters }
+          : undefined;
+      return buildLadder(
+        contract,
+        llmFor(models.judge, 'judge'),
+        timeouts.verifyMs,
+        adversarial,
+      );
     },
     // Sign-off (second key, issue #84 + follow-up): a single reviewer by default (quorum 1 ⇒
     // byte-for-byte the historical call). `--approver-quorum N` runs a perspective-diverse panel
@@ -613,11 +688,19 @@ function makeOpenAiClient(
  * `verifyTimeoutMs` caps each deterministic command — including an artifact-running smoke command
  * (issue #53), which is just another deterministic rung (a timeout is a fail-closed FAIL); the model
  * and timeout are wiring and never alter the frozen rungs themselves.
+ *
+ * `adversarial` (the `--adversarial` refuter panel) APPENDS a built-in {@link AdversarialReviewRung}
+ * after every frozen rung — the same non-contract-rung precedent as the guard below: part of the
+ * ladder, never part of `contractHash`. The ladder's short-circuit means it runs only on an
+ * all-green frozen bar (so its LLM spend occurs only on candidate greens — under `--candidates > 1`
+ * that is per green candidate, deliberately: its red feeds the graded selection) and it can only
+ * FAIL that green, never promote a red.
  */
 export function buildLadder(
   contract: CompiledContract,
   llm: LlmProvider,
   verifyTimeoutMs?: number,
+  adversarial?: { llm: LlmProvider; refuters: number },
 ): Verifier {
   const rungs: Verifier[] = contract.rungs.map((rung) =>
     rung.kind === 'deterministic'
@@ -634,6 +717,9 @@ export function buildLadder(
   // command measures. No generated files ⇒ no guard (the common --verify-cmd path is unchanged).
   if (contract.generatedFiles.length > 0) {
     rungs.unshift(new GeneratedFilesGuard(contract.generatedFiles));
+  }
+  if (adversarial !== undefined && adversarial.refuters > 0) {
+    rungs.push(new AdversarialReviewRung({ llm: adversarial.llm, refuters: adversarial.refuters }));
   }
   return new Ladder(rungs);
 }

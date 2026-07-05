@@ -45,8 +45,9 @@ class ThrowingProvider implements LlmProvider {
 }
 
 describe('AgentApprover — per-reviewer model independence (reviewers list)', () => {
-  it('a panel of 3 distinct providers calls each provider exactly once', async () => {
-    const a = new NamedFake('model-a', [noVeto]);
+  it('a panel of 3 distinct providers calls each provider exactly once (while the outcome is open)', async () => {
+    // Reviewer 1 vetoes so the outcome stays mathematically open through all three providers.
+    const a = new NamedFake('model-a', [veto('keep the panel open')]);
     const b = new NamedFake('model-b', [noVeto]);
     const c = new NamedFake('model-c', [noVeto]);
     // quorum defaults to reviewers.length when unset.
@@ -58,6 +59,21 @@ describe('AgentApprover — per-reviewer model independence (reviewers list)', (
     expect(a.requests).toHaveLength(1);
     expect(b.requests).toHaveLength(1);
     expect(c.requests).toHaveLength(1);
+  });
+
+  it('a unanimous distinct-model panel early-exits: the third provider is never consulted', async () => {
+    const a = new NamedFake('model-a', [noVeto]);
+    const b = new NamedFake('model-b', [noVeto]);
+    const c = new NamedFake('model-c', [noVeto]);
+    const approver = new AgentApprover({ llm: a, reviewers: [a, b, c] });
+
+    const verdict = await approver.review(baseInput);
+
+    // 2*2 > 3 after the first two no-vetoes — model c's vote cannot change the aggregate.
+    expect(verdict.veto).toBe(false);
+    expect(a.requests).toHaveLength(1);
+    expect(b.requests).toHaveLength(1);
+    expect(c.requests).toHaveLength(0);
   });
 
   it('defaults quorum to the reviewer count when no quorum is given', async () => {
@@ -73,8 +89,9 @@ describe('AgentApprover — per-reviewer model independence (reviewers list)', (
   });
 
   it('cycles the providers when quorum exceeds the model count', async () => {
-    const a = new NamedFake('model-a', [noVeto, noVeto]);
-    const b = new NamedFake('model-b', [noVeto]);
+    // Reviewer 1 vetoes so the outcome stays open through all four votes and the cycle is visible.
+    const a = new NamedFake('model-a', [veto('keep the panel open'), noVeto]);
+    const b = new NamedFake('model-b', [noVeto, noVeto]);
     // quorum 4, two models: reviewer 0→a, 1→b, 2→a, 3→b.
     const approver = new AgentApprover({ llm: a, reviewers: [a, b], quorum: 4 });
 
@@ -86,7 +103,8 @@ describe('AgentApprover — per-reviewer model independence (reviewers list)', (
   });
 
   it('pairs reviewer i with lens i % lenses.length, same as the single-model panel', async () => {
-    const a = new NamedFake('model-a', [noVeto, noVeto]);
+    // Reviewer 1 vetoes so the outcome stays open and reviewer 3 (a again, LENS_ALPHA) is reached.
+    const a = new NamedFake('model-a', [veto('keep the panel open'), noVeto]);
     const b = new NamedFake('model-b', [noVeto]);
     const approver = new AgentApprover({
       llm: a,
@@ -98,9 +116,9 @@ describe('AgentApprover — per-reviewer model independence (reviewers list)', (
     await approver.review(baseInput);
 
     // reviewer 0 → provider a, lens ALPHA; reviewer 1 → provider b, lens BETA; reviewer 2 → a, ALPHA.
-    expect(a.requests[0]?.system).toContain('LENS_ALPHA');
-    expect(b.requests[0]?.system).toContain('LENS_BETA');
-    expect(a.requests[1]?.system).toContain('LENS_ALPHA');
+    expect(a.requests[0]?.prompt).toContain('LENS_ALPHA');
+    expect(b.requests[0]?.prompt).toContain('LENS_BETA');
+    expect(a.requests[1]?.prompt).toContain('LENS_ALPHA');
   });
 
   it('a reviewer whose provider throws becomes a VETO vote (fail-closed)', async () => {
@@ -150,7 +168,7 @@ describe('AgentApprover — per-reviewer model independence (reviewers list)', (
     // No reviewers ⇒ the single-llm quorum-1 single call, byte-for-byte.
     expect(llm.requests).toHaveLength(1);
     expect(llm.requests[0]?.temperature).toBe(0);
-    expect(llm.requests[0]?.system).not.toContain('REVIEW LENS');
+    expect(llm.requests[0]?.prompt).not.toContain('REVIEW LENS');
   });
 
   it('absent reviewers is byte-for-byte the single-llm path', async () => {
@@ -184,6 +202,6 @@ describe('AgentApprover — per-reviewer model independence (reviewers list)', (
 
     expect(only.requests).toHaveLength(1);
     expect(only.requests[0]?.temperature).toBe(0.5);
-    expect(only.requests[0]?.system).toContain('REVIEW LENS');
+    expect(only.requests[0]?.prompt).toContain('REVIEW LENS');
   });
 });

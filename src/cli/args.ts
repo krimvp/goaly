@@ -188,6 +188,8 @@ Usage:
                [--harness claude|codex|droid|pi|goaly-code] [--max-agent-turns N] [--model <m>]
                [--llm-model <m>] [--approver-quorum N] [--approver-diversity-temp T]
                [--approver-models m1,m2,…] [--approver-lenses l1,l2,…]
+               [--adversarial [--adversarial-plan-critics N] [--adversarial-contract-critics N]
+                              [--adversarial-refuters N] [--critic-model <m>]]
                [--llm-provider claude|codex|droid|pi|openai] [--harness-timeout-ms N]
                [--base-url <url>] [--llm-api-key-env <NAME>]
                [--llm-timeout-ms N] [--verify-timeout-ms N] [--config <path>]
@@ -343,6 +345,25 @@ Compile resilience (issue #51):
                              A correctable authoring mistake (bad path, transient parse miss) no
                              longer discards a valid plan. Exhausting the budget is still a typed
                              FAILED — never a skipped check.
+
+Adversarial review (opt-in; a run without --adversarial is byte-for-byte unchanged):
+  --adversarial         red-team the loop at three points: an adversarial critic panel on the phased
+                        PLAN before its Seal, a red-team panel on the compiled CONTRACT before the
+                        Seal (each critical finding triggers a bounded re-author round; the Seal
+                        gates still stand), and a REFUTER rung appended AFTER the frozen ladder —
+                        it runs only when every frozen rung is green, votes refute-first, and can
+                        only FAIL the iteration (never part of the contractHash, like the
+                        generated-files guard). Also widens Sign-off to a 3-reviewer panel unless
+                        --approver-quorum is set explicitly. Pre-Seal critics are advisory (a broken
+                        critic ⇒ pass-through); the refuter rung is fail-closed (a broken refuter
+                        counts as refuted; zero parseable refuters ⇒ unevaluable, never a green).
+                        COST: critics/refuters are metered LLM calls counted against --budget-tokens;
+                        refuters run only on candidate greens.
+  --adversarial-plan-critics N      plan-critic panel size (default 2; 0 skips the plan critique)
+  --adversarial-contract-critics N  contract red-team panel size (default 2; 0 skips it)
+  --adversarial-refuters N          refuter votes on a green ladder (default 3; 0 skips the rung)
+  --critic-model <m>    model for all adversarial critics/refuters (cascades like the other
+                        LLM-step models: --critic-model → --llm-model → --model)
 
 Model selection (all optional; default = each tool's own default):
   --model <m>           model for the harness AND the LLM steps (the global default)
@@ -622,6 +643,7 @@ const VALUELESS_FLAGS = new Set([
   'no-setup',
   'autonomous',
   'phased',
+  'adversarial',
   'delta-verify',
   'no-log-file',
   'stream',
@@ -914,6 +936,16 @@ export async function parseArgs(
     ...(parseApproverLenses(flags) !== undefined
       ? { approverLenses: parseApproverLenses(flags) }
       : {}),
+    ...(flags['adversarial'] !== undefined ? { adversarial: true } : {}),
+    ...(parseAdversarialCount(flags, 'adversarial-plan-critics') !== undefined
+      ? { adversarialPlanCritics: parseAdversarialCount(flags, 'adversarial-plan-critics') }
+      : {}),
+    ...(parseAdversarialCount(flags, 'adversarial-contract-critics') !== undefined
+      ? { adversarialContractCritics: parseAdversarialCount(flags, 'adversarial-contract-critics') }
+      : {}),
+    ...(parseAdversarialCount(flags, 'adversarial-refuters') !== undefined
+      ? { adversarialRefuters: parseAdversarialCount(flags, 'adversarial-refuters') }
+      : {}),
   });
 
   const harness = parseHarness(str(flags, 'harness'));
@@ -1076,6 +1108,21 @@ function parseApproverQuorum(flags: RawFlags): number | undefined {
 }
 
 /**
+ * Validate the `--adversarial-*` panel-size flags at the seam: a NON-NEGATIVE integer (0 is a valid
+ * "skip this step" opt-out), fail-closed on anything else (invariant #6). Absent ⇒ undefined so the
+ * adversarial-block defaults apply.
+ */
+function parseAdversarialCount(flags: RawFlags, name: string): number | undefined {
+  const v = str(flags, name);
+  if (v === undefined) return undefined;
+  const parsed = z.coerce.number().int().min(0).safeParse(v);
+  if (!parsed.success) {
+    throw new UsageError(`--${name}: expected a non-negative integer, got '${v}'`);
+  }
+  return parsed.data;
+}
+
+/**
  * Validate `--approver-diversity-temp T` at the seam (issue #84): a sampling temperature in [0,2]
  * applied ONLY when the panel has `quorum > 1`, fail-closed on anything else. Absent ⇒ undefined so
  * the approver-block default (0.5) applies.
@@ -1223,6 +1270,7 @@ function parseModels(flags: RawFlags): ModelSelection {
   }
   add('compilerModel', 'compiler-model');
   add('plannerModel', 'planner-model');
+  add('criticModel', 'critic-model');
   add('explainModel', 'explain-model');
   try {
     return ModelSelection.parse(raw);

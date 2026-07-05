@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { RunConfig } from '../domain/config';
 import { Plan, type PhasePlan } from '../domain/plan';
 import { freezePlan } from '../util/hash';
+import { extractBalancedJson } from '../util/json-extract';
 import type { LlmProvider } from '../llm/provider';
 import type { Planner } from './planner';
 
@@ -32,36 +33,6 @@ const SYSTEM_PROMPT =
   '- Do NOT include a final "make everything pass" / "run the whole test suite" phase — a cumulative ' +
   'acceptance step on the ORIGINAL goal is added automatically after your phases.';
 
-/**
- * Extract the first balanced JSON object from a string. Tolerant of surrounding prose or markdown
- * fences the LLM may emit despite instructions. String-literal aware (ignores braces inside strings).
- * Returns the substring, or undefined if no balanced object is found.
- */
-function extractBalancedJson(text: string): string | undefined {
-  const start = text.indexOf('{');
-  if (start === -1) return undefined;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i += 1) {
-    const ch = text[i];
-    if (ch === undefined) break;
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === '\\') escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === '{') depth += 1;
-    else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return undefined;
-}
-
 function parseGenerated(raw: string): Plan {
   const json = extractBalancedJson(raw);
   if (json === undefined) throw new Error('AgentPlanner: LLM response contained no JSON object');
@@ -83,6 +54,13 @@ function parseGenerated(raw: string): Plan {
  */
 export class AgentPlanner implements Planner {
   readonly #llm: LlmProvider;
+  /**
+   * The provider session of the LAST authoring call, when the transport supports resume: a re-plan
+   * round (plan-Seal "revise", plan-critique re-author) resumes it with only the feedback as a
+   * delta turn, mirroring the {@link AgentCompiler}'s authoring continuity. Authoring-only — the
+   * plan gate and plan critics stay independent, fresh sessions.
+   */
+  #session: string | undefined;
 
   constructor(opts: { llm: LlmProvider }) {
     this.#llm = opts.llm;
@@ -95,11 +73,40 @@ export class AgentPlanner implements Planner {
     }
     parts.push('Author the plan as JSON only.');
 
-    const { text } = await this.#llm.complete({
-      system: SYSTEM_PROMPT,
-      prompt: parts.join('\n'),
-      temperature: 0,
-    });
+    // A revise round resumes the planner's OWN prior session where supported (delta = the feedback);
+    // fresh fallback on any resume failure — the shortcut must never cost a working re-plan round.
+    const resumeId =
+      feedback !== undefined && feedback.length > 0 && this.#llm.supportsResume === true
+        ? this.#session
+        : undefined;
+    const prompt =
+      resumeId !== undefined
+        ? `Reviewer feedback on your previous plan (revise accordingly): ${feedback}\n` +
+          'Re-emit the COMPLETE plan JSON object described at the start of this session. JSON only.'
+        : parts.join('\n');
+
+    let text: string;
+    let session: string | undefined;
+    try {
+      ({ text, sessionId: session } = await this.#llm.complete({
+        system: SYSTEM_PROMPT,
+        prompt,
+        temperature: 0,
+        // Fresh authoring mints a goaly-owned session (see AgentCompiler) so a later resume
+        // replays only this planner's own turns, even under an ambient-pinned CLI.
+        ...(resumeId !== undefined ? { resumeSessionId: resumeId } : { mintSession: true }),
+      }));
+    } catch (e) {
+      if (resumeId === undefined) throw e;
+      this.#session = undefined;
+      ({ text, sessionId: session } = await this.#llm.complete({
+        system: SYSTEM_PROMPT,
+        prompt: parts.join('\n'),
+        temperature: 0,
+        mintSession: true,
+      }));
+    }
+    this.#session = session;
 
     return freezePlan(parseGenerated(text));
   }

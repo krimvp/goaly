@@ -200,6 +200,32 @@ export const RunConfig = z.object({
     })
     .default({}),
   /**
+   * Adversarial review steps (`--adversarial`). Opt-in Claude-style red-teaming at three points:
+   * a plan critic panel before the plan Seal (phased runs), a contract red-team panel before the
+   * Seal, and a refuter rung appended AFTER the frozen ladder (runs only on an all-green ladder,
+   * can only fail it — never part of `contractHash`, like the generated-files guard). The pre-Seal
+   * critics are ADVISORY (a broken critic ⇒ pass-through; the Seal gates still stand); the refuter
+   * rung is fail-closed (a broken refuter counts as refuted). `enabled: false` (the default) builds
+   * none of it — a default run is byte-for-byte unchanged and pays nothing. Pure WIRING — never
+   * frozen into the contract (it's extra scrutiny on how artifacts are produced/accepted, not part
+   * of what "done" means); rides {@link DriverWiring} so a phased sub-goal inherits it.
+   */
+  adversarial: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** Plan-critic panel size (phased runs only). 0 skips the plan critique even when enabled. */
+      planCritics: z.number().int().min(0).default(2),
+      /** Max critique→re-plan rounds before the last plan passes through to the plan Seal. */
+      planCritiqueRounds: z.number().int().min(0).default(1),
+      /** Contract red-team panel size. 0 skips the contract critique even when enabled. */
+      contractCritics: z.number().int().min(0).default(2),
+      /** Max critique→re-compile rounds before the last contract passes through to the Seal. */
+      contractCritiqueRounds: z.number().int().min(0).default(1),
+      /** Refuter votes on a green ladder. 0 skips the refuter rung even when enabled. */
+      refuters: z.number().int().min(0).default(3),
+    })
+    .default({}),
+  /**
    * Follow-up session inheritance (Capability C, `--from-run … --inherit-session`). When set, the
    * follow-up's FIRST agent turn resumes this prior harness session so the agent keeps its working
    * memory; after turn 1 the real returned session id overwrites it. The NEW frozen contract still
@@ -244,7 +270,7 @@ export type LoopPolicy = Pick<
   | 'installMissingTools'
 >;
 /** Pure Driver wiring — NEVER the frozen contract, never the reducer's decision (the diff scope). */
-export type DriverWiring = Pick<RunConfig, 'diffIgnore' | 'deltaVerify' | 'approver'>;
+export type DriverWiring = Pick<RunConfig, 'diffIgnore' | 'deltaVerify' | 'approver' | 'adversarial'>;
 
 /** Extract the {@link GatePolicy} fields. Pure; used to re-derive a phase config from the base. */
 export const pickGatePolicy = (c: GatePolicy): GatePolicy => ({
@@ -269,6 +295,7 @@ export const pickDriverWiring = (c: DriverWiring): DriverWiring => ({
   diffIgnore: c.diffIgnore,
   deltaVerify: c.deltaVerify,
   approver: c.approver,
+  adversarial: c.adversarial,
 });
 
 /**
@@ -326,6 +353,12 @@ export const CliInput = z.object({
    * addenda, each trimmed + non-empty, replacing the default taxonomy when set. Ignored at quorum 1.
    */
   approverLenses: z.array(z.string().min(1)).nonempty().optional(),
+  /** Adversarial review steps (`--adversarial`): plan critic, contract red-team, refuter rung. */
+  adversarial: z.coerce.boolean().optional(),
+  /** Panel-size overrides for the adversarial steps; fail-closed non-negative ints at the seam. */
+  adversarialPlanCritics: z.coerce.number().int().min(0).optional(),
+  adversarialContractCritics: z.coerce.number().int().min(0).optional(),
+  adversarialRefuters: z.coerce.number().int().min(0).optional(),
 });
 export type CliInput = z.infer<typeof CliInput>;
 
@@ -370,6 +403,24 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
   if (input.approverDiversityTemp !== undefined)
     approver.diversityTemperature = input.approverDiversityTemp;
   if (input.approverLenses !== undefined) approver.lenses = input.approverLenses;
+  // `--adversarial` is ONE coherent hardening switch: when the user did not pin the quorum
+  // themselves, it also widens Sign-off to a 3-reviewer panel (the adversarial default posture).
+  // An explicit --approver-quorum always wins; without --adversarial nothing changes.
+  if (input.adversarial === true && input.approverQuorum === undefined) approver.quorum = 3;
+
+  // Adversarial steps: override only what the user set, so the block's schema defaults apply.
+  const adversarial: {
+    enabled?: boolean;
+    planCritics?: number;
+    contractCritics?: number;
+    refuters?: number;
+  } = {};
+  if (input.adversarial !== undefined) adversarial.enabled = input.adversarial;
+  if (input.adversarialPlanCritics !== undefined)
+    adversarial.planCritics = input.adversarialPlanCritics;
+  if (input.adversarialContractCritics !== undefined)
+    adversarial.contractCritics = input.adversarialContractCritics;
+  if (input.adversarialRefuters !== undefined) adversarial.refuters = input.adversarialRefuters;
 
   return RunConfig.parse({
     goal: input.goal,
@@ -403,5 +454,6 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     ...(input.deltaVerify !== undefined ? { deltaVerify: input.deltaVerify } : {}),
     ...(Object.keys(stuckPolicy).length > 0 ? { stuckPolicy } : {}),
     ...(Object.keys(approver).length > 0 ? { approver } : {}),
+    ...(Object.keys(adversarial).length > 0 ? { adversarial } : {}),
   } satisfies RunConfigInput);
 }

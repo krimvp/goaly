@@ -109,6 +109,117 @@ describe('AgentCliLlmProvider — one codec-driven provider for every CLI', () =
     expect(rec[0]!.input).toBe('only');
   });
 
+  it('claude: threads resumeSessionId as --resume and surfaces the completion sessionId', async () => {
+    const rec: { args: string[]; input: string | undefined }[] = [];
+    const envelope = JSON.stringify({ result: 'revised json', session_id: 'sess-2' });
+    const llm = new AgentCliLlmProvider({ codec: claudeCodec, exec: recExec(ok(envelope), rec) });
+
+    expect(llm.supportsResume).toBe(true);
+    const out = await llm.complete({ prompt: 'revise it', resumeSessionId: 'sess-1' });
+
+    expect(rec[0]!.args).toContain('--resume');
+    expect(rec[0]!.args[rec[0]!.args.indexOf('--resume') + 1]).toBe('sess-1');
+    expect(out.sessionId).toBe('sess-2');
+  });
+
+  it('claude: never resumes with the unknown-session sentinel (degrades to a fresh call)', async () => {
+    const rec: { args: string[]; input: string | undefined }[] = [];
+    const envelope = JSON.stringify({ result: 'fresh', session_id: 'sess-3' });
+    const llm = new AgentCliLlmProvider({ codec: claudeCodec, exec: recExec(ok(envelope), rec) });
+
+    await llm.complete({ prompt: 'p', resumeSessionId: claudeCodec.unknownSession });
+
+    expect(rec[0]!.args).not.toContain('--resume');
+  });
+
+  it('claude: mintSession passes a fresh --session-id UUID and returns it as the completion session', async () => {
+    const rec: { args: string[]; input: string | undefined }[] = [];
+    // The CLI reports some OTHER id (e.g. the ambient pin) — the minted id must win regardless.
+    const envelope = JSON.stringify({ result: 'authored', session_id: 'ambient-or-whatever' });
+    const llm = new AgentCliLlmProvider({ codec: claudeCodec, exec: recExec(ok(envelope), rec) });
+
+    const out = await llm.complete({ prompt: 'author it', mintSession: true });
+
+    const args = rec[0]!.args;
+    const i = args.indexOf('--session-id');
+    expect(i).toBeGreaterThan(-1);
+    const minted = args[i + 1]!;
+    expect(minted).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(out.sessionId).toBe(minted);
+    expect(args).not.toContain('--resume');
+  });
+
+  it('claude: a retry after a transient failure mints a DIFFERENT --session-id (never "already in use")', async () => {
+    const rec: { args: string[]; input: string | undefined }[] = [];
+    let calls = 0;
+    const exec = async (args: string[], input: string | undefined): Promise<ExecResult> => {
+      rec.push({ args, input });
+      calls += 1;
+      if (calls === 1) return { stdout: '', stderr: 'transient blip', code: 1 };
+      return ok(JSON.stringify({ result: 'authored', session_id: 's' }));
+    };
+    const llm = new AgentCliLlmProvider({
+      codec: claudeCodec,
+      exec,
+      sleep: async () => {},
+    });
+
+    await llm.complete({ prompt: 'author it', mintSession: true });
+
+    const id = (args: string[]): string => args[args.indexOf('--session-id') + 1]!;
+    expect(rec).toHaveLength(2);
+    expect(id(rec[0]!.args)).not.toBe(id(rec[1]!.args));
+  });
+
+  it('mintSession is ignored alongside a resume, and by codecs without the capability', async () => {
+    const rec: { args: string[]; input: string | undefined }[] = [];
+    const envelope = JSON.stringify({ result: 'r', session_id: 'sess-9' });
+    const llm = new AgentCliLlmProvider({ codec: claudeCodec, exec: recExec(ok(envelope), rec) });
+    // Resume + mint together: resume wins, nothing is minted.
+    await llm.complete({ prompt: 'p', resumeSessionId: 'sess-1', mintSession: true });
+    expect(rec[0]!.args).toContain('--resume');
+    expect(rec[0]!.args).not.toContain('--session-id');
+
+    const rec2: { args: string[]; input: string | undefined }[] = [];
+    const jsonl = JSON.stringify({ type: 'result', text: 'v', usage: { total_tokens: 1 } });
+    const codex = new AgentCliLlmProvider({ codec: codexCodec, exec: recExec(ok(jsonl), rec2) });
+    await codex.complete({ prompt: 'p', mintSession: true });
+    expect(rec2[0]!.args).not.toContain('--session-id');
+  });
+
+  it('never trusts the AMBIENT session id (goaly nested under Claude Code)', async () => {
+    const prev = process.env['CLAUDE_CODE_SESSION_ID'];
+    process.env['CLAUDE_CODE_SESSION_ID'] = 'ambient-1';
+    try {
+      const rec: { args: string[]; input: string | undefined }[] = [];
+      // The wrapped CLI reports the ambient id instead of minting a fresh session.
+      const envelope = JSON.stringify({ result: 'text', session_id: 'ambient-1' });
+      const llm = new AgentCliLlmProvider({ codec: claudeCodec, exec: recExec(ok(envelope), rec) });
+
+      // The ambient id is dropped from the completion (an authoring caller must never store it)…
+      const out = await llm.complete({ prompt: 'p' });
+      expect(out.sessionId).toBeUndefined();
+
+      // …and refused as a resume target (fresh call, no --resume argv).
+      await llm.complete({ prompt: 'p', resumeSessionId: 'ambient-1' });
+      expect(rec[1]!.args).not.toContain('--resume');
+    } finally {
+      if (prev === undefined) delete process.env['CLAUDE_CODE_SESSION_ID'];
+      else process.env['CLAUDE_CODE_SESSION_ID'] = prev;
+    }
+  });
+
+  it('a codec without read-only resume ignores resumeSessionId (fresh call, no resume argv)', async () => {
+    const rec: { args: string[]; input: string | undefined }[] = [];
+    const jsonl = JSON.stringify({ type: 'result', text: 'verdict', usage: { total_tokens: 1 } });
+    const llm = new AgentCliLlmProvider({ codec: codexCodec, exec: recExec(ok(jsonl), rec) });
+
+    expect(llm.supportsResume).toBe(false);
+    await llm.complete({ prompt: 'p', resumeSessionId: 'sess-1' });
+
+    expect(rec[0]!.args.join(' ')).not.toContain('sess-1');
+  });
+
   it('estimates token usage from the streamed turns when the step self-reports none (issue #24)', async () => {
     // A claude stream-json reply whose closing `result` carries NO usage block.
     const streamJson = [

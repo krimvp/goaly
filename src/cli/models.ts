@@ -19,6 +19,8 @@ export const ModelSelection = z.object({
   approverModels: z.array(z.string().trim().min(1)).nonempty().optional(),
   compilerModel: z.string().trim().min(1).optional(),
   plannerModel: z.string().trim().min(1).optional(),
+  /** Model for the adversarial critics/refuters (`--adversarial`); follows the LLM-step cascade. */
+  criticModel: z.string().trim().min(1).optional(),
   /** Model for the optional `--explain` observer (issue #8); follows the same LLM-step cascade. */
   explainModel: z.string().trim().min(1).optional(),
 });
@@ -40,6 +42,8 @@ export type ResolvedModels = {
   approverModels: string[] | undefined;
   /** Model for the planner step (issue #48); follows the same LLM-step cascade. */
   planner: string | undefined;
+  /** One shared model for the adversarial critics/refuters; follows the same LLM-step cascade. */
+  critic: string | undefined;
   /** Model for the `--explain` observer (issue #8); follows the same LLM-step cascade. */
   explain: string | undefined;
 };
@@ -59,6 +63,7 @@ export function resolveModels(sel: ModelSelection): ResolvedModels {
     // The per-reviewer list is an explicit override, never cascaded from --model/--llm-model.
     approverModels: sel.approverModels,
     planner: sel.plannerModel ?? llm,
+    critic: sel.criticModel ?? llm,
     explain: sel.explainModel ?? llm,
   };
 }

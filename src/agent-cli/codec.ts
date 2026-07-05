@@ -93,9 +93,34 @@ export interface AgentCliCodec {
   /**
    * Read-only argv (the LLM role: judge / approver / compiler — must NEVER edit the tree). `stream`
    * requests per-turn JSONL where applicable; a CLI whose structured output is already a JSONL
-   * stream ignores it.
+   * stream ignores it. `sessionId` resumes a prior READ-ONLY session (authoring continuity for the
+   * compiler/planner revise loops) — only passed when {@link readonlyResume} is true; a codec
+   * without that capability never receives it.
    */
-  readonlyArgs(opts: { prompt: string; model: string | undefined; stream: boolean }): string[];
+  readonlyArgs(opts: {
+    prompt: string;
+    model: string | undefined;
+    stream: boolean;
+    sessionId?: string | undefined;
+    /** A goaly-MINTED fresh session id to create (claude: `--session-id <uuid>`); see {@link readonlyMintSession}. */
+    newSessionId?: string | undefined;
+  }): string[];
+
+  /**
+   * Whether this CLI can RESUME a session in its read-only/headless dialect (claude:
+   * `-p --resume <id>`). Gates {@link LlmProvider.supportsResume} on the agent-CLI provider so the
+   * authoring roles only attempt a resume where the CLI genuinely supports it — absent/false means
+   * every read-only call is a fresh session (the historical behavior, and always a safe fallback).
+   */
+  readonly readonlyResume?: boolean;
+
+  /**
+   * Whether this CLI accepts an EXPLICIT fresh session id in its read-only dialect (claude:
+   * `-p --session-id <uuid>`). Lets the provider mint a goaly-owned session per authoring call, so
+   * a later resume replays ONLY that caller's turns — immune to environments that pin every bare
+   * call to one ambient shared session. Absent/false ⇒ `mintSession` requests are ignored.
+   */
+  readonly readonlyMintSession?: boolean;
 
   /** Tolerantly parse this CLI's stdout into the shared {@link AgentOutput}. Never throws. */
   parse(stdout: string): AgentOutput | null;

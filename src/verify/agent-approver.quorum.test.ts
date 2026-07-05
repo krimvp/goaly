@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AgentApprover } from './agent-approver';
+import { AgentApprover, DEFAULT_LENSES } from './agent-approver';
 import { FakeLlm } from '../llm/provider';
 import { ApprovalVerdict } from '../domain/verdict';
 import type { ApprovalInput } from '../domain/events';
@@ -25,8 +25,8 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     expect(verdict.veto).toBe(false);
     expect(llm.requests).toHaveLength(1);
     expect(llm.requests[0]?.temperature).toBe(0);
-    // No lens addendum is woven into the single-call system prompt.
-    expect(llm.requests[0]?.system).not.toContain('REVIEW LENS');
+    // No lens addendum is appended to the single-call prompt.
+    expect(llm.requests[0]?.prompt).not.toContain('REVIEW LENS');
   });
 
   it('defaults to quorum 1 (single call) when no quorum is given', async () => {
@@ -39,14 +39,39 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     expect(llm.requests[0]?.temperature).toBe(0);
   });
 
-  it('calls the model `quorum` times and uses the diversity temperature when quorum>1', async () => {
-    const llm = new FakeLlm([noVeto, noVeto, noVeto]);
+  it('polls up to `quorum` reviewers at the diversity temperature while the outcome is open', async () => {
+    // A veto first keeps the outcome mathematically open through all three votes.
+    const llm = new FakeLlm([veto('keep the panel open'), noVeto, noVeto]);
     const approver = new AgentApprover({ llm, quorum: 3, diversityTemperature: 0.7 });
 
     await approver.review(baseInput);
 
     expect(llm.requests).toHaveLength(3);
     for (const req of llm.requests) expect(req.temperature).toBe(0.7);
+  });
+
+  it('early-exits a settled green: two no-vetoes of three end the panel in exactly 2 calls', async () => {
+    const llm = new FakeLlm([noVeto, noVeto, veto('never consulted')]);
+    const approver = new AgentApprover({ llm, quorum: 3 });
+
+    const verdict = await approver.review(baseInput);
+
+    // 2*2 > 3 — the third reviewer cannot change aggregate()'s answer, so it is never called.
+    expect(verdict.veto).toBe(false);
+    expect(llm.requests).toHaveLength(2);
+  });
+
+  it('early-exits a settled red: two vetoes of three end the panel in exactly 2 calls', async () => {
+    const llm = new FakeLlm([veto('reason one'), veto('reason two'), noVeto]);
+    const approver = new AgentApprover({ llm, quorum: 3 });
+
+    const verdict = await approver.review(baseInput);
+
+    // noVeto can reach at most 1 of 3 — red is settled; the reasons come from the votes cast.
+    expect(verdict.veto).toBe(true);
+    expect(verdict.reason).toContain('reason one');
+    expect(verdict.reason).toContain('reason two');
+    expect(llm.requests).toHaveLength(2);
   });
 
   it('greens only on a strict supermajority of no-veto votes (2-of-3)', async () => {
@@ -118,8 +143,10 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
   });
 
   it('dedupes the concatenated veto reasons of the panel', async () => {
+    // Quorum 5 so the red is not settled until the third veto is cast (early exit would otherwise
+    // stop a 3-panel before the distinct 'other problem' vote).
     const llm = new FakeLlm([veto('same problem'), veto('same problem'), veto('other problem')]);
-    const approver = new AgentApprover({ llm, quorum: 3 });
+    const approver = new AgentApprover({ llm, quorum: 5 });
 
     const verdict = await approver.review(baseInput);
 
@@ -151,7 +178,8 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
   });
 
   it('cycles explicit lenses across reviewers when quorum>1', async () => {
-    const llm = new FakeLlm([noVeto, noVeto, noVeto]);
+    // A veto first keeps the outcome open so all three reviewers (and the lens cycle) are observed.
+    const llm = new FakeLlm([veto('keep the panel open'), noVeto, noVeto]);
     const approver = new AgentApprover({
       llm,
       quorum: 3,
@@ -161,26 +189,54 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     await approver.review(baseInput);
 
     expect(llm.requests).toHaveLength(3);
-    // Lenses cycle: reviewer 0 → ALPHA, 1 → BETA, 2 → ALPHA again.
-    expect(llm.requests[0]?.system).toContain('LENS_ALPHA');
-    expect(llm.requests[1]?.system).toContain('LENS_BETA');
-    expect(llm.requests[2]?.system).toContain('LENS_ALPHA');
+    // Lenses cycle: reviewer 0 → ALPHA, 1 → BETA, 2 → ALPHA again — on the PROMPT TAIL, so the
+    // panel shares a constant system + cacheable prompt prefix (reviewer 1 writes, 2..N read).
+    expect(llm.requests[0]?.prompt).toContain('LENS_ALPHA');
+    expect(llm.requests[1]?.prompt).toContain('LENS_BETA');
+    expect(llm.requests[2]?.prompt).toContain('LENS_ALPHA');
+    const systems = new Set(llm.requests.map((r) => r.system));
+    expect(systems.size).toBe(1); // panel-constant system — the cacheable-prefix invariant
+    const shared = (llm.requests[0]?.prompt ?? '').split('REVIEW LENS')[0]!;
+    expect(shared.length).toBeGreaterThan(0);
+    for (const r of llm.requests) expect(r.prompt.startsWith(shared)).toBe(true);
   });
 
   it('applies the default lens taxonomy when quorum>1 and no explicit lenses are supplied', async () => {
-    const llm = new FakeLlm([noVeto, noVeto, noVeto, noVeto]);
+    // A veto first keeps the outcome open through all four reviewers/lenses.
+    const llm = new FakeLlm([veto('keep the panel open'), noVeto, noVeto, noVeto]);
     const approver = new AgentApprover({ llm, quorum: 4 });
 
     await approver.review(baseInput);
 
-    const systems = llm.requests.map((r) => r.system ?? '');
+    const prompts = llm.requests.map((r) => r.prompt);
     // Each default lens (correctness / security / goal-met / prompt-injection) is mentioned.
-    const joined = systems.join('\n').toLowerCase();
+    const joined = prompts.join('\n').toLowerCase();
     expect(joined).toContain('correctness');
     expect(joined).toContain('security');
     expect(joined).toContain('prompt-injection');
     // And each reviewer carries SOME lens addendum (no bare reviewer when quorum>1).
-    for (const s of systems) expect(s).toContain('REVIEW LENS');
+    for (const p of prompts) expect(p).toContain('REVIEW LENS');
+  });
+
+  it('the default taxonomy carries the adversarial lenses (spec-gaming / test-tampering / hidden-regression)', async () => {
+    // Pin the taxonomy itself: seven lenses, the three adversarial ones present…
+    expect(DEFAULT_LENSES).toHaveLength(7);
+    const taxonomy = DEFAULT_LENSES.join('\n');
+    expect(taxonomy).toContain('SPEC-GAMING');
+    expect(taxonomy).toContain('TEST-TAMPERING');
+    expect(taxonomy).toContain('HIDDEN-REGRESSION');
+
+    // …and a panel large enough to cycle through all of them weaves each into some reviewer.
+    // Alternating vetoes keep the outcome mathematically open through all seven votes.
+    const llm = new FakeLlm([
+      veto('open'), noVeto, veto('open'), noVeto, veto('open'), noVeto, noVeto,
+    ]);
+    const approver = new AgentApprover({ llm, quorum: 7 });
+    await approver.review(baseInput);
+    const joined = llm.requests.map((r) => r.prompt).join('\n');
+    expect(joined).toContain('SPEC-GAMING');
+    expect(joined).toContain('TEST-TAMPERING');
+    expect(joined).toContain('HIDDEN-REGRESSION');
   });
 
   it('quorum 1 ignores lenses entirely (pure single-call behavior)', async () => {
@@ -190,12 +246,13 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     await approver.review(baseInput);
 
     expect(llm.requests).toHaveLength(1);
-    expect(llm.requests[0]?.system).not.toContain('SHOULD_NOT_APPEAR');
+    expect(llm.requests[0]?.prompt).not.toContain('SHOULD_NOT_APPEAR');
     expect(llm.requests[0]?.temperature).toBe(0);
   });
 
   it('explicit operator lenses REPLACE the default taxonomy and cycle (issue #84 OQ4)', async () => {
-    const llm = new FakeLlm([noVeto, noVeto, noVeto]);
+    // A veto first keeps the outcome open so all three reviewers are observed.
+    const llm = new FakeLlm([veto('keep the panel open'), noVeto, noVeto]);
     // Two operator lenses, a 3-reviewer panel: they cycle 0→OPS_A, 1→OPS_B, 2→OPS_A, and NONE of the
     // built-in default lenses (correctness/security/prompt-injection) leaks into any reviewer.
     const approver = new AgentApprover({ llm, quorum: 3, lenses: ['OPS_LENS_A', 'OPS_LENS_B'] });
@@ -203,10 +260,10 @@ describe('AgentApprover — multi-vote panel (quorum)', () => {
     await approver.review(baseInput);
 
     expect(llm.requests).toHaveLength(3);
-    expect(llm.requests[0]?.system).toContain('OPS_LENS_A');
-    expect(llm.requests[1]?.system).toContain('OPS_LENS_B');
-    expect(llm.requests[2]?.system).toContain('OPS_LENS_A');
-    const joined = llm.requests.map((r) => r.system ?? '').join('\n').toLowerCase();
+    expect(llm.requests[0]?.prompt).toContain('OPS_LENS_A');
+    expect(llm.requests[1]?.prompt).toContain('OPS_LENS_B');
+    expect(llm.requests[2]?.prompt).toContain('OPS_LENS_A');
+    const joined = llm.requests.map((r) => r.prompt).join('\n').toLowerCase();
     expect(joined).not.toContain('does the change actually implement the goal'); // a DEFAULT_LENSES phrase
     expect(joined).not.toContain('unsafe deserialization'); // another DEFAULT_LENSES phrase
   });
