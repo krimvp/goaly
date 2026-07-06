@@ -14,7 +14,7 @@
  * provider and the composition root import the codec from this neutral `agent-cli/` layer.
  */
 
-import { SessionId, coerceSessionId } from '../domain/ids';
+import { SessionId, coerceSessionId, isSentinelSession } from '../domain/ids';
 import { HarnessRunResult } from '../domain/events';
 import { runProcess } from '../util/spawn';
 import { parseAgentOutput, type AgentOutput, type FieldExtractor } from './output';
@@ -225,11 +225,17 @@ export async function runCodecHarness(
   // continuation turn, turning one slow/timed-out turn into a dead run — a false STUCK_HARNESS_CRASH.
   // Drop it so the next turn starts a FRESH session instead; the worker loses that turn's chat memory
   // but keeps making real progress against the frozen contract (which alone governs DONE).
-  // The AMBIENT id (goaly nested under Claude Code) is refused the same way: resuming it would pull
-  // the OUTER conversation — and every sibling LLM step sharing that session file — into the worker
-  // (see {@link ambientSessionId}).
+  // EVERY sentinel is refused, not just this codec's own: a run resumed under a different --harness
+  // carries the PRIOR harness's sentinel (e.g. the fake harness's `noop-session`), and
+  // `claude --resume noop-session` crashes every turn the same way. The AMBIENT id (goaly nested
+  // under Claude Code) is refused too: resuming it would pull the OUTER conversation — and every
+  // sibling LLM step sharing that session file — into the worker (see {@link ambientSessionId}).
   const resumeId =
-    sessionId === codec.unknownSession || sessionId === ambientSessionId() ? undefined : sessionId;
+    sessionId === codec.unknownSession ||
+    (sessionId !== undefined && isSentinelSession(sessionId)) ||
+    sessionId === ambientSessionId()
+      ? undefined
+      : sessionId;
   const args = codec.harnessArgs({
     prompt,
     model,

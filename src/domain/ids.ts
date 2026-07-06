@@ -56,6 +56,34 @@ export type PlanHash = z.infer<typeof PlanHash>;
 export const asSessionId = (s: string): SessionId => SessionId.parse(s);
 
 /**
+ * The synthesized SENTINEL session ids the adapters/driver mint when no REAL id could be recovered
+ * from the agent CLI. They are valid {@link SessionId}s on the wire (so the event still parses) but
+ * mean "no resumable session" — threading one into `claude --resume <id>` / a goaly-code session
+ * reload would point at nothing (or, worse, at a DIFFERENT harness's sentinel: a run resumed under
+ * a new `--harness` carries the OLD harness's sentinel, e.g. `claude --resume noop-session`, which
+ * crashes every turn). Kept in ONE place — the id domain — so the codec sentinels
+ * (`<name>-unknown`), the NoopHarness sentinel, the driver's error sentinels, and the generic
+ * coerce fallback can never drift from this skip-list. The harness core, the follow-up resume-hint
+ * (Capability A), and session inheritance (Capability C) must all skip them.
+ */
+export const SENTINEL_SESSION_IDS: ReadonlySet<string> = new Set([
+  'unknown-session', // coerceSessionId default fallback
+  'noop-session', // NoopHarness (the fake harness)
+  'workspace-error', // driver: a workspace (diffHash) failure synthesizes a crashed run
+  'best-of-error', // best-of-N driver/tournament: a fan-out error synthesizes a crashed run
+  'claude-unknown',
+  'codex-unknown',
+  'droid-unknown',
+  'pi-unknown',
+  'goaly-code-unknown',
+]);
+
+/** Whether `id` is a synthesized sentinel rather than a real, resumable harness session id. */
+export function isSentinelSession(id: string): boolean {
+  return SENTINEL_SESSION_IDS.has(id);
+}
+
+/**
  * Coerce an untrusted candidate (parsed from harness stdout) into a valid SessionId, falling
  * back to a safe sentinel when it is absent or fails the allowlist — so an adapter never throws
  * on a hostile session id.

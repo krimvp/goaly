@@ -176,6 +176,23 @@ describe('runCodecHarness', () => {
     expect(result.sessionId).toBe('s-2');
   });
 
+  it('does NOT resume a FOREIGN harness sentinel (a resumed run that switched harness)', async () => {
+    // Regression: the guard only knew THIS codec's sentinel, so a run resumed under a different
+    // --harness threaded the prior harness's sentinel into `claude --resume noop-session`, crashing
+    // every candidate/turn. Every entry in the shared sentinel skip-list must start fresh instead.
+    const captured = { args: [] as string[][] };
+    const exec: AgentExecFn = async () => ({
+      stdout: JSON.stringify({ result: 'ok', session_id: 's-3', usage: { total_tokens: 3 } }),
+      stderr: '',
+      code: 0,
+    });
+    const result = await runCodecHarness(spyCodec(captured), exec, undefined, 'go', sid('noop-session'));
+    expect(captured.args[0]).not.toContain('--resume');
+    expect(captured.args[0]).not.toContain('noop-session');
+    expect(result.status).toBe('completed');
+    expect(result.sessionId).toBe('s-3');
+  });
+
   it('never trusts the AMBIENT session id (goaly nested under Claude Code)', async () => {
     // Regression: a nested `claude -p` adopts and reports the ambient CLAUDE_CODE_SESSION_ID instead
     // of minting its own — the LLM provider already refuses it, but the HARNESS recorded it as the
