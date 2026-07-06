@@ -281,7 +281,8 @@ function sdkUserToolResults(message: Record<string, unknown>): AgentStreamEvent[
 
 /**
  * The Anthropic agent-SDK stream-json mapping — shared by every tool that emits that envelope
- * (Claude Code, and Factory's droid under `--output-format stream-json`). Maps `system`(init) →
+ * (Claude Code; droid's `--output-format stream-json` turned out to be droid-NATIVE on 0.164.0, so
+ * its codec maps a custom extractor instead). Maps `system`(init) →
  * session, `assistant` content blocks → message / reasoning / tool_use, `user` tool_result blocks
  * → tool_result, and the closing `result` event → usage + done. Pass `errorKey` so a soft failure
  * (`is_error`) on the result line surfaces as `done` status `error`. Unknown lines map to `[]`.

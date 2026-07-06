@@ -114,35 +114,47 @@ describe('claudeStreamExtractor (stream-json)', () => {
   });
 });
 
-describe('droidStreamExtractor (Anthropic agent-SDK stream-json)', () => {
-  it('maps droid stream-json turns the same way as claude (shared SDK mapping)', () => {
+describe('droidStreamExtractor (droid-NATIVE stream-json, captured 0.164.0)', () => {
+  it('maps a full droid turn to ordered canonical events, suppressing the user prompt echo', () => {
     const events = run(droidStreamExtractor, [
-      { type: 'system', subtype: 'init', session_id: 'd-1' },
-      { type: 'assistant', message: { content: [{ type: 'text', text: 'all set' }] } },
-      { type: 'result', subtype: 'success', result: 'all set', usage: { input_tokens: 2, output_tokens: 3 } },
+      { type: 'system', subtype: 'init', session_id: 'd-1', tools: ['Create'], model: 'm' },
+      { type: 'message', role: 'user', id: 'u1', text: 'create probe.txt', session_id: 'd-1' },
+      { type: 'reasoning', id: 'r1', text: 'trivial task', session_id: 'd-1' },
+      { type: 'tool_call', id: 'call_1', toolId: 'Create', toolName: 'Create', parameters: { file_path: 'probe.txt', content: 'hello' }, session_id: 'd-1' },
+      { type: 'tool_result', id: 'call_1', toolId: 'Create', isError: false, value: '{"success":true}', session_id: 'd-1' },
+      { type: 'message', role: 'assistant', id: 'a1', text: 'all set', session_id: 'd-1' },
+      { type: 'completion', finalText: 'all set', numTurns: 2, session_id: 'd-1', usage: { input_tokens: 2, output_tokens: 3 } },
     ]);
     expect(events).toEqual([
       { kind: 'session', sessionId: 'd-1' },
+      { kind: 'reasoning', text: 'trivial task' },
+      { kind: 'tool_use', id: 'call_1', name: 'Create', input: { file_path: 'probe.txt', content: 'hello' } },
+      { kind: 'tool_result', id: 'call_1', output: '{"success":true}', isError: false },
       { kind: 'message', text: 'all set' },
+      { kind: 'usage', inputTokens: 2, outputTokens: 3, totalTokens: 5 },
+      { kind: 'done', status: 'completed' },
+    ]);
+  });
+
+  it('marks the done status `error` when the completion carries an error flag', () => {
+    const events = run(droidStreamExtractor, [
+      { type: 'completion', finalText: 'oops', isError: true, usage: { input_tokens: 1, output_tokens: 1 } },
+    ]);
+    expect(events.at(-1)).toEqual({ kind: 'done', status: 'error' });
+  });
+
+  it('still maps the plain-json result envelope to usage + done (text recovered separately)', () => {
+    const events = run(droidStreamExtractor, [
+      { type: 'result', subtype: 'success', is_error: false, result: 'all set', session_id: 'd-1', usage: { input_tokens: 2, output_tokens: 3 } },
+    ]);
+    expect(events).toEqual([
       { kind: 'usage', inputTokens: 2, outputTokens: 3, totalTokens: 5 },
       { kind: 'done', status: 'success' },
     ]);
   });
 
-  it('marks the done status `error` when droid sets is_error on the result line', () => {
-    const events = run(droidStreamExtractor, [
-      { type: 'result', result: 'oops', is_error: true, usage: { input_tokens: 1, output_tokens: 1 } },
-    ]);
-    expect(events.at(-1)).toEqual({ kind: 'done', status: 'error' });
-  });
-
-  it('degrades a lone final result envelope to usage + done (final text recovered separately)', () => {
-    const events = run(droidStreamExtractor, [
-      { type: 'result', result: 'all set', session_id: 'd-1', usage: { input_tokens: 2, output_tokens: 3 } },
-    ]);
-    expect(events).toEqual([
-      { kind: 'usage', inputTokens: 2, outputTokens: 3, totalTokens: 5 },
-      { kind: 'done', status: 'completed' },
-    ]);
+  it('emits nothing for a user message or an unknown line type', () => {
+    expect(run(droidStreamExtractor, [{ type: 'message', role: 'user', text: 'the prompt' }])).toEqual([]);
+    expect(run(droidStreamExtractor, [{ type: 'telemetry', anything: 1 }])).toEqual([]);
   });
 });

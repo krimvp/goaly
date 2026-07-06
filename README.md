@@ -1210,7 +1210,7 @@ goaly runs list --workspace ./myrepo   # look elsewhere for the .goaly directory
   stuck/failure **reason**, and the totals.
 - **`goaly runs resume-cmd <runId>`** — print the command to continue the run's underlying CLI
   session in its **own interactive mode** (e.g. `claude --resume <id>`, `codex resume <id>`,
-  `droid --session-id <id>`, `pi --continue`), recovered from the log's recorded harness + last real
+  `droid --resume <id>`, `pi --continue`), recovered from the log's recorded harness + last real
   session id. For a `goaly-code` run (no external CLI) it routes you to `--from-run --inherit-session`.
   Pass `--harness <name>` as a fallback when the log predates harness recording.
 

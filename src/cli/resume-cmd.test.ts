@@ -14,8 +14,8 @@ describe('per-codec interactiveResume', () => {
     expect(hint?.command).toBe(`codex resume ${sid}`);
     expect(hint?.caveat).toMatch(/exec/);
   });
-  it('droid → droid --session-id <id>', () => {
-    expect(codecFor('droid').interactiveResume?.(sid)).toEqual({ command: `droid --session-id ${sid}` });
+  it('droid → droid --resume <id> (the documented top-level flag; --session-id is exec-only)', () => {
+    expect(codecFor('droid').interactiveResume?.(sid)).toEqual({ command: `droid --resume ${sid}` });
   });
   it('pi → pi --continue (latest-cwd caveat; id not addressable)', () => {
     const hint = codecFor('pi').interactiveResume?.(sid);

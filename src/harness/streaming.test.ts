@@ -47,8 +47,8 @@ const claudeJson = JSON.stringify({ result: 'final answer', session_id: 'sess-1'
 
 const droidStreamJson = [
   JSON.stringify({ type: 'system', subtype: 'init', session_id: 'd-1' }),
-  JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'shipped' }] } }),
-  JSON.stringify({ type: 'result', subtype: 'success', result: 'shipped', usage: { input_tokens: 1, output_tokens: 2 } }),
+  JSON.stringify({ type: 'message', role: 'assistant', id: 'a1', text: 'shipped', session_id: 'd-1' }),
+  JSON.stringify({ type: 'completion', finalText: 'shipped', numTurns: 1, session_id: 'd-1', usage: { input_tokens: 1, output_tokens: 2 } }),
 ].join('\n');
 
 describe('CodexAdapter streaming', () => {
@@ -213,7 +213,7 @@ describe('token estimation fallback (issue #24)', () => {
 });
 
 describe('DroidAdapter streaming', () => {
-  it('requests stream-json and forwards the SDK turns when an onEvent sink is supplied', async () => {
+  it('requests stream-json and forwards the native droid turns when an onEvent sink is supplied', async () => {
     const seenArgs: string[][] = [];
     const exec = async (
       args: string[],

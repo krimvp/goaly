@@ -17,7 +17,7 @@ function fakeExec(
   };
 }
 
-/** A real `droid exec --output-format json` envelope captured from droid 0.153.1. */
+/** A real `droid exec --output-format json` envelope captured from droid 0.164.0. */
 const droidRealSample = JSON.stringify({
   type: 'result',
   subtype: 'success',
@@ -33,6 +33,26 @@ const droidRealSample = JSON.stringify({
     cache_creation_input_tokens: 0,
   },
 });
+
+/**
+ * A real `droid exec --output-format stream-json` transcript captured from droid 0.164.0 (trimmed:
+ * long paths/tool lists shortened; keys and line shapes verbatim). Note the droid-NATIVE envelope —
+ * message/reasoning/tool_call/tool_result/completion — not the Anthropic agent-SDK one, and the
+ * duplicated reasoning line, which droid really emits.
+ */
+const SID = '11222393-d4e2-464e-bd63-eb6b96d7a40e';
+const droidStreamLines = [
+  { type: 'system', subtype: 'init', cwd: '/tmp/probe', session_id: SID, tools: ['Read', 'Execute', 'Create'], model: 'claude-opus-4-8', reasoning_effort: 'high' },
+  { type: 'message', role: 'user', id: 'f8401e2e', text: 'create a file named probe.txt containing the word hello, then report done', timestamp: 1783373407509, session_id: SID },
+  { type: 'reasoning', id: '5a9e1859', text: 'The user wants me to create a simple file named probe.txt.', timestamp: 1783373409985, session_id: SID },
+  { type: 'reasoning', id: '5a9e1859', text: 'The user wants me to create a simple file named probe.txt.', timestamp: 1783373409985, session_id: SID },
+  { type: 'tool_call', id: 'call_4wv2tm9k', messageId: '5a9e1859', toolId: 'Create', toolName: 'Create', parameters: { file_path: '/tmp/probe/probe.txt', content: 'hello' }, timestamp: 1783373409985, session_id: SID },
+  { type: 'tool_result', id: 'call_4wv2tm9k', messageId: 'ff11ae55', toolId: 'Create', isError: false, value: '{"success":true,"file_path":"/tmp/probe/probe.txt"}', timestamp: 1783373410009, session_id: SID },
+  { type: 'message', role: 'assistant', id: 'f213682c', text: 'Done. Created `probe.txt` containing the word "hello".', timestamp: 1783373411553, session_id: SID },
+  { type: 'completion', finalText: 'Done. Created `probe.txt` containing the word "hello".', numTurns: 2, durationMs: 4074, session_id: SID, timestamp: 1783373411556, usage: { input_tokens: 30671, output_tokens: 116, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+];
+const droidStreamStdout = (n = droidStreamLines.length) =>
+  droidStreamLines.slice(0, n).map((l) => JSON.stringify(l)).join('\n');
 
 describe('droidCodec.parse', () => {
   it('extracts result text, session id, and summed tokens from a real envelope', () => {
@@ -89,6 +109,33 @@ describe('droidCodec.parse', () => {
   });
 });
 
+describe('droidCodec.parse (native stream-json transcript, captured 0.164.0)', () => {
+  it('recovers finalText from the completion line, with the session and full usage', () => {
+    expect(droidCodec.parse(droidStreamStdout())).toEqual({
+      text: 'Done. Created `probe.txt` containing the word "hello".',
+      sessionId: SID,
+      tokens: 30787,
+      breakdown: { input: 30671, output: 116, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
+  it('never salvages the echoed USER prompt as result text (stream cut after the echo)', () => {
+    // system + user-message lines only: a run that died right after starting.
+    expect(droidCodec.parse(droidStreamStdout(2))).toBeNull();
+  });
+
+  it('does not treat reasoning or tool traffic as result text', () => {
+    // through system, user echo, both reasoning lines, tool_call, tool_result — still no result.
+    expect(droidCodec.parse(droidStreamStdout(6))).toBeNull();
+  });
+
+  it('salvages the last assistant message when the stream dies before completion', () => {
+    const parsed = droidCodec.parse(droidStreamStdout(7));
+    expect(parsed?.text).toBe('Done. Created `probe.txt` containing the word "hello".');
+    expect(parsed?.sessionId).toBe(SID);
+  });
+});
+
 describe('AgentCliHarness(droidCodec)', () => {
   it('exposes the harness name', () => {
     expect(new AgentCliHarness(droidCodec).name).toBe('droid');
@@ -111,14 +158,14 @@ describe('AgentCliHarness(droidCodec)', () => {
     ]);
   });
 
-  it('adds --session-id <id> when resuming, keeping the prompt last', async () => {
+  it('resumes via --fork <id> (exec -s fetches remotely and fails for local sessions), prompt last', async () => {
     const capture = { args: [] as string[][], prompts: [] as string[] };
     const adapter = new AgentCliHarness(droidCodec, { exec: fakeExec({ stdout: droidRealSample, stderr: '', code: 0 }, capture) });
 
     await adapter.run('continue', SessionId.parse('sess-prev'));
 
     expect(capture.args[0]).toEqual([
-      'exec', '--output-format', 'json', '--auto', 'low', '--session-id', 'sess-prev', 'continue',
+      'exec', '--output-format', 'json', '--auto', 'low', '--fork', 'sess-prev', 'continue',
     ]);
   });
 
@@ -149,7 +196,7 @@ describe('AgentCliHarness(droidCodec)', () => {
 
     await adapter.run('more', SessionId.parse('sess-prev'));
     expect(capture.args[1]).toEqual([
-      'exec', '--output-format', 'json', '--auto', 'low', '--model', 'm1', '--session-id', 'sess-prev', 'more',
+      'exec', '--output-format', 'json', '--auto', 'low', '--model', 'm1', '--fork', 'sess-prev', 'more',
     ]);
   });
 

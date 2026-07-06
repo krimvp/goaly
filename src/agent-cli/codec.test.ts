@@ -74,7 +74,7 @@ describe('AgentCliCodec argv dialects', () => {
       expect(
         makeDroidCodec('medium').harnessArgs({ prompt: 'go', model: 'm1', sessionId: sid('s'), stream: true }),
       ).toEqual([
-        'exec', '--output-format', 'stream-json', '--auto', 'medium', '--model', 'm1', '--session-id', 's', 'go',
+        'exec', '--output-format', 'stream-json', '--auto', 'medium', '--model', 'm1', '--fork', 's', 'go',
       ]);
     });
 

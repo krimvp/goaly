@@ -175,8 +175,10 @@ import { parseAgentOutput, flatExtractor, type FieldExtractor } from './output';
 // If your envelope is FLAT (text under result/text/response, session under session_id/sessionId,
 // tokens in a `usage` block — input/output AND cache_read/cache_creation are read for you) you
 // don't write one at all — reuse the shared factory:
-const fieldExtractor = flatExtractor();                  // claude & droid use exactly this
-// droid only adds a soft-error flag: flatExtractor({ errorKey: 'is_error' })
+const fieldExtractor = flatExtractor();                  // claude uses exactly this
+// droid wraps flatExtractor({ errorKey: 'is_error' }) in a line-type GATE: its stream-json reuses
+// `text` on non-result lines (the user prompt echo, reasoning), and its closing `completion` line
+// carries the result as `finalText` — see droid-codec.ts for the pattern.
 
 // Write a CUSTOM extractor only if your shapes are nested (see `codexExtractor` in codex-codec.ts,
 // which walks message/content[]/delta and thread-id session keys):
@@ -262,8 +264,10 @@ a throw degrades to "no events for this line" (fail-closed; observability never 
 import { sdkStreamExtractor, flatStreamExtractor, type StreamEventExtractor } from './stream';
 
 // If your tool emits the ANTHROPIC AGENT-SDK stream-json envelope (system/assistant/user/result
-// events) you don't write one at all — reuse the shared factory (claude & droid use exactly this):
-const streamExtractor = sdkStreamExtractor();                  // droid adds { errorKey: 'is_error' }
+// events) you don't write one at all — reuse the shared factory (claude uses exactly this):
+const streamExtractor = sdkStreamExtractor();
+// droid's stream-json is droid-NATIVE (message/reasoning/tool_call/tool_result/completion lines,
+// verified live on 0.164.0), so its codec maps a custom extractor — see droid-codec.ts.
 
 // If your tool only emits a single FINAL result object, degrade with the flat factory
 // (session → message → usage → done):
@@ -303,7 +307,7 @@ interactiveResume(id) {
 ```
 
 The four bundled codecs map it as: claude → `claude --resume <id>`; codex → `codex resume <id>`
-(caveat: differs from `exec`); droid → `droid --session-id <id>`; pi → `pi --continue` (caveat: it
+(caveat: differs from `exec`); droid → `droid --resume <id>`; pi → `pi --continue` (caveat: it
 resumes the latest *cwd* session only, so the id is not addressable). It is **optional** — a codec
 that omits it makes `resume-cmd` report a typed "no resume command" for that harness. The
 `HarnessChoice`→codec bridge and the typed result live in `src/cli/resume-cmd.ts` (`resumeHint`);

@@ -157,10 +157,10 @@ function flatUsage(
 }
 
 /**
- * The claude/droid strategy: a flat envelope with the text under `result`/`text`/`response`, the
- * session under `session_id`/`sessionId`, tokens in a `usage` block, and (droid only) a boolean
- * soft-error key. Both CLIs share this shape, so one factory serves both — pass `errorKey` for
- * droid's `is_error`.
+ * The flat-envelope strategy: text under `result`/`text`/`response`, the session under
+ * `session_id`/`sessionId`, tokens in a `usage` block, and an optional boolean soft-error key
+ * (droid's `is_error`). Claude uses it as-is; droid LAYERS a line-type gate on top (its stream-json
+ * reuses `text` for non-result lines — see droid-codec.ts).
  */
 export function flatExtractor(opts: { errorKey?: string } = {}): FieldExtractor {
   return (obj) => {
