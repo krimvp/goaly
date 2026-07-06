@@ -18,12 +18,12 @@ describe('DECIDE truth table', () => {
 
   it('ladder fail → CONTINUE with verifier detail as feedback', () => {
     const d = decide(makeCtx(), failVerdict('tests are red'), null);
-    expect(d).toEqual({ kind: 'CONTINUE', feedback: 'tests are red' });
+    expect(d).toEqual({ kind: 'CONTINUE', feedback: 'tests are red', source: 'verifier' });
   });
 
   it('ladder pass + veto → CONTINUE with veto reason as feedback', () => {
     const d = decide(makeCtx(), passVerdict(), veto('the test is empty'));
-    expect(d).toEqual({ kind: 'CONTINUE', feedback: 'the test is empty' });
+    expect(d).toEqual({ kind: 'CONTINUE', feedback: 'the test is empty', source: 'veto' });
   });
 
   it('DONE wins over maxIterations (goal met on the last allowed iteration)', () => {
@@ -64,21 +64,53 @@ describe('DECIDE truth table', () => {
     // has not yet seen — it must get one real turn to act on the (correct) critique first.
     const ctx = makeCtx({ iteration: 1, lastNoDiff: true, feedback: undefined });
     const d = decide(ctx, passVerdict(), veto('power-ups are inert'));
-    expect(d).toEqual({ kind: 'CONTINUE', feedback: 'power-ups are inert' });
+    expect(d).toEqual({ kind: 'CONTINUE', feedback: 'power-ups are inert', source: 'veto' });
   });
 
   it('a SECOND unproductive no-diff on the same veto → ABORTED (issue #54)', () => {
-    // The agent was already told this veto last turn (feedback === reason) and still made no edits.
-    const ctx = makeCtx({ iteration: 2, lastNoDiff: true, feedback: 'power-ups are inert' });
+    // The agent was already told this veto last turn (feedbackSource 'veto') and still made no edits.
+    const ctx = makeCtx({
+      iteration: 2,
+      lastNoDiff: true,
+      feedback: 'power-ups are inert',
+      feedbackSource: 'veto',
+    });
     const d = decide(ctx, passVerdict(), veto('power-ups are inert'));
     expect(d.kind).toBe('ABORTED');
     if (d.kind === 'ABORTED') expect(d.reason).toContain('no-diff');
   });
 
+  it('a REWORDED veto after an unproductive no-diff still ABORTS — the excuse is per source, not per wording', () => {
+    // Regression: an LLM approver rewords its veto every round. If freshness were keyed on the
+    // reason TEXT, every veto would look fresh and a worker that never edits would burn the whole
+    // iteration budget in approver spend. The excuse must not renew just because the words changed.
+    const ctx = makeCtx({
+      iteration: 2,
+      lastNoDiff: true,
+      feedback: 'the diff is empty and the goal is vague',
+      feedbackSource: 'veto',
+    });
+    const d = decide(ctx, passVerdict(), veto('no evidence of any actual change was provided'));
+    expect(d.kind).toBe('ABORTED');
+    if (d.kind === 'ABORTED') expect(d.reason).toContain('no-diff');
+  });
+
+  it('a no-diff on a veto AFTER verifier-red feedback is excused — the just-run turn was not answering a veto', () => {
+    // The turn that produced no diff was chewing on a red-ladder detail; the veto is genuinely new.
+    const ctx = makeCtx({
+      iteration: 2,
+      lastNoDiff: true,
+      feedback: 'tests are red',
+      feedbackSource: 'verifier',
+    });
+    const d = decide(ctx, passVerdict(), veto('power-ups are inert'));
+    expect(d).toEqual({ kind: 'CONTINUE', feedback: 'power-ups are inert', source: 'veto' });
+  });
+
   it('a turn killed by timeout does not immediately trip no-diff (issue #54)', () => {
     const ctx = makeCtx({ iteration: 1, lastNoDiff: true, lastRunStatus: 'timeout' });
     const d = decide(ctx, failVerdict('still red'), null);
-    expect(d).toEqual({ kind: 'CONTINUE', feedback: 'still red' });
+    expect(d).toEqual({ kind: 'CONTINUE', feedback: 'still red', source: 'verifier' });
   });
 
   it('stuck (oscillation) → ABORTED', () => {

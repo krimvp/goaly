@@ -62,6 +62,14 @@ export type LoopCtx = {
   /** Feedback text threaded into the next agent prompt. */
   readonly feedback: string | undefined;
   /**
+   * Where the current `feedback` came from: `'verifier'` (a red ladder's detail) or `'veto'` (a
+   * green-ladder Sign-off veto reason). Drives the one-shot no-diff excuse (issue #54): a no-diff
+   * iteration is excused for a veto only when the just-run turn was NOT already answering a veto —
+   * an LLM approver rewords its veto every round, so comparing reason strings would renew the
+   * excuse forever and burn maxIterations of approver spend on a worker that never edits.
+   */
+  readonly feedbackSource: 'verifier' | 'veto' | undefined;
+  /**
    * The phase position within a frozen plan (issue #48), or undefined on a classic single-contract
    * run. When set, a phase reaching both keys ADVANCES (checkpoint + next phase's compile) instead of
    * declaring the whole run DONE — only the final acceptance phase's DONE ends the run.
@@ -204,6 +212,7 @@ export function initialCtx(
     lastBudget: undefined,
     lastVerdict: undefined,
     feedback: undefined,
+    feedbackSource: undefined,
     phase,
   };
 }

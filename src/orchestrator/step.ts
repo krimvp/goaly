@@ -527,7 +527,7 @@ function stepAwaitSignoff(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
 function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
   switch (decision.kind) {
     case 'CONTINUE': {
-      const next: LoopCtx = { ...ctx, feedback: decision.feedback };
+      const next: LoopCtx = { ...ctx, feedback: decision.feedback, feedbackSource: decision.source };
       const prompt = buildLoopPrompt(ctx.contract, decision.feedback, ctx.lastRunStatus);
       return startIteration(next, prompt, ctx.sessionId);
     }
