@@ -52,3 +52,53 @@ export function extractJson(text: string): unknown | null {
     return null;
   }
 }
+
+/**
+ * Substring marker for a truncated-JSON failure reason (see {@link isTruncatedJson}). Shared between
+ * whichever seam throws the error (e.g. the compiler) and the orchestrator's retry-feedback / resume
+ * decision, so both recognise the SAME failure mode by checking one constant instead of each
+ * re-deriving it from raw reason text. A truncation-shaped failure warrants a fresh session + a
+ * stop-exploring nudge on retry — resuming the exhausted session tends to just re-hit the same
+ * ceiling.
+ */
+export const TRUNCATED_JSON_MARKER = 'truncated mid-JSON';
+
+/**
+ * Distinguish "the response never contained JSON" from "the response STARTED a JSON object but got
+ * cut off before the closing brace" (an opening `{` whose depth never returns to 0 by EOF). This is
+ * the common failure mode when an authoring LLM call runs out of turns/output budget mid-answer — a
+ * caller that sees this should retry with a FRESH session and a stop-exploring nudge, not resume the
+ * exhausted one (resuming tends to just re-hit the same ceiling). Same string-literal-aware scan as
+ * {@link extractBalancedJson}; only the depth-at-EOF check differs, so kept as a small sibling rather
+ * than complicating that function's return shape for every existing caller.
+ */
+export function isTruncatedJson(text: string): boolean {
+  const start = text.indexOf('{');
+  if (start === -1) return false;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === undefined) break;
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '{') {
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return false; // balanced — not truncated
+    }
+  }
+  return depth > 0; // ended mid-object
+}

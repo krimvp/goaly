@@ -67,6 +67,30 @@ describe('step() transitions', () => {
     expect(s3).toMatchObject({ tag: 'FAILED', reason: 'final', contractHash: undefined });
   });
 
+  it('COMPILE_FAILED with a truncated-JSON reason adds a stop-exploring nudge to the retry feedback', () => {
+    const config = makeConfig({ maxCompileRetries: 2 });
+    const [, cmds] = step(initial(config)[0], {
+      tag: 'COMPILE_FAILED',
+      reason:
+        'AgentCompiler: LLM response was truncated mid-JSON (unbalanced braces) — it likely ran out ' +
+        'of turns or output budget before finishing the JSON object.',
+    });
+    expect(cmds[0]?.tag).toBe('COMPILE_VERIFIER');
+    if (cmds[0]?.tag === 'COMPILE_VERIFIER') {
+      expect(cmds[0].feedback).toContain('truncated mid-JSON');
+      expect(cmds[0].feedback).toContain('Do NOT re-explore the repository');
+    }
+  });
+
+  it('a non-truncation COMPILE_FAILED reason gets the generic retry feedback only', () => {
+    const config = makeConfig({ maxCompileRetries: 2 });
+    const [, cmds] = step(initial(config)[0], { tag: 'COMPILE_FAILED', reason: 'wrote to /tmp' });
+    expect(cmds[0]?.tag).toBe('COMPILE_VERIFIER');
+    if (cmds[0]?.tag === 'COMPILE_VERIFIER') {
+      expect(cmds[0].feedback).not.toContain('Do NOT re-explore the repository');
+    }
+  });
+
   it('a retried compile that succeeds proceeds to Seal (issue #51)', () => {
     const config = makeConfig({ maxCompileRetries: 2 });
     const [s1] = step(initial(config)[0], { tag: 'COMPILE_FAILED', reason: 'bad path' });

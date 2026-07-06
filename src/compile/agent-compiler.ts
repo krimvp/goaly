@@ -5,7 +5,7 @@ import { freezeContract, sha256Hex } from '../util/hash';
 import type { LlmProvider } from '../llm/provider';
 import type { VerifierCompiler } from './compiler';
 import { extractRequiredTools } from './required-tools';
-import { extractBalancedJson } from '../util/json-extract';
+import { extractBalancedJson, isTruncatedJson, TRUNCATED_JSON_MARKER } from '../util/json-extract';
 import { findModuleFormatMismatch, type WorkspaceFacts } from '../workspace/workspace-facts';
 import { UsageAssertion, enforceUsageAssertion, type UsageShape } from './usage-gate';
 
@@ -52,6 +52,11 @@ const SYSTEM_PROMPT =
   '"requiredTools"?: string[], "files"?: Array<{ "path": string, "content": string }>, ' +
   '"usageAssertion"?: { "targetSymbols": string[], "description": string } }. ' +
   'The command must exit 0 exactly when the goal is achieved.\n' +
+  '- Explore the repository minimally before answering — read only what you need (a handful of ' +
+  'files at most) to author the command and any files. A response that gets cut off mid-JSON because ' +
+  'it explored too long fails closed and wastes a whole retry round. If you sense you are running low ' +
+  'on turns or output budget, STOP exploring immediately and emit the complete JSON object now — a ' +
+  'conservative-but-complete answer beats a thorough one that never finishes.\n' +
   'Guardrails for a RUNNABLE bar (issue #55):\n' +
   '- The files you author are VERIFICATION ONLY — test files, fixtures, or a check script. NEVER ' +
   'author the implementation/solution itself (the source the goal asks for): writing that code is the ' +
@@ -192,6 +197,12 @@ function withTimeoutHint(e: unknown): Error {
 function parseGenerated(raw: string): GeneratedVerification {
   const json = extractBalancedJson(raw);
   if (json === undefined) {
+    if (isTruncatedJson(raw)) {
+      throw new Error(
+        `AgentCompiler: LLM response was ${TRUNCATED_JSON_MARKER} (unbalanced braces) — it likely ran ` +
+          'out of turns or output budget before finishing the JSON object.',
+      );
+    }
     throw new Error('AgentCompiler: LLM response contained no JSON object');
   }
   let parsed: unknown;
@@ -347,8 +358,18 @@ export class AgentCompiler implements VerifierCompiler {
     // to the fresh full-prompt call on any resume failure (a stale/rejected session must not burn a
     // compile-retry). The full prompt is ALWAYS what a fresh session receives — a delta to an
     // amnesiac model would be meaningless, hence the supportsResume gate.
+    //
+    // EXCEPTION: when the previous attempt was cut off mid-JSON (TRUNCATED_JSON_MARKER in the
+    // feedback), do NOT resume — that session already ran out of turns/output budget once, and
+    // resuming it tends to just re-hit the same ceiling with the same "explore first, answer last"
+    // trajectory. Force a fresh session + the full prompt (which carries the stop-exploring guidance
+    // via the feedback line above) instead.
+    const wasTruncated = feedback !== undefined && feedback.includes(TRUNCATED_JSON_MARKER);
     const resumeId =
-      feedback !== undefined && feedback.length > 0 && this.#llm.supportsResume === true
+      feedback !== undefined &&
+      feedback.length > 0 &&
+      this.#llm.supportsResume === true &&
+      !wasTruncated
         ? this.#session
         : undefined;
     const prompt =

@@ -7,6 +7,7 @@ import type { OrchestratorState, LoopCtx, PhaseCtx } from './state';
 import { initialCtx } from './state';
 import { decide, type Decision } from './decide';
 import { normalizeDetail } from './stuck';
+import { TRUNCATED_JSON_MARKER } from '../util/json-extract';
 
 /**
  * The pure reducer — the product's intelligence. `step(state, event) -> [state, Command[]]`
@@ -249,11 +250,24 @@ function stepCompiling(
 
 /** Turn a COMPILE_FAILED reason into actionable re-authoring guidance for the next compile attempt. */
 function compileRetryFeedback(reason: string): string {
-  return (
+  const base =
     `The previous attempt to author the verification failed: ${reason}. ` +
     "Author verification that runs over the repo's existing tooling, and write any helper files " +
-    'inside the workspace using relative paths only.'
-  );
+    'inside the workspace using relative paths only.';
+  // A truncation-shaped failure (see TRUNCATED_JSON_MARKER) means the LAST attempt explored the repo
+  // too long and ran out of turns/output budget before finishing its JSON answer. The generic
+  // "author verification" guidance above isn't enough on its own — spell out the actual fix so the
+  // retry doesn't repeat the same over-exploration trajectory (the compiler also forces a fresh
+  // session for this case rather than resuming the exhausted one — see agent-compiler.ts).
+  if (reason.includes(TRUNCATED_JSON_MARKER)) {
+    return (
+      base +
+      ' Do NOT re-explore the repository from scratch — you already gathered enough context last ' +
+      'time. Go straight to emitting the complete JSON object as your first and only substantive ' +
+      'output this turn.'
+    );
+  }
+  return base;
 }
 
 function stepAwaitSeal(
