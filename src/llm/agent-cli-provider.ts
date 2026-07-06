@@ -4,7 +4,7 @@ import { runProcess } from '../util/spawn';
 import { parseAgentOutput } from '../agent-cli/output';
 import { StreamTap, type AgentEventSink } from '../agent-cli/stream';
 import { accountTokens, streamingEstimator } from '../agent-cli/estimate';
-import type { AgentCliCodec } from '../agent-cli/codec';
+import { ambientSessionId, type AgentCliCodec } from '../agent-cli/codec';
 
 /**
  * Injectable subprocess seam: takes the full argv plus the prompt (delivered on stdin only when the
@@ -24,21 +24,6 @@ const DEFAULT_RETRIES = 2;
 const BACKOFF_MS = 1000;
 
 const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-/**
- * The AMBIENT session id when goaly itself runs nested under Claude Code (e.g. inside a Claude Code
- * remote environment). A spawned `claude -p` there adopts and REPORTS this id instead of minting a
- * fresh per-call session, and every call in a cwd appends to that ONE shared session file — so
- * resuming it would replay sibling steps' turns (the shape classifier, the red-team critics, …)
- * into the authoring context, not the author's own conversation. Observed empirically; scrubbing
- * the variable from the child env does NOT stop the pinning (the wrapped CLI keeps it), so the
- * only safe policy is to never TRUST the ambient id: drop it from completions and refuse it as a
- * resume target — authoring then degrades to fresh full-prompt calls, the pre-feature behavior.
- */
-function ambientSessionId(): string | undefined {
-  const v = process.env['CLAUDE_CODE_SESSION_ID'];
-  return v !== undefined && v.length > 0 ? v : undefined;
-}
 
 /**
  * The ONE {@link LlmProvider} backed by a coding-agent CLI, driven entirely by that CLI's

@@ -176,6 +176,38 @@ describe('runCodecHarness', () => {
     expect(result.sessionId).toBe('s-2');
   });
 
+  it('never trusts the AMBIENT session id (goaly nested under Claude Code)', async () => {
+    // Regression: a nested `claude -p` adopts and reports the ambient CLAUDE_CODE_SESSION_ID instead
+    // of minting its own — the LLM provider already refuses it, but the HARNESS recorded it as the
+    // worker's session, so iteration 2 (or --resume / --inherit-session) would resume the OUTER
+    // conversation into the worker. The harness must scrub it on both sides of the seam.
+    const prev = process.env['CLAUDE_CODE_SESSION_ID'];
+    process.env['CLAUDE_CODE_SESSION_ID'] = 'ambient-1';
+    try {
+      const captured = { args: [] as string[][] };
+      const exec: AgentExecFn = async () => ({
+        // The wrapped CLI reports the ambient id instead of a fresh session.
+        stdout: JSON.stringify({ result: 'ok', session_id: 'ambient-1', usage: { total_tokens: 3 } }),
+        stderr: '',
+        code: 0,
+      });
+
+      // The ambient id is never SURFACED: it becomes the codec's unknown-session sentinel, which
+      // every downstream consumer (resume hint, --inherit-session, next-turn resume) already skips.
+      const first = await runCodecHarness(spyCodec(captured), exec, undefined, 'go');
+      expect(first.status).toBe('completed');
+      expect(first.sessionId).toBe(claudeCodec.unknownSession);
+
+      // …and never THREADED into --resume when a prior turn recorded it anyway.
+      await runCodecHarness(spyCodec(captured), exec, undefined, 'go', sid('ambient-1'));
+      expect(captured.args[1]).not.toContain('--resume');
+      expect(captured.args[1]).not.toContain('ambient-1');
+    } finally {
+      if (prev === undefined) delete process.env['CLAUDE_CODE_SESSION_ID'];
+      else process.env['CLAUDE_CODE_SESSION_ID'] = prev;
+    }
+  });
+
   it('never throws when the exec seam itself rejects — fails closed to crashed', async () => {
     const exec: AgentExecFn = async () => {
       throw new Error('spawn ENOENT');
