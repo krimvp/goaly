@@ -150,6 +150,15 @@
         above 16 is a fail-closed error). Composes with
         <code>--phased</code> / <code>--delta-verify</code> / <code>--sandbox</code>; needs a committed
         HEAD.</p>
+        <p><b>Or just say it:</b> a natural-language directive in the goal — <i>"fix the flaky test,
+        work with 4 subagents"</i>, <i>"… using 3 parallel attempts"</i> — maps onto
+        <code>--candidates</code> via a small <b>deterministic grammar</b> (never an LLM parse), and the
+        clause is <b>stripped from the goal</b> so it can't enter the frozen contract; the
+        interpretation is loudly logged and the explicit flag always wins. Mid-run, the same grammar
+        reads a resume note: <code>--resume &lt;id&gt; --note "try 4 parallel attempts"</code> raises
+        the fan-out as a <code>RUN_EXTENDED</code> candidates overlay (operator control, ADR 0012).
+        Domain goals like <i>"a queue with 4 parallel workers"</i> never match — no directive means the
+        classic single attempt.</p>
       </div>
       <div class="card">
         <h3>Named worktrees</h3>
@@ -234,8 +243,10 @@
         never disturbs the run). Ctrl-C stops cleanly between steps, then
         <code>--resume &lt;id&gt; --note "…"</code> hands the worker your guidance on its next turn.
         A run that hit an <em>operational</em> limit isn't a dead end — <code>--resume</code> with
-        <code>--max-iterations</code> / <code>--budget-tokens</code> / <code>--stuck-*</code>
-        continues it in place, auditable in the log. The extension schema simply <b>has no field for
+        <code>--max-iterations</code> / <code>--budget-tokens</code> / <code>--stuck-*</code> /
+        <code>--candidates</code> continues it in place, auditable in the log — and it continues the
+        run's <b>own recorded harness</b> (session ids are harness-specific; <code>--harness</code>
+        overrides explicitly). The extension schema simply <b>has no field for
         the goal or verifier</b>: you can add room, never lower the frozen bar.
         <a href="https://github.com/krimvp/goaly/blob/main/docs/adr/0012-operator-control.md" target="_blank" rel="noopener" style="color:var(--accent)">ADR 0012 →</a></p>
       </div>

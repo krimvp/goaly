@@ -230,6 +230,14 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     budgetWallMs: z.number().int().positive().optional(),
     /** Stuck-policy overrides (each field replaces its counterpart; absent fields keep the prior). */
     stuck: StuckPolicy.partial().optional(),
+    /**
+     * Best-of-N candidates override (issue #85): raise/lower the per-iteration parallel fan-out
+     * mid-run — an OPERATIONAL loop knob like `maxIterations`, never the frozen contract. Capped at
+     * 16 like the config seam (each candidate is a full concurrent worker + worktree). Typically
+     * set from an explicit `--candidates` at resume or a natural-language `--note` directive
+     * ("try 4 parallel attempts" — see `src/cli/delegation.ts`).
+     */
+    candidates: z.number().int().positive().max(16).optional(),
     /** Operator guidance appended to the NEXT agent prompt (worker steering, never the contract). */
     note: z.string().min(1).optional(),
   }),

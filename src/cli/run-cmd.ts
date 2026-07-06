@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { USAGE, type ParsedArgs } from './args';
+import { USAGE, isHarnessChoice, type ParsedArgs } from './args';
 import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
 import { drive } from '../driver/driver';
@@ -236,9 +236,10 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
   // overlays + this invocation's explicit extension), NOT this invocation's re-parsed defaults — so
   // the budget meter, best-of wiring, etc. match exactly what the resume fold will compute.
   let runConfig = followup.config;
-  if (parsed.resumeRunId !== undefined) {
+  const resumeRunId = parsed.resumeRunId; // stable narrow (parsed is rebound on harness adoption)
+  if (resumeRunId !== undefined) {
     const stateDir = path.join(parsed.workspace, STATE_DIR);
-    const prior = await readRun(stateDir, parsed.resumeRunId);
+    const prior = await readRun(stateDir, resumeRunId);
     if (prior === null) {
       io.err(
         `goaly: --resume ${parsed.resumeRunId}: no such run in ${stateDir} — ` +
@@ -250,6 +251,21 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       io.err(`goaly: --resume ${parsed.resumeRunId}: run log is corrupt: ${prior.error}\n`);
       return { code: 2, runId: undefined, outcome: undefined };
     }
+    // A resume continues the run's OWN harness unless `--harness` is explicitly re-passed: session
+    // ids are harness-specific, so silently switching to the default CLI mid-run would thread the
+    // prior harness's session (or sentinel) into a different tool and crash/derail every turn.
+    if (
+      !parsed.harnessExplicit &&
+      prior.detail.harness !== undefined &&
+      prior.detail.harness !== parsed.harness &&
+      isHarnessChoice(prior.detail.harness)
+    ) {
+      io.err(
+        `goaly: --resume: continuing with this run's harness '${prior.detail.harness}' ` +
+          `(pass --harness to override)\n`,
+      );
+      parsed = { ...parsed, harness: prior.detail.harness };
+    }
     // Extending a DONE run is meaningless (both keys already turned) — route to the follow-up path.
     if (prior.detail.status === 'DONE' && parsed.resumeExtend !== undefined) {
       io.err(
@@ -258,7 +274,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       );
       return { code: 2, runId: undefined, outcome: undefined };
     }
-    const stored = await new FileRunLog(path.join(stateDir, parsed.resumeRunId)).read();
+    const stored = await new FileRunLog(path.join(stateDir, resumeRunId)).read();
     if (stored !== null) {
       const effective = extendedRunConfig(stored.header.config, stored.entries);
       runConfig =
@@ -360,6 +376,23 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       ...(egressAllowlist !== undefined ? { egressAllowlist: egressAllowlist.join(', ') } : {}),
       ...startupFields(parsed),
     });
+
+    // Natural-language delegation is a GOAL/NOTE REWRITE, so it must be loudly auditable: name the
+    // matched phrase and what it was mapped to (or that the explicit flag won) every time.
+    if (parsed.delegation !== undefined) {
+      deps.logger?.info(
+        parsed.delegation.overriddenByFlag
+          ? 'delegation directive found but --candidates wins (directive still stripped)'
+          : 'delegation directive interpreted — running the best-of-N tournament',
+        {
+          runId,
+          phrase: parsed.delegation.phrase,
+          candidates: parsed.delegation.overriddenByFlag
+            ? runConfig.candidates
+            : parsed.delegation.candidates,
+        },
+      );
+    }
 
     // Cooperative stop: an injected probe (the UI's stop button) is used as-is — the embedding
     // process owns its signals. Otherwise install the classic Ctrl-C controller around drive().

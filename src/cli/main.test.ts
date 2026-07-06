@@ -288,6 +288,28 @@ describe('main() — resume extension end-to-end (operator control, ADR 0012)', 
     expect(second.out).toContain('reached maxIterations');
   });
 
+  it("a --resume without --harness ADOPTS the run's recorded harness (never silently the default)", async () => {
+    // Regression: a resume that omitted --harness silently switched to the default CLI (claude),
+    // threading the prior harness's session/sentinel into a different tool — observed live as
+    // `claude --resume noop-session` crashing every candidate of a resumed fake-harness run.
+    const first = await captureAll(() =>
+      main(['run', 'g', '--verify-cmd', 'false', '--harness', 'fake', '--autonomous',
+        '--max-iterations', '2', '--workspace', root]),
+    );
+    expect(first.code).toBe(1);
+    const runId = /── goaly run (run-[0-9a-f-]+) ──/.exec(first.out)?.[1];
+    expect(runId).toBeDefined();
+
+    // No --harness here: the run log's 'fake' must be adopted (a silent claude default would spawn
+    // the real CLI on iteration 2).
+    const second = await captureAll(() =>
+      main(['run', '--workspace', root, '--resume', runId!, '--stuck-no-diff', 'false']),
+    );
+    expect(second.out).toContain("continuing with this run's harness 'fake'");
+    expect(second.code).toBe(1);
+    expect(second.out).toContain('reached maxIterations');
+  });
+
   it('refuses to extend a DONE run, pointing at --from-run', async () => {
     // Fabricate a DONE run log directly (no LLM/harness involved): both keys turned.
     const contract = makeFakeContract({ goal: 'g' });

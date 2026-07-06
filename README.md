@@ -190,7 +190,10 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   0) and can't win. Each candidate completes write-ahead, so `--resume` re-runs only the not-yet-logged
   ones and re-selects deterministically — or, with `--resume-best-of-incomplete collapse`, collapses to the
   best already-logged candidate and re-runs nothing. Needs a committed HEAD (it refuses to start fail-closed
-  on an unborn branch). See [Best-of-N parallel worker](#best-of-n-parallel-worker---candidates).
+  on an unborn branch). You can also request it in **natural language** — *"fix the flaky test, work with 4
+  subagents"* in the goal, or *"try 4 parallel attempts"* in a `--resume` note — a deterministic directive
+  grammar (never an LLM parse) maps it onto `--candidates`, strips the clause from the frozen goal, and
+  logs the interpretation loudly. See [Best-of-N parallel worker](#best-of-n-parallel-worker---candidates).
 - **Compile is resilient, not one-shot.** A `COMPILE_FAILED` (a correctable authoring mistake — bad
   path, transient parse miss) re-authors the verification with the error fed back as guidance, up to
   `--max-compile-retries` (default 2; `0` disables), before the run fails — so one bad compile output
@@ -367,6 +370,33 @@ each iteration, with --candidates N:
   **`--sandbox`** jails each of the N execs through the same launcher. Best-of-N needs a **committed
   HEAD** — `git worktree` can't check out an unborn tree, so a `--candidates > 1` run on a HEAD-less repo
   **refuses to start** (fail-closed) with a clear message; make an initial commit or use `--candidates 1`.
+
+### Natural-language delegation — just say it
+
+You don't have to remember the flag: a **delegation directive in the goal** maps onto the same
+tournament, and mid-run the same grammar reads your **resume note**.
+
+```bash
+goaly "fix the flaky auth test, work with 4 subagents"        # ⇒ --candidates 4
+goaly "make the linter pass using 3 parallel attempts"        # ⇒ --candidates 3
+goaly "port the parser to TS, use subagents"                  # ⇒ --candidates 3 (documented default)
+goaly --resume run-… --note "focus on the parser, try 4 parallel attempts"   # raises the fan-out mid-run
+```
+
+- **Deterministic, never an LLM parse.** Detection is a small directive grammar (`src/cli/delegation.ts`)
+  — an LLM interpreting your config would be exactly the "LLM in control flow" goaly exists to avoid. The
+  grammar is deliberately narrow: only **`subagents`** (with a delegation verb — `use / spawn / work
+  with / delegate to …`) and **`N parallel attempts|candidates|tries`** trigger it, so goals about
+  app-domain parallelism (*"implement a job queue with 4 parallel workers"*, *"handle 5 parallel login
+  attempts"*) never match. No match ⇒ the classic single attempt — fail-closed, never a guess.
+- **The directive is stripped from the goal** before the contract is compiled — the goal is frozen and
+  read by the judge/approver, and a leftover *"use 4 subagents"* would become an unverifiable success
+  criterion. The interpretation is **loudly logged** (`phrase → N`), and the explicit `--candidates` /
+  `--best-of` flag (or config file) **always wins**.
+- **Mid-run steering rides ADR 0012.** A directive in `--resume … --note "…"` becomes a `candidates`
+  overlay on the `RUN_EXTENDED` marker (an operational knob, like a raised `--max-iterations` — the
+  frozen contract stays unreachable); the directive clause leaves the note and any remaining text still
+  steers the worker. Same 16 cap, same fail-closed error above it.
 
 ## Worktrees (`--worktree`)
 
@@ -1179,14 +1209,18 @@ goaly --resume run-<id> --max-iterations 25             # revive FAILED at the i
 goaly --resume run-<id> --budget-tokens 900000          # revive a budget abort (prior spend still counts)
 goaly --resume run-<id> --stuck-no-diff false --note "try editing src/parser.ts directly"
                                                         # revive a stuck abort, with direction
+goaly --resume run-<id> --candidates 4                  # widen the best-of-N fan-out for what's left
+goaly --resume run-<id> --note "try 4 parallel attempts"  # same, said in natural language
 ```
 
 Only the operational knobs are extendable (`--max-iterations`, `--budget-tokens`,
-`--budget-wall-ms`, the `--stuck-*` thresholds) — the goal, verifier, and rubric are structurally
-not part of an extension, so autonomy never becomes "renegotiate the bar." A DONE run refuses to
-extend and points you at `--from-run`. Rule of thumb: **same goal, more room → `--resume` with
-caps/note; new or refined goal → `--from-run`** (a fresh contract, compiled aware of what just
-happened — see [Following up](#following-up-after-a-run-ends---from-run)).
+`--budget-wall-ms`, the `--stuck-*` thresholds, `--candidates`) — the goal, verifier, and rubric are
+structurally not part of an extension, so autonomy never becomes "renegotiate the bar." A DONE run
+refuses to extend and points you at `--from-run`. A resume also **continues the run's own harness**
+(recorded in the log) rather than silently switching to the default — session ids are
+harness-specific; pass `--harness` explicitly to override. Rule of thumb: **same goal, more room →
+`--resume` with caps/note; new or refined goal → `--from-run`** (a fresh contract, compiled aware of
+what just happened — see [Following up](#following-up-after-a-run-ends---from-run)).
 
 ### Inspecting past runs
 

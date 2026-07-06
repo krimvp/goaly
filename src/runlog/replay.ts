@@ -30,6 +30,7 @@ export function applyRunExtension(cfg: RunConfig, x: RunExtension): RunConfig {
   return {
     ...cfg,
     ...(x.maxIterations !== undefined ? { maxIterations: x.maxIterations } : {}),
+    ...(x.candidates !== undefined ? { candidates: x.candidates } : {}),
     budget: {
       ...cfg.budget,
       ...(x.budgetTokens !== undefined ? { tokens: x.budgetTokens } : {}),
