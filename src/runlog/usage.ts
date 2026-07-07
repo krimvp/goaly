@@ -43,6 +43,13 @@ export function summarizeUsage(events: OrchestratorEvent[], budget: BudgetConfig
       case 'SIGNOFF_DECIDED':
         addLlmStep(approver, event.llm);
         break;
+      case 'WAVE_RAN':
+        // EXPERIMENTAL parallel waves: each outcome carries its CHILD run's total spend (the child
+        // spends across all layers internally, metered by the SHARED budget). The parent report has
+        // no per-child columns, so the whole child total is bucketed under `harness` — the run's
+        // `total`/`budget` stay exact, which is what the cap and the summary line need.
+        for (const outcome of event.outcomes) addLlmStep(harness, outcome.usage);
+        break;
     }
   }
 

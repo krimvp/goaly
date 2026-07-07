@@ -161,6 +161,21 @@
         classic single attempt.</p>
       </div>
       <div class="card">
+        <h3>Cooperative parallel waves <span style="opacity:.6">(experimental)</span></h3>
+        <p><code>--parallel-phases</code> (opt-in, with <code>--phased --autonomous</code>) turns
+        consecutive plan phases sharing a <code>"group"</code> into a concurrent <b>wave of
+        cooperating child runs</b> — each phase a FULL goaly run (own frozen contract, iterations,
+        two-key gate, write-ahead log) in an isolated worktree, on the one shared
+        <code>--budget-tokens</code>. DONE children then <b>merge in phase order</b> via real 3-way
+        <code>git merge-tree</code> plumbing (no commits), and each merged phase's frozen
+        <b>deterministic rungs re-run on the combined tree</b> — a merge is never trusted. A
+        conflict, a red re-verify, a failed child, or even a missing wave executor all
+        <b>downgrade fail-closed to the classic sequential phase</b>; the cumulative ACCEPTANCE
+        contract still gates the whole run, so parallel decomposition can't green a broken whole.
+        The reducer stays pure: one <code>RUN_WAVE</code> command out, one <code>WAVE_RAN</code>
+        event back — children never enter the parent's state machine.</p>
+      </div>
+      <div class="card">
         <h3>Named worktrees</h3>
         <p><code>--worktree &lt;name&gt;</code> re-roots the <b>entire run</b> — run log, lock, agent
         cwd, verifier, diff scope — at an isolated checkout under

@@ -74,6 +74,12 @@ export function feedLine(entry: RunLogEntry, iteration: number): FeedLine | null
       ];
       return plain(`operator extension: ${parts.join(', ')}`);
     }
+    case 'WAVE_RAN': {
+      const merged = e.outcomes.filter((o) => o.kind === 'merged').length;
+      const fallback = e.outcomes.length - merged;
+      const text = `wave: ${merged}/${e.outcomes.length} phase(s) merged + re-verified${fallback > 0 ? `, ${fallback} downgraded to sequential` : ''}`;
+      return { at, text, tone: fallback > 0 ? 'plain' : 'pass' };
+    }
     case 'CHECKPOINTED':
       return null; // internal diff-baseline plumbing — noise for a human
   }

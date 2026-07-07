@@ -107,6 +107,45 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
    * (like CHECKPOINTED) AND drives the reducer's advance to the next phase's contract compile.
    */
   z.object({ tag: z.literal('PHASE_ADVANCED'), tree: DiffHash }),
+  /**
+   * EXPERIMENTAL — a cooperative parallel WAVE completed (`--parallel-phases`): consecutive grouped
+   * phases ran concurrently as isolated, frozen, two-key CHILD runs; the Driver merged the DONE
+   * children in phase order and RE-VERIFIED each merged phase's frozen ladder on the combined tree.
+   * One outcome per wave member:
+   *  - `merged`    — child DONE, merged clean, frozen ladder green on the combined tree ⇒ the phase
+   *                  is complete (the reducer SKIPS it when advancing).
+   *  - `unmerged`  — the child failed to land (merge conflict, red re-verify, or a non-DONE child
+   *                  outcome) ⇒ FAIL-CLOSED downgrade: the phase re-runs as a classic sequential
+   *                  phase on the merged-so-far tree (a fresh frozen contract on the same sub-goal —
+   *                  the bar never moves, only the starting tree).
+   * Carries the post-merge checkpoint tree (the baseline for whatever follows, like PHASE_ADVANCED).
+   * Fed to `step()` (it drives the advance) AND read by replay for baseline reconstruction.
+   */
+  z.object({
+    tag: z.literal('WAVE_RAN'),
+    outcomes: z
+      .array(
+        z.discriminatedUnion('kind', [
+          z.object({
+            kind: z.literal('merged'),
+            /** The plan phase index this outcome belongs to. */
+            index: z.number().int().nonnegative(),
+            /** The child run's total spend (all layers), for the parent's usage fold. */
+            usage: TokenUsage.optional(),
+          }),
+          z.object({
+            kind: z.literal('unmerged'),
+            index: z.number().int().nonnegative(),
+            /** Why the child did not land (conflict / red re-verify / child FAILED-ABORTED / error). */
+            reason: z.string(),
+            usage: TokenUsage.optional(),
+          }),
+        ]),
+      )
+      .min(1),
+    /** The post-merge checkpoint tree — the diff baseline for the phases that follow. */
+    tree: DiffHash,
+  }),
   z.object({
     tag: z.literal('CONTRACT_COMPILED'),
     contract: CompiledContract,
@@ -304,7 +343,17 @@ export type Command =
    */
   | { tag: 'RUN_AGENT_BEST_OF'; prompt: string; sessionId: SessionId | undefined; candidates: number }
   | { tag: 'RUN_VERIFIER'; contract: CompiledContract }
-  | { tag: 'REQUEST_SIGNOFF'; goal: string; rubric: string; verdicts: Verdict[] };
+  | { tag: 'REQUEST_SIGNOFF'; goal: string; rubric: string; verdicts: Verdict[] }
+  /**
+   * EXPERIMENTAL — run a cooperative parallel WAVE (`--parallel-phases`): the consecutive grouped
+   * phases at `phases[i].index`, each as its own frozen, two-key CHILD goaly run in an isolated
+   * worktree (per-phase config derived by the reducer exactly as for a sequential phase), then merge
+   * the DONE children in phase order and re-verify each merged ladder on the combined tree. The
+   * Driver performs the whole wave through the injected {@link WaveRunner} seam and feeds back ONE
+   * `WAVE_RAN` event. Emitted INSTEAD of the first phase's `COMPILE_VERIFIER` when the plan groups
+   * consecutive phases and `config.parallelPhases` is on — still exactly one command per state.
+   */
+  | { tag: 'RUN_WAVE'; phases: { index: number; config: RunConfig }[] };
 
 /** Terminal result of a whole run. */
 export const RunOutcome = z.object({

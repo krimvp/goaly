@@ -38,6 +38,7 @@ import { AgentCliHarness } from '../harness/agent-cli-harness';
 import { SystemClock } from '../driver/clock';
 import { SystemBudgetMeter } from '../driver/budget';
 import { LlmTokenMeter, meterLlm } from '../driver/llm-meter';
+import { DefaultWaveRunner } from '../driver/wave-runner';
 import { buildLogger, type FileLogOptions } from '../log/build';
 import type { Logger, LogLevel } from '../log/logger';
 import type { LogFs } from '../log/sinks';
@@ -191,6 +192,13 @@ export type ComposeOptions = {
   sealGate?: SealGate;
   /** Inject the plan-Seal gate (phased runs), same rules as {@link sealGate}. */
   planGate?: PlanGate;
+  /**
+   * Inject the harness adapter per workspace root (tests/embedders) — bypasses {@link harness}
+   * selection. The FACTORY shape (not a single adapter) exists for EXPERIMENTAL parallel waves,
+   * where each wave child composes its own deps rooted at its worktree: the factory receives that
+   * root so a scripted test harness can write into the right tree.
+   */
+  harnessFactory?: (workspaceRoot: string) => HarnessAdapter;
 };
 
 /**
@@ -361,11 +369,12 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
           options.egressProxy,
         );
   const workspace = new GitWorkspace(options.workspaceRoot, undefined, excludes, true, runLauncher);
-  // Best-of-N worktree host (issue #85): only wired when `--candidates > 1` (a `--candidates 1` run
-  // never touches it). It shares the canonical root / exec / excludes / verify-jail so each candidate's
-  // isolated worktree hashes + scores identically to the canonical workspace.
+  // Worktree host: wired for best-of-N (issue #85, `--candidates > 1`) and for EXPERIMENTAL
+  // cooperative parallel waves (`--parallel-phases`) — a run using neither never touches it. It
+  // shares the canonical root / exec / excludes / verify-jail so each isolated worktree hashes +
+  // scores identically to the canonical workspace.
   const worktrees =
-    config.candidates > 1
+    config.candidates > 1 || (config.phased && config.parallelPhases)
       ? new GitWorktreeHost({
           root: options.workspaceRoot,
           exec: realExec,
@@ -470,6 +479,39 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   // detected, never assumed — a non-code workspace yields `undefined` and nothing is injected.
   const workspaceFacts = detectWorkspaceFacts(options.workspaceRoot);
 
+  // ONE budget meter for the whole run — hoisted so EXPERIMENTAL parallel-wave children share it
+  // (the `--budget-tokens` cap governs the fan-out, not each child separately).
+  const budget = new SystemBudgetMeter(config.budget, clock);
+
+  // EXPERIMENTAL cooperative parallel waves (`--parallel-phases`): each wave CHILD is a FULL goaly
+  // run composed by this very function, rooted at its ephemeral worktree — its own frozen contract,
+  // two-key gate, and write-ahead log (under `<worktree>/.goaly`), on the parent's budget meter and
+  // interrupt probe. Parent-anchored artifact paths (log/stream/state overrides, the diff baseline)
+  // are stripped so children never write into the parent's files.
+  const wave =
+    config.phased && config.parallelPhases && worktrees !== undefined
+      ? new DefaultWaveRunner({
+          host: worktrees,
+          workspace,
+          workspaceRoot: options.workspaceRoot,
+          ...(timeouts.verifyMs !== undefined ? { verifyTimeoutMs: timeouts.verifyMs } : {}),
+          logger,
+          composeChild: async (spec, worktree, childRunId, interrupted) => {
+            const { logFile: _lf, streamFile: _sf, stateDir: _sd, baseline: _b, ...rest } = options;
+            const childDeps = composeDeps(spec.config, {
+              ...rest,
+              workspaceRoot: worktree.root,
+              runId: childRunId,
+            });
+            return {
+              ...childDeps,
+              budget,
+              ...(interrupted !== undefined ? { interrupted } : {}),
+            };
+          },
+        })
+      : undefined;
+
   return {
     compiler: seedCompiler(
       critiqueCompiler(
@@ -500,14 +542,16 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
         : new HumanSealGate({ allowRevise: config.maxSealRevisions > 0 })),
     ...(phasedSeams !== undefined ? phasedSeams : {}),
     harness:
-      options.harness === 'goaly-code'
-        ? makeGoalyCodeHarness(options, models, stateDir, logger, launcher)
-        : makeHarness(options.harness, models.harness, timeouts.harnessMs, timeouts.harnessIdleMs, {
-            launcher,
-            workspace: options.workspaceRoot,
-            policy: options.sandbox ?? defaultPolicy(),
-            ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
-          }),
+      options.harnessFactory !== undefined
+        ? options.harnessFactory(options.workspaceRoot)
+        : options.harness === 'goaly-code'
+          ? makeGoalyCodeHarness(options, models, stateDir, logger, launcher)
+          : makeHarness(options.harness, models.harness, timeouts.harnessMs, timeouts.harnessIdleMs, {
+              launcher,
+              workspace: options.workspaceRoot,
+              policy: options.sandbox ?? defaultPolicy(),
+              ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
+            }),
     makeLadder: (contract) => {
       // Surface the frozen authored bar (`generatedFiles`) in the diff the two LLM keys review, even
       // though it's git-excluded (issue #52) from the user's `git status`. Without this the judge sees
@@ -540,8 +584,9 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     prepareLlm: llmFor(models.judge, 'preflight'),
     workspace,
     ...(worktrees !== undefined ? { worktrees } : {}),
+    ...(wave !== undefined ? { wave } : {}),
     clock,
-    budget: new SystemBudgetMeter(config.budget, clock),
+    budget,
     llmMeter,
     runlog: new FileRunLog(path.join(stateDir, options.runId)),
     logger,

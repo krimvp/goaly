@@ -49,7 +49,7 @@ stays resumable). See [Usage](#usage) for every flag.
 
 - [How it works](#how-it-works) — the loop, the two gates, the verify ladder
 - [Install](#install) · [Usage](#usage) — every flag and mode
-- [Phased goals](#phased-goals---phased) · [Worktrees](#worktrees---worktree) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
+- [Phased goals](#phased-goals---phased) · [Parallel waves](#cooperative-parallel-waves---parallel-phases-experimental) · [Worktrees](#worktrees---worktree) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
 - [Reliability](#reliability-preflight-retries-interrupts-crash-safety) — preflight, retries, Ctrl-C, crash-safety
 - [Operator control](#watching-steering--extending-a-run-operator-control) — watch live, steer with `--note`, extend caps on `--resume`
 - [Web UI](#web-ui-goaly-ui) — `goaly ui`: runs, live feeds, and worktrees in the browser
@@ -306,6 +306,53 @@ ACCEPT  (a cumulative contract on the ORIGINAL goal) ──both keys──► DO
   contract, but still freezes + logs both. **`--budget-tokens` is the whole-run total** (summed across
   every phase). `--resume` re-enters mid-plan without repeating completed phases. `goaly runs show`
   prints the frozen plan and stamps each iteration with its phase.
+
+### Cooperative parallel waves (`--parallel-phases`, EXPERIMENTAL)
+
+Sequential phases leave wall-clock on the table when sub-goals are **independent**. `--parallel-phases`
+(opt-in, experimental) runs them as **cooperating agents**: consecutive plan phases sharing a `group`
+value form a **wave** that executes concurrently, then **merges** — without weakening a single
+guarantee.
+
+```jsonc
+// plan.json — phases 1+2 are one wave; phase 3 runs after the merged result
+{ "phases": [
+  { "goal": "implement the parser",    "group": 1 },
+  { "goal": "implement the formatter", "group": 1 },
+  { "goal": "wire parser + formatter into the CLI" }
+] }
+```
+```bash
+goaly "build the tool" --verify-cmd "npm test" --phased --parallel-phases --autonomous \
+      --plan-file plan.json
+```
+
+How a wave works, and why it can't cheat:
+
+- **Fork: every wave member is a full goaly run.** Each phase gets an isolated git worktree off the
+  wave-start checkpoint and runs as its own **child run** — its own compiled + frozen contract, its own
+  iterations, verifier ladder, and veto-only Sign-off (both keys per child), its own write-ahead log
+  inside the worktree — all children metered by the **one shared `--budget-tokens`** cap.
+- **Merge: plumbing, not prayer.** DONE children merge in phase order with a real 3-way
+  `git merge-tree` against the fork point — objects only, no commits, no HEAD/branch/index movement. A
+  **textual conflict applies nothing** of that child.
+- **Re-verify: a merge is never trusted.** After promotion, each merged child's **frozen deterministic
+  rungs re-run on the combined tree** — two individually-green changes can still break each other. A
+  red re-verify un-lands nothing silently: that phase **downgrades to the classic sequential run** on
+  the merged tree, under a fresh frozen contract for the same sub-goal (the bar never moves, only the
+  starting tree). Merge conflicts and children that never reach DONE downgrade the same way.
+- **Acceptance still gates the whole.** The final cumulative acceptance contract (both keys, LLM
+  included) runs on the original goal exactly as in a sequential phased run — so no decomposition,
+  parallel or not, can green a goal whose parts pass but whole doesn't.
+- **Fail-closed to sequential.** Every failure shape — a conflicted merge, a red re-verify, a crashed
+  child, even a missing/broken wave executor — degrades to phases running one at a time, which is
+  byte-for-byte today's `--phased`. The reducer stays pure: it emits one `RUN_WAVE` command and folds
+  one `WAVE_RAN` event; children never enter the parent's state machine.
+- **Experimental limits (v1):** requires `--autonomous` (children seal their frozen contracts
+  concurrently — still frozen + loudly logged) and a `--plan-file` with `group` fields (the LLM planner
+  does not author groups yet); a crash mid-wave re-runs the whole wave on `--resume` (children live in
+  ephemeral worktrees); wave-child spend is reported under the parent's `harness` layer. Grouped plans
+  run **strictly sequentially** without the flag, and the plan's grouping is frozen into `planHash`.
 
 ## Best-of-N parallel worker (`--candidates`)
 

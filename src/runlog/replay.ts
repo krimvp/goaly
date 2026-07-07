@@ -168,6 +168,12 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
       baseline = entry.event.tree;
       phaseBaseline = entry.event.tree;
     }
+    // EXPERIMENTAL parallel waves: like PHASE_ADVANCED, a wave both DRIVES the reducer (skip/advance
+    // bookkeeping) and records the post-merge checkpoint tree for baseline reconstruction on resume.
+    if (entry.event.tag === 'WAVE_RAN') {
+      baseline = entry.event.tree;
+      phaseBaseline = entry.event.tree;
+    }
     // With extended budget caps, the persisted `exceeded` flags are re-judged against the new caps
     // (raw spent numbers stay the persisted facts) — else the fold would re-abort at the old cap.
     [state, commands] = step(state, budgetExtended ? rejudgeBudget(entry.event, effective) : entry.event);

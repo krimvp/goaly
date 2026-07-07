@@ -97,6 +97,54 @@ describe('GitWorktreeHost (integration, real git) — best-of-N (issue #85)', ()
     expect(git(root, 'rev-parse', 'HEAD')).toBe(headBefore);
   });
 
+  it('mergeTrees merges DISJOINT edits cleanly into a promotable tree (parallel waves)', async () => {
+    const h = host(root);
+    const base = await new GitWorkspace(root).diffHash(); // the fork point
+
+    // Two children fork from base and edit DIFFERENT files.
+    const a = await h.addWorktree('HEAD');
+    await writeFile(join(a.root, 'a.txt'), 'from child A\n');
+    const treeA = await a.scope.diffHash();
+    await h.removeWorktree(a);
+
+    const b = await h.addWorktree('HEAD');
+    await writeFile(join(b.root, 'b.txt'), 'from child B\n');
+    const treeB = await b.scope.diffHash();
+    await h.removeWorktree(b);
+
+    const merged = await h.mergeTrees(base, treeA, treeB);
+    expect(merged.kind).toBe('clean');
+    if (merged.kind !== 'clean') return;
+
+    // The merged tree promotes into the canonical workspace with BOTH children's work.
+    await h.promoteTree(merged.tree);
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('from child A\n');
+    expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('from child B\n');
+    expect(await readFile(join(root, 'file.txt'), 'utf8')).toBe('base\n');
+  });
+
+  it('mergeTrees reports OVERLAPPING edits as a typed conflict and applies nothing', async () => {
+    const h = host(root);
+    const base = await new GitWorkspace(root).diffHash();
+
+    const a = await h.addWorktree('HEAD');
+    await writeFile(join(a.root, 'file.txt'), 'child A version\n');
+    const treeA = await a.scope.diffHash();
+    await h.removeWorktree(a);
+
+    const b = await h.addWorktree('HEAD');
+    await writeFile(join(b.root, 'file.txt'), 'child B version\n');
+    const treeB = await b.scope.diffHash();
+    await h.removeWorktree(b);
+
+    const merged = await h.mergeTrees(base, treeA, treeB);
+    expect(merged.kind).toBe('conflict');
+    if (merged.kind !== 'conflict') return;
+    expect(merged.detail).toContain('file.txt');
+    // Nothing was applied anywhere — the canonical tree is untouched.
+    expect(await readFile(join(root, 'file.txt'), 'utf8')).toBe('base\n');
+  });
+
   it('promoteTree deletes a tracked file the winning tree dropped', async () => {
     // Add a second tracked file in the canonical tree.
     await writeFile(join(root, 'drop-me.txt'), 'temp\n');

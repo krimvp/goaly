@@ -212,7 +212,7 @@ Usage:
                [--install-missing-tools true|false]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N] [--candidates N]
                [--phased [--max-phases N] [--max-plan-revisions N] [--plan-file <p>]
-                         [--planner-model <m>]]
+                         [--planner-model <m>] [--parallel-phases]]
                [--max-seal-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
@@ -351,6 +351,19 @@ Phased decomposition (issue #48 — split one big goal into a frozen plan of sma
   --max-plan-revisions N  cap the free-text plan-Seal revise rounds (default 10; 0 disables revision).
   --planner-model <m> model for the planner step only (cascades like the other LLM-step models).
   --autonomous        also auto-accepts the plan AND each phase contract — still frozen + logged loudly.
+  --parallel-phases   EXPERIMENTAL, opt-in — cooperative parallel WAVES: consecutive plan phases
+                      sharing a "group" value (plan-file: {"goal": …, "group": 1}) execute
+                      CONCURRENTLY, each as its own frozen, two-key CHILD goaly run in an isolated
+                      git worktree on the SHARED --budget-tokens meter. The children are then merged
+                      in phase order (3-way git merge-tree — plumbing only, no commits) and each
+                      merged phase's frozen DETERMINISTIC rungs are RE-VERIFIED on the combined tree
+                      — a merge is never trusted. Fail-closed everywhere: a merge conflict, a red
+                      re-verify, or a child that can't reach DONE simply DOWNGRADES that phase to
+                      the classic sequential run on the merged tree (the bar never moves, only the
+                      starting tree); the cumulative ACCEPTANCE contract still gates the whole run.
+                      Requires --phased and --autonomous (children seal concurrently). Without this
+                      flag, grouped plans run strictly sequentially. Resume note: a crash mid-wave
+                      re-runs the WHOLE wave on --resume (children live in ephemeral worktrees).
 
 Best-of-N parallel worker (issue #85 — tournament-select candidates against the frozen ladder):
   --candidates N      (alias --best-of N) run N independent worker attempts EACH loop iteration in
@@ -1014,6 +1027,7 @@ export async function parseArgs(
       ? { resumeBestOfIncomplete: parseResumeBestOfIncomplete(flags) }
       : {}),
     ...(flags['phased'] !== undefined ? { phased: true } : {}),
+    ...(flags['parallel-phases'] !== undefined ? { parallelPhases: true } : {}),
     ...(str(flags, 'max-phases') !== undefined ? { maxPhases: str(flags, 'max-phases') } : {}),
     ...(str(flags, 'max-plan-revisions') !== undefined
       ? { maxPlanRevisions: str(flags, 'max-plan-revisions') }
@@ -1070,6 +1084,24 @@ export async function parseArgs(
 
   const harness = parseHarness(str(flags, 'harness'));
   const config = cliInputToRunConfig(cliInput);
+
+  // EXPERIMENTAL parallel waves: the fan-out only exists inside a phased plan (grouped sub-goals),
+  // and wave children compile + Seal their contracts CONCURRENTLY — an interactive gate cannot pause
+  // K children at once, so autonomy is required (the contracts are still frozen + logged loudly).
+  if (config.parallelPhases && !resuming) {
+    if (!config.phased) {
+      throw new UsageError(
+        "--parallel-phases parallelizes a phased plan's grouped sub-goals — pair it with --phased " +
+          '(and mark consecutive phases with a shared "group" in the plan)',
+      );
+    }
+    if (!config.autonomous) {
+      throw new UsageError(
+        '--parallel-phases requires --autonomous: wave children seal their frozen contracts ' +
+          'concurrently and cannot pause at interactive gates (each contract is still frozen + logged)',
+      );
+    }
+  }
   // Explicitness for the resume extension is judged on CLI flags ONLY (never the config-file
   // overlay): a `.goalyrc` default like "budget-tokens" must not append a RUN_EXTENDED marker to
   // the log on every resume — an extension is an explicit per-invocation operator act.

@@ -138,6 +138,12 @@ export function renderWatchEvent(entry: RunLogEntry, iteration: number): string 
       ];
       return `${at}  operator extension: ${parts.join(', ')}`;
     }
+    case 'WAVE_RAN': {
+      const merged = e.outcomes.filter((o) => o.kind === 'merged').length;
+      const fallback = e.outcomes.length - merged;
+      const tail = fallback > 0 ? `, ${fallback} downgraded to sequential` : '';
+      return `${at}  wave: ${merged}/${e.outcomes.length} phase(s) merged + re-verified${tail}`;
+    }
     case 'CHECKPOINTED':
       return null; // internal diff-baseline plumbing — noise for a human watcher
   }

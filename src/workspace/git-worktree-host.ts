@@ -101,6 +101,39 @@ export class GitWorktreeHost implements WorktreeHost {
     }
   }
 
+  /**
+   * EXPERIMENTAL (parallel waves) — 3-way merge `ours` and `theirs` against `base` using the modern
+   * plumbing `git merge-tree --write-tree --merge-base=<base>` (git ≥ 2.40): a REAL recursive merge
+   * that writes only objects, never touching HEAD / index / working tree. Tree SHAs are wrapped in
+   * dangling commits first (the plumbing takes commit-ish). Exit 0 ⇒ clean (first stdout line is the
+   * merged tree OID); exit 1 ⇒ textual conflict (typed, with the conflicted paths — nothing is
+   * applied anywhere); anything else throws fail-closed.
+   */
+  async mergeTrees(
+    base: string,
+    ours: string,
+    theirs: string,
+  ): Promise<{ kind: 'clean'; tree: string } | { kind: 'conflict'; detail: string }> {
+    const b = await this.#toCommitish(base);
+    const o = await this.#toCommitish(ours);
+    const t = await this.#toCommitish(theirs);
+    const r = await this.#git(['merge-tree', '--write-tree', `--merge-base=${b}`, o, t]);
+    if (r.code === 0) {
+      const tree = r.stdout.trim().split('\n')[0] ?? '';
+      if (tree.length === 0) throw new Error('git merge-tree returned no tree OID');
+      return { kind: 'clean', tree };
+    }
+    if (r.code === 1) {
+      // Conflicted: stdout is <oid>\n<conflicted file sections>. Surface the file names for the log.
+      const lines = splitLines(r.stdout).slice(1);
+      return {
+        kind: 'conflict',
+        detail: lines.length > 0 ? lines.slice(0, 10).join(', ') : 'textual merge conflict',
+      };
+    }
+    throw new Error(`git merge-tree failed (code ${r.code}): ${r.stderr.trim()}`);
+  }
+
   /** Resolve `treeish` to a commit-ish: a ref/commit as-is, else wrap a bare tree SHA in a commit. */
   async #toCommitish(treeish: string): Promise<string> {
     const commit = await this.#git(['rev-parse', '--verify', '--quiet', `${treeish}^{commit}`]);

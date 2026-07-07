@@ -365,6 +365,28 @@ export class FakeWorktreeHost implements WorktreeHost {
     this.promoted.push(treeish);
     this.canonical?.setHash(treeish);
   }
+
+  /** Scripted conflict paths (ours+theirs keys) — a pair listed here merges as a typed conflict. */
+  readonly conflicts = new Set<string>();
+  /** Record of every mergeTrees call, for assertions. */
+  readonly mergedCalls: { base: string; ours: string; theirs: string }[] = [];
+
+  /**
+   * Fake 3-way merge (parallel waves): a pair scripted via {@link conflicts} (`"ours+theirs"`)
+   * conflicts; anything else merges "clean" to a deterministic synthetic tree id derived from the
+   * inputs, so tests can assert exactly which trees were combined without real git.
+   */
+  async mergeTrees(
+    base: string,
+    ours: string,
+    theirs: string,
+  ): Promise<{ kind: 'clean'; tree: string } | { kind: 'conflict'; detail: string }> {
+    this.mergedCalls.push({ base, ours, theirs });
+    if (this.conflicts.has(`${ours}+${theirs}`)) {
+      return { kind: 'conflict', detail: `scripted conflict merging ${theirs} onto ${ours}` };
+    }
+    return { kind: 'clean', tree: `${ours.slice(0, 3)}${theirs.slice(0, 4)}` };
+  }
 }
 
 export class ManualClock implements Clock {

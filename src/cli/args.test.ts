@@ -208,6 +208,33 @@ describe('parseArgs', () => {
     });
   });
 
+  describe('--parallel-phases (EXPERIMENTAL cooperative waves)', () => {
+    it('parses with --phased --autonomous', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--phased', '--autonomous', '--parallel-phases',
+      ]);
+      expect(a.config.parallelPhases).toBe(true);
+      expect(a.config.phased).toBe(true);
+    });
+
+    it('defaults OFF (grouped plans run sequentially without the flag)', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--phased', '--autonomous']);
+      expect(a.config.parallelPhases).toBe(false);
+    });
+
+    it('rejects --parallel-phases without --phased (fail-closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--autonomous', '--parallel-phases']),
+      ).rejects.toThrow(/--phased/);
+    });
+
+    it('rejects --parallel-phases without --autonomous (children seal concurrently)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--phased', '--parallel-phases']),
+      ).rejects.toThrow(/--autonomous/);
+    });
+  });
+
   describe('--resume-best-of-incomplete (issue #85 follow-up)', () => {
     it('defaults to rerun when absent (byte-for-byte the historical behavior)', async () => {
       const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
