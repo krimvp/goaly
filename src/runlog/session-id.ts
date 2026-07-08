@@ -1,32 +1,10 @@
 import type { SessionId } from '../domain/ids';
 import type { RunLogEntry } from './runlog';
 
-/**
- * The synthesized SENTINEL session ids the adapters/driver mint when no REAL id could be recovered
- * from the agent CLI. They are valid `SessionId`s on the wire (so the event still parses) but mean
- * "no resumable session" — threading one into `claude --resume <id>` / a goaly-code session reload
- * would point at nothing. The follow-up resume-hint (Capability A) and session inheritance
- * (Capability C) must skip them and recover the last id that actually came back from the CLI.
- *
- * Kept in ONE place so the codec sentinels (`<name>-unknown`), the NoopHarness sentinel
- * (`noop-session`), the workspace-error sentinel (`workspace-error`), and the generic coerce
- * fallback (`unknown-session`) can never drift from this skip-list.
- */
-export const SENTINEL_SESSION_IDS: ReadonlySet<string> = new Set([
-  'unknown-session', // coerceSessionId default fallback
-  'noop-session', // NoopHarness
-  'workspace-error', // driver: a workspace (diffHash) failure synthesizes a crashed run
-  'claude-unknown',
-  'codex-unknown',
-  'droid-unknown',
-  'pi-unknown',
-  'goaly-code-unknown',
-]);
-
-/** Whether `id` is a synthesized sentinel rather than a real, resumable harness session id. */
-export function isSentinelSession(id: string): boolean {
-  return SENTINEL_SESSION_IDS.has(id);
-}
+// The sentinel skip-list lives in the id DOMAIN (src/domain/ids.ts) so the harness core can refuse
+// sentinels at the resume seam without importing persistence; re-exported here for its consumers.
+export { SENTINEL_SESSION_IDS, isSentinelSession } from '../domain/ids';
+import { isSentinelSession } from '../domain/ids';
 
 /**
  * Walk the `AGENT_RAN` entries BACKWARDS to the last REAL session id — the most recent agent turn

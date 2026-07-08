@@ -257,6 +257,14 @@ describe('replay() — RUN_EXTENDED (operator extension, ADR 0012)', () => {
     expect(cfg.stuckPolicy.oscillation).toBe(true); // untouched fields keep their values
   });
 
+  it('a candidates extension overlays the best-of-N fan-out (NL delegation at resume)', () => {
+    const cfg = extendedRunConfig(makeConfig({ maxIterations: 5 }), [
+      extensionEntry(1, { candidates: 4, note: 'try 4 parallel attempts' }),
+    ]);
+    expect(cfg.candidates).toBe(4);
+    expect(cfg.maxIterations).toBe(5); // untouched fields keep their values
+  });
+
   it('a raised maxIterations UN-TERMINATES a FAILED-at-cap fold (the run continues)', async () => {
     const runlog = await driveToIterationCap(1);
     const stored = await runlog.read();

@@ -140,6 +140,101 @@ describe('parseArgs', () => {
     });
   });
 
+  describe('natural-language parallel delegation (goal directive → best-of-N)', () => {
+    it('maps "work with N subagents" in the goal to candidates and STRIPS the clause', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'fix the flaky test, work with 4 subagents', '--verify-cmd', 'true',
+      ]);
+      expect(a.config.candidates).toBe(4);
+      expect(a.config.goal).toBe('fix the flaky test'); // the directive never enters the contract
+      expect(a.delegation).toEqual({
+        candidates: 4,
+        phrase: expect.stringContaining('work with 4 subagents'),
+        overriddenByFlag: false,
+      });
+    });
+
+    it('the explicit --candidates flag wins over the directive (still stripped + reported)', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'fix it using 4 subagents', '--verify-cmd', 'true', '--candidates', '2',
+      ]);
+      expect(a.config.candidates).toBe(2);
+      expect(a.config.goal).toBe('fix it');
+      expect(a.delegation?.overriddenByFlag).toBe(true);
+    });
+
+    it('a directive above the candidate cap fails closed like the flag', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'fix it with 20 subagents', '--verify-cmd', 'true']),
+      ).rejects.toThrow(/at most 16/);
+    });
+
+    it('a goal that is ONLY a directive fails closed (no goal left to freeze)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'use 4 subagents', '--verify-cmd', 'true']),
+      ).rejects.toThrow(/only a delegation directive/);
+    });
+
+    it('an application-domain goal about parallelism does NOT trigger delegation', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'implement a job queue with 4 parallel workers', '--verify-cmd', 'true',
+      ]);
+      expect(a.config.candidates).toBe(1);
+      expect(a.config.goal).toBe('implement a job queue with 4 parallel workers');
+      expect(a.delegation).toBeUndefined();
+    });
+
+    it('a note directive at resume becomes a candidates extension and the clause leaves the note', async () => {
+      const a = await parseArgs([
+        'run', '--resume', 'run-abc', '--note', 'focus on the parser, try 4 parallel attempts',
+      ]);
+      expect(a.resumeExtend?.candidates).toBe(4);
+      expect(a.resumeExtend?.note).toBe('focus on the parser');
+      expect(a.delegation?.candidates).toBe(4);
+    });
+
+    it('a note that is ONLY a directive still extends candidates, with no note left', async () => {
+      const a = await parseArgs(['run', '--resume', 'run-abc', '--note', 'use 3 subagents']);
+      expect(a.resumeExtend?.candidates).toBe(3);
+      expect(a.resumeExtend?.note).toBeUndefined();
+    });
+
+    it('an explicit --candidates at resume rides the extension (flag wins over the note)', async () => {
+      const a = await parseArgs([
+        'run', '--resume', 'run-abc', '--candidates', '2', '--note', 'try 5 parallel attempts',
+      ]);
+      expect(a.resumeExtend?.candidates).toBe(2);
+      expect(a.delegation?.overriddenByFlag).toBe(true);
+    });
+  });
+
+  describe('--parallel-phases (EXPERIMENTAL cooperative waves)', () => {
+    it('parses with --phased --autonomous', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--phased', '--autonomous', '--parallel-phases',
+      ]);
+      expect(a.config.parallelPhases).toBe(true);
+      expect(a.config.phased).toBe(true);
+    });
+
+    it('defaults OFF (grouped plans run sequentially without the flag)', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--phased', '--autonomous']);
+      expect(a.config.parallelPhases).toBe(false);
+    });
+
+    it('rejects --parallel-phases without --phased (fail-closed)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--autonomous', '--parallel-phases']),
+      ).rejects.toThrow(/--phased/);
+    });
+
+    it('rejects --parallel-phases without --autonomous (children seal concurrently)', async () => {
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--phased', '--parallel-phases']),
+      ).rejects.toThrow(/--autonomous/);
+    });
+  });
+
   describe('--resume-best-of-incomplete (issue #85 follow-up)', () => {
     it('defaults to rerun when absent (byte-for-byte the historical behavior)', async () => {
       const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);

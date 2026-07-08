@@ -64,6 +64,18 @@ export interface WorktreeHost {
    * surfaces it to the outer loop, never a silent half-applied tree).
    */
   promoteTree(treeish: string): Promise<void>;
+  /**
+   * EXPERIMENTAL (parallel waves) — 3-way merge two trees against an explicit base, entirely with
+   * plumbing (`git merge-tree --write-tree`): no commit, no HEAD/branch/index movement, no working-tree
+   * touch. Returns the merged tree SHA on a clean merge, or a typed `conflict` (with the conflicted
+   * paths) — NEVER a half-merged tree: a conflicted merge writes nothing anywhere. Throws fail-closed
+   * only on a real git error (e.g. an unknown SHA), which the caller downgrades to `unmerged`.
+   */
+  mergeTrees(
+    base: string,
+    ours: string,
+    theirs: string,
+  ): Promise<{ kind: 'clean'; tree: string } | { kind: 'conflict'; detail: string }>;
 }
 
 /**

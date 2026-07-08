@@ -7,7 +7,7 @@ import { detectStuck } from './stuck';
  * commands. No LLM, no IO, no clock.
  */
 export type Decision =
-  | { kind: 'CONTINUE'; feedback: string }
+  | { kind: 'CONTINUE'; feedback: string; source: 'verifier' | 'veto' }
   | { kind: 'DONE' }
   | { kind: 'FAILED'; reason: string }
   | { kind: 'ABORTED'; reason: string };
@@ -55,23 +55,27 @@ export function decide(
 
   // Continue: feed back the verifier detail (failed ladder) or the veto reason.
   if (!ladder.pass) {
-    return { kind: 'CONTINUE', feedback: ladder.detail };
+    return { kind: 'CONTINUE', feedback: ladder.detail, source: 'verifier' };
   }
   // ladder.pass && veto
   return {
     kind: 'CONTINUE',
     feedback: approval?.reason ?? 'rejected by the approval gate',
+    source: 'veto',
   };
 }
 
 /**
  * The in-flight half of the no-diff excuse (issue #54): a green ladder blocked only by a FRESH
- * Sign-off veto — one whose reason differs from the feedback the just-run turn was already given
- * (`ctx.feedback`) — so the worker has not yet had a real turn to act on it. One-shot by construction:
- * once that veto reason becomes the prior feedback, it no longer differs and the no-diff abort trips.
+ * Sign-off veto — one the just-run turn was NOT already answering (`ctx.feedbackSource !== 'veto'`)
+ * — so the worker has not yet had a real turn to act on a veto-class critique. One-shot by
+ * construction: the excused turn's feedback is recorded as `source: 'veto'`, so a second
+ * consecutive no-diff-on-veto aborts. Keyed on the feedback's SOURCE, not its text: an LLM
+ * approver rewords its veto every round, so a reason-string comparison would classify every veto
+ * as fresh and let a worker that never edits burn the whole iteration budget in approver spend.
  * Pure; lives in DECIDE because it needs the in-flight `ladder`/`approval` the reducer is deciding on.
  */
 function freshVeto(ctx: LoopCtx, ladder: Verdict, approval: ApprovalVerdict | null): boolean {
   if (ladder.pass !== true || approval?.veto !== true) return false;
-  return (approval.reason ?? '') !== (ctx.feedback ?? '');
+  return ctx.feedbackSource !== 'veto';
 }

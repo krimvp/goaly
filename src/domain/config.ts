@@ -139,6 +139,17 @@ export const RunConfig = z.object({
    * reads this in `initial()` to seed PLANNING instead of COMPILING.
    */
   phased: z.boolean().default(false),
+  /**
+   * EXPERIMENTAL — cooperative parallel waves (`--parallel-phases`, opt-in). When true, CONSECUTIVE
+   * plan phases sharing a `group` value execute as one concurrent WAVE: each phase runs as its own
+   * frozen, two-key CHILD goaly run in an isolated worktree (sharing this run's budget), then the
+   * children are merged in phase order and each merged phase's frozen ladder is RE-VERIFIED on the
+   * combined tree — a merge is never trusted. Any conflict / red re-verify downgrades that phase to
+   * the classic sequential run (fail-closed; the bar never moves, only the starting tree). Requires
+   * `phased` + `autonomous` (child contracts cannot pause at interactive Seals mid-fan-out). Default
+   * false ⇒ grouped plans still run strictly sequentially — byte-for-byte the classic phased run.
+   */
+  parallelPhases: z.boolean().default(false),
   /** Max sub-goals a phased plan may contain; a planner that exceeds it is a fail-closed PLAN_FAILED. */
   maxPhases: z.number().int().positive().default(10),
   /**
@@ -266,6 +277,7 @@ export type LoopPolicy = Pick<
   | 'stuckPolicy'
   | 'budget'
   | 'phased'
+  | 'parallelPhases'
   | 'maxPhases'
   | 'installMissingTools'
 >;
@@ -287,6 +299,7 @@ export const pickLoopPolicy = (c: LoopPolicy): LoopPolicy => ({
   stuckPolicy: c.stuckPolicy,
   budget: c.budget,
   phased: c.phased,
+  parallelPhases: c.parallelPhases,
   maxPhases: c.maxPhases,
   installMissingTools: c.installMissingTools,
 });
@@ -330,6 +343,8 @@ export const CliInput = z.object({
   resumeBestOfIncomplete: z.enum(['rerun', 'collapse']).optional(),
   /** Phased decomposition (issue #48). */
   phased: z.coerce.boolean().optional(),
+  /** EXPERIMENTAL cooperative parallel waves (`--parallel-phases`; requires phased + autonomous). */
+  parallelPhases: z.coerce.boolean().optional(),
   maxPhases: z.coerce.number().int().positive().optional(),
   maxPlanRevisions: z.coerce.number().int().nonnegative().optional(),
   budgetTokens: z.coerce.number().int().positive().optional(),
@@ -445,6 +460,7 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
       ? { resumeBestOfIncomplete: input.resumeBestOfIncomplete }
       : {}),
     ...(input.phased !== undefined ? { phased: input.phased } : {}),
+    ...(input.parallelPhases !== undefined ? { parallelPhases: input.parallelPhases } : {}),
     ...(input.maxPhases !== undefined ? { maxPhases: input.maxPhases } : {}),
     ...(input.maxPlanRevisions !== undefined
       ? { maxPlanRevisions: input.maxPlanRevisions }

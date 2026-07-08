@@ -18,6 +18,7 @@ import type { PlanGate } from '../plan/plan-gate';
 import type { HarnessAdapter } from '../harness/adapter';
 import type { Verifier } from '../verify/verifier';
 import type { Approver } from '../verify/approver';
+import type { WaveRunner } from './wave';
 import type { LlmProvider } from '../llm/provider';
 import type { Workspace, WorktreeHost } from '../workspace/workspace';
 import type { Clock } from './clock';
@@ -86,6 +87,12 @@ export type DriverDeps = {
    * but this is absent, the run refuses to start (fail-closed).
    */
   worktrees?: WorktreeHost;
+  /**
+   * EXPERIMENTAL — the cooperative parallel-wave seam (`--parallel-phases`). Used ONLY when a
+   * grouped, phased run fans a wave out; absent ⇒ a `RUN_WAVE` fails closed by DOWNGRADING every
+   * wave member to the classic sequential phase (never a crash, never a skipped phase).
+   */
+  wave?: WaveRunner;
   clock: Clock;
   budget: BudgetMeter;
   /**
@@ -630,6 +637,40 @@ async function perform(
       }
       const decision = await deps.planGate.approvePlan(command.plan);
       return { event: { tag: 'PLAN_SEAL_DECIDED', decision } };
+    }
+
+    case 'RUN_WAVE': {
+      // EXPERIMENTAL parallel waves: the whole fan-out + merge + re-verify happens behind the
+      // injected seam; the reducer sees ONE WAVE_RAN. Fail-closed on every failure shape: a missing
+      // runner or a thrown runner DOWNGRADES every wave member to the classic sequential phase
+      // (`unmerged`) — never a crash, never a skipped phase, never an unverified merge.
+      try {
+        if (deps.wave === undefined) {
+          throw new Error('parallel waves require a wave runner, but none was configured');
+        }
+        const result = await deps.wave.run(command.phases, deps.interrupted);
+        log.info('wave completed', {
+          phases: command.phases.length,
+          merged: result.outcomes.filter((o) => o.kind === 'merged').length,
+        });
+        return { event: { tag: 'WAVE_RAN', outcomes: result.outcomes, tree: result.tree } };
+      } catch (e) {
+        log.warn('wave runner failed — downgrading every wave member to sequential', {
+          reason: errorMessage(e),
+        });
+        const tree = await deps.workspace.checkpoint();
+        return {
+          event: {
+            tag: 'WAVE_RAN',
+            outcomes: command.phases.map((p) => ({
+              kind: 'unmerged' as const,
+              index: p.index,
+              reason: `wave fan-out unavailable: ${errorMessage(e)}`,
+            })),
+            tree,
+          },
+        };
+      }
     }
 
     case 'CHECKPOINT_AND_ADVANCE': {

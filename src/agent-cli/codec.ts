@@ -14,7 +14,7 @@
  * provider and the composition root import the codec from this neutral `agent-cli/` layer.
  */
 
-import { SessionId, coerceSessionId } from '../domain/ids';
+import { SessionId, coerceSessionId, isSentinelSession } from '../domain/ids';
 import { HarnessRunResult } from '../domain/events';
 import { runProcess } from '../util/spawn';
 import { parseAgentOutput, type AgentOutput, type FieldExtractor } from './output';
@@ -177,6 +177,22 @@ export function defaultAgentExec(
 }
 
 /**
+ * The AMBIENT session id when goaly itself runs nested under Claude Code (e.g. inside a Claude Code
+ * remote environment). A spawned `claude -p` there adopts and REPORTS this id instead of minting a
+ * fresh per-call session, and every call in a cwd appends to that ONE shared session file — so
+ * resuming it would replay the OUTER conversation's turns (and every sibling goaly LLM step) into
+ * the worker's context, not the worker's own working memory. Observed empirically; scrubbing the
+ * variable from the child env does NOT stop the pinning (the wrapped CLI keeps it), so the only
+ * safe policy is to never TRUST the ambient id: treat it exactly like the codec's unknown-session
+ * sentinel — never surface it as a resumable session and never thread it into `--resume`. Shared by
+ * the harness core (below) and the read-only {@link ../llm/agent-cli-provider!AgentCliLlmProvider}.
+ */
+export function ambientSessionId(): string | undefined {
+  const v = process.env['CLAUDE_CODE_SESSION_ID'];
+  return v !== undefined && v.length > 0 ? v : undefined;
+}
+
+/**
  * The one harness `run()` body, parameterised by a codec. Builds the optional stream tap (and the
  * issue-#24 token estimator), asks the codec for the write-mode argv, runs the injected `exec`
  * (never rejecting — a thrown exec becomes a fail-closed `crashed`), flushes the tap, and lets the
@@ -209,7 +225,17 @@ export async function runCodecHarness(
   // continuation turn, turning one slow/timed-out turn into a dead run — a false STUCK_HARNESS_CRASH.
   // Drop it so the next turn starts a FRESH session instead; the worker loses that turn's chat memory
   // but keeps making real progress against the frozen contract (which alone governs DONE).
-  const resumeId = sessionId === codec.unknownSession ? undefined : sessionId;
+  // EVERY sentinel is refused, not just this codec's own: a run resumed under a different --harness
+  // carries the PRIOR harness's sentinel (e.g. the fake harness's `noop-session`), and
+  // `claude --resume noop-session` crashes every turn the same way. The AMBIENT id (goaly nested
+  // under Claude Code) is refused too: resuming it would pull the OUTER conversation — and every
+  // sibling LLM step sharing that session file — into the worker (see {@link ambientSessionId}).
+  const resumeId =
+    sessionId === codec.unknownSession ||
+    (sessionId !== undefined && isSentinelSession(sessionId)) ||
+    sessionId === ambientSessionId()
+      ? undefined
+      : sessionId;
   const args = codec.harnessArgs({
     prompt,
     model,
@@ -231,7 +257,7 @@ export async function runCodecHarness(
   }
   tap?.end(); // flush a final unterminated JSONL line before classification
 
-  return codec.classify({
+  const classified = codec.classify({
     stdout: result.stdout,
     stderr: result.stderr,
     code: result.code,
@@ -239,6 +265,14 @@ export async function runCodecHarness(
     ...(resumeId !== undefined ? { sessionId: resumeId } : {}),
     ...(estimator !== undefined ? { estimator } : {}),
   });
+  // Never SURFACE the ambient id either: a nested CLI reports it as its session_id, and anything
+  // downstream that stores it (the run log, the resume hint, --inherit-session) would later resume
+  // the outer conversation. Coerce it to the codec's unknown-session sentinel — "no resumable
+  // session" — which every consumer already skips.
+  if (classified.sessionId === ambientSessionId()) {
+    return { ...classified, sessionId: coerceSessionId(undefined, codec.unknownSession) };
+  }
+  return classified;
 }
 
 /**

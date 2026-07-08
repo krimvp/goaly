@@ -6,6 +6,7 @@ import { LogLevel } from '../log/logger';
 import { ModelSelection, type ModelSelectionInput } from './models';
 import { resolveInputSources, defaultReaders, type InputReaders } from './input-sources';
 import { loadConfig, type LoadedConfig } from './config-file';
+import { parseDelegationDirective } from './delegation';
 import type { AgentCli } from '../agent-cli/registry';
 import type { WorktreeCommand } from './worktree-cmd';
 import { WorktreeName } from '../workspace/worktree-manager';
@@ -15,6 +16,21 @@ import { WorktreeName } from '../workspace/worktree-manager';
  * non-codec goaly-code harness that drives an OpenAI-compatible endpoint through goaly's own agent loop.
  */
 export type HarnessChoice = AgentCli | 'fake' | 'goaly-code';
+
+/** All valid harness choices — one source of truth for the flag parser and the resume adoption. */
+export const HARNESS_CHOICES: readonly HarnessChoice[] = [
+  'claude',
+  'codex',
+  'droid',
+  'pi',
+  'fake',
+  'goaly-code',
+];
+
+/** Whether a stored/untrusted string names a known harness. */
+export function isHarnessChoice(value: string): value is HarnessChoice {
+  return (HARNESS_CHOICES as readonly string[]).includes(value);
+}
 
 /**
  * Which provider runs the LLM workflow steps (judge / approver / compiler). Any bundled CLI, plus
@@ -79,6 +95,14 @@ export type ParsedArgs = {
   worktreeRun: string | true | undefined;
   config: RunConfig;
   harness: HarnessChoice;
+  /**
+   * Whether `harness` came from an EXPLICIT `--harness` CLI flag this invocation (never the
+   * config-file overlay — same explicitness rule as the resume extension). A `--resume` without it
+   * ADOPTS the resumed run's recorded harness instead of silently switching to the default: session
+   * ids are harness-specific, and continuing a fake/codex run under `claude` mid-run is never what
+   * the user meant.
+   */
+  harnessExplicit: boolean;
   models: ModelSelection;
   llmProvider: LlmProviderChoice;
   workspace: string;
@@ -163,6 +187,14 @@ export type ParsedArgs = {
    * run or a plain resume. Operational knobs only — never the goal / verifier / rubric.
    */
   resumeExtend: RunExtension | undefined;
+  /**
+   * Natural-language parallel delegation, when a directive in the GOAL text was mapped onto the
+   * best-of-N tournament ("work with 4 subagents" ⇒ `candidates: 4` — see `delegation.ts`). Carried
+   * so the CLI can log the interpretation loudly (the matched phrase and the count). The directive
+   * clause is already stripped from `config.goal`; an explicit `--candidates` always wins (this is
+   * then still set, with `overriddenByFlag: true`, so the log can say so). Undefined ⇒ no directive.
+   */
+  delegation: { candidates: number; phrase: string; overriddenByFlag: boolean } | undefined;
 };
 
 export const USAGE = `goaly — run a coding agent until a frozen success contract is met.
@@ -180,7 +212,7 @@ Usage:
                [--install-missing-tools true|false]
                [--rubric "<rubric>"] [--autonomous] [--max-iterations N] [--candidates N]
                [--phased [--max-phases N] [--max-plan-revisions N] [--plan-file <p>]
-                         [--planner-model <m>]]
+                         [--planner-model <m>] [--parallel-phases]]
                [--max-seal-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
@@ -319,6 +351,19 @@ Phased decomposition (issue #48 — split one big goal into a frozen plan of sma
   --max-plan-revisions N  cap the free-text plan-Seal revise rounds (default 10; 0 disables revision).
   --planner-model <m> model for the planner step only (cascades like the other LLM-step models).
   --autonomous        also auto-accepts the plan AND each phase contract — still frozen + logged loudly.
+  --parallel-phases   EXPERIMENTAL, opt-in — cooperative parallel WAVES: consecutive plan phases
+                      sharing a "group" value (plan-file: {"goal": …, "group": 1}) execute
+                      CONCURRENTLY, each as its own frozen, two-key CHILD goaly run in an isolated
+                      git worktree on the SHARED --budget-tokens meter. The children are then merged
+                      in phase order (3-way git merge-tree — plumbing only, no commits) and each
+                      merged phase's frozen DETERMINISTIC rungs are RE-VERIFIED on the combined tree
+                      — a merge is never trusted. Fail-closed everywhere: a merge conflict, a red
+                      re-verify, or a child that can't reach DONE simply DOWNGRADES that phase to
+                      the classic sequential run on the merged tree (the bar never moves, only the
+                      starting tree); the cumulative ACCEPTANCE contract still gates the whole run.
+                      Requires --phased and --autonomous (children seal concurrently). Without this
+                      flag, grouped plans run strictly sequentially. Resume note: a crash mid-wave
+                      re-runs the WHOLE wave on --resume (children live in ephemeral worktrees).
 
 Best-of-N parallel worker (issue #85 — tournament-select candidates against the frozen ladder):
   --candidates N      (alias --best-of N) run N independent worker attempts EACH loop iteration in
@@ -338,6 +383,18 @@ Best-of-N parallel worker (issue #85 — tournament-select candidates against th
                       the N execs goes through the same jail). Needs a committed HEAD: on a repo with no
                       resolvable HEAD (unborn branch) a --candidates > 1 run refuses to start (fail-closed)
                       — make an initial commit or run with --candidates 1.
+  Natural-language delegation: you can also just SAY it — a delegation directive in the goal
+                      ("fix the flaky test, work with 4 subagents", "… using 3 parallel attempts",
+                      "use subagents" ⇒ 3) maps onto --candidates and the directive clause is
+                      STRIPPED from the goal (it must never enter the frozen contract), loudly
+                      logged as phrase → N. Detection is a small DETERMINISTIC grammar, never an
+                      LLM parse, and deliberately narrow: only "subagents"/"parallel attempts|
+                      candidates|tries" introduced by a delegation verb trigger it — goals about
+                      app-domain parallelism ("a queue with 4 parallel workers") never match. The
+                      explicit --candidates/--best-of always wins. Mid-run, the same grammar reads
+                      your resume note: goaly --resume <id> --note "try 4 parallel attempts" raises
+                      the fan-out as a RUN_EXTENDED candidates overlay (ADR 0012) and keeps any
+                      remaining note text as worker guidance.
 
 Compile resilience (issue #51):
   --max-compile-retries N    on a COMPILE_FAILED, re-author the verification with the error as
@@ -540,8 +597,11 @@ Plain-language run narration (opt-in observability — issue #8):
 
 Resume, steer & extend (operator control over ONE run — the frozen contract never changes):
   --resume <runId>    re-enter an INCOMPLETE run's loop exactly where the write-ahead log left it
-                      (crash, Ctrl-C, kill — nothing completed is repeated). Pass any of the flags
-                      below WITH --resume to extend/steer the resumed run; each is recorded in the
+                      (crash, Ctrl-C, kill — nothing completed is repeated). The resumed run
+                      CONTINUES ITS OWN harness (recorded in the run log) — session ids are
+                      harness-specific, so it is never silently switched to the default; pass
+                      --harness explicitly to override. Pass any of the flags below WITH --resume
+                      to extend/steer the resumed run; each is recorded in the
                       log (a RUN_EXTENDED marker) so the extension is auditable and later resumes
                       keep it. Only these OPERATIONAL knobs are extendable — never the goal, the
                       verifier, or the rubric (the contract stays frozen; both keys still gate DONE):
@@ -549,10 +609,14 @@ Resume, steer & extend (operator control over ONE run — the frozen contract ne
                         --budget-tokens N       also revives a budget-ABORTED run (spend re-judged
                         --budget-wall-ms N        against the new cap; prior spend still counts)
                         --stuck-* flags         raise/toggle a tripped stuck detector to continue
+                        --candidates N          raise/lower the best-of-N fan-out for the remaining
+                                                iterations (also via a --note directive, see above)
                       Live in another terminal: goaly runs watch <runId>.
   --note "<text>"     (with --resume) operator guidance appended to the NEXT agent prompt — steer
                       the worker without touching the bar. Combine with Ctrl-C for mid-run steering:
-                      interrupt, then 'goaly --resume <id> --note "try the other approach"'.
+                      interrupt, then 'goaly --resume <id> --note "try the other approach"'. A
+                      delegation directive in the note ("try 4 parallel attempts") is lifted out
+                      into a --candidates extension (see natural-language delegation above).
 
 Follow-up after a run ends (build on a finished run — keeps every invariant by construction):
   --from-run <runId>  start a NEW run whose contract is authored AWARE of a finished run: a concise,
@@ -738,9 +802,12 @@ function boolFlag(flags: RawFlags, key: string): boolean | undefined {
  * effective config says. `--note` is resume-only: on a fresh run there is no next-turn boundary to
  * attach it to, so it fails closed with the fix.
  */
-function collectResumeExtension(flags: RawFlags, config: RunConfig): RunExtension | undefined {
+function collectResumeExtension(
+  flags: RawFlags,
+  config: RunConfig,
+): { extension: RunExtension | undefined; delegation: ParsedArgs['delegation'] } {
   const resuming = str(flags, 'resume') !== undefined;
-  const note = str(flags, 'note');
+  let note = str(flags, 'note');
   if (!resuming) {
     if (note !== undefined) {
       throw new UsageError(
@@ -748,9 +815,32 @@ function collectResumeExtension(flags: RawFlags, config: RunConfig): RunExtensio
           '--resume <runId>. To guide a fresh run, put the guidance in the goal or --intent.',
       );
     }
-    return undefined;
+    return { extension: undefined, delegation: undefined };
   }
   const has = (key: string): boolean => flags[key] !== undefined;
+  // Natural-language delegation in a resume note ("try 4 parallel attempts"): the steering intent
+  // is goaly's to ACT on (a `candidates` overlay on the extension), not the worker's to read — so
+  // the directive clause is stripped and any remaining guidance stays the note. The explicit
+  // `--candidates` / `--best-of` flag wins, exactly as on a fresh run.
+  const explicit = has('candidates') || has('best-of');
+  let delegation: ParsedArgs['delegation'];
+  if (note !== undefined) {
+    const directive = parseDelegationDirective(note);
+    if (directive !== null) {
+      if (directive.candidates > MAX_CANDIDATES) {
+        throw new UsageError(
+          `"${directive.phrase}": at most ${MAX_CANDIDATES} parallel candidates are supported ` +
+            `(each is a full concurrent worker + worktree) — ask for ${MAX_CANDIDATES} or fewer`,
+        );
+      }
+      delegation = {
+        candidates: directive.candidates,
+        phrase: directive.phrase,
+        overriddenByFlag: explicit,
+      };
+      note = directive.cleaned.length > 0 ? directive.cleaned : undefined;
+    }
+  }
   const stuck = {
     ...(has('stuck-no-diff') ? { noDiff: config.stuckPolicy.noDiff } : {}),
     ...(has('stuck-repeat-threshold')
@@ -773,9 +863,17 @@ function collectResumeExtension(flags: RawFlags, config: RunConfig): RunExtensio
       ? { budgetWallMs: config.budget.wallClockMs }
       : {}),
     ...(Object.keys(stuck).length > 0 ? { stuck } : {}),
+    ...(explicit
+      ? { candidates: config.candidates }
+      : delegation !== undefined
+        ? { candidates: delegation.candidates }
+        : {}),
     ...(note !== undefined ? { note } : {}),
   };
-  return Object.keys(extension).length > 0 ? extension : undefined;
+  return {
+    extension: Object.keys(extension).length > 0 ? extension : undefined,
+    delegation,
+  };
 }
 
 /** Fields that may be sourced inline / from a file / from stdin; a CLI source overrides config. */
@@ -871,7 +969,38 @@ export async function parseArgs(
         '--goal - (stdin)',
     );
   }
-  const goalForParse = resolved.goal ?? RESUMED_GOAL_PLACEHOLDER;
+  // Natural-language parallel delegation: an explicit directive in the goal ("work with 4
+  // subagents") maps onto the best-of-N tournament (issue #85) and its clause is STRIPPED — the
+  // goal is frozen into the contract and read by the judge/approver, so a leftover directive would
+  // become an unverifiable success criterion. Deterministic grammar (see `delegation.ts`), loudly
+  // logged by the CLI; the explicit `--candidates` / `--best-of` flag (or config) always wins.
+  const explicitCandidates = candidatesFlag(flags);
+  let goalText = resolved.goal;
+  let delegation: ParsedArgs['delegation'];
+  if (goalText !== undefined) {
+    const directive = parseDelegationDirective(goalText);
+    if (directive !== null) {
+      if (directive.candidates > MAX_CANDIDATES) {
+        throw new UsageError(
+          `"${directive.phrase}": at most ${MAX_CANDIDATES} parallel candidates are supported ` +
+            `(each is a full concurrent worker + worktree) — ask for ${MAX_CANDIDATES} or fewer`,
+        );
+      }
+      if (directive.cleaned.length === 0) {
+        throw new UsageError(
+          `the goal '${goalText}' is only a delegation directive — say WHAT to achieve too, ` +
+            `e.g. goaly "fix the flaky test, ${directive.phrase}"`,
+        );
+      }
+      goalText = directive.cleaned;
+      delegation = {
+        candidates: directive.candidates,
+        phrase: directive.phrase,
+        overriddenByFlag: explicitCandidates !== undefined,
+      };
+    }
+  }
+  const goalForParse = goalText ?? RESUMED_GOAL_PLACEHOLDER;
 
   const cliInput = CliInput.parse({
     goal: goalForParse,
@@ -889,11 +1018,16 @@ export async function parseArgs(
     ...(str(flags, 'max-iterations') !== undefined
       ? { maxIterations: str(flags, 'max-iterations') }
       : {}),
-    ...(candidatesFlag(flags) !== undefined ? { candidates: candidatesFlag(flags) } : {}),
+    ...(explicitCandidates !== undefined
+      ? { candidates: explicitCandidates }
+      : delegation !== undefined
+        ? { candidates: String(delegation.candidates) }
+        : {}),
     ...(parseResumeBestOfIncomplete(flags) !== undefined
       ? { resumeBestOfIncomplete: parseResumeBestOfIncomplete(flags) }
       : {}),
     ...(flags['phased'] !== undefined ? { phased: true } : {}),
+    ...(flags['parallel-phases'] !== undefined ? { parallelPhases: true } : {}),
     ...(str(flags, 'max-phases') !== undefined ? { maxPhases: str(flags, 'max-phases') } : {}),
     ...(str(flags, 'max-plan-revisions') !== undefined
       ? { maxPlanRevisions: str(flags, 'max-plan-revisions') }
@@ -950,10 +1084,29 @@ export async function parseArgs(
 
   const harness = parseHarness(str(flags, 'harness'));
   const config = cliInputToRunConfig(cliInput);
+
+  // EXPERIMENTAL parallel waves: the fan-out only exists inside a phased plan (grouped sub-goals),
+  // and wave children compile + Seal their contracts CONCURRENTLY — an interactive gate cannot pause
+  // K children at once, so autonomy is required (the contracts are still frozen + logged loudly).
+  if (config.parallelPhases && !resuming) {
+    if (!config.phased) {
+      throw new UsageError(
+        "--parallel-phases parallelizes a phased plan's grouped sub-goals — pair it with --phased " +
+          '(and mark consecutive phases with a shared "group" in the plan)',
+      );
+    }
+    if (!config.autonomous) {
+      throw new UsageError(
+        '--parallel-phases requires --autonomous: wave children seal their frozen contracts ' +
+          'concurrently and cannot pause at interactive gates (each contract is still frozen + logged)',
+      );
+    }
+  }
   // Explicitness for the resume extension is judged on CLI flags ONLY (never the config-file
   // overlay): a `.goalyrc` default like "budget-tokens" must not append a RUN_EXTENDED marker to
   // the log on every resume — an extension is an explicit per-invocation operator act.
-  const resumeExtend = collectResumeExtension(cliFlags, config);
+  const resumed = collectResumeExtension(cliFlags, config);
+  const resumeExtend = resumed.extension;
 
   // Piping a field via stdin (`--goal -`) drains the ONLY stdin stream, so the interactive Seal
   // prompt that a non-autonomous run needs would read EOF / hang. That used to be a doc-note
@@ -974,6 +1127,7 @@ export async function parseArgs(
     worktreeRun: parseWorktreeRun(flags),
     config,
     harness,
+    harnessExplicit: cliFlags['harness'] !== undefined,
     models: parseModels(flags),
     llmProvider: parseLlmProvider(str(flags, 'llm-provider')),
     workspace: str(flags, 'workspace') ?? process.cwd(),
@@ -982,6 +1136,9 @@ export async function parseArgs(
     planFile: str(flags, 'plan-file'),
     resumeRunId: str(flags, 'resume'),
     resumeExtend,
+    // A directive can come from the goal (fresh run) or the resume note — never both in one
+    // invocation (a resumed run's goal is the placeholder; a fresh run rejects --note).
+    delegation: delegation ?? resumed.delegation,
     fromRunId: str(flags, 'from-run'),
     inheritSession: flags['inherit-session'] !== undefined,
     logLevel: parseLogLevel(str(flags, 'log-level')),
@@ -1223,14 +1380,7 @@ function parseSandbox(flags: RawFlags): SandboxPolicy {
 
 function parseHarness(value: string | undefined): HarnessChoice {
   if (value === undefined) return 'claude';
-  if (
-    value === 'claude' ||
-    value === 'codex' ||
-    value === 'droid' ||
-    value === 'pi' ||
-    value === 'fake' ||
-    value === 'goaly-code'
-  ) {
+  if (isHarnessChoice(value)) {
     return value;
   }
   // The `claude-code` value was renamed to `claude` (one name per CLI across the harness and the
@@ -1445,6 +1595,7 @@ function baseArgs(
     // a placeholder config; never used for the help / runs commands.
     config: cliInputToRunConfig(CliInput.parse({ goal: 'help', verifyCmd: 'true' })),
     harness: 'claude',
+    harnessExplicit: false,
     models: ModelSelection.parse({}),
     llmProvider: 'claude',
     workspace,
@@ -1469,5 +1620,6 @@ function baseArgs(
     baseUrl: undefined,
     llmApiKeyEnv: 'OPENAI_API_KEY',
     resumeExtend: undefined,
+    delegation: undefined,
   };
 }

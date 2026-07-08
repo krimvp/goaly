@@ -20,6 +20,18 @@ export type PhaseCtx = {
   readonly plan: PhasePlan;
   /** 0-based phase index; `plan.phases.length` denotes the final cumulative acceptance phase. */
   readonly index: number;
+  /**
+   * EXPERIMENTAL parallel waves: phase indices already COMPLETED by a merged-and-reverified wave
+   * child — the sequential advance skips them. Absent on a classic/sequential run (no field, so
+   * every existing PhaseCtx construction and equality stays byte-for-byte).
+   */
+  readonly skip?: readonly number[];
+  /**
+   * EXPERIMENTAL parallel waves: phase indices whose wave fan-out was already ATTEMPTED. A phase in
+   * this list never re-fans-out — an unmerged member re-runs as a classic sequential phase (the
+   * fail-closed downgrade), so a fully-conflicted wave can never fan out forever.
+   */
+  readonly waved?: readonly number[];
 };
 
 /**
@@ -61,6 +73,14 @@ export type LoopCtx = {
   readonly lastVerdict: Verdict | undefined;
   /** Feedback text threaded into the next agent prompt. */
   readonly feedback: string | undefined;
+  /**
+   * Where the current `feedback` came from: `'verifier'` (a red ladder's detail) or `'veto'` (a
+   * green-ladder Sign-off veto reason). Drives the one-shot no-diff excuse (issue #54): a no-diff
+   * iteration is excused for a veto only when the just-run turn was NOT already answering a veto —
+   * an LLM approver rewords its veto every round, so comparing reason strings would renew the
+   * excuse forever and burn maxIterations of approver spend on a worker that never edits.
+   */
+  readonly feedbackSource: 'verifier' | 'veto' | undefined;
   /**
    * The phase position within a frozen plan (issue #48), or undefined on a classic single-contract
    * run. When set, a phase reaching both keys ADVANCES (checkpoint + next phase's compile) instead of
@@ -125,6 +145,17 @@ export type OrchestratorState =
       /** The phase position when this prepare belongs to a phased run (issue #48); else undefined. */
       readonly phase?: PhaseCtx;
     }
+  | {
+      /**
+       * EXPERIMENTAL — a cooperative parallel WAVE is in flight (`--parallel-phases`): the Driver is
+       * running the grouped phases at `indices` as concurrent, isolated, frozen two-key CHILD runs,
+       * then merging + re-verifying. Resolved by ONE `WAVE_RAN` event. Carries the wave's FIRST
+       * member's PhaseCtx (`phase.index === indices[0]`).
+       */
+      readonly tag: 'RUNNING_WAVE';
+      readonly phase: PhaseCtx;
+      readonly indices: readonly number[];
+    }
   | { readonly tag: 'RUNNING_AGENT'; readonly ctx: LoopCtx }
   | { readonly tag: 'VERIFYING'; readonly ctx: LoopCtx }
   | { readonly tag: 'AWAIT_SIGNOFF'; readonly ctx: LoopCtx }
@@ -172,6 +203,8 @@ export function iterationCount(state: OrchestratorState): number {
     case 'PREPARING':
     case 'PLANNING':
     case 'AWAIT_PLAN_SEAL':
+    // A wave's iterations belong to its CHILD runs (each has its own log); the parent counts none.
+    case 'RUNNING_WAVE':
       return 0;
   }
 }
@@ -204,6 +237,7 @@ export function initialCtx(
     lastBudget: undefined,
     lastVerdict: undefined,
     feedback: undefined,
+    feedbackSource: undefined,
     phase,
   };
 }

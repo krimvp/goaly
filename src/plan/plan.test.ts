@@ -4,6 +4,7 @@ import { StaticPlanner } from './static-planner';
 import { AutoPlanGate, HumanPlanGate } from './plan-gates';
 import { FakeLlm } from '../llm/provider';
 import { freezePlan, hashPlan } from '../util/hash';
+import { canonicalPlanString, waveIndicesAt } from '../domain/plan';
 import { makeConfig } from '../testing/fakes';
 
 const config = makeConfig({ phased: true, goal: 'build a CLI', maxPhases: 5 });
@@ -21,6 +22,48 @@ describe('freezePlan / hashPlan (issue #48)', () => {
     const frozen = freezePlan({ phases: [{ goal: 'only' }] });
     expect(frozen.planHash).toBe(hashPlan({ phases: [{ goal: 'only' }] }));
     expect(frozen.phases).toHaveLength(1);
+  });
+
+  it('a wave `group` is FROZEN into the hash, and groupless plans keep their legacy hash (back-compat)', () => {
+    // Grouping is part of the frozen plan — re-shuffling it would be a different plan.
+    const grouped = hashPlan({ phases: [{ goal: 'x', group: 1 }, { goal: 'y', group: 1 }] });
+    const ungrouped = hashPlan({ phases: [{ goal: 'x' }, { goal: 'y' }] });
+    const regrouped = hashPlan({ phases: [{ goal: 'x', group: 1 }, { goal: 'y', group: 2 }] });
+    expect(grouped).not.toBe(ungrouped);
+    expect(grouped).not.toBe(regrouped);
+    // Back-compat: a plan WITHOUT groups canonicalizes exactly as before the field existed, so every
+    // pre-existing run log's planHash still matches on replay.
+    expect(canonicalPlanString({ phases: [{ goal: 'x' }] })).toBe(
+      JSON.stringify({ phases: [{ goal: 'x', intent: null, rubric: null }] }),
+    );
+  });
+});
+
+describe('waveIndicesAt — consecutive same-group members (EXPERIMENTAL parallel waves)', () => {
+  const plan = freezePlan({
+    phases: [
+      { goal: 'a', group: 1 },
+      { goal: 'b', group: 1 },
+      { goal: 'c' },
+      { goal: 'd', group: 2 },
+    ],
+  });
+
+  it('the group head fans out over its consecutive members', () => {
+    expect(waveIndicesAt(plan, 0)).toEqual([0, 1]);
+  });
+
+  it('a MID-group index never fans out (a sequential fallback walks members one at a time)', () => {
+    expect(waveIndicesAt(plan, 1)).toEqual([1]);
+  });
+
+  it('an ungrouped phase and a singleton group are singletons', () => {
+    expect(waveIndicesAt(plan, 2)).toEqual([2]);
+    expect(waveIndicesAt(plan, 3)).toEqual([3]);
+  });
+
+  it('an out-of-range index is a singleton (the acceptance phase)', () => {
+    expect(waveIndicesAt(plan, 4)).toEqual([4]);
   });
 });
 

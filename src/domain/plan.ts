@@ -13,6 +13,14 @@ export const SubGoal = z.object({
   intent: z.string().optional(),
   /** Optional rubric guidance for this phase's LLM-judge portion (frozen with the phase contract). */
   rubric: z.string().optional(),
+  /**
+   * EXPERIMENTAL — cooperative parallel waves (opt-in via `--parallel-phases`): CONSECUTIVE phases
+   * sharing a `group` value form a WAVE that executes concurrently (each phase as its own frozen,
+   * two-key child run in an isolated worktree) and is then merged and RE-VERIFIED fail-closed.
+   * Absent (the default) ⇒ the phase is strictly sequential, byte-for-byte the classic plan. The
+   * grouping is part of the frozen plan (hashed), so no transition can re-shuffle it.
+   */
+  group: z.number().int().nonnegative().optional(),
 });
 export type SubGoal = z.infer<typeof SubGoal>;
 
@@ -52,6 +60,28 @@ export function canonicalPlanString(p: UnhashedPlan): string {
     goal: s.goal,
     intent: s.intent ?? null,
     rubric: s.rubric ?? null,
+    // `group` (parallel waves) is included ONLY when set, so every pre-existing plan keeps the
+    // planHash it always had (back-compat), while a grouped plan's grouping is frozen into the hash.
+    ...(s.group !== undefined ? { group: s.group } : {}),
   }));
   return JSON.stringify({ phases });
+}
+
+/**
+ * The CONSECUTIVE indices sharing `plan.phases[index]`'s wave group, starting at `index` (which must
+ * be the group's first member for a fan-out to trigger). Returns `[index]` alone when the phase has
+ * no group, the group has one member, or `index` is mid-group (a resumed sequential fallback walks
+ * the remaining members one at a time — never re-fans-out from the middle). Pure and total.
+ */
+export function waveIndicesAt(plan: PhasePlan, index: number): readonly number[] {
+  const phase = plan.phases[index];
+  if (phase === undefined || phase.group === undefined) return [index];
+  // Mid-group entry (a sequential fallback / resume) never re-fans-out.
+  if (index > 0 && plan.phases[index - 1]?.group === phase.group) return [index];
+  const wave: number[] = [index];
+  for (let i = index + 1; i < plan.phases.length; i += 1) {
+    if (plan.phases[i]?.group !== phase.group) break;
+    wave.push(i);
+  }
+  return wave;
 }

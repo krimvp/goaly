@@ -49,7 +49,7 @@ stays resumable). See [Usage](#usage) for every flag.
 
 - [How it works](#how-it-works) — the loop, the two gates, the verify ladder
 - [Install](#install) · [Usage](#usage) — every flag and mode
-- [Phased goals](#phased-goals---phased) · [Worktrees](#worktrees---worktree) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
+- [Phased goals](#phased-goals---phased) · [Parallel waves](#cooperative-parallel-waves---parallel-phases-experimental) · [Worktrees](#worktrees---worktree) · [Sandboxing](#sandboxing) · [Per-run spend report](#per-run-spend-report) — going further
 - [Reliability](#reliability-preflight-retries-interrupts-crash-safety) — preflight, retries, Ctrl-C, crash-safety
 - [Operator control](#watching-steering--extending-a-run-operator-control) — watch live, steer with `--note`, extend caps on `--resume`
 - [Web UI](#web-ui-goaly-ui) — `goaly ui`: runs, live feeds, and worktrees in the browser
@@ -190,7 +190,10 @@ PHASE 2 · the loop (🔁 ≤ --max-iterations, default 10; bails early on STUCK
   0) and can't win. Each candidate completes write-ahead, so `--resume` re-runs only the not-yet-logged
   ones and re-selects deterministically — or, with `--resume-best-of-incomplete collapse`, collapses to the
   best already-logged candidate and re-runs nothing. Needs a committed HEAD (it refuses to start fail-closed
-  on an unborn branch). See [Best-of-N parallel worker](#best-of-n-parallel-worker---candidates).
+  on an unborn branch). You can also request it in **natural language** — *"fix the flaky test, work with 4
+  subagents"* in the goal, or *"try 4 parallel attempts"* in a `--resume` note — a deterministic directive
+  grammar (never an LLM parse) maps it onto `--candidates`, strips the clause from the frozen goal, and
+  logs the interpretation loudly. See [Best-of-N parallel worker](#best-of-n-parallel-worker---candidates).
 - **Compile is resilient, not one-shot.** A `COMPILE_FAILED` (a correctable authoring mistake — bad
   path, transient parse miss) re-authors the verification with the error fed back as guidance, up to
   `--max-compile-retries` (default 2; `0` disables), before the run fails — so one bad compile output
@@ -304,6 +307,53 @@ ACCEPT  (a cumulative contract on the ORIGINAL goal) ──both keys──► DO
   every phase). `--resume` re-enters mid-plan without repeating completed phases. `goaly runs show`
   prints the frozen plan and stamps each iteration with its phase.
 
+### Cooperative parallel waves (`--parallel-phases`, EXPERIMENTAL)
+
+Sequential phases leave wall-clock on the table when sub-goals are **independent**. `--parallel-phases`
+(opt-in, experimental) runs them as **cooperating agents**: consecutive plan phases sharing a `group`
+value form a **wave** that executes concurrently, then **merges** — without weakening a single
+guarantee.
+
+```jsonc
+// plan.json — phases 1+2 are one wave; phase 3 runs after the merged result
+{ "phases": [
+  { "goal": "implement the parser",    "group": 1 },
+  { "goal": "implement the formatter", "group": 1 },
+  { "goal": "wire parser + formatter into the CLI" }
+] }
+```
+```bash
+goaly "build the tool" --verify-cmd "npm test" --phased --parallel-phases --autonomous \
+      --plan-file plan.json
+```
+
+How a wave works, and why it can't cheat:
+
+- **Fork: every wave member is a full goaly run.** Each phase gets an isolated git worktree off the
+  wave-start checkpoint and runs as its own **child run** — its own compiled + frozen contract, its own
+  iterations, verifier ladder, and veto-only Sign-off (both keys per child), its own write-ahead log
+  inside the worktree — all children metered by the **one shared `--budget-tokens`** cap.
+- **Merge: plumbing, not prayer.** DONE children merge in phase order with a real 3-way
+  `git merge-tree` against the fork point — objects only, no commits, no HEAD/branch/index movement. A
+  **textual conflict applies nothing** of that child.
+- **Re-verify: a merge is never trusted.** After promotion, each merged child's **frozen deterministic
+  rungs re-run on the combined tree** — two individually-green changes can still break each other. A
+  red re-verify un-lands nothing silently: that phase **downgrades to the classic sequential run** on
+  the merged tree, under a fresh frozen contract for the same sub-goal (the bar never moves, only the
+  starting tree). Merge conflicts and children that never reach DONE downgrade the same way.
+- **Acceptance still gates the whole.** The final cumulative acceptance contract (both keys, LLM
+  included) runs on the original goal exactly as in a sequential phased run — so no decomposition,
+  parallel or not, can green a goal whose parts pass but whole doesn't.
+- **Fail-closed to sequential.** Every failure shape — a conflicted merge, a red re-verify, a crashed
+  child, even a missing/broken wave executor — degrades to phases running one at a time, which is
+  byte-for-byte today's `--phased`. The reducer stays pure: it emits one `RUN_WAVE` command and folds
+  one `WAVE_RAN` event; children never enter the parent's state machine.
+- **Experimental limits (v1):** requires `--autonomous` (children seal their frozen contracts
+  concurrently — still frozen + loudly logged) and a `--plan-file` with `group` fields (the LLM planner
+  does not author groups yet); a crash mid-wave re-runs the whole wave on `--resume` (children live in
+  ephemeral worktrees); wave-child spend is reported under the parent's `harness` layer. Grouped plans
+  run **strictly sequentially** without the flag, and the plan's grouping is frozen into `planHash`.
+
 ## Best-of-N parallel worker (`--candidates`)
 
 Some iterations are a coin-flip — one attempt half-finishes, another nails it. `--candidates N` (alias
@@ -367,6 +417,33 @@ each iteration, with --candidates N:
   **`--sandbox`** jails each of the N execs through the same launcher. Best-of-N needs a **committed
   HEAD** — `git worktree` can't check out an unborn tree, so a `--candidates > 1` run on a HEAD-less repo
   **refuses to start** (fail-closed) with a clear message; make an initial commit or use `--candidates 1`.
+
+### Natural-language delegation — just say it
+
+You don't have to remember the flag: a **delegation directive in the goal** maps onto the same
+tournament, and mid-run the same grammar reads your **resume note**.
+
+```bash
+goaly "fix the flaky auth test, work with 4 subagents"        # ⇒ --candidates 4
+goaly "make the linter pass using 3 parallel attempts"        # ⇒ --candidates 3
+goaly "port the parser to TS, use subagents"                  # ⇒ --candidates 3 (documented default)
+goaly --resume run-… --note "focus on the parser, try 4 parallel attempts"   # raises the fan-out mid-run
+```
+
+- **Deterministic, never an LLM parse.** Detection is a small directive grammar (`src/cli/delegation.ts`)
+  — an LLM interpreting your config would be exactly the "LLM in control flow" goaly exists to avoid. The
+  grammar is deliberately narrow: only **`subagents`** (with a delegation verb — `use / spawn / work
+  with / delegate to …`) and **`N parallel attempts|candidates|tries`** trigger it, so goals about
+  app-domain parallelism (*"implement a job queue with 4 parallel workers"*, *"handle 5 parallel login
+  attempts"*) never match. No match ⇒ the classic single attempt — fail-closed, never a guess.
+- **The directive is stripped from the goal** before the contract is compiled — the goal is frozen and
+  read by the judge/approver, and a leftover *"use 4 subagents"* would become an unverifiable success
+  criterion. The interpretation is **loudly logged** (`phrase → N`), and the explicit `--candidates` /
+  `--best-of` flag (or config file) **always wins**.
+- **Mid-run steering rides ADR 0012.** A directive in `--resume … --note "…"` becomes a `candidates`
+  overlay on the `RUN_EXTENDED` marker (an operational knob, like a raised `--max-iterations` — the
+  frozen contract stays unreachable); the directive clause leaves the note and any remaining text still
+  steers the worker. Same 16 cap, same fail-closed error above it.
 
 ## Worktrees (`--worktree`)
 
@@ -1179,14 +1256,18 @@ goaly --resume run-<id> --max-iterations 25             # revive FAILED at the i
 goaly --resume run-<id> --budget-tokens 900000          # revive a budget abort (prior spend still counts)
 goaly --resume run-<id> --stuck-no-diff false --note "try editing src/parser.ts directly"
                                                         # revive a stuck abort, with direction
+goaly --resume run-<id> --candidates 4                  # widen the best-of-N fan-out for what's left
+goaly --resume run-<id> --note "try 4 parallel attempts"  # same, said in natural language
 ```
 
 Only the operational knobs are extendable (`--max-iterations`, `--budget-tokens`,
-`--budget-wall-ms`, the `--stuck-*` thresholds) — the goal, verifier, and rubric are structurally
-not part of an extension, so autonomy never becomes "renegotiate the bar." A DONE run refuses to
-extend and points you at `--from-run`. Rule of thumb: **same goal, more room → `--resume` with
-caps/note; new or refined goal → `--from-run`** (a fresh contract, compiled aware of what just
-happened — see [Following up](#following-up-after-a-run-ends---from-run)).
+`--budget-wall-ms`, the `--stuck-*` thresholds, `--candidates`) — the goal, verifier, and rubric are
+structurally not part of an extension, so autonomy never becomes "renegotiate the bar." A DONE run
+refuses to extend and points you at `--from-run`. A resume also **continues the run's own harness**
+(recorded in the log) rather than silently switching to the default — session ids are
+harness-specific; pass `--harness` explicitly to override. Rule of thumb: **same goal, more room →
+`--resume` with caps/note; new or refined goal → `--from-run`** (a fresh contract, compiled aware of
+what just happened — see [Following up](#following-up-after-a-run-ends---from-run)).
 
 ### Inspecting past runs
 

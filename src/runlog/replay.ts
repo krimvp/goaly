@@ -30,6 +30,7 @@ export function applyRunExtension(cfg: RunConfig, x: RunExtension): RunConfig {
   return {
     ...cfg,
     ...(x.maxIterations !== undefined ? { maxIterations: x.maxIterations } : {}),
+    ...(x.candidates !== undefined ? { candidates: x.candidates } : {}),
     budget: {
       ...cfg.budget,
       ...(x.budgetTokens !== undefined ? { tokens: x.budgetTokens } : {}),
@@ -164,6 +165,12 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
     // the checkpoint tree for baseline reconstruction on resume (issue #48) — so it is fed to step()
     // *and* updates `baseline`, unlike the pure CHECKPOINTED marker.
     if (entry.event.tag === 'PHASE_ADVANCED') {
+      baseline = entry.event.tree;
+      phaseBaseline = entry.event.tree;
+    }
+    // EXPERIMENTAL parallel waves: like PHASE_ADVANCED, a wave both DRIVES the reducer (skip/advance
+    // bookkeeping) and records the post-merge checkpoint tree for baseline reconstruction on resume.
+    if (entry.event.tag === 'WAVE_RAN') {
       baseline = entry.event.tree;
       phaseBaseline = entry.event.tree;
     }

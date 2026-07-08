@@ -15,6 +15,9 @@ export {
   type CheckpointDeps,
 } from './driver/driver';
 export { noopTelemetry, type Telemetry, type TelemetryEvent } from './telemetry/telemetry';
+// EXPERIMENTAL cooperative parallel waves (--parallel-phases): the seam + the composable executor.
+export type { WaveRunner, WavePhaseSpec, WaveOutcome, WaveResult } from './driver/wave';
+export { DefaultWaveRunner, type ComposeChild } from './driver/wave-runner';
 export {
   composeDeps,
   buildLadder,

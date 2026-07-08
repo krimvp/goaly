@@ -3,6 +3,7 @@ import type { RunConfig, VerifierIntent } from '../domain/config';
 import { pickGatePolicy, pickLoopPolicy, pickDriverWiring } from '../domain/config';
 import type { CompiledContract, Rung } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
+import { waveIndicesAt } from '../domain/plan';
 import type { OrchestratorState, LoopCtx, PhaseCtx } from './state';
 import { initialCtx } from './state';
 import { decide, type Decision } from './decide';
@@ -42,6 +43,8 @@ export function step(state: OrchestratorState, event: OrchestratorEvent): StepRe
       return stepAwaitPlanSeal(state.config, state.plan, state.reviseRound, event);
     case 'ADVANCING_PHASE':
       return stepAdvancingPhase(state.phase, event);
+    case 'RUNNING_WAVE':
+      return stepRunningWave(state.phase, state.indices, event);
     case 'COMPILING':
       return stepCompiling(state.config, state.reviseRound, state.compileRound, state.phase, event);
     case 'AWAIT_SEAL':
@@ -146,17 +149,83 @@ function stepAwaitPlanSeal(
  */
 function stepAdvancingPhase(phase: PhaseCtx, event: OrchestratorEvent): StepResult {
   if (event.tag !== 'PHASE_ADVANCED') throw invalidTransition('ADVANCING_PHASE', event);
-  const next: PhaseCtx = { ...phase, index: phase.index + 1 };
+  const next: PhaseCtx = { ...phase, index: nextPhaseIndex(phase, phase.index + 1) };
   return startPhaseCompile(next);
 }
 
-/** Begin a phase: COMPILING its derived config, carrying the phase position for the eventual advance. */
+/** The next phase index at or after `from`, skipping indices a wave already completed (merged). */
+function nextPhaseIndex(phase: PhaseCtx, from: number): number {
+  const skip = phase.skip ?? [];
+  let next = from;
+  while (skip.includes(next)) next += 1;
+  return next;
+}
+
+/**
+ * Begin a phase: COMPILING its derived config, carrying the phase position for the eventual advance.
+ * EXPERIMENTAL parallel waves: when the phase heads a not-yet-attempted group of consecutive
+ * same-`group` sub-goals AND `--parallel-phases` is on, the whole group is emitted as ONE `RUN_WAVE`
+ * command instead (still exactly one command per state — the Driver invariant). Everything else —
+ * ungrouped plans, the acceptance phase, a re-entered (already-attempted) member, the feature off —
+ * takes the classic sequential compile, byte-for-byte.
+ */
 function startPhaseCompile(phase: PhaseCtx): StepResult {
+  const wave = pendingWaveAt(phase);
+  if (wave.length > 1) {
+    return [
+      { tag: 'RUNNING_WAVE', phase, indices: wave },
+      [
+        {
+          tag: 'RUN_WAVE',
+          phases: wave.map((index) => ({ index, config: phaseConfigFor({ ...phase, index }) })),
+        },
+      ],
+    ];
+  }
   const config = phaseConfigFor(phase);
   return [
     { tag: 'COMPILING', config, reviseRound: 0, compileRound: 0, phase },
     [{ tag: 'COMPILE_VERIFIER', config }],
   ];
+}
+
+/**
+ * The wave the current phase would fan out, or a singleton when it must run sequentially: the
+ * feature is off, the index is the acceptance phase, the group was ALREADY attempted (`waved` — an
+ * unmerged member re-runs sequentially, never re-fans-out), or the group has one live member.
+ */
+function pendingWaveAt(phase: PhaseCtx): readonly number[] {
+  if (!phase.baseConfig.parallelPhases) return [phase.index];
+  if (phase.index >= phase.plan.phases.length) return [phase.index];
+  if ((phase.waved ?? []).includes(phase.index)) return [phase.index];
+  const skip = phase.skip ?? [];
+  return waveIndicesAt(phase.plan, phase.index).filter((i) => !skip.includes(i));
+}
+
+/**
+ * EXPERIMENTAL parallel waves: fold the ONE `WAVE_RAN` event. `merged` members are recorded in
+ * `skip` (complete — the advance walks past them); every attempted index is recorded in `waved`
+ * (never re-fans-out); the machine advances to the FIRST not-merged wave member — a classic
+ * sequential re-run on the merged tree (the fail-closed downgrade) — or past the group when all
+ * merged. The plan, the contracts, and the two-key gate are untouched: an unmerged phase re-enters
+ * the same compile → Seal → loop path any sequential phase takes.
+ */
+function stepRunningWave(
+  phase: PhaseCtx,
+  indices: readonly number[],
+  event: OrchestratorEvent,
+): StepResult {
+  if (event.tag !== 'WAVE_RAN') throw invalidTransition('RUNNING_WAVE', event);
+  // Only indices that were actually part of this wave count (defense in depth on a replayed log).
+  const merged = event.outcomes
+    .filter((o) => o.kind === 'merged' && indices.includes(o.index))
+    .map((o) => o.index);
+  const next: PhaseCtx = {
+    ...phase,
+    skip: [...(phase.skip ?? []), ...merged],
+    waved: [...(phase.waved ?? []), ...indices],
+  };
+  return startPhaseCompile({ ...next, index: nextPhaseIndex(next, indices[0] ?? phase.index) });
 }
 
 /**
@@ -171,7 +240,7 @@ function startPhaseCompile(phase: PhaseCtx): StepResult {
 function phaseConfigFor(phase: PhaseCtx): RunConfig {
   const base = phase.baseConfig;
   if (phase.index >= phase.plan.phases.length) {
-    return { ...base, phased: false };
+    return { ...base, phased: false, parallelPhases: false };
   }
   // A sub-goal phase: FRESH contract inputs authored per sub-goal (goal/verifier/rubric), but the
   // SAME operational policy as the run — inherited wholesale by lifetime VIEW (gate / loop / wiring)
@@ -196,6 +265,9 @@ function phaseConfigFor(phase: PhaseCtx): RunConfig {
     // frozen into the contract, so each phase's Sign-off uses the same panel.)
     ...(sub.rubric !== undefined ? { rubric: sub.rubric } : {}),
     phased: false,
+    // A phase (whether run inline or as a wave CHILD) is a single-contract run — it must never
+    // decompose or fan out again (no nested waves).
+    parallelPhases: false,
   };
 }
 
@@ -527,7 +599,7 @@ function stepAwaitSignoff(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
 function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
   switch (decision.kind) {
     case 'CONTINUE': {
-      const next: LoopCtx = { ...ctx, feedback: decision.feedback };
+      const next: LoopCtx = { ...ctx, feedback: decision.feedback, feedbackSource: decision.source };
       const prompt = buildLoopPrompt(ctx.contract, decision.feedback, ctx.lastRunStatus);
       return startIteration(next, prompt, ctx.sessionId);
     }
