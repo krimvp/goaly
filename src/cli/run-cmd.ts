@@ -210,28 +210,13 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
   const followup = await resolveFollowup(parsed, io.err);
   if (!followup.ok) return { code: followup.code, runId: undefined, outcome: undefined };
 
-  // First-run preflight (fail-fast, before any spend): git repo present, harness / LLM-provider
-  // CLI on PATH — the mistakes that used to surface only AFTER a compile + agent turn, as cryptic
-  // spawn/plumbing errors. Cheap (milliseconds).
-  {
-    const problem = await preflightRun({
-      harness: parsed.harness,
-      llmProvider: parsed.llmProvider,
-      workspace: parsed.workspace,
-    });
-    if (problem !== null) {
-      io.err(`goaly: ${problem}\n`);
-      return { code: 2, runId: undefined, outcome: undefined };
-    }
-  }
-
-  const resuming = parsed.resumeRunId !== undefined;
-  const runId: RunId =
-    parsed.resumeRunId !== undefined ? asRunId(parsed.resumeRunId) : asRunId(`run-${randomUUID()}`);
-
-  // Validate --resume BEFORE creating anything (the run lock would otherwise mkdir a run dir for a
-  // typo'd id): a missing run gets a pointer to `runs list`; a corrupt log a clear parse error —
-  // mirroring the --from-run guards above instead of failing deep inside the resume fold.
+  // Validate --resume BEFORE the preflight and before creating anything (the run lock would
+  // otherwise mkdir a run dir for a typo'd id): a missing run gets a pointer to `runs list`; a
+  // corrupt log a clear parse error — mirroring the --from-run guards above instead of failing deep
+  // inside the resume fold. Runs BEFORE the preflight because a resume ADOPTS the run's recorded
+  // harness when --harness wasn't re-passed — the preflight must check the harness that will
+  // actually run, not the default (a CI/host without the default CLI would otherwise refuse to
+  // resume a fake/codex run it can perfectly continue).
   // A resumed run continues with the LOG's effective config (header + any logged RUN_EXTENDED
   // overlays + this invocation's explicit extension), NOT this invocation's re-parsed defaults — so
   // the budget meter, best-of wiring, etc. match exactly what the resume fold will compute.
@@ -283,6 +268,26 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
           : effective;
     }
   }
+
+  // First-run preflight (fail-fast, before any spend): git repo present, harness / LLM-provider
+  // CLI on PATH — the mistakes that used to surface only AFTER a compile + agent turn, as cryptic
+  // spawn/plumbing errors. Cheap (milliseconds). On resume this runs AFTER the harness adoption
+  // above, so it validates the harness the resumed run will actually use.
+  {
+    const problem = await preflightRun({
+      harness: parsed.harness,
+      llmProvider: parsed.llmProvider,
+      workspace: parsed.workspace,
+    });
+    if (problem !== null) {
+      io.err(`goaly: ${problem}\n`);
+      return { code: 2, runId: undefined, outcome: undefined };
+    }
+  }
+
+  const resuming = parsed.resumeRunId !== undefined;
+  const runId: RunId =
+    parsed.resumeRunId !== undefined ? asRunId(parsed.resumeRunId) : asRunId(`run-${randomUUID()}`);
 
   // Exclusive per-run lock: two goaly processes appending to one run log would interleave duplicate
   // seq values and corrupt it logically. A crashed holder self-heals (stale-pid detection); a LIVE
