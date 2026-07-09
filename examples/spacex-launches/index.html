@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpaceX Launch Board</title>
+  <style>
+    :root {
+      --color-bg-primary: #0a0e27;
+      --color-bg-secondary: #1a1f3a;
+      --color-bg-tertiary: #2a3050;
+      --color-accent: #00d4ff;
+      --color-accent-dim: #0099cc;
+      --color-text-primary: #e8eaed;
+      --color-text-secondary: #a0aec0;
+      --color-text-tertiary: #718096;
+      --color-border: #3a4566;
+      --color-status-live: #10b981;
+      --color-status-scheduled: #8b5cf6;
+      --color-status-unknown: #6b7280;
+
+      --spacing-unit: 1rem;
+      --spacing-xs: 0.25rem;
+      --spacing-sm: 0.5rem;
+      --spacing-md: 1rem;
+      --spacing-lg: 1.5rem;
+      --spacing-xl: 2rem;
+      --spacing-2xl: 3rem;
+      --spacing-3xl: 4rem;
+      --spacing-4xl: 6rem;
+
+      --font-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      --font-mono: 'Courier New', Courier, monospace;
+
+      --type-xs: 0.75rem;
+      --type-sm: 0.875rem;
+      --type-base: 1rem;
+      --type-lg: 1.125rem;
+      --type-xl: 1.25rem;
+      --type-2xl: 1.5rem;
+      --type-3xl: 1.875rem;
+      --type-4xl: 2.25rem;
+      --type-5xl: 3rem;
+
+      --grid-cols: 12;
+      --grid-gap: var(--spacing-md);
+
+      --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+      --transition-base: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      :root {
+        --transition-fast: 0ms;
+        --transition-base: 0ms;
+      }
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background-color: var(--color-bg-primary);
+      color: var(--color-text-primary);
+      font-family: var(--font-base);
+      font-size: var(--type-base);
+      line-height: 1.6;
+      letter-spacing: 0.5px;
+    }
+
+    main {
+      display: flex;
+      flex-direction: column;
+    }
+
+    section {
+      padding: var(--spacing-3xl) var(--spacing-md);
+    }
+
+    h1, h2, h3 {
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: var(--spacing-lg);
+    }
+
+    h1 {
+      font-size: var(--type-5xl);
+      line-height: 1.1;
+    }
+
+    h2 {
+      font-size: var(--type-3xl);
+      line-height: 1.2;
+    }
+
+    h3 {
+      font-size: var(--type-xl);
+      line-height: 1.3;
+    }
+
+    p {
+      margin-bottom: var(--spacing-md);
+      color: var(--color-text-secondary);
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1280px;
+      margin: 0 auto;
+      padding-left: var(--spacing-md);
+      padding-right: var(--spacing-md);
+    }
+
+    @media (min-width: 640px) {
+      section {
+        padding: var(--spacing-4xl) var(--spacing-lg);
+      }
+      .container {
+        padding-left: var(--spacing-xl);
+        padding-right: var(--spacing-xl);
+      }
+    }
+
+    /* Hero Section */
+    .hero {
+      background: linear-gradient(135deg, var(--color-bg-primary) 0%, var(--color-bg-secondary) 100%);
+      border-bottom: 1px solid var(--color-border);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    .hero-content {
+      display: grid;
+      gap: var(--spacing-3xl);
+      align-items: center;
+    }
+
+    @media (min-width: 768px) {
+      .hero-content {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .hero-text h1 {
+      color: var(--color-text-primary);
+      margin-bottom: var(--spacing-xl);
+      animation: fadeInUp 0.8s ease-out;
+    }
+
+    .hero-text p {
+      font-size: var(--type-lg);
+      color: var(--color-text-secondary);
+      margin-bottom: var(--spacing-md);
+      animation: fadeInUp 0.8s ease-out 0.2s both;
+    }
+
+    .featured-countdown {
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-accent);
+      border-radius: 8px;
+      padding: var(--spacing-2xl);
+      animation: fadeInUp 0.8s ease-out 0.4s both;
+    }
+
+    .countdown-display {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--spacing-md);
+      margin-bottom: var(--spacing-lg);
+    }
+
+    @media (min-width: 480px) {
+      .countdown-display {
+        gap: var(--spacing-lg);
+      }
+    }
+
+    .countdown-unit {
+      text-align: center;
+    }
+
+    .countdown-value {
+      font-family: var(--font-mono);
+      font-size: var(--type-5xl);
+      font-weight: 700;
+      color: var(--color-accent);
+      line-height: 1;
+      letter-spacing: 0.05em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .countdown-label {
+      font-size: var(--type-sm);
+      color: var(--color-text-secondary);
+      margin-top: var(--spacing-md);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .featured-label {
+      font-size: var(--type-sm);
+      color: var(--color-accent);
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      margin-bottom: var(--spacing-lg);
+      font-weight: 600;
+    }
+
+    .featured-mission {
+      font-size: var(--type-2xl);
+      color: var(--color-text-primary);
+      font-weight: 600;
+      margin-top: var(--spacing-md);
+    }
+
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(30px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* Launch Board Section */
+    .launch-board {
+      background-color: var(--color-bg-primary);
+      border-top: 1px solid var(--color-border);
+    }
+
+    .board-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: var(--spacing-2xl);
+      flex-wrap: wrap;
+      gap: var(--spacing-md);
+    }
+
+    .data-source-badge {
+      display: inline-block;
+      background-color: var(--color-bg-tertiary);
+      border: 1px solid var(--color-accent);
+      color: var(--color-accent);
+      padding: var(--spacing-sm) var(--spacing-lg);
+      border-radius: 20px;
+      font-size: var(--type-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-weight: 600;
+    }
+
+    .launch-grid {
+      display: grid;
+      gap: var(--spacing-lg);
+    }
+
+    @media (min-width: 768px) {
+      .launch-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (min-width: 1280px) {
+      .launch-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+
+    .launch-card {
+      background: var(--color-bg-secondary);
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+      padding: var(--spacing-xl);
+      display: flex;
+      flex-direction: column;
+      gap: var(--spacing-md);
+      transition: all var(--transition-base);
+      cursor: pointer;
+    }
+
+    .launch-card:hover {
+      border-color: var(--color-accent);
+      background-color: var(--color-bg-tertiary);
+      box-shadow: 0 8px 32px rgba(0, 212, 255, 0.1);
+      transform: translateY(-2px);
+    }
+
+    .launch-card[data-launched="true"] {
+      opacity: 0.6;
+      border-color: var(--color-text-tertiary);
+    }
+
+    .card-header {
+      border-bottom: 1px solid var(--color-border);
+      padding-bottom: var(--spacing-md);
+    }
+
+    .mission-name {
+      font-size: var(--type-xl);
+      font-weight: 600;
+      color: var(--color-text-primary);
+    }
+
+    .card-meta {
+      display: grid;
+      gap: var(--spacing-md);
+      font-size: var(--type-sm);
+    }
+
+    .meta-item {
+      display: flex;
+      gap: var(--spacing-md);
+      align-items: flex-start;
+    }
+
+    .meta-label {
+      color: var(--color-text-tertiary);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 600;
+      min-width: 60px;
+      font-size: var(--type-xs);
+    }
+
+    .meta-value {
+      color: var(--color-text-secondary);
+      flex: 1;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: var(--spacing-sm) var(--spacing-md);
+      border-radius: 4px;
+      font-size: var(--type-xs);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      background-color: rgba(107, 114, 128, 0.1);
+      color: var(--color-status-unknown);
+      border: 1px solid var(--color-status-unknown);
+    }
+
+    .status-badge[data-status*="Go" i] {
+      background-color: rgba(16, 185, 129, 0.1);
+      color: var(--color-status-live);
+      border: 1px solid var(--color-status-live);
+    }
+
+    .status-badge[data-status*="TBD" i],
+    .status-badge[data-status*="Determined" i] {
+      background-color: rgba(107, 114, 128, 0.1);
+      color: var(--color-status-unknown);
+      border: 1px solid var(--color-status-unknown);
+    }
+
+    .status-badge[data-status*="Scheduled" i],
+    .status-badge[data-status*="Hold" i] {
+      background-color: rgba(139, 92, 246, 0.1);
+      color: var(--color-status-scheduled);
+      border: 1px solid var(--color-status-scheduled);
+    }
+
+    .card-countdown {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--spacing-sm);
+      margin-top: var(--spacing-md);
+      padding-top: var(--spacing-md);
+      border-top: 1px solid var(--color-border);
+    }
+
+    @media (min-width: 480px) {
+      .card-countdown {
+        gap: var(--spacing-md);
+      }
+    }
+
+    .card-countdown-unit {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: var(--spacing-xs);
+    }
+
+    .card-countdown-value {
+      font-family: var(--font-mono);
+      font-size: var(--type-2xl);
+      font-weight: 700;
+      color: var(--color-accent);
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .card-countdown-label {
+      font-size: var(--type-xs);
+      color: var(--color-text-tertiary);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .card-status-text {
+      font-size: var(--type-sm);
+      color: var(--color-text-secondary);
+      font-style: italic;
+      text-align: center;
+      padding: var(--spacing-md) 0;
+    }
+
+    footer {
+      border-top: 1px solid var(--color-border);
+      padding: var(--spacing-2xl) var(--spacing-md);
+      text-align: center;
+      color: var(--color-text-tertiary);
+      font-size: var(--type-sm);
+    }
+
+    .error-message {
+      background-color: rgba(239, 68, 68, 0.1);
+      border: 1px solid #dc2626;
+      color: #fca5a5;
+      padding: var(--spacing-md) var(--spacing-lg);
+      border-radius: 4px;
+      margin-bottom: var(--spacing-md);
+      display: none;
+    }
+
+    .error-message.show {
+      display: block;
+    }
+
+    @media (max-width: 375px) {
+      :root {
+        --type-5xl: 2rem;
+        --type-4xl: 1.75rem;
+        --type-3xl: 1.5rem;
+        --spacing-3xl: 2rem;
+        --spacing-2xl: 1.5rem;
+      }
+
+      section {
+        padding: var(--spacing-2xl) var(--spacing-md);
+      }
+
+      .hero {
+        min-height: auto;
+      }
+
+      .hero-content {
+        gap: var(--spacing-2xl);
+      }
+
+      .countdown-display {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .countdown-value {
+        font-size: var(--type-3xl);
+      }
+
+      .card-countdown-value {
+        font-size: var(--type-xl);
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="container">
+        <div class="hero-content">
+          <div class="hero-text">
+            <h1>SpaceX Launch Board</h1>
+            <p>Track upcoming SpaceX missions in real-time. Live countdowns to the next launch into the cosmos.</p>
+          </div>
+          <div class="featured-countdown" data-featured-countdown>
+            <div class="featured-label">Next Launch</div>
+            <div class="featured-mission" data-featured-mission>Loading...</div>
+            <div class="countdown-display">
+              <div class="countdown-unit">
+                <div class="countdown-value" data-countdown="days">00</div>
+                <div class="countdown-label">Days</div>
+              </div>
+              <div class="countdown-unit">
+                <div class="countdown-value" data-countdown="hours">00</div>
+                <div class="countdown-label">Hours</div>
+              </div>
+              <div class="countdown-unit">
+                <div class="countdown-value" data-countdown="minutes">00</div>
+                <div class="countdown-label">Minutes</div>
+              </div>
+              <div class="countdown-unit">
+                <div class="countdown-value" data-countdown="seconds">00</div>
+                <div class="countdown-label">Seconds</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="launch-board">
+      <div class="container">
+        <div class="board-header">
+          <h2>Upcoming Launches</h2>
+          <div class="data-source-badge" data-source="sample">Sample Data</div>
+        </div>
+        <div class="error-message" id="error-message"></div>
+        <div class="launch-grid" id="launch-grid">
+          <p style="grid-column: 1 / -1; text-align: center; color: var(--color-text-tertiary);">Loading launches...</p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <p>SpaceX Launch Board &copy; 2026. Data from Launch Library 2 API.</p>
+    </footer>
+  </main>
+
+  <script>
+    const FALLBACK_LAUNCHES = [
+      {
+        id: "1",
+        name: "Starlink Group 9-3",
+        rocket: { configuration: { name: "Falcon 9" } },
+        pad: { name: "CCAFS SLC-40", location: { name: "Cape Canaveral" } },
+        net: "2026-08-15T18:30:00Z",
+        status: 1,
+        mission: { type: "Communications", description: "Deployment of Starlink Group 9-3 satellites to low Earth orbit" }
+      },
+      {
+        id: "2",
+        name: "Starlink Group 10-1",
+        rocket: { configuration: { name: "Falcon 9" } },
+        pad: { name: "VAFB SLC-4E", location: { name: "Vandenberg" } },
+        net: "2026-08-28T14:15:00Z",
+        status: 1,
+        mission: { type: "Communications", description: "Deployment of Starlink satellites to polar orbit for global coverage" }
+      },
+      {
+        id: "3",
+        name: "Galaxy 37",
+        rocket: { configuration: { name: "Falcon Heavy" } },
+        pad: { name: "KSC LC-39A", location: { name: "Kennedy Space Center" } },
+        net: "2026-09-10T22:45:00Z",
+        status: 1,
+        mission: { type: "Communications", description: "Deployment of Galaxy 37 communications satellite to GEO transfer orbit" }
+      },
+      {
+        id: "4",
+        name: "Starship Flight 7 Orbital Test",
+        rocket: { configuration: { name: "Starship" } },
+        pad: { name: "Starbase RP1", location: { name: "Boca Chica" } },
+        net: "2026-09-24T16:00:00Z",
+        status: 1,
+        mission: { type: "Test Flight", description: "Orbital flight test with payload bay demonstration and orbital refueling" }
+      },
+      {
+        id: "5",
+        name: "NOAA GOES-Z",
+        rocket: { configuration: { name: "Falcon Heavy" } },
+        pad: { name: "CCAFS SLC-40", location: { name: "Cape Canaveral" } },
+        net: "2026-10-08T10:30:00Z",
+        status: 1,
+        mission: { type: "Government", description: "NOAA weather satellite deployment to geostationary orbit" }
+      },
+      {
+        id: "6",
+        name: "Starlink Group 11-2",
+        rocket: { configuration: { name: "Falcon 9" } },
+        pad: { name: "VAFB SLC-4E", location: { name: "Vandenberg" } },
+        net: "2026-10-22T11:20:00Z",
+        status: 1,
+        mission: { type: "Communications", description: "Deployment of Starlink Group 11-2 to complete polar constellation coverage" }
+      },
+      {
+        id: "7",
+        name: "Crew-9 Dragon Resupply",
+        rocket: { configuration: { name: "Falcon 9" } },
+        pad: { name: "CCAFS SLC-40", location: { name: "Cape Canaveral" } },
+        net: "2026-11-05T13:45:00Z",
+        status: 1,
+        mission: { type: "Crewed", description: "Crew resupply mission to International Space Station" }
+      },
+      {
+        id: "8",
+        name: "SES-25",
+        rocket: { configuration: { name: "Falcon 9" } },
+        pad: { name: "CCAFS SLC-40", location: { name: "Cape Canaveral" } },
+        net: "2026-11-18T20:15:00Z",
+        status: 1,
+        mission: { type: "Communications", description: "SES-25 communications satellite to GEO" }
+      }
+    ];
+
+    const STATUS_DESCRIPTIONS = {
+      0: "Unknown",
+      1: "Go",
+      2: "TBD",
+      3: "On Hold",
+      4: "In Flight",
+      5: "Successful",
+      6: "Launch Failure",
+      7: "In Flight (Suborbital)"
+    };
+
+    let launchesData = [];
+    let updateInterval = null;
+
+    function getOrbitDescription(mission) {
+      if (!mission) return "Orbital deployment information not available";
+      if (mission.description) return mission.description;
+      if (mission.type) return mission.type;
+      return "Orbital deployment";
+    }
+
+    function formatDateUTC(isoString) {
+      try {
+        const date = new Date(isoString);
+        return date.toUTCString().replace(' GMT', ' UTC');
+      } catch {
+        return isoString.replace('Z', ' UTC');
+      }
+    }
+
+    function calculateCountdown(launchTimeMs) {
+      const now = Date.now();
+      const diff = Math.max(0, Math.floor((launchTimeMs - now) / 1000));
+      const days = Math.floor(diff / 86400);
+      const hours = Math.floor((diff % 86400) / 3600);
+      const minutes = Math.floor((diff % 3600) / 60);
+      const seconds = diff % 60;
+      return { days, hours, minutes, seconds, total: diff };
+    }
+
+    function getStatusText(status) {
+      if (status && typeof status === "object") return status.name || status.abbrev || "Unknown";
+      if (typeof status === "string") return status;
+      return STATUS_DESCRIPTIONS[status] || "Unknown";
+    }
+
+    function formatCountdownValue(value) {
+      return String(value).padStart(2, '0');
+    }
+
+    function renderLaunchCard(launch) {
+      const launchTime = new Date(launch.net).getTime();
+      const countdown = calculateCountdown(launchTime);
+      const isLaunched = countdown.total === 0;
+      const launchStatus = getStatusText(launch.status);
+
+      const rocketName = launch.rocket?.configuration?.name || "Unknown";
+      const padName = launch.pad?.name || "Unknown Pad";
+      const siteName = launch.pad?.location?.name || "";
+      const padLocation = siteName ? `${padName}, ${siteName}` : padName;
+      const orbitDesc = getOrbitDescription(launch.mission);
+      const formattedDate = formatDateUTC(launch.net);
+
+      const card = document.createElement("div");
+      card.className = "launch-card";
+      card.setAttribute("data-launch-time", launch.net);
+      if (isLaunched) card.setAttribute("data-launched", "true");
+
+      if (isLaunched) {
+        card.innerHTML = `
+          <div class="card-header">
+            <div class="mission-name" data-field="mission">${launch.name}</div>
+          </div>
+          <div class="card-meta">
+            <div class="meta-item">
+              <span class="meta-label">Vehicle</span>
+              <span class="meta-value" data-field="vehicle">${rocketName}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Pad</span>
+              <span class="meta-value" data-field="pad">${padLocation}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Orbit</span>
+              <span class="meta-value" data-field="orbit">${orbitDesc}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Status</span>
+              <span class="meta-value"><span class="status-badge" data-status="${launchStatus}" data-field="status">${launchStatus}</span></span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Launch</span>
+              <span class="meta-value" data-field="date-utc">${formattedDate}</span>
+            </div>
+          </div>
+          <div class="card-status-text">🚀 LAUNCHED</div>
+        `;
+      } else {
+        card.innerHTML = `
+          <div class="card-header">
+            <div class="mission-name" data-field="mission">${launch.name}</div>
+          </div>
+          <div class="card-meta">
+            <div class="meta-item">
+              <span class="meta-label">Vehicle</span>
+              <span class="meta-value" data-field="vehicle">${rocketName}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Pad</span>
+              <span class="meta-value" data-field="pad">${padLocation}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Orbit</span>
+              <span class="meta-value" data-field="orbit">${orbitDesc}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Status</span>
+              <span class="meta-value"><span class="status-badge" data-status="${launchStatus}" data-field="status">${launchStatus}</span></span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Launch</span>
+              <span class="meta-value" data-field="date-utc">${formattedDate}</span>
+            </div>
+          </div>
+          <div class="card-countdown">
+            <div class="card-countdown-unit">
+              <div class="card-countdown-value" data-countdown="days">${countdown.days}</div>
+              <div class="card-countdown-label">Days</div>
+            </div>
+            <div class="card-countdown-unit">
+              <div class="card-countdown-value" data-countdown="hours">${formatCountdownValue(countdown.hours)}</div>
+              <div class="card-countdown-label">Hrs</div>
+            </div>
+            <div class="card-countdown-unit">
+              <div class="card-countdown-value" data-countdown="minutes">${formatCountdownValue(countdown.minutes)}</div>
+              <div class="card-countdown-label">Min</div>
+            </div>
+            <div class="card-countdown-unit">
+              <div class="card-countdown-value" data-countdown="seconds">${formatCountdownValue(countdown.seconds)}</div>
+              <div class="card-countdown-label">Sec</div>
+            </div>
+          </div>
+        `;
+      }
+
+      return card;
+    }
+
+    function renderBoard(launches) {
+      const grid = document.getElementById("launch-grid");
+      grid.innerHTML = "";
+
+      if (!launches || launches.length === 0) {
+        grid.innerHTML = '<p style="grid-column: 1 / -1; text-align: center; color: var(--color-text-tertiary);">No upcoming launches found.</p>';
+        return;
+      }
+
+      launches.forEach(launch => {
+        grid.appendChild(renderLaunchCard(launch));
+      });
+    }
+
+    function updateCountdowns() {
+      document.querySelectorAll("[data-launch-time]").forEach(card => {
+        const launchTime = new Date(card.getAttribute("data-launch-time")).getTime();
+        const countdown = calculateCountdown(launchTime);
+
+        const countdownElements = card.querySelectorAll("[data-countdown]");
+        countdownElements.forEach(el => {
+          const part = el.getAttribute("data-countdown");
+          if (part === 'days') {
+            el.textContent = String(countdown[part]);
+          } else {
+            el.textContent = formatCountdownValue(countdown[part]);
+          }
+        });
+
+        if (countdown.total === 0 && !card.getAttribute("data-launched")) {
+          const countdownSection = card.querySelector(".card-countdown");
+          if (countdownSection) {
+            countdownSection.innerHTML = '<div class="card-status-text">🚀 LAUNCHED</div>';
+            card.setAttribute("data-launched", "true");
+          }
+        }
+      });
+
+      const heroCountdown = document.querySelector("[data-featured-countdown]");
+      if (heroCountdown && launchesData.length > 0) {
+        const nextLaunch = launchesData[0];
+        const launchTime = new Date(nextLaunch.net).getTime();
+        const countdown = calculateCountdown(launchTime);
+
+        const countdownElements = heroCountdown.querySelectorAll("[data-countdown]");
+        countdownElements.forEach(el => {
+          const part = el.getAttribute("data-countdown");
+          if (part === 'days') {
+            el.textContent = String(countdown[part]);
+          } else {
+            el.textContent = formatCountdownValue(countdown[part]);
+          }
+        });
+
+        const missionEl = heroCountdown.querySelector("[data-featured-mission]");
+        if (missionEl) {
+          if (countdown.total === 0) {
+            missionEl.textContent = "🚀 " + nextLaunch.name + " - LAUNCHED";
+          } else {
+            missionEl.textContent = nextLaunch.name;
+          }
+        }
+      }
+    }
+
+    async function fetchLaunches() {
+      try {
+        const response = await fetch("https://ll.thespacedevs.com/2.2.0/launch/upcoming/?lsp__name=SpaceX&limit=12&mode=detailed");
+        if (!response.ok) throw new Error(`API returned ${response.status}`);
+        const data = await response.json();
+        const launches = data.results || [];
+        const filtered = launches.filter(l => new Date(l.net).getTime() > Date.now()).slice(0, 12);
+        if (filtered.length >= 6) {
+          document.querySelector("[data-source]").textContent = "Live Data";
+          document.querySelector("[data-source]").setAttribute("data-source", "live");
+          return filtered;
+        }
+      } catch (e) {
+        console.log("API fetch failed, using fallback:", e.message);
+      }
+
+      document.querySelector("[data-source]").textContent = "Sample Data";
+      document.querySelector("[data-source]").setAttribute("data-source", "sample");
+      return FALLBACK_LAUNCHES.filter(l => new Date(l.net).getTime() > Date.now()).slice(0, 12);
+    }
+
+    async function initialize() {
+      launchesData = await fetchLaunches();
+      renderBoard(launchesData);
+      updateCountdowns();
+
+      if (updateInterval) clearInterval(updateInterval);
+      updateInterval = setInterval(updateCountdowns, 1000);
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", initialize);
+    } else {
+      initialize();
+    }
+  </script>
+</body>
+</html>
