@@ -86,7 +86,7 @@
   const PIPE_DETAIL = {
     compile: {
       t: "COMPILE — author & freeze",
-      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. The anti-reward-hacking core. Deterministically DETECTED workspace facts (module system, lockfile, manifests — never assumed, nothing injected for a non-code goal) steer the author, and a pre-freeze lint refuses an authored file that couldn't even load. With --adversarial a red-team panel attacks the authored bar (vacuous command? rubric mismatch? hard-codable tests?) before Seal — critical findings trigger a bounded re-author round.",
+      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. Vacuous or un-runnable bars are refused at compile, and with --adversarial a red-team panel attacks the authored bar before Seal.",
       pills: ['<span class="pill pass">→ contractHash</span>', '<span class="pill fail">--adversarial red-team</span>'],
     },
     seal: {
@@ -101,12 +101,12 @@
     },
     run: {
       t: "RUN_AGENT — one turn",
-      d: "Spawn the chosen harness headlessly with the prompt, resuming the session. A transiently-CRASHED turn (a momentary rate-limit/network blip) is retried once with backoff before it can count toward the stuck-crash streak — retries absorb blips, stuck detection governs walls. With --candidates N (best-of-N) the Driver fans out N isolated worktree attempts, scores each against the SAME frozen ladder, and keeps the best one's tree — the reducer still sees exactly one winning run and never learns N existed.",
+      d: "Spawn the chosen harness headlessly with the prompt, resuming the session. A transiently-crashed turn is retried once with backoff. With --candidates N the Driver fans out N isolated worktree attempts, scores each against the SAME frozen ladder, and keeps the best — the reducer never learns N existed.",
       pills: ['<span class="pill neutral">harness adapter</span>', '<span class="pill violet">--candidates N (best-of-N)</span>'],
     },
     ladder: {
       t: "Verify — deterministic first",
-      d: "Checks run cheapest-and-hardest-to-game first (tests / exit codes before any LLM judge) and short-circuit on the first fail. Fail-closed. With --adversarial a built-in refuter rung runs LAST — a refute-first skeptic panel that attacks each candidate green and can only fail it; part of the ladder, never part of the contractHash (like the anti-tamper guard).",
+      d: "Checks run cheapest-and-hardest-to-game first (tests / exit codes before any LLM judge) and short-circuit on the first fail. Fail-closed: a malformed grader is never a green. With --adversarial a refute-first skeptic panel runs last and can only fail a candidate green.",
       pills: ['<span class="pill pass">exit codes</span>', '<span class="pill violet">LLM judge</span>', '<span class="pill fail">--adversarial refuters</span>'],
     },
     signoff: {
@@ -116,7 +116,7 @@
     },
     decide: {
       t: "DECIDE — pure truth table",
-      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop on STUCK / budget / iteration cap. A no-diff turn is excused when the run was cut short (timeout, crash, or truncated at its turn cap) — it gets another iteration instead of a premature stuck abort. When the checker itself can't RUN for N turns in a row — the verify command timed out or couldn't start, or the judge errored/overflowed — that's a typed CONTRACT_UNEVALUABLE: it says the work may be correct-but-unverified instead of blaming (and discarding) the tree. It keys only on facts goaly owns (no exit-code/error-string guessing) and is prevented at the source (the compiler authors offline verify commands). Still fail-closed: a could-not-evaluate is never a green.",
+      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop with a typed reason on STUCK / budget / iteration cap. A no-diff turn is excused when the run was cut short, and a checker that itself can't run is a CONTRACT_UNEVALUABLE — correct-but-unverified, never blamed on the tree, never a green.",
       pills: ['<span class="pill pass">two keys → DONE</span>'],
     },
   };

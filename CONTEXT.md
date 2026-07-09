@@ -6,7 +6,7 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
 > This is the terse **contributor** reference (noun-by-noun, with anti-definitions). For a
 > **plain-language** walkthrough of the same concepts and the cross-cutting idioms — fail-closed,
 > fail-open, reward-hacking, the two keys, write-ahead, stuck detection — with links to read more,
-> see the **[Glossary appendix in the README](README.md#appendix-glossary)**.
+> see the **[Glossary in the reference](docs/reference.md#glossary)**.
 
 - **Goal** — the natural-language objective for one run. _avoid:_ a test; a prompt.
 - **Contract** (`CompiledContract`) — the **frozen** definition of "done": an ordered ladder
