@@ -25,6 +25,7 @@
     <a class="brand" href="#top"><img src="assets/favicon.svg" alt="" />goaly</a>
     <nav class="nav-links" id="navLinks">
       <a href="#how">How it works</a>
+      <a href="#features">Features</a>
       <a href="#docs">Docs</a>
     </nav>
     <a class="nav-cta" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">GitHub ↗</a>
@@ -35,21 +36,16 @@
 <!-- ============================== HERO ============================== -->
 <a id="top"></a>
 <section class="hero">
+  <div class="hero-glow" aria-hidden="true"></div>
   <div class="wrap hero-grid">
     <div class="hero-copy">
       <div class="eyebrow">Goal orchestration for coding agents</div>
-      <h1>Loop a coding agent until the goal is verifiably met.</h1>
+      <h1>Loop a coding agent until the goal is <span class="hl">verifiably met</span>.</h1>
       <p class="hero-lede">
-        goaly runs <b>Claude Code, Codex, Droid, pi</b>, its own <b>goaly-code</b> agent against any
-        OpenAI-compatible endpoint — or your own agent — until your goal is <em>actually done</em>,
-        checked against a contract it can't weaken to pass.
+        Hand goaly a goal. It freezes what "done" means, then loops your agent
+        against that bar until it's <em>actually done</em> — a bar the agent can't
+        weaken to pass.
       </p>
-
-      <div class="spec-strip">
-        <span><b>any harness</b></span><span class="sep">/</span>
-        <span><b>two keys</b> for DONE</span><span class="sep">/</span>
-        <span>resumable</span>
-      </div>
 
       <div class="code hero-install">
         <button class="copy-btn" data-clip="npm i -g goaly">copy</button>
@@ -59,12 +55,12 @@
       <div class="btn-row">
         <a class="btn btn-primary" href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener">Get started →</a>
         <a class="btn btn-ghost" href="#how">How it works</a>
-        <a class="btn btn-ghost" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">GitHub ↗</a>
       </div>
     </div>
 
     <div class="hero-art reveal">
-      <div class="code" aria-hidden="true">
+      <div class="code term" aria-hidden="true">
+        <div class="term-bar"><span></span><span></span><span></span><em>goaly</em></div>
         <button class="copy-btn" data-clip='goaly -d "add /health endpoint"'>copy</button>
 <pre><span class="cmt">$</span> <span class="fn">goaly</span> -d <span class="str">"add /health endpoint"</span>  <span class="cmt"># just the goal</span>
 
@@ -77,14 +73,24 @@
       </div>
     </div>
   </div>
+
+  <div class="wrap harness-strip reveal">
+    <span class="hs-label">Works with</span>
+    <span class="hs-item">Claude Code</span>
+    <span class="hs-item">Codex</span>
+    <span class="hs-item">Droid</span>
+    <span class="hs-item">pi</span>
+    <span class="hs-item">goaly-code</span>
+    <span class="hs-item hs-yours">your own harness</span>
+  </div>
 </section>
 
-<!-- ============================== PROMISES (3, one line each) ============================== -->
+<!-- ============================== PROMISES ============================== -->
 <section id="why">
   <div class="wrap">
     <div class="grid grid-3 grid-start reveal">
-      <div class="card"><h3><span class="pill pass">1</span> Freeze the bar</h3><p>The success check is hashed and <b>frozen</b> before the loop — the agent can't weaken its own test to finish.</p></div>
-      <div class="card"><h3><span class="pill gate">2</span> Two keys for DONE</h3><p>Done means <b>both</b> turn: the frozen check passes <em>and</em> an independent reviewer — prompted <b>refute-first</b>, cycling adversarial lenses — doesn't veto. Scale it to a <a class="more" href="https://github.com/krimvp/goaly/blob/main/docs/reference.md#hardening-against-reward-hacking">multi-vote panel across distinct models →</a></p></div>
+      <div class="card"><h3><span class="pill pass">1</span> Freeze the bar</h3><p>The success check is hashed and <b>frozen</b> before the loop starts — the agent can't weaken its own test to finish.</p></div>
+      <div class="card"><h3><span class="pill gate">2</span> Two keys for DONE</h3><p>Done means <b>both</b> turn: the frozen check passes <em>and</em> an independent, refute-first reviewer doesn't veto.</p></div>
       <div class="card"><h3><span class="pill fail">3</span> Fail closed</h3><p>Anything that errors or returns garbage is a <b>fail</b>, never a false green. The control loop makes zero LLM calls.</p></div>
     </div>
   </div>
@@ -92,7 +98,7 @@
 
 <hr class="section-line" />
 
-<!-- ============================== HOW IT WORKS (pipeline only) ============================== -->
+<!-- ============================== HOW IT WORKS ============================== -->
 <section id="how">
   <div class="wrap">
     <div class="eyebrow reveal">How it works</div>
@@ -119,146 +125,75 @@
           <div class="stage" data-stage="decide"><span class="st-k">DECIDE</span><span class="st-s">pure</span></div>
         </div>
         <div class="term-row">
-          <div class="term done">DONE ✔</div>
-          <div class="term failed">FAILED</div>
-          <div class="term aborted">ABORTED</div>
+          <div class="term-cell done">DONE ✔</div>
+          <div class="term-cell failed">FAILED</div>
+          <div class="term-cell aborted">ABORTED</div>
         </div>
       </div>
       <div class="detail" id="pipeline-detail"></div>
     </div>
 
     <p class="lede footnote reveal">
-      The verify ladder, stuck detection, the four seams and resume are in
+      The full design — verify ladder, stuck detection, seams, resume — lives in
       <a class="more" href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">ARCHITECTURE.md →</a>
     </p>
-
-    <div class="grid grid-2 grid-start mt-lg reveal">
-      <div class="card">
-        <h3>Best-of-N parallel worker</h3>
-        <p><code>--candidates N</code> runs <b>N isolated attempts each iteration</b> in git
-        worktrees, scores each against the <b>same frozen ladder</b>, and keeps the one that climbed
-        furthest — the pure reducer never learns N existed. Crashed fan-outs resume without
-        re-running finished candidates.</p>
-        <p><b>Or just say it:</b> <i>"fix the flaky test, work with 4 subagents"</i> maps onto
-        <code>--candidates</code> via a <b>deterministic grammar</b> (never an LLM parse) and is
-        stripped from the frozen goal.
-        <a class="more" href="https://github.com/krimvp/goaly/blob/main/docs/reference.md#best-of-n-parallel-worker---candidates" target="_blank" rel="noopener">reference →</a></p>
-      </div>
-      <div class="card">
-        <h3>Cooperative parallel waves <span class="soft">(experimental)</span></h3>
-        <p><code>--parallel-phases</code> runs independent plan phases concurrently as <b>full child
-        runs</b> (own frozen contract, own two-key gate, isolated worktree), merges the winners with
-        real <code>git merge-tree</code> plumbing, and <b>re-verifies every merged phase on the
-        combined tree</b> — a merge is never trusted. Every failure shape downgrades fail-closed to
-        the classic sequential phase, and cumulative acceptance still gates the whole run.
-        <a class="more" href="https://github.com/krimvp/goaly/blob/main/docs/reference.md#cooperative-parallel-waves---parallel-phases-experimental" target="_blank" rel="noopener">reference →</a></p>
-      </div>
-      <div class="card">
-        <h3>Named worktrees</h3>
-        <p><code>--worktree &lt;name&gt;</code> re-roots the <b>entire run</b> — log, lock, agent
-        cwd, verifier, diff scope — at an isolated checkout under
-        <code>.goaly/worktrees/&lt;name&gt;</code>, so the main tree is never touched and several
-        runs can go at once. Runs never commit; <b>merge-back is plain git</b>.
-        <a class="more" href="https://github.com/krimvp/goaly/blob/main/docs/adr/0013-named-worktrees.md" target="_blank" rel="noopener">ADR 0013 →</a></p>
-      </div>
-      <div class="card">
-        <h3>No cheating by reimplementation</h3>
-        <p>A <b>build-and-use</b> goal can't be greened by re-deriving the logic inline and never
-        calling the artifact: a neutral shape classifier flags such goals, and the compiler must
-        author a <b>runtime usage assertion</b> that spies the artifact's entry points — a
-        reimplementation records zero calls and <b>fails</b>. Fail-open, so it never blocks other
-        runs.</p>
-      </div>
-      <div class="card">
-        <h3>Adversarial review <span class="soft">(<code>--adversarial</code>)</span></h3>
-        <p>Opt-in red-teaming at three points, all veto/feedback-shaped — never a third key. A
-        <b>critic panel</b> attacks the authored contract before Seal (and the plan on
-        <code>--phased</code>), and a <b>refute-first panel</b> attacks every green ladder before
-        Sign-off — a green survives only a strict supermajority of "could not refute" votes. Off by
-        default; a plain run is byte-for-byte unchanged.
-        <a class="more" href="https://github.com/krimvp/goaly/blob/main/docs/reference.md#hardening-against-reward-hacking" target="_blank" rel="noopener">reference →</a></p>
-      </div>
-      <div class="card">
-        <h3>Follow up after it ends</h3>
-        <p><code>goaly "now also handle empty input" --from-run &lt;id&gt;</code> starts a <b>new,
-        re-verified</b> goal that knows what just happened — a compaction of the prior run seeds the
-        new contract's authoring. Every invariant holds: new freeze, new two-key gate. Add
-        <code>--inherit-session</code> to keep the agent's memory too, or
-        <code>goaly runs resume-cmd &lt;id&gt;</code> to jump back into the CLI session yourself.</p>
-      </div>
-      <div class="card">
-        <h3>The web UI</h3>
-        <p><code>goaly ui</code> serves a local view of every run — live SSE feeds, per-run detail,
-        worktrees — and <b>drives</b> runs through the same code path as the CLI, holding the
-        <b>Seal in a browser review station</b>: read, edit, and re-freeze the authored verification
-        files before you approve. Localhost-only, with fail-closed request guards.
-        <a class="more" href="https://github.com/krimvp/goaly/blob/main/docs/reference.md#web-ui-goaly-ui" target="_blank" rel="noopener">reference →</a></p>
-      </div>
-      <div class="card">
-        <h3>Watch it &amp; steer it</h3>
-        <p><code>goaly runs watch &lt;id&gt;</code> tails any live run read-only; Ctrl-C stops
-        cleanly between steps; <code>--resume &lt;id&gt; --note "…"</code> hands the worker your
-        guidance, and raised <em>operational</em> caps revive a run that hit a limit. The extension
-        schema simply <b>has no field for the goal or verifier</b> — you can add room, never lower
-        the frozen bar.
-        <a class="more" href="https://github.com/krimvp/goaly/blob/main/docs/adr/0012-operator-control.md" target="_blank" rel="noopener">ADR 0012 →</a></p>
-      </div>
-      <div class="card">
-        <h3>Reliable by default</h3>
-        <p>Fail closed, but never fail eagerly: a millisecond <b>preflight</b> catches a missing CLI
-        before any token is spent; transient blips are <b>retried with backoff</b> while timeouts
-        stay hard; the fsync'd <b>write-ahead log survives a crash at any byte</b>; and budgets
-        survive <code>--resume</code>. Every failed run ends with a one-line <code>next:</code>
-        hint.
-        <a class="more" href="https://github.com/krimvp/goaly/blob/main/docs/adr/0011-reliability-hardening.md" target="_blank" rel="noopener">ADR 0011 →</a></p>
-      </div>
-      <div class="card">
-        <h3>Sandboxed, if you ask</h3>
-        <p><code>--sandbox</code> jails the two untrusted execs — the agent and the verify command —
-        via bwrap, firejail, or a container, with per-seam network policy and
-        <b>egress allowlists</b> (<code>--sandbox-net allow:&lt;hosts&gt;</code>). Fail-closed: a
-        missing mechanism refuses to start, never a silent downgrade.
-        <a class="more" href="https://github.com/krimvp/goaly/blob/main/docs/reference.md#sandboxing" target="_blank" rel="noopener">reference →</a></p>
-      </div>
-    </div>
   </div>
 </section>
 
 <hr class="section-line" />
 
+<!-- ============================== FEATURES (one line each) ============================== -->
+<section id="features">
+  <div class="wrap">
+    <div class="eyebrow reveal">And there's more</div>
+    <h2 class="reveal">Everything else, one line each.</h2>
+
+    <ul class="feature-index reveal">
+      <li><span class="fi-name">Best-of-N attempts</span><span class="fi-desc"><code>--candidates N</code> races N isolated attempts per iteration and keeps the one that climbs furthest.</span></li>
+      <li><span class="fi-name">Parallel waves</span><span class="fi-desc"><code>--parallel-phases</code> runs independent plan phases concurrently and re-verifies every merge.</span></li>
+      <li><span class="fi-name">Named worktrees</span><span class="fi-desc"><code>--worktree</code> isolates the whole run in its own checkout — your main tree is never touched.</span></li>
+      <li><span class="fi-name">Adversarial review</span><span class="fi-desc"><code>--adversarial</code> red-teams the contract before Seal and attacks every green before Sign-off.</span></li>
+      <li><span class="fi-name">Web UI</span><span class="fi-desc"><code>goaly ui</code> watches and drives runs locally, with the Seal in a browser review station.</span></li>
+      <li><span class="fi-name">Watch &amp; steer</span><span class="fi-desc">Tail any live run, stop cleanly, resume with a note — you can add room, never lower the bar.</span></li>
+      <li><span class="fi-name">Crash-safe</span><span class="fi-desc">A write-ahead log survives a crash at any byte; budgets survive <code>--resume</code>.</span></li>
+      <li><span class="fi-name">Sandboxing</span><span class="fi-desc"><code>--sandbox</code> jails the agent and the verify command, with per-seam network policy.</span></li>
+      <li><span class="fi-name">Follow-ups</span><span class="fi-desc"><code>--from-run</code> starts a new, re-verified goal that knows what just happened.</span></li>
+    </ul>
+
+    <p class="lede footnote reveal">
+      Every flag, default, and guarantee:
+      <a class="more" href="https://github.com/krimvp/goaly/blob/main/docs/reference.md" target="_blank" rel="noopener">the full reference →</a>
+    </p>
+  </div>
+</section>
+
+<!-- ============================== CTA ============================== -->
+<section id="cta">
+  <div class="wrap">
+    <div class="cta-band reveal">
+      <h2>Hand it a goal. Get it back done.</h2>
+      <div class="code hero-install">
+        <button class="copy-btn" data-clip="npm i -g goaly">copy</button>
+<pre><span class="cmt">$</span> npm i -g goaly</pre>
+      </div>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener">Get started →</a>
+        <a class="btn btn-ghost" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ============================== DOCS ============================== -->
 <section id="docs">
   <div class="wrap">
     <div class="eyebrow reveal">Docs</div>
-    <h2 class="reveal">Go as deep as you want.</h2>
-
-    <div class="grid grid-4 grid-start mt-lg reveal">
-      <a class="card" href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener">
-        <h3>README <span class="pill pass">start here</span></h3>
-        <p>The short tour: install, quick start, how it works, and the feature map.</p>
-      </a>
-      <a class="card" href="https://github.com/krimvp/goaly/blob/main/docs/reference.md" target="_blank" rel="noopener">
-        <h3>Reference</h3>
-        <p>Every flag, mode, default, and guarantee — config, budgets, sandboxing, phased goals, the
-        full CLI cookbook.</p>
-      </a>
-      <a class="card" href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">
-        <h3>Architecture</h3>
-        <p>The pure reducer, the state machine, the four seams, and the write-ahead log.</p>
-      </a>
-      <a class="card" href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener">
-        <h3>Add a harness</h3>
-        <p>Wrap any headless coding agent in one small codec module — or go non-codec with
-        <b>goaly-code</b> against any OpenAI-compatible endpoint.</p>
-      </a>
+    <div class="doc-links reveal">
+      <a href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener"><b>README</b><span>the short tour</span></a>
+      <a href="https://github.com/krimvp/goaly/blob/main/docs/reference.md" target="_blank" rel="noopener"><b>Reference</b><span>every flag &amp; guarantee</span></a>
+      <a href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener"><b>Architecture</b><span>reducer, seams, log</span></a>
+      <a href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener"><b>Add a harness</b><span>wrap any agent CLI</span></a>
     </div>
-
-    <p class="lede footnote reveal">
-      Also: <a class="more" href="https://github.com/krimvp/goaly/blob/main/DESIGN.md" target="_blank" rel="noopener">DESIGN.md</a> (what &amp; why) ·
-      <a class="more" href="https://github.com/krimvp/goaly/blob/main/AGENTS.md" target="_blank" rel="noopener">AGENTS.md</a> (invariants) ·
-      <a class="more" href="https://github.com/krimvp/goaly/tree/main/docs/adr" target="_blank" rel="noopener">ADRs</a> ·
-      <a class="more" href="https://github.com/krimvp/goaly/blob/main/docs/reference.md#glossary" target="_blank" rel="noopener">glossary</a>
-    </p>
   </div>
 </section>
 
