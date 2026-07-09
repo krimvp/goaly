@@ -16,8 +16,9 @@ Quick reference:
 - Recording a terminal-demo GIF (e.g. to attach to a PR): use the `record-demo-gif` skill
   (`.claude/skills/record-demo-gif/`); its `references/goaly-demo-recipe.md` has the loop-specific recipe.
 - Meaningful changes to the architecture, the public API, or functionality must update `README.md`
-  **and** the landing page ([`docs/index.html`](docs/index.html)) in the same change — it's a
-  definition-of-done check, not optional. **Also update
+  (the short tour), the reference ([`docs/reference.md`](docs/reference.md) — where detailed
+  flag/feature docs live), **and** the landing page ([`docs/index.html`](docs/index.html)) in the
+  same change — it's a definition-of-done check, not optional. **Also update
   [`docs/adding-a-harness.md`](docs/adding-a-harness.md)** when you change the harness-authoring
   pattern (the `HarnessAdapter`/`LlmProvider` shape, the shared parsing core, or the registration
   edits). See `AGENTS.md` → "Keep the docs in sync".

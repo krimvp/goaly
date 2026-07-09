@@ -184,7 +184,11 @@ alters the architecture, the public/embeddable API (`src/index.ts` exports, the 
 `HarnessAdapter`/`LlmProvider`/seam interfaces), the harness-authoring pattern, or user-facing
 functionality MUST update the affected docs below in the same change:**
 
-- [`README.md`](README.md) — install, usage, flags, supported harnesses, the how-it-works summary.
+- [`README.md`](README.md) — the short tour: install, quick start, the how-it-works summary, and
+  the feature table (one row per feature, linking into the reference).
+- [`docs/reference.md`](docs/reference.md) — the full practical reference: every flag, mode,
+  default, and guarantee. This is where detailed flag/feature documentation lives now — a change to
+  a flag, default, or behavior updates the reference (and the README only if the tour mentions it).
 - [`docs/index.html`](docs/index.html) — the GitHub Pages landing page (the interactive overview):
   its pipeline / state-machine / DECIDE / verifier-ladder / seam diagrams, the support matrix, the
   "adding a harness" guide, and the harness-comparison tabs.

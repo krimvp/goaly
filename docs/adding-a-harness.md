@@ -441,7 +441,7 @@ dialect and `fieldExtractor`/`streamExtractor`.
 `complete()` returns an `LlmCompletion`, not a bare string: `text` is the result, and the **optional
 `tokensUsed`** (with a `tokenSource: 'reported' | 'estimated'` marker, plus an optional per-category
 `tokenBreakdown` for a reported count) feeds the
-[per-run spend report](../README.md#per-run-spend-report). `AgentCliLlmProvider` fills it in from the
+[per-run spend report](reference.md#spend-report--budgets). `AgentCliLlmProvider` fills it in from the
 same `usage` block your `FieldExtractor` already reads (cache buckets included); and when you wire a
 `streamExtractor`, it
 **estimates** the spend from the streamed turns whenever the CLI reports no usage (issue #24) — all
