@@ -215,7 +215,7 @@ function Pipeline({ stateTag, status, live }: { stateTag: string; status: string
   const active = pipelineStageOf(stateTag);
   const activeIndex = PIPELINE_STAGES.findIndex((s) => s.key === active);
   const failed = status === 'FAILED' || status === 'ABORTED';
-  return html`<div class=${`pipeline${failed ? ' failed' : ''}`}>
+  return html`<div class=${`pipeline${failed ? ' failed' : ''}${live && !failed ? ' live' : ''}`}>
     ${PIPELINE_STAGES.map((stage, i) => {
       const isLoop = stage.key === 'agent' || stage.key === 'verify' || stage.key === 'signoff';
       const state =
