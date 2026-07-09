@@ -126,6 +126,84 @@ export function statusBadgeClass(status: string): string {
   return 'badge incomplete';
 }
 
+/** Compact token counts for stat tiles: 950 → "950", 12_345 → "12.3k", 4_200_000 → "4.2M". */
+export function fmtTokens(n: number | undefined): string {
+  if (n === undefined) return '—';
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${trimmed(n / 1000)}k`;
+  return `${trimmed(n / 1_000_000)}M`;
+}
+
+function trimmed(v: number): string {
+  const s = v.toFixed(1);
+  return s.endsWith('.0') ? s.slice(0, -2) : s;
+}
+
+/** Human duration between two epoch-ms stamps: "42s", "3m 12s", "2h 05m". */
+export function fmtDuration(fromMs: number, toMs: number): string {
+  const s = Math.max(0, Math.round((toMs - fromMs) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${String(m % 60).padStart(2, '0')}m`;
+}
+
+/** Coarse relative time for the run board: "just now", "5m ago", "3h ago", "2d ago". */
+export function fmtAgo(ms: number, now: number): string {
+  const s = Math.max(0, Math.round((now - ms) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+/**
+ * The mission pipeline the run detail header draws: the fixed COMPILE → SEAL → PREP journey into
+ * the AGENT → VERIFY → SIGN-OFF loop, ending at DONE. Each orchestrator state tag maps onto one
+ * stage so the strip can highlight where the run is right now.
+ */
+export const PIPELINE_STAGES = [
+  { key: 'plan', label: 'plan' },
+  { key: 'compile', label: 'compile' },
+  { key: 'seal', label: 'seal' },
+  { key: 'prepare', label: 'prep' },
+  { key: 'agent', label: 'agent' },
+  { key: 'verify', label: 'verify' },
+  { key: 'signoff', label: 'sign-off' },
+  { key: 'done', label: 'done' },
+] as const;
+export type PipelineStageKey = (typeof PIPELINE_STAGES)[number]['key'];
+
+/** Which pipeline stage a state tag sits at — null for terminal failure (the strip dims instead). */
+export function pipelineStageOf(stateTag: string): PipelineStageKey | null {
+  switch (stateTag) {
+    case 'PLANNING':
+    case 'AWAIT_PLAN_SEAL':
+      return 'plan';
+    case 'COMPILING':
+      return 'compile';
+    case 'AWAIT_SEAL':
+      return 'seal';
+    case 'PREPARING':
+      return 'prepare';
+    case 'RUNNING_AGENT':
+    case 'RUNNING_WAVE':
+    case 'ADVANCING_PHASE':
+      return 'agent';
+    case 'VERIFYING':
+      return 'verify';
+    case 'AWAIT_SIGNOFF':
+      return 'signoff';
+    case 'DONE':
+      return 'done';
+    default:
+      return null; // FAILED / ABORTED / unknown-future tags: no active stage
+  }
+}
+
 /** The review station's editable contract FIELDS, as the modal's form state (ADR 0016). */
 export type SealFieldEdits = {
   /** '' means "cleared" (→ `setup: null` in the patch). */

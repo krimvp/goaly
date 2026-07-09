@@ -8,13 +8,13 @@ import { buildSealPatch, sealFieldsOf, truncate, type SealFieldEdits } from './f
 const html = htm.bind(h);
 
 /**
- * The interactive views (ADR 0015): the start-run form and the Seal / plan-Seal modal. The seal
+ * The interactive views (ADR 0015): the launch console and the Seal / plan-Seal modal. The seal
  * modal is the POINT of a non-autonomous UI run — the frozen contract is presented for
  * approve / revise-with-feedback / reject exactly like the CLI prompt, against a `gateId` so a
  * double-submit can never answer a later gate.
  */
 
-// ---- start-run form ----------------------------------------------------------
+// ---- launch console ----------------------------------------------------------
 
 export function StartRunPage(): VNode {
   const [goal, setGoal] = useState('');
@@ -55,73 +55,90 @@ export function StartRunPage(): VNode {
   };
 
   return html`<form class="card start-form" onSubmit=${submit}>
-    <h2 style="margin-top:0">start a run</h2>
+    <h2 class="console-title">launch a mission</h2>
+    <p class="muted lede">
+      The goal is compiled into a frozen success contract; the agent loops until the contract is
+      verifiably met — and can never weaken the bar to pass.
+    </p>
     ${error !== undefined ? html`<div class="error-box">${error}</div>` : ''}
 
-    <label>goal
-      <textarea rows="3" required value=${goal}
-        placeholder="add a /health endpoint returning 200"
-        onInput=${(e: Event): void => setGoal((e.target as HTMLTextAreaElement).value)}></textarea>
-    </label>
+    <fieldset>
+      <legend><span class="step-no">01</span> objective</legend>
+      <label>goal
+        <textarea rows="3" required value=${goal}
+          placeholder="add a /health endpoint returning 200"
+          onInput=${(e: Event): void => setGoal((e.target as HTMLTextAreaElement).value)}></textarea>
+      </label>
+    </fieldset>
 
-    <div class="field-row">
+    <fieldset>
+      <legend><span class="step-no">02</span> verification — the bar that gets frozen</legend>
+      <div class="field-row">
+        <label class="inline">
+          <input type="radio" name="verify" checked=${verifyMode === 'verify-cmd'}
+            onChange=${(): void => setVerifyMode('verify-cmd')} />
+          I have a verify command
+        </label>
+        <label class="inline">
+          <input type="radio" name="verify" checked=${verifyMode === 'generate'}
+            onChange=${(): void => setVerifyMode('generate')} />
+          generate the verification (<code>--generate</code>)
+        </label>
+      </div>
+      ${verifyMode === 'verify-cmd'
+        ? html`<label>verify command (must exit 0)
+            <input type="text" required value=${verifyCmd} placeholder="npm test" class="mono"
+              onInput=${(e: Event): void => setVerifyCmd((e.target as HTMLInputElement).value)} />
+          </label>`
+        : ''}
+    </fieldset>
+
+    <fieldset>
+      <legend><span class="step-no">03</span> execution</legend>
+      <div class="field-row">
+        <label>harness
+          <select value=${harness} onChange=${(e: Event): void => setHarness((e.target as HTMLSelectElement).value)}>
+            ${['claude', 'codex', 'droid', 'pi', 'goaly-code', 'fake'].map((name) => html`<option value=${name}>${name}</option>`)}
+          </select>
+        </label>
+        <label>model <span class="muted">(optional)</span>
+          <input type="text" value=${model} onInput=${(e: Event): void => setModel((e.target as HTMLInputElement).value)} />
+        </label>
+      </div>
       <label class="inline">
-        <input type="radio" name="verify" checked=${verifyMode === 'verify-cmd'}
-          onChange=${(): void => setVerifyMode('verify-cmd')} />
-        verify command
+        <input type="checkbox" checked=${useWorktree}
+          onChange=${(e: Event): void => setUseWorktree((e.target as HTMLInputElement).checked)} />
+        run in a worktree (isolated checkout — the main tree is never touched)
       </label>
+      ${useWorktree
+        ? html`<label>worktree name
+            <input type="text" required value=${worktreeName} placeholder="feature-x" class="mono"
+              onInput=${(e: Event): void => setWorktreeName((e.target as HTMLInputElement).value)} />
+          </label>`
+        : ''}
       <label class="inline">
-        <input type="radio" name="verify" checked=${verifyMode === 'generate'}
-          onChange=${(): void => setVerifyMode('generate')} />
-        generate the verification (--generate)
+        <input type="checkbox" checked=${autonomous}
+          onChange=${(e: Event): void => setAutonomous((e.target as HTMLInputElement).checked)} />
+        autonomous — auto-accept the (still-frozen, still-logged) contract; unchecked parks the run
+        at the Seal so YOU approve the bar here
       </label>
-    </div>
-    ${verifyMode === 'verify-cmd'
-      ? html`<label>verify command (must exit 0)
-          <input type="text" required value=${verifyCmd} placeholder="npm test" class="mono"
-            onInput=${(e: Event): void => setVerifyCmd((e.target as HTMLInputElement).value)} />
-        </label>`
-      : ''}
+    </fieldset>
 
-    <div class="field-row">
-      <label>harness
-        <select value=${harness} onChange=${(e: Event): void => setHarness((e.target as HTMLSelectElement).value)}>
-          ${['claude', 'codex', 'droid', 'pi', 'goaly-code', 'fake'].map((name) => html`<option value=${name}>${name}</option>`)}
-        </select>
-      </label>
-      <label>model <span class="muted">(optional)</span>
-        <input type="text" value=${model} onInput=${(e: Event): void => setModel((e.target as HTMLInputElement).value)} />
-      </label>
-      <label>max iterations
-        <input type="number" min="1" value=${maxIterations} placeholder="10"
-          onInput=${(e: Event): void => setMaxIterations((e.target as HTMLInputElement).value)} />
-      </label>
-      <label>budget (tokens)
-        <input type="number" min="1" value=${budgetTokens}
-          onInput=${(e: Event): void => setBudgetTokens((e.target as HTMLInputElement).value)} />
-      </label>
-    </div>
+    <fieldset>
+      <legend><span class="step-no">04</span> limits</legend>
+      <div class="field-row">
+        <label>max iterations
+          <input type="number" min="1" value=${maxIterations} placeholder="10"
+            onInput=${(e: Event): void => setMaxIterations((e.target as HTMLInputElement).value)} />
+        </label>
+        <label>budget (tokens)
+          <input type="number" min="1" value=${budgetTokens}
+            onInput=${(e: Event): void => setBudgetTokens((e.target as HTMLInputElement).value)} />
+        </label>
+      </div>
+    </fieldset>
 
-    <label class="inline">
-      <input type="checkbox" checked=${autonomous}
-        onChange=${(e: Event): void => setAutonomous((e.target as HTMLInputElement).checked)} />
-      autonomous — auto-accept the (still-frozen, still-logged) contract; unchecked parks the run
-      at the Seal so YOU approve the bar here
-    </label>
-
-    <label class="inline">
-      <input type="checkbox" checked=${useWorktree}
-        onChange=${(e: Event): void => setUseWorktree((e.target as HTMLInputElement).checked)} />
-      run in a worktree (isolated checkout — the main tree is never touched)
-    </label>
-    ${useWorktree
-      ? html`<label>worktree name
-          <input type="text" required value=${worktreeName} placeholder="feature-x" class="mono"
-            onInput=${(e: Event): void => setWorktreeName((e.target as HTMLInputElement).value)} />
-        </label>`
-      : ''}
-
-    <button class="linkish primary" disabled=${busy} type="submit">${busy ? 'starting…' : 'start run'}</button>
+    <button class="linkish primary launch" disabled=${busy} type="submit">${busy ? 'igniting…' : '▶ launch'}</button>
   </form>` as VNode;
 }
 
@@ -198,8 +215,8 @@ export function SealModal({
 
   return html`<div class="modal-backdrop">
     <div class="card modal">
-      <h2 style="margin-top:0">
-        ${gate.kind === 'seal' ? 'Seal — review & approve the success contract' : 'Plan Seal — approve the plan'}
+      <h2 class="console-title">
+        ${gate.kind === 'seal' ? '⬡ Seal — review & approve the success contract' : '⬡ Plan Seal — approve the plan'}
       </h2>
       <p class="muted" style="margin-top:0">
         This is the bar the run will be held to. Once approved it is FROZEN — no transition can
@@ -295,9 +312,9 @@ export function SealModal({
       <div class="field-row">
         <button class="linkish primary" disabled=${busy || unsavedEdits || fieldPatch !== undefined}
           title=${unsavedEdits || fieldPatch !== undefined ? 're-freeze your edits first' : ''}
-          onClick=${(): void => void answer('approve')}>approve & start</button>
-        <button class="linkish" disabled=${busy || feedback.trim() === ''} onClick=${(): void => void answer('revise')}>revise with feedback</button>
-        <button class="linkish danger" disabled=${busy} onClick=${(): void => void answer('reject')}>reject (abort)</button>
+          onClick=${(): void => void answer('approve')}>✓ approve & start</button>
+        <button class="linkish" disabled=${busy || feedback.trim() === ''} onClick=${(): void => void answer('revise')}>↻ revise with feedback</button>
+        <button class="linkish danger" disabled=${busy} onClick=${(): void => void answer('reject')}>✕ reject (abort)</button>
       </div>
     </div>
   </div>` as VNode;
@@ -328,8 +345,8 @@ export function ResumePanel({ runId }: { runId: string }): VNode {
     }
   };
 
-  return html`<div class="card">
-    <h2 style="margin-top:0">resume this run</h2>
+  return html`<div class="resume-panel">
+    <h4>▶ resume this run</h4>
     <p class="muted" style="margin-top:0">
       Continue where the log left off — optionally raise the OPERATIONAL caps or steer the worker
       with a note. The goal, verifier, and rubric are structurally not extendable (the bar stays frozen).
