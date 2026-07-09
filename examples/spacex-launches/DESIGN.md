@@ -1,21 +1,26 @@
-# SpaceX Launch Board Design System
+# SpaceX Launch Board — Neon Crystal Design System
+
+A futuristic neon crystal aesthetic applied to the SpaceX launch board, combining glassmorphism, prismatic geometry, and electric color accents for a dramatic visual upgrade.
 
 ## Palette
 
-### Primary Colors
-- **Background Primary:** `#0a0e27` — Deep space black, the main page background
-- **Background Secondary:** `#1a1f3a` — Card background, creates depth
-- **Background Tertiary:** `#2a3050` — Hover states and featured sections
-- **Accent Color:** `#00d4ff` — Vibrant cyan, used for active elements and countdowns
-- **Accent Dim:** `#0099cc` — Darker accent for interactions
+The neon prism palette consists of three core hues rendered against a deep-space near-black canvas:
+
+### Neon Prism Colors
+- **Neon Cyan** (`#00d9ff`): Primary accent color, used for hero headings, featured countdown digits, card borders, and data glow halos. Electric and vibrant against the dark background.
+- **Neon Magenta** (`#ff006e`): Hot accent secondary, used for hover state intensification, status badges, and gradient accents in animated transitions. Complements cyan with warmth.
+- **Neon Purple** (`#8000ff`): Ultraviolet tertiary, used for data source badges, footer borders, and background nebula accents. Creates depth and cosmic atmosphere.
+
+### Background & Supporting Colors
+- **Deep Space Near-Black** (`#0a0e1a`): Primary background, part of a fixed gradient to create depth.
+- **Nebula Accent** (`#0f1428`, `#1a0f2e`): Secondary background gradients for the fixed body layer creating nebula effect.
+- **Background Secondary** (`#1a1f3a`): Card background secondary blend.
+- **Background Tertiary** (`#2a3050`): Hover states and featured sections.
 
 ### Text Colors
 - **Primary Text:** `#e8eaed` — High-contrast white for main content
 - **Secondary Text:** `#a0aec0` — Medium contrast for supporting text
 - **Tertiary Text:** `#718096` — Low contrast for labels and metadata
-
-### Borders & Dividers
-- **Border Color:** `#3a4566` — Subtle separation between elements
 
 ### Status Indicators
 - **Live/Go Status:** `#10b981` — Green for active launches
@@ -36,9 +41,12 @@ A strict modular type scale based on 1rem (16px) base with geometric progression
 - **4XL:** 2.25rem (36px) — Page headers
 - **5XL:** 3rem (48px) — Hero titles
 
-### Font Families
-- **Display & Body:** System font stack (`-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`) for optimal performance and native feel
-- **Monospace:** `'Courier New', Courier, monospace` — Used for countdown timers and numeric data with `font-variant-numeric: tabular-nums` for fixed-width digits
+### Typography Treatment
+- **Display Headings** (`h1`, `h2`, `h3`): `text-transform: uppercase` + `letter-spacing: 0.15em` for an ultra-wide condensed aesthetic.
+- **Countdown Digits**: `font-variant-numeric: tabular-nums` for aligned digital-terminal style numbers.
+- **Font Families**:
+  - **Display & Body:** System font stack (`-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`) for optimal performance and native feel
+  - **Monospace:** `'Courier New', Courier, monospace` — Used for countdown timers and numeric data with `font-variant-numeric: tabular-nums` for fixed-width digits
 
 ## Spacing Scale
 
@@ -82,67 +90,122 @@ All gaps and padding derive from these units, maintaining rhythm and visual hier
 - **Default:** 1rem (16px) gap between grid items
 - **Maintained at all breakpoints** for visual consistency
 
+## Glassmorphism & Crystal Facets
+
+### Glass Treatment (backdrop-filter)
+All interactive cards and the featured countdown use **glassmorphism** via `backdrop-filter: blur(8-10px)`, layering translucent backgrounds over the animated nebula gradient. This creates a frosted-glass effect that lets the background shimmer through.
+
+```css
+backdrop-filter: blur(8px);
+background: rgba(26, 31, 58, 0.3–0.5);
+```
+
+### Faceted Shards (clip-path polygons)
+Launch cards are rendered as **faceted crystal shards** using angled `clip-path: polygon(...)` paths, angling the corners at ~5–8° to suggest broken glass prisms. The facet geometry shifts slightly on smaller screens to maintain visual balance. Each card is a prismatic shard with beveled edges, simulating light refracting through crystal.
+
+## Neon Glow Shadows
+
+### Box & Text Shadows
+Neon glows are created using layered `text-shadow` and `box-shadow` declarations with semi-transparent neon hues, simulating light diffusion through a prism:
+
+- **Hero countdown digits**: Multi-layer cyan + purple glow with 2s pulse animation.
+- **Launch card borders**: Cyan primary, magenta on hover, with inner inset shadows for depth.
+- **Status badges**: Per-status color glow (green for "Go", cyan for "TBD", magenta for "Scheduled").
+
+Example:
+```css
+text-shadow:
+  0 0 10px var(--color-neon-cyan),
+  0 0 20px rgba(0, 217, 255, 0.5),
+  0 0 40px rgba(128, 0, 255, 0.3);
+```
+
+## Gradient Accents
+
+### Linear & Radial Gradients
+1. **Body Background**: Fixed radial gradients (cyan at 20% left, purple at 80% right) create a subtle nebula atmosphere behind all content.
+2. **Hero Shimmer Line**: Animated horizontal gradient (cyan → magenta → purple) at the hero top edge, 4s shimmer cycle.
+3. **Neon Borders**: Launch cards use gradient borders transitioning cyan → magenta → purple along the clip-path edge.
+4. **Featured Countdown**: Backdrop gradient with inset glow for holographic accent.
+
 ## Motion & Transitions
 
-### Easing Curves
-- **Standard:** `cubic-bezier(0.4, 0, 0.2, 1)` — Material Design standard
+### Keyframe Animations
+- `nebulaPulse` (8s): Background opacity pulse (1 → 0.8 → 1), creates breathing nebula effect.
+- `shimmerWave` (4s): Hero edge line opacity pulse (0.5 → 1 → 0.5), horizontal shimmer effect.
+- `neonPulse` (2s): Countdown digit glow intensity pulse, multi-layer shadow growth.
+- `fadeInUp` (0.8s, staggered): Initial load entrance animations on hero content.
+
+### Easing & Durations
+- **Standard Easing:** `cubic-bezier(0.4, 0, 0.2, 1)` — Material Design standard
 - **Duration (Fast):** 150ms — Hover states, button feedback
 - **Duration (Base):** 250ms — Card transitions, modal slides
 
-### Effects
-- **Entrance:** Fade-in with 30px upward slide (`fadeInUp` keyframe) at 0.8s with staggered delays
-- **Hover:** `-2px` translateY elevation with enhanced border and shadow
-- **Countdowns:** Numeric updates at 1-second intervals (no animation, direct update)
-
 ### Reduced Motion Respect
-- All transitions disabled when `prefers-reduced-motion: reduce` is set
-- Timings reset to 0ms to honor accessibility preferences
-
-## Responsive Breakpoints
-
-- **Mobile:** ≤375px (small devices)
-- **Mobile Extended:** 376–639px
-- **Tablet:** 640px–767px
-- **Tablet Large:** 768px–1279px
-- **Desktop:** 1280px+
+All motion gates behind `@media (prefers-reduced-motion: reduce)` — motion pauses, glows hold steady, animations become static. This ensures accessibility for users who prefer static layouts.
 
 ## Component Specifications
 
 ### Hero Section
 - Full viewport height on desktop (`min-height: 100vh`)
-- Gradient background for depth
-- Gradient direction: 135deg (bottom-left to top-right)
-- Featured countdown with cyan accent border and subtle shadow on hover
+- Fixed gradient background with nebula effect
+- Animated shimmer line at top border
+- Featured countdown with glassmorphism, gradient border, and neon glow
+- Heading text glow with cyan + purple shadows
 
-### Launch Cards
-- Rounded corners: 8px
-- Border: 1px solid `--color-border`
-- Hover effect: Border shifts to accent color, background lightens, subtle shadow
-- Opacity reduced to 0.6 for launched missions
-- Card countdown in tabular numerals for alignment and readability
+### Launch Cards — Faceted Crystal Glass Shards
+- **Shape**: Angled clip-path polygon (faceted shard geometry)
+- **Glass Effect**: `backdrop-filter: blur(8px)` with semi-transparent background
+- **Border**: 2px neon cyan, shifts to magenta on hover
+- **Glow**: Layered box-shadow with cyan primary and inset purple blend
+- **Hover**: Border shifts to magenta, background opacity increases, transform lifts card by 4px
+- **Launched State**: Opacity reduced to 0.6, border becomes gray
 
 ### Countdown Timers
-- Font: Monospace with `font-variant-numeric: tabular-nums`
-- Featured countdown (hero): 3rem font size
-- Card countdowns: 1.5rem font size
-- Format: Two-digit padding for hours, minutes, seconds
-- Days: Variable width (can be 1–3+ digits)
+- **Font**: Monospace with `font-variant-numeric: tabular-nums`
+- **Featured countdown (hero)**: 5xl font size (3rem) with neon cyan glow and pulse animation
+- **Card countdowns**: 2xl font size (1.5rem) with neon cyan text-shadow glow
+- **Format**: Two-digit padding for hours, minutes, seconds
+- **Days**: Variable width (can be 1–3+ digits)
 
 ### Status Badges
-- Inline-block display
-- Rounded corners: 4px
-- Color-coded by status (green/go, purple/scheduled, gray/unknown)
-- Uppercase text with 0.08em letter spacing
+- **Styling**: Color-coded by status with per-color neon glows
+- **Unknown**: Purple border + glow
+- **Go**: Green border + glow
+- **TBD/Determined**: Cyan border + glow
+- **Scheduled/Hold**: Magenta border + glow
+- **Display**: Inline-block, rounded corners, uppercase text with letter-spacing
 
 ### Data Source Indicator
-- Pill-shaped badge: 20px border-radius
-- Displays "Live Data" or "Sample Data"
-- Cyan border and text for consistency with accent color
+- **Style**: Glassmorphic pill-shaped badge with purple neon border and glow
+- **Display**: "Live Data" (API fetch) or "Sample Data" (fallback/offline)
+- **Glow**: Purple neon box-shadow with inset blur effect
+
+### Footer
+- Purple neon top border (2px) with inset glow
+- Semantic footer landmark with relative z-index for layering
+
+## Responsive Breakpoints
+
+- **Mobile:** ≤375px (small devices, facet angles adjusted)
+- **Mobile Extended:** 376–639px
+- **Tablet:** 640px–767px (facet angles adjusted)
+- **Tablet Large:** 768px–1279px (facet angles adjusted)
+- **Desktop:** 1280px+ (full facet geometry)
 
 ## Accessibility
 
 - **Semantic HTML:** `<main>`, `<section>`, `<footer>` landmarks used throughout
-- **Color Contrast:** All text meets WCAG AA minimum 4.5:1 ratio
+- **Color Contrast:** Neon accents on near-black meet WCAG AA standards (high contrast for body text; decorative glows are supplementary)
 - **Motion:** `prefers-reduced-motion` media query disables all animations for users with motion sensitivity
-- **Responsive:** Fully functional at 375px width and below
+- **Responsive:** Fully functional at 375px width and below with dynamic type scaling and layout reflow
 - **Tabular Numerals:** Countdown digits use fixed-width monospace for alignment
+- **Data Attributes:** Machine-verifiable hooks (`[data-launch-time]`, `[data-field="..."]`, etc.) for accessibility tooling
+
+## Self-Contained & Performance
+
+- **Inline Styles**: All CSS is embedded in a single `<style>` block; no external stylesheets or CDN fonts.
+- **Inline Script**: All JavaScript logic (fetch, countdown updates, rendering) is embedded in a single `<script>` block; no external frameworks.
+- **Offline**: Full functionality with bundled fallback dataset when the network is unavailable or disabled.
+- **Fixed Background**: The nebula gradient background is fixed, reducing layout thrashing on scroll.
+- **Graceful Degradation**: Backdrop filters may not render on older browsers; solid backgrounds provide fallback.
