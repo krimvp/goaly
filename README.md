@@ -705,8 +705,10 @@ make pack           # -> goaly-<version>.tgz, installable with `npm i -g ./goaly
 ```
 
 Requires Node ≥ 20 and `git`. The default adapters shell out to the `claude` / `codex` / `droid` /
-`pi` CLIs; the LLM compile/judge/approve steps use a CLI-backed provider (`claude` by default,
-switchable with `--llm-provider`). Pick the model per layer with `--model` / `--llm-model` (see
+`pi` CLIs; the LLM compile/judge/approve steps use a CLI-backed provider that **follows the
+harness** by default (`--harness codex` runs them on `codex` — including authoring a `--generate`
+bar — so one installed CLI is enough), switchable with `--llm-provider`. Pick the model per layer
+with `--model` / `--llm-model` (see
 Usage). [`pi`](https://pi.dev) is provider-agnostic — one CLI over any model from any provider — so
 pass `--model` as `"provider/id"` (e.g. `"anthropic/claude-opus-4-8"`, `"ollama/qwen3:8b"`) to pick
 provider+model on one flag, or omit it to use pi's own configured default; credentials come from your
@@ -715,8 +717,9 @@ env / pi's config, the same boundary `claude` and `codex` already assume.
 > **No CLI? Use `--harness goaly-code`.** The `goaly-code` harness needs no coding CLI at all — goaly runs its own
 > agent loop directly against any OpenAI-compatible chat-completions endpoint (`--base-url`, plus a
 > `--model`; the bearer token is read from `OPENAI_API_KEY`, override with `--llm-api-key-env`). The
-> read-only LLM steps can use the same endpoint with `--llm-provider openai`. Only Node ≥ 20's built-in
-> `fetch` is required. A local keyless endpoint (e.g. ollama) needs no token.
+> read-only LLM steps default onto the same endpoint (`--harness goaly-code` derives
+> `--llm-provider openai`). Only Node ≥ 20's built-in `fetch` is required. A local keyless endpoint
+> (e.g. ollama) needs no token.
 
 > Add `.goaly/` to your target repo's `.gitignore`. (goaly also excludes it from its own
 > tree-hash, so its run logs never pollute stuck-detection regardless.)
@@ -798,15 +801,19 @@ goaly run --goal "..." --generate --autonomous --adversarial --critic-model clau
 goaly run --goal "..." --verify-cmd "npm test" --harness claude \
              --model claude-opus-4-8 --llm-model claude-sonnet-4-6
 
-# Run the LLM steps on a different CLI entirely (kept read-only so they never touch the tree):
+# The LLM steps (compiler/judge/approver, kept read-only) FOLLOW the harness by default — this
+# authors the --generate bar and judges on codex too, with one installed CLI:
+goaly run --goal "..." --generate --autonomous --harness codex --model gpt-5-codex --judge-model o3
+# ...or split them onto a different CLI entirely with --llm-provider:
 goaly run --goal "..." --generate --autonomous --harness codex \
-             --model gpt-5-codex --llm-provider codex --judge-model o3
+             --model gpt-5-codex --llm-provider claude --llm-model claude-opus-4-8
 
 # Drive goaly's OWN agent loop against an OpenAI-compatible endpoint — no coding CLI installed:
 goaly run --goal "..." --verify-cmd "npm test" --harness goaly-code \
              --base-url https://api.openai.com/v1 --model gpt-5    # reads OPENAI_API_KEY
-# ...or a local, keyless endpoint (ollama). The same flag also backs the read-only LLM steps:
-goaly run --goal "..." --autonomous --harness goaly-code --llm-provider openai \
+# ...or a local, keyless endpoint (ollama). The read-only LLM steps default onto the SAME endpoint
+# (--harness goaly-code derives --llm-provider openai), so no coding CLI is needed anywhere:
+goaly run --goal "..." --autonomous --harness goaly-code \
              --base-url http://localhost:11434/v1 --model qwen2.5-coder --approver-model llama3.1
 
 # Follow the loop step-by-step, and keep a structured diagnostics file (rotated):
@@ -1104,8 +1111,10 @@ is the global default (the harness *and* the LLM steps); `--llm-model` overrides
 `--judge-model` / `--approver-model` / `--compiler-model` / `--critic-model` (and `--explain-model`
 for the optional `--explain` observer) override a single step. Precedence per LLM
 step: per-step flag → `--llm-model` → `--model` → the tool's own default. `--llm-provider`
-(`claude` default, or `codex` / `droid` / `pi` / `openai`) picks which provider runs those steps —
-handy when the harness and the LLM steps should share a model namespace. **`--approver-quorum N`**
+(`claude` / `codex` / `droid` / `pi` / `openai`) picks which provider runs those steps; its default
+**follows `--harness`** (`codex` → `codex`, `goaly-code` → `openai`, the test-only `fake` →
+`claude`), so the compiler that authors a `--generate` bar runs on the tool you picked — pass the
+flag to put the LLM steps on a different provider than the worker. **`--approver-quorum N`**
 (default `1`) turns the Sign-off approver into an N-reviewer panel (see *Two keys for DONE* above),
 with **`--approver-diversity-temp T`** (default `0.5`, applied only when `N > 1`) tuning the panel's
 sampling spread. **`--approver-models m1,m2,…`** runs that panel across **distinct models** for real
@@ -1128,9 +1137,10 @@ wiring — never part of the frozen contract; without `--adversarial` a run is b
 write-role coding agent. `goaly-code` is the first non-CLI harness: goaly drives its own tool-use loop
 against an OpenAI-compatible endpoint set by **`--base-url <url>`** (`/chat/completions` is appended),
 with the bearer token read from **`--llm-api-key-env <NAME>`** (default `OPENAI_API_KEY`; a keyless
-local endpoint like ollama needs none). `--harness goaly-code` requires a resolved `--model`; pair it with
-`--llm-provider openai` to run the read-only LLM steps through the same endpoint. Both fail closed
-(refuse to start) if the base URL or model is missing.
+local endpoint like ollama needs none). `--harness goaly-code` requires a resolved `--model`; the
+read-only LLM steps run through the same endpoint by default (its derived `--llm-provider` is
+`openai` — override the flag to split them). Both fail closed (refuse to start) if the base URL or
+model is missing.
 
 **`--max-agent-turns N`** caps the `goaly-code` agent loop at *N* model turns per run (default 50). A
 run that hits the cap ends as `truncated` — not a failure — and the loop gives it another iteration

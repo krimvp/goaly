@@ -39,6 +39,21 @@ export function isHarnessChoice(value: string): value is HarnessChoice {
 export type LlmProviderChoice = AgentCli | 'openai';
 
 /**
+ * The default LLM provider for a harness: the workflow steps (compiler / judge / approver — the
+ * steps that author a `--generate` bar and turn the two keys) FOLLOW the harness the user picked,
+ * so `--harness codex` does not silently keep requiring the `claude` CLI to generate the
+ * verification. `goaly-code` drives an OpenAI-compatible endpoint, so its steps default to the
+ * `openai` provider on that same endpoint (its required `--base-url`/`--model` are exactly what
+ * the provider needs); the test-only `fake` harness cannot back LLM steps and keeps `claude`.
+ * An explicit `--llm-provider` (CLI flag or config file) always overrides.
+ */
+export function defaultLlmProvider(harness: HarnessChoice): LlmProviderChoice {
+  if (harness === 'goaly-code') return 'openai';
+  if (harness === 'fake') return 'claude';
+  return harness;
+}
+
+/**
  * The read-only run-inspection subcommand (`goaly runs list` / `goaly runs show <id>` /
  * `goaly runs resume-cmd <id>`). `resume-cmd` (Capability A) prints how to continue the run's
  * underlying CLI session; `harness` is an optional fallback for a log written before the header
@@ -105,6 +120,12 @@ export type ParsedArgs = {
   harnessExplicit: boolean;
   models: ModelSelection;
   llmProvider: LlmProviderChoice;
+  /**
+   * Whether `llmProvider` was set explicitly (CLI flag or config file) rather than derived from
+   * the harness via {@link defaultLlmProvider}. A `--resume` that adopts the resumed run's
+   * recorded harness re-derives the provider only when it was NOT explicit.
+   */
+  llmProviderExplicit: boolean;
   workspace: string;
   /**
    * Diff baseline (issue #47): the git ref/SHA `diff()`/Sign-off compare the working tree against,
@@ -456,9 +477,12 @@ Model selection (all optional; default = each tool's own default):
   --compiler-model <m>  model for the verification compiler only
   --planner-model <m>   model for the phased planner only (issue #48)
   --explain-model <m>   model for the --explain observer only (issue #8)
-  --llm-provider <p>    which provider runs the LLM steps: claude (default) | codex | droid | pi |
-                        openai. 'openai' calls an OpenAI-compatible chat endpoint directly (no coding
-                        CLI installed) — pair it with --base-url and a resolved --llm-model/--model.
+  --llm-provider <p>    which provider runs the LLM steps: claude | codex | droid | pi | openai.
+                        'openai' calls an OpenAI-compatible chat endpoint directly (no coding CLI
+                        installed) — pair it with --base-url and a resolved --llm-model/--model.
+                        Default: FOLLOWS --harness (claude→claude, codex→codex, droid→droid,
+                        pi→pi, goaly-code→openai, fake→claude), so the compiler that authors a
+                        --generate bar runs on the harness you picked — pass the flag to split them.
   Precedence per LLM step: per-step flag → --llm-model → --model. The harness follows --model.
   Note: pi (pi.dev) is provider-agnostic — pass --model as "provider/id" (e.g.
   "anthropic/claude-opus-4-8", "ollama/qwen3:8b") to pick the provider+model on one flag, or omit
@@ -494,8 +518,9 @@ Seal (contract approval — the review point before any execution):
                             [e]dited stays available even then)
   --autonomous                skip the prompt: auto-accept (still frozen; logged loudly)
   -d, --defaults              hands-off sugar for --autonomous. The other easy-mode defaults
-                              (--generate, the claude LLM provider, the claude harness) already
-                              apply with no flag, so -d's only effect is auto-accepting the contract.
+                              (--generate, the claude harness, the LLM provider following the
+                              harness) already apply with no flag, so -d's only effect is
+                              auto-accepting the contract.
 
   Note: piping the goal via stdin (--goal -) leaves no stdin for the interactive prompt, so a
   non-autonomous run refuses to start (fail-closed): pair it with --autonomous, or read the goal
@@ -719,8 +744,8 @@ const VALUELESS_FLAGS = new Set([
 
 /**
  * `--defaults` / `-d` is hands-off sugar for `--autonomous`: the other easy-mode defaults
- * (generate, the claude LLM provider, the claude harness) already apply with no flag, so the
- * only thing it adds is auto-accepting the (still-frozen, still-logged) contract at Seal.
+ * (generate, the claude harness, the LLM provider following the harness) already apply with no
+ * flag, so the only thing it adds is auto-accepting the (still-frozen, still-logged) contract at Seal.
  */
 function canonicalFlag(name: string): string {
   return name === 'defaults' ? 'autonomous' : name;
@@ -1129,7 +1154,8 @@ export async function parseArgs(
     harness,
     harnessExplicit: cliFlags['harness'] !== undefined,
     models: parseModels(flags),
-    llmProvider: parseLlmProvider(str(flags, 'llm-provider')),
+    llmProvider: parseLlmProvider(str(flags, 'llm-provider'), harness),
+    llmProviderExplicit: flags['llm-provider'] !== undefined,
     workspace: str(flags, 'workspace') ?? process.cwd(),
     baseline: str(flags, 'baseline'),
     verifyDir: str(flags, 'verify-dir'),
@@ -1391,8 +1417,8 @@ function parseHarness(value: string | undefined): HarnessChoice {
   throw new UsageError(`unknown harness: ${value} (expected claude | codex | droid | pi | goaly-code | fake)`);
 }
 
-function parseLlmProvider(value: string | undefined): LlmProviderChoice {
-  if (value === undefined) return 'claude';
+function parseLlmProvider(value: string | undefined, harness: HarnessChoice): LlmProviderChoice {
+  if (value === undefined) return defaultLlmProvider(harness);
   if (value === 'claude' || value === 'codex' || value === 'droid' || value === 'pi' || value === 'openai') {
     return value;
   }
@@ -1598,6 +1624,7 @@ function baseArgs(
     harnessExplicit: false,
     models: ModelSelection.parse({}),
     llmProvider: 'claude',
+    llmProviderExplicit: false,
     workspace,
     baseline: undefined,
     verifyDir: undefined,

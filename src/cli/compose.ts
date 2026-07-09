@@ -58,7 +58,7 @@ import type { AgentEventSink, PhasedStreamSink, StreamPhase } from '../agent-cli
 import { makeStreamRenderer, streamLogFields } from './stream-render';
 import { resolveModels, type ModelSelection } from './models';
 import { independenceWarnings } from './independence';
-import type { HarnessChoice, LlmProviderChoice, StepTimeouts } from './args';
+import { defaultLlmProvider, type HarnessChoice, type LlmProviderChoice, type StepTimeouts } from './args';
 import {
   makeLauncher,
   neutralAgentExec,
@@ -79,7 +79,11 @@ export type ComposeOptions = {
   runId: RunId;
   /** Override the LLM provider (tests inject a FakeLlm; production uses the CLI provider). */
   llm?: LlmProvider;
-  /** Which CLI runs the LLM workflow steps (judge / approver / compiler). Default `claude`. */
+  /**
+   * Which provider runs the LLM workflow steps (judge / approver / compiler). Default: FOLLOWS
+   * the harness ({@link defaultLlmProvider}), so a `--generate` bar is authored by the tool the
+   * user actually picked — never unconditionally `claude`.
+   */
   llmProvider?: LlmProviderChoice;
   /** Raw model-selection flags; resolved into per-seam models via the cascade. */
   models?: ModelSelection;
@@ -337,7 +341,7 @@ function refuseIfUnavailable(launcher: SandboxLauncher): void {
  */
 export function composeDeps(config: RunConfig, options: ComposeOptions): DriverDeps {
   const models = resolveModels(options.models ?? {});
-  const provider = options.llmProvider ?? 'claude';
+  const provider = options.llmProvider ?? defaultLlmProvider(options.harness);
   // The verify command gets a DEFAULT kill-timeout (matching the harness/LLM 10-min default): a
   // verify command that hangs (a test awaiting the network, a server that never exits) must never
   // hang the whole run unboundedly. A hit is a fail-closed could-not-evaluate — the unevaluable

@@ -14,6 +14,17 @@ describe('parseArgs — goaly-code harness / OpenAI provider flags', () => {
     expect(a.llmProvider).toBe('openai');
   });
 
+  it('--harness goaly-code derives the openai LLM provider (the same endpoint backs the LLM steps)', async () => {
+    const a = await parseArgs([...RUN, '--harness', 'goaly-code']);
+    expect(a.llmProvider).toBe('openai');
+    expect(a.llmProviderExplicit).toBe(false);
+  });
+
+  it('--harness goaly-code still honors an explicit --llm-provider', async () => {
+    const a = await parseArgs([...RUN, '--harness', 'goaly-code', '--llm-provider', 'claude']);
+    expect(a.llmProvider).toBe('claude');
+  });
+
   it('parses --base-url', async () => {
     const a = await parseArgs([...RUN, '--base-url', 'https://api.openai.com/v1']);
     expect(a.baseUrl).toBe('https://api.openai.com/v1');

@@ -892,6 +892,46 @@ describe('parseArgs', () => {
         parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--llm-provider', 'bogus']),
       ).rejects.toThrow(UsageError);
     });
+
+    it('the LLM provider FOLLOWS the harness (so --generate is not always claude)', async () => {
+      for (const harness of ['claude', 'codex', 'droid', 'pi'] as const) {
+        const a = await parseArgs(['run', '--goal', 'g', '--generate', '--harness', harness]);
+        expect(a.llmProvider).toBe(harness);
+        expect(a.llmProviderExplicit).toBe(false);
+      }
+    });
+
+    it('an explicit --llm-provider overrides the harness-derived default', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--generate', '--harness', 'codex', '--llm-provider', 'claude',
+      ]);
+      expect(a.llmProvider).toBe('claude');
+      expect(a.llmProviderExplicit).toBe(true);
+    });
+
+    it('the fake harness cannot back LLM steps — keeps the claude default', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'fake']);
+      expect(a.llmProvider).toBe('claude');
+    });
+
+    it('a config-file harness drives the derived provider; a config-file llm-provider is explicit', async () => {
+      const derived = await parseArgs(
+        ['run', '--goal', 'g', '--generate'],
+        undefined,
+        async () => ({ overlay: { harness: 'codex' }, sources: ['.goalyrc'] }),
+      );
+      expect(derived.harness).toBe('codex');
+      expect(derived.llmProvider).toBe('codex');
+      expect(derived.llmProviderExplicit).toBe(false);
+
+      const explicit = await parseArgs(
+        ['run', '--goal', 'g', '--generate', '--harness', 'codex'],
+        undefined,
+        async () => ({ overlay: { 'llm-provider': 'claude' }, sources: ['.goalyrc'] }),
+      );
+      expect(explicit.llmProvider).toBe('claude');
+      expect(explicit.llmProviderExplicit).toBe(true);
+    });
   });
 
   describe('goal / intent / rubric input sources', () => {

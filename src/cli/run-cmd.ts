@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { USAGE, isHarnessChoice, type ParsedArgs } from './args';
+import { USAGE, defaultLlmProvider, isHarnessChoice, type ParsedArgs } from './args';
 import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
 import { drive } from '../driver/driver';
@@ -62,7 +62,10 @@ export type RunResult = { code: number; runId: RunId | undefined; outcome: RunOu
 /** Exit code for a run stopped by Ctrl-C/SIGTERM (128 + SIGINT), distinct from FAILED/ABORTED (1). */
 const EXIT_INTERRUPTED = 130;
 
-/** The model/provider flags the user actually set, as structured log fields (set ones only). */
+/**
+ * The model/provider flags the user actually set, as structured log fields (set ones only; the
+ * LLM provider is also logged when it RESOLVES off `claude` — e.g. derived from `--harness codex`).
+ */
 function startupFields(parsed: ParsedArgs): Record<string, string> {
   const m = parsed.models;
   const fields: Record<string, string> = {};
@@ -249,7 +252,16 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
         `goaly: --resume: continuing with this run's harness '${prior.detail.harness}' ` +
           `(pass --harness to override)\n`,
       );
-      parsed = { ...parsed, harness: prior.detail.harness };
+      // The LLM provider default FOLLOWS the harness; a derived (non-explicit) provider is
+      // re-derived from the adopted harness so the preflight and the LLM steps track the harness
+      // the resumed run will actually use.
+      parsed = {
+        ...parsed,
+        harness: prior.detail.harness,
+        ...(parsed.llmProviderExplicit
+          ? {}
+          : { llmProvider: defaultLlmProvider(prior.detail.harness) }),
+      };
     }
     // Extending a DONE run is meaningless (both keys already turned) — route to the follow-up path.
     if (prior.detail.status === 'DONE' && parsed.resumeExtend !== undefined) {
