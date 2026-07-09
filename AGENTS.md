@@ -170,7 +170,10 @@ See [`docs/adding-a-harness.md`](docs/adding-a-harness.md) for both paths.
 A harness CLI can **optionally** also back the LLM workflow steps (compiler / judge / approver) via
 the separate, **read-only** `LlmProvider` seam — `AgentCliLlmProvider` consumes the **same codec**
 (its `readonlyArgs` + `fieldExtractor`/`streamExtractor`); register an `LlmProviderChoice` +
-`makeLlmProvider()` case, and select it with `--llm-provider`. A judge/approver must never edit the
+`makeLlmProvider()` case, and select it with `--llm-provider`. The `--llm-provider` **default
+follows the harness** (`defaultLlmProvider` in `src/cli/args.ts`: `codex` → `codex`, `goaly-code`
+→ `openai`, `fake` → `claude`), so the compiler that authors a `--generate` bar runs on the
+harness the user picked — never unconditionally `claude`. A judge/approver must never edit the
 tree, so this is read-only only. See the "Optional: also use the tool for the LLM steps" section of
 the harness guide.
 

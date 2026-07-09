@@ -472,10 +472,13 @@ That's it. The resolved per-step model is threaded in for you, and the cascade
 applies automatically — your provider just receives a `model` string or `undefined`.
 
 **Caveats to document.** Each `complete()` is a full (read-only) agent turn, and the judge calls it
-`quorum` times (default 3) per iteration — heavier than a one-shot completion API, which is why
-`claude` stays the default. And model names are tool-specific: align `--llm-provider` with the model
-you pass, or the cascade may hand a name from one tool's namespace to another (`claude --model
-<a-codex-model>`).
+`quorum` times (default 3) per iteration — heavier than a one-shot completion API. The
+`--llm-provider` default **follows the harness** (`defaultLlmProvider` in `src/cli/args.ts`:
+`--harness codex` puts the compiler/judge/approver on `codex` too, `goaly-code` → `openai`, `fake`
+→ `claude`), so when you add a CLI to the `AgentCli` union it becomes the derived provider for its
+own harness — another reason `readonlyArgs` must be genuinely read-only. Model names stay
+tool-specific: align `--llm-provider` with the model you pass, or the cascade may hand a name from
+one tool's namespace to another (`claude --model <a-codex-model>`).
 
 **Test the provider** by constructing `new AgentCliLlmProvider({ codec: myagentCodec, exec })` with a
 fake `exec` (see `src/llm/agent-cli-provider.test.ts`): assert it returns your parsed `text` (and
