@@ -81,7 +81,7 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Sandboxing](docs/reference.md#sandboxing) | `--sandbox`, `--sandbox-net` | OS-jail the agent and verifier (bwrap / firejail / container), with egress allowlists. |
 | [Operator control](docs/reference.md#operator-control-watch-steer-extend) | `--resume`, `--note` | Watch live, steer with notes, raise caps mid-run — never the frozen bar. |
 | [Follow-ups](docs/reference.md#following-up-after-a-run-ends---from-run) | `--from-run` | A new re-verified goal that knows what the last run did. |
-| [Web UI](docs/reference.md#web-ui-goaly-ui) | `goaly ui` | Runs, live feeds, worktrees, and a browser Seal review station. Localhost-only. |
+| [Web UI](docs/reference.md#web-ui-goaly-ui) | `goaly ui` | A local control center: mission dashboard, live pipeline + session inspector, worktrees, and a browser Seal review station. Localhost-only. |
 | [Spend & budgets](docs/reference.md#spend-report--budgets) | `--budget-tokens`, `--cost-table` | Per-layer token report (cache included); budgets survive resume. |
 | [Observability](docs/reference.md#observability) | `--stream`, `--explain`, `--log-level` | Live agent turns, durable transcripts, plain-language narration. |
 | [Reliability](docs/reference.md#reliability) | *(defaults)* | Preflight, bounded retries, safe Ctrl-C, fsync'd write-ahead log. |

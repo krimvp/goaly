@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { feedLine, streamLine, iterationAt, statusBadgeClass, truncate, sealFieldsOf, buildSealPatch } from './format';
+import {
+  feedLine,
+  streamLine,
+  iterationAt,
+  statusBadgeClass,
+  truncate,
+  sealFieldsOf,
+  buildSealPatch,
+  fmtTokens,
+  fmtDuration,
+  fmtAgo,
+  pipelineStageOf,
+  PIPELINE_STAGES,
+} from './format';
 import { RunId, ContractHash, DiffHash, SessionId } from '../../domain/ids';
 import type { RunLogEntry } from '../../runlog/runlog';
 import { makeFakeContract } from '../../testing/fakes';
@@ -78,6 +91,55 @@ describe('helpers', () => {
   it('truncate flattens whitespace and caps length', () => {
     expect(truncate('a  b\n c', 100)).toBe('a b c');
     expect(truncate('x'.repeat(20), 10)).toHaveLength(10);
+  });
+
+  it('fmtTokens compacts counts and keeps "unknown" distinct', () => {
+    expect(fmtTokens(undefined)).toBe('—');
+    expect(fmtTokens(950)).toBe('950');
+    expect(fmtTokens(12_345)).toBe('12.3k');
+    expect(fmtTokens(4_000)).toBe('4k');
+    expect(fmtTokens(4_200_000)).toBe('4.2M');
+  });
+
+  it('fmtDuration renders seconds / minutes / hours', () => {
+    expect(fmtDuration(0, 42_000)).toBe('42s');
+    expect(fmtDuration(0, 192_000)).toBe('3m 12s');
+    expect(fmtDuration(0, 2 * 3_600_000 + 5 * 60_000)).toBe('2h 05m');
+    expect(fmtDuration(5_000, 1_000)).toBe('0s'); // clock skew never goes negative
+  });
+
+  it('fmtAgo renders coarse relative time', () => {
+    expect(fmtAgo(1_000, 30_000)).toBe('just now');
+    expect(fmtAgo(0, 5 * 60_000)).toBe('5m ago');
+    expect(fmtAgo(0, 3 * 3_600_000)).toBe('3h ago');
+    expect(fmtAgo(0, 72 * 3_600_000)).toBe('3d ago');
+  });
+});
+
+describe('pipelineStageOf — state tag → pipeline stage for the mission strip', () => {
+  it('maps every non-terminal tag onto a stage', () => {
+    expect(pipelineStageOf('PLANNING')).toBe('plan');
+    expect(pipelineStageOf('AWAIT_PLAN_SEAL')).toBe('plan');
+    expect(pipelineStageOf('COMPILING')).toBe('compile');
+    expect(pipelineStageOf('AWAIT_SEAL')).toBe('seal');
+    expect(pipelineStageOf('PREPARING')).toBe('prepare');
+    expect(pipelineStageOf('RUNNING_AGENT')).toBe('agent');
+    expect(pipelineStageOf('RUNNING_WAVE')).toBe('agent');
+    expect(pipelineStageOf('ADVANCING_PHASE')).toBe('agent');
+    expect(pipelineStageOf('VERIFYING')).toBe('verify');
+    expect(pipelineStageOf('AWAIT_SIGNOFF')).toBe('signoff');
+    expect(pipelineStageOf('DONE')).toBe('done');
+  });
+
+  it('terminal failures have no active stage, and every mapped stage exists in the strip', () => {
+    expect(pipelineStageOf('FAILED')).toBeNull();
+    expect(pipelineStageOf('ABORTED')).toBeNull();
+    const keys = PIPELINE_STAGES.map((s) => s.key);
+    for (const tag of ['PLANNING', 'COMPILING', 'AWAIT_SEAL', 'PREPARING', 'RUNNING_AGENT', 'VERIFYING', 'AWAIT_SIGNOFF', 'DONE']) {
+      const stage = pipelineStageOf(tag);
+      expect(stage).not.toBeNull();
+      expect(keys).toContain(stage);
+    }
   });
 });
 

@@ -636,19 +636,30 @@ hint with the same mapping as `runs resume-cmd`.
 
 ## Web UI (`goaly ui`)
 
-Everything the read-only subcommands show — plus live tails — in the browser:
+A local control center over the run logs — everything the read-only subcommands show, plus live
+tails and browser-side operation:
 
 ```bash
 goaly ui                       # http://127.0.0.1:4180 over this workspace's runs
 goaly ui --port 5000 --workspace ./myrepo
 ```
 
-- **Runs table across every root** — the main workspace and each managed worktree, with status
-  badges and a pulsing LIVE badge. Corrupt logs are flagged, never dropped.
-- **Run detail** — the frozen contract (rungs + hash + setup), Seal decisions, every iteration's
-  verdict and Sign-off, the failure reason, spend, and the exact `--resume` command.
+- **Mission dashboard** — fleet KPIs (live runs, runs parked at a Seal, done, failed/aborted,
+  total tokens) over a run board grouped by root — the main workspace and each managed worktree —
+  with status badges, live-state chips, and a pulsing LIVE indicator. Corrupt logs are flagged,
+  never dropped.
+- **Run detail (the mission view)** — a pipeline strip showing where the run is right now
+  (plan → compile → seal → prep → the agent/verify/sign-off loop → done), stat tiles (iterations,
+  tokens against the budget with a spend meter, duration, harness, state), the frozen contract
+  rendered as its rung ladder, an iteration timeline with each verdict and Sign-off, and an
+  *operate* card with copyable `--resume` / harness-session commands.
+- **Session inspector** — jump inside the agent's session: the recorded stream transcript
+  (`stream.jsonl`, always on for UI-started runs) rendered as the agent's actual turns — messages,
+  reasoning, tool invocations with expandable inputs/results and ok/error states, token usage, and
+  turn boundaries — each tagged and filterable by seam (agent / judge / approver / compiler …),
+  streaming live over SSE.
 - **Live event feed over SSE** — the write-ahead log tailed read-only (it never takes the run
-  lock), so it follows runs started in any terminal. Recorded stream transcripts flow in too.
+  lock), so it follows runs started in any terminal.
 - **Worktrees panel** — create/remove with the manager's refusal ladder surfaced verbatim.
 - **Start runs, and hold the Seal in your hand.** The start form executes in-process through the
   exact same code path as the CLI (same guards, run lock, write-ahead log). A non-autonomous run
