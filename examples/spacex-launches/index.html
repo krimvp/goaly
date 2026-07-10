@@ -3,24 +3,23 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SpaceX Launch Board</title>
+  <title>SpaceX Mission Control</title>
   <style>
     :root {
-      --color-bg-primary: #0a0e1a;
-      --color-bg-secondary: #1a1f3a;
-      --color-bg-tertiary: #2a3050;
-      --color-neon-cyan: #00d9ff;
-      --color-neon-magenta: #ff006e;
-      --color-neon-purple: #8000ff;
-      --color-accent: var(--color-neon-cyan);
-      --color-accent-dim: #0099cc;
+      --color-bg-primary: #0a0d15;
+      --color-bg-secondary: #121621;
+      --color-bg-tertiary: #1a1f2e;
+      --color-phosphor-green: #39ff14;
+      --color-phosphor-amber: #ffb81c;
+      --color-telemetry-cyan: #00ffff;
+      --color-alert-go: #0fff50;
+      --color-alert-hold: #ff6b6b;
+      --color-alert-tbd: #ffb81c;
       --color-text-primary: #e8eaed;
       --color-text-secondary: #a0aec0;
       --color-text-tertiary: #718096;
-      --color-border: #3a4566;
-      --color-status-live: #10b981;
-      --color-status-scheduled: #8b5cf6;
-      --color-status-unknown: #6b7280;
+      --color-border: #2a3f5f;
+      --color-grid: rgba(0, 255, 255, 0.03);
 
       --spacing-unit: 1rem;
       --spacing-xs: 0.25rem;
@@ -57,13 +56,67 @@
         --transition-fast: 0ms;
         --transition-base: 0ms;
       }
-      @keyframes neonPulse {
-        0%, 100% { opacity: 1; text-shadow: none; }
-        50% { opacity: 1; text-shadow: none; }
+    }
+
+    @keyframes telemetryBlink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    @keyframes telemetryPulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(57, 255, 20, 0.3); }
+      50% { opacity: 0.7; box-shadow: 0 0 16px rgba(57, 255, 20, 0.6); }
+    }
+
+    @keyframes lineDraw {
+      from { stroke-dashoffset: 1000; }
+      to { stroke-dashoffset: 0; }
+    }
+
+    @keyframes beaconBlink {
+      0%, 100% { r: 2.5; opacity: 1; }
+      50% { r: 3.5; opacity: 0.6; }
+    }
+
+    @keyframes engineGlow {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 1; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      @keyframes telemetryBlink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 1; }
       }
-      @keyframes gradientShimmer {
-        0%, 100% { opacity: 0.3; }
-        50% { opacity: 0.3; }
+      @keyframes telemetryPulse {
+        0%, 100% { opacity: 1; box-shadow: none; }
+        50% { opacity: 1; box-shadow: none; }
+      }
+      @keyframes lineDraw {
+        from { stroke-dashoffset: 0; }
+        to { stroke-dashoffset: 0; }
+      }
+      @keyframes beaconBlink {
+        0%, 100% { r: 2.5; opacity: 1; }
+        50% { r: 2.5; opacity: 1; }
+      }
+      @keyframes engineGlow {
+        0%, 100% { opacity: 0.4; }
+        50% { opacity: 0.4; }
+      }
+      svg[data-scene] path,
+      svg[data-scene] polyline,
+      svg[data-scene] line,
+      svg[data-scene] polygon,
+      svg[data-scene] circle,
+      svg[data-scene] ellipse,
+      svg[data-scene] rect {
+        animation: none !important;
+        stroke-dashoffset: 0 !important;
+      }
+      [data-parallax],
+      [data-parallax-layer] {
+        transform: translateY(0) !important;
       }
     }
 
@@ -78,7 +131,7 @@
     }
 
     body {
-      background: linear-gradient(135deg, var(--color-bg-primary) 0%, #0f1428 50%, #1a0f2e 100%);
+      background: linear-gradient(135deg, var(--color-bg-primary) 0%, #0d1118 50%, #1a0f2e 100%);
       background-attachment: fixed;
       color: var(--color-text-primary);
       font-family: var(--font-base);
@@ -86,6 +139,7 @@
       line-height: 1.6;
       letter-spacing: 0.5px;
       position: relative;
+      overflow-x: hidden;
     }
 
     body::before {
@@ -95,29 +149,108 @@
       left: 0;
       width: 100%;
       height: 100%;
-      background:
-        radial-gradient(circle at 20% 50%, rgba(0, 217, 255, 0.05) 0%, transparent 50%),
-        radial-gradient(circle at 80% 80%, rgba(128, 0, 255, 0.05) 0%, transparent 50%);
+      background-image:
+        linear-gradient(0deg, transparent 24%, rgba(0, 255, 255, 0.02) 25%, rgba(0, 255, 255, 0.02) 26%, transparent 27%, transparent 74%, rgba(0, 255, 255, 0.02) 75%, rgba(0, 255, 255, 0.02) 76%, transparent 77%, transparent),
+        linear-gradient(90deg, transparent 24%, rgba(0, 255, 255, 0.02) 25%, rgba(0, 255, 255, 0.02) 26%, transparent 27%, transparent 74%, rgba(0, 255, 255, 0.02) 75%, rgba(0, 255, 255, 0.02) 76%, transparent 77%, transparent);
+      background-size: 50px 50px;
       pointer-events: none;
-      animation: nebulaPulse 8s ease-in-out infinite;
       z-index: 0;
-    }
-
-    @keyframes nebulaPulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.8; }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      @keyframes nebulaPulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 1; }
-      }
+      opacity: 0.5;
+      aria-hidden: true;
     }
 
     main {
       position: relative;
       z-index: 1;
+    }
+
+    /* Status Ticker Bar */
+    [data-ticker] {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3rem;
+      background: linear-gradient(90deg, var(--color-bg-primary) 0%, var(--color-bg-secondary) 50%, var(--color-bg-primary) 100%);
+      border-bottom: 2px solid var(--color-phosphor-green);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      padding: 0 var(--spacing-lg);
+      font-family: var(--font-mono);
+      font-size: var(--type-xs);
+      color: var(--color-phosphor-green);
+      box-shadow: 0 0 20px rgba(57, 255, 20, 0.2), inset 0 1px 0 rgba(57, 255, 20, 0.1);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      gap: var(--spacing-2xl);
+      overflow: hidden;
+    }
+
+    [data-ticker]::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 12px;
+      background: linear-gradient(90deg, var(--color-bg-primary), transparent);
+      z-index: 10;
+    }
+
+    [data-ticker]::after {
+      content: '';
+      position: absolute;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      width: 12px;
+      background: linear-gradient(270deg, var(--color-bg-primary), transparent);
+      z-index: 10;
+    }
+
+    .ticker-item {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .ticker-label {
+      color: var(--color-text-tertiary);
+      font-weight: 600;
+    }
+
+    .ticker-value {
+      color: var(--color-phosphor-green);
+      font-weight: 700;
+      animation: telemetryBlink 3s ease-in-out infinite;
+    }
+
+    [data-led] {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--color-phosphor-green);
+      box-shadow: 0 0 8px var(--color-phosphor-green), inset 0 0 2px rgba(255, 255, 255, 0.3);
+      border: 1px solid rgba(57, 255, 20, 0.5);
+      animation: telemetryBlink 1.5s ease-in-out infinite;
+    }
+
+    [data-led].led-active {
+      background: var(--color-alert-go);
+      box-shadow: 0 0 12px var(--color-alert-go);
+    }
+
+    [data-led].led-caution {
+      background: var(--color-phosphor-amber);
+      box-shadow: 0 0 12px var(--color-phosphor-amber);
+    }
+
+    main {
+      padding-top: 3rem;
     }
 
     section {
@@ -129,16 +262,20 @@
       margin-bottom: var(--spacing-lg);
       text-transform: uppercase;
       letter-spacing: 0.15em;
+      font-family: var(--font-base);
     }
 
     h1 {
       font-size: var(--type-5xl);
       line-height: 1.1;
+      color: var(--color-phosphor-green);
+      text-shadow: 0 0 20px rgba(57, 255, 20, 0.4);
     }
 
     h2 {
       font-size: var(--type-3xl);
       line-height: 1.2;
+      color: var(--color-phosphor-green);
     }
 
     h3 {
@@ -175,9 +312,17 @@
       flex-direction: column;
       justify-content: center;
       min-height: 100vh;
-      border-bottom: 2px solid var(--color-neon-cyan);
+      border-bottom: 2px solid var(--color-phosphor-green);
       position: relative;
       overflow: hidden;
+    }
+
+    .hero [data-parallax="far"] {
+      transform: translateY(0);
+    }
+
+    .hero [data-parallax="mid"] {
+      transform: translateY(0);
     }
 
     .hero::before {
@@ -189,9 +334,9 @@
       height: 1px;
       background: linear-gradient(90deg,
         transparent,
-        var(--color-neon-cyan) 20%,
-        var(--color-neon-magenta) 50%,
-        var(--color-neon-purple) 80%,
+        var(--color-phosphor-green) 20%,
+        var(--color-phosphor-amber) 50%,
+        var(--color-phosphor-green) 80%,
         transparent
       );
       animation: shimmerWave 4s ease-in-out infinite;
@@ -225,12 +370,10 @@
     }
 
     .hero-text h1 {
-      color: var(--color-text-primary);
+      color: var(--color-phosphor-green);
       margin-bottom: var(--spacing-xl);
       animation: fadeInUp 0.8s ease-out;
-      text-shadow:
-        0 0 10px rgba(0, 217, 255, 0.5),
-        0 0 20px rgba(128, 0, 255, 0.3);
+      text-shadow: 0 0 20px rgba(57, 255, 20, 0.4);
     }
 
     .hero-text p {
@@ -238,23 +381,45 @@
       color: var(--color-text-secondary);
       margin-bottom: var(--spacing-md);
       animation: fadeInUp 0.8s ease-out 0.2s both;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: var(--type-sm);
     }
 
     .featured-countdown {
-      background: rgba(26, 31, 58, 0.4);
+      background: rgba(10, 13, 21, 0.6);
       backdrop-filter: blur(10px);
-      border: 2px solid transparent;
-      border-image: linear-gradient(135deg,
-        var(--color-neon-cyan),
-        var(--color-neon-magenta),
-        var(--color-neon-purple)
-      ) 1;
-      border-radius: 8px;
+      border: 2px solid var(--color-phosphor-green);
+      border-radius: 0;
       padding: var(--spacing-2xl);
       animation: fadeInUp 0.8s ease-out 0.4s both;
       box-shadow:
-        0 0 20px rgba(0, 217, 255, 0.2),
-        inset 0 0 20px rgba(128, 0, 255, 0.05);
+        0 0 20px rgba(57, 255, 20, 0.3),
+        inset 0 0 20px rgba(57, 255, 20, 0.05);
+      position: relative;
+    }
+
+    .featured-countdown::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 20px;
+      height: 20px;
+      border-top: 2px solid var(--color-phosphor-green);
+      border-left: 2px solid var(--color-phosphor-green);
+    }
+
+    .featured-countdown::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      right: 0;
+      width: 20px;
+      height: 20px;
+      border-bottom: 2px solid var(--color-phosphor-green);
+      border-right: 2px solid var(--color-phosphor-green);
     }
 
     .countdown-display {
@@ -278,35 +443,20 @@
       font-family: var(--font-mono);
       font-size: var(--type-5xl);
       font-weight: 700;
-      color: var(--color-neon-cyan);
+      color: var(--color-phosphor-green);
       line-height: 1;
       letter-spacing: 0.05em;
       font-variant-numeric: tabular-nums;
       text-shadow:
-        0 0 10px var(--color-neon-cyan),
-        0 0 20px rgba(0, 217, 255, 0.5),
-        0 0 40px rgba(128, 0, 255, 0.3);
-      animation: neonPulse 2s ease-in-out infinite;
-    }
-
-    @keyframes neonPulse {
-      0%, 100% {
-        text-shadow:
-          0 0 10px var(--color-neon-cyan),
-          0 0 20px rgba(0, 217, 255, 0.5),
-          0 0 40px rgba(128, 0, 255, 0.3);
-      }
-      50% {
-        text-shadow:
-          0 0 20px var(--color-neon-cyan),
-          0 0 30px rgba(0, 217, 255, 0.7),
-          0 0 60px rgba(128, 0, 255, 0.5);
-      }
+        0 0 10px var(--color-phosphor-green),
+        0 0 20px rgba(57, 255, 20, 0.5);
+      animation: telemetryPulse 2s ease-in-out infinite;
     }
 
     @media (prefers-reduced-motion: reduce) {
       .countdown-value {
         animation: none;
+        text-shadow: 0 0 10px var(--color-phosphor-green);
       }
     }
 
@@ -316,15 +466,17 @@
       margin-top: var(--spacing-md);
       text-transform: uppercase;
       letter-spacing: 0.1em;
+      font-family: var(--font-mono);
     }
 
     .featured-label {
       font-size: var(--type-sm);
-      color: var(--color-accent);
+      color: var(--color-phosphor-green);
       text-transform: uppercase;
       letter-spacing: 0.15em;
       margin-bottom: var(--spacing-lg);
       font-weight: 600;
+      font-family: var(--font-mono);
     }
 
     .featured-mission {
@@ -345,10 +497,125 @@
       }
     }
 
+    /* Rocket and Tower Centerpiece */
+    .centerpiece-section {
+      position: relative;
+      background: linear-gradient(180deg, rgba(0, 255, 255, 0.02) 0%, rgba(0, 0, 0, 0.3) 50%, rgba(57, 255, 20, 0.01) 100%);
+      border-top: 2px solid var(--color-phosphor-green);
+      border-bottom: 2px solid var(--color-phosphor-green);
+      min-height: 75vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      padding: var(--spacing-3xl) var(--spacing-md);
+    }
+
+    .centerpiece-section::before {
+      content: 'PAD 39A // VEHICLE INTEGRATION';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2.5rem;
+      background: linear-gradient(90deg, var(--color-bg-secondary) 0%, var(--color-bg-tertiary) 50%, var(--color-bg-secondary) 100%);
+      border-bottom: 1px solid var(--color-phosphor-green);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-mono);
+      font-size: var(--type-sm);
+      color: var(--color-phosphor-green);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      font-weight: 600;
+      z-index: 10;
+    }
+
+    .centerpiece-scene {
+      position: relative;
+      width: 100%;
+      max-width: 800px;
+      height: 700px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 2.5rem;
+    }
+
+    .centerpiece-scene [data-parallax="far"] {
+      will-change: transform;
+    }
+
+    .centerpiece-scene [data-parallax="mid"] {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      will-change: transform;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    svg[data-scene] {
+      width: 100%;
+      height: 100%;
+      filter: drop-shadow(0 0 15px rgba(57, 255, 20, 0.4));
+    }
+
+    [data-rocket],
+    [data-tower] {
+      will-change: transform;
+    }
+
+    [data-beacon] {
+      animation: beaconBlink 1.2s ease-in-out infinite;
+    }
+
+    [data-engine-glow] {
+      animation: engineGlow 1.5s ease-in-out infinite;
+    }
+
+    svg[data-scene] path,
+    svg[data-scene] polyline,
+    svg[data-scene] line,
+    svg[data-scene] polygon {
+      stroke-dasharray: 1000;
+      animation: lineDraw 3s ease-out forwards;
+    }
+
+    svg[data-scene] circle {
+      stroke-dasharray: 1000;
+      animation: lineDraw 2.5s ease-out forwards;
+      animation-delay: 0.3s;
+    }
+
+    svg[data-scene] rect {
+      stroke-dasharray: 1000;
+      animation: lineDraw 3s ease-out forwards;
+      animation-delay: 0.1s;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      [data-beacon],
+      [data-engine-glow],
+      svg[data-scene] path,
+      svg[data-scene] polyline,
+      svg[data-scene] line,
+      svg[data-scene] polygon,
+      svg[data-scene] circle,
+      svg[data-scene] rect {
+        animation: none !important;
+        stroke-dashoffset: 0 !important;
+      }
+    }
+
     /* Launch Board Section */
     .launch-board {
       background-color: var(--color-bg-primary);
-      border-top: 1px solid var(--color-border);
+      border-top: 2px solid var(--color-phosphor-green);
+      position: relative;
     }
 
     .board-header {
@@ -362,19 +629,18 @@
 
     .data-source-badge {
       display: inline-block;
-      background: rgba(26, 31, 58, 0.4);
+      background: rgba(10, 13, 21, 0.6);
       backdrop-filter: blur(8px);
-      border: 2px solid var(--color-neon-purple);
-      color: var(--color-neon-purple);
+      border: 1px solid var(--color-phosphor-amber);
+      color: var(--color-phosphor-amber);
       padding: var(--spacing-sm) var(--spacing-lg);
-      border-radius: 20px;
+      border-radius: 0;
       font-size: var(--type-xs);
       text-transform: uppercase;
       letter-spacing: 0.1em;
       font-weight: 600;
-      box-shadow:
-        0 0 12px rgba(128, 0, 255, 0.3),
-        inset 0 0 8px rgba(128, 0, 255, 0.05);
+      font-family: var(--font-mono);
+      box-shadow: 0 0 12px rgba(255, 184, 28, 0.2);
     }
 
     .launch-grid {
@@ -395,73 +661,84 @@
     }
 
     .launch-card {
-      background: rgba(26, 31, 58, 0.3);
+      background: rgba(18, 22, 33, 0.5);
       backdrop-filter: blur(8px);
-      border: 2px solid var(--color-neon-cyan);
-      clip-path: polygon(
-        0% 0%,
-        95% 0%,
-        100% 8%,
-        100% 100%,
-        5% 100%,
-        0% 92%
-      );
-      padding: var(--spacing-xl);
+      border: 1px solid var(--color-phosphor-green);
+      padding: 0;
       display: flex;
       flex-direction: column;
-      gap: var(--spacing-md);
+      gap: 0;
       transition: all var(--transition-base);
       cursor: pointer;
       box-shadow:
-        0 0 15px rgba(0, 217, 255, 0.3),
-        inset 0 0 15px rgba(128, 0, 255, 0.05),
-        0 0 30px rgba(255, 0, 110, 0.1);
+        0 0 15px rgba(57, 255, 20, 0.2),
+        inset 0 0 15px rgba(57, 255, 20, 0.03);
       position: relative;
     }
 
     .launch-card::before {
       content: '';
       position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: linear-gradient(135deg,
-        rgba(0, 217, 255, 0.05) 0%,
-        rgba(128, 0, 255, 0.02) 100%
-      );
-      clip-path: polygon(
-        0% 0%,
-        95% 0%,
-        100% 8%,
-        100% 100%,
-        5% 100%,
-        0% 92%
-      );
+      top: -1px;
+      left: -1px;
+      width: 16px;
+      height: 16px;
+      border-top: 2px solid var(--color-phosphor-green);
+      border-left: 2px solid var(--color-phosphor-green);
+      pointer-events: none;
+    }
+
+    .launch-card::after {
+      content: '';
+      position: absolute;
+      bottom: -1px;
+      right: -1px;
+      width: 16px;
+      height: 16px;
+      border-bottom: 2px solid var(--color-phosphor-green);
+      border-right: 2px solid var(--color-phosphor-green);
       pointer-events: none;
     }
 
     .launch-card:hover {
-      border-color: var(--color-neon-magenta);
-      background-color: rgba(42, 48, 80, 0.5);
+      border-color: var(--color-phosphor-amber);
+      background-color: rgba(26, 31, 46, 0.7);
       box-shadow:
-        0 0 25px rgba(255, 0, 110, 0.5),
-        inset 0 0 20px rgba(128, 0, 255, 0.1),
-        0 0 40px rgba(0, 217, 255, 0.2);
-      transform: translateY(-4px);
+        0 0 25px rgba(255, 184, 28, 0.4),
+        inset 0 0 20px rgba(57, 255, 20, 0.08);
+      transform: translateY(-2px);
     }
 
     .launch-card[data-launched="true"] {
       opacity: 0.6;
       border-color: var(--color-text-tertiary);
       box-shadow:
-        0 0 10px rgba(113, 128, 150, 0.2),
-        inset 0 0 10px rgba(113, 128, 150, 0.05);
+        0 0 10px rgba(113, 128, 150, 0.1),
+        inset 0 0 10px rgba(113, 128, 150, 0.02);
+    }
+
+    [data-designation] {
+      background: linear-gradient(90deg, var(--color-bg-secondary) 0%, var(--color-bg-tertiary) 100%);
+      border-bottom: 1px solid var(--color-phosphor-green);
+      padding: var(--spacing-md) var(--spacing-lg);
+      font-family: var(--font-mono);
+      font-size: var(--type-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--color-phosphor-green);
+      font-weight: 700;
+      display: flex;
+      gap: var(--spacing-md);
+      align-items: center;
+    }
+
+    [data-designation] [data-led] {
+      flex-shrink: 0;
     }
 
     .card-header {
       border-bottom: 1px solid var(--color-border);
-      padding-bottom: var(--spacing-md);
+      padding: var(--spacing-lg);
     }
 
     .mission-name {
@@ -474,6 +751,7 @@
       display: grid;
       gap: var(--spacing-md);
       font-size: var(--type-sm);
+      padding: var(--spacing-lg);
     }
 
     .meta-item {
@@ -489,6 +767,7 @@
       font-weight: 600;
       min-width: 60px;
       font-size: var(--type-xs);
+      font-family: var(--font-mono);
     }
 
     .meta-value {
@@ -498,47 +777,47 @@
 
     .status-badge {
       display: inline-block;
-      padding: var(--spacing-sm) var(--spacing-md);
-      border-radius: 4px;
+      padding: var(--spacing-xs) var(--spacing-md);
+      border-radius: 0;
       font-size: var(--type-xs);
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.08em;
-      background-color: rgba(128, 0, 255, 0.1);
-      color: var(--color-neon-purple);
-      border: 1px solid var(--color-neon-purple);
-      text-shadow: 0 0 6px rgba(128, 0, 255, 0.3);
+      background-color: rgba(255, 184, 28, 0.1);
+      color: var(--color-phosphor-amber);
+      border: 1px solid var(--color-phosphor-amber);
+      text-shadow: 0 0 6px rgba(255, 184, 28, 0.3);
+      font-family: var(--font-mono);
     }
 
     .status-badge[data-status*="Go" i] {
-      background-color: rgba(16, 185, 129, 0.1);
-      color: var(--color-status-live);
-      border: 1px solid var(--color-status-live);
-      text-shadow: 0 0 6px rgba(16, 185, 129, 0.3);
+      background-color: rgba(15, 255, 80, 0.1);
+      color: var(--color-alert-go);
+      border: 1px solid var(--color-alert-go);
+      text-shadow: 0 0 6px rgba(15, 255, 80, 0.3);
     }
 
     .status-badge[data-status*="TBD" i],
     .status-badge[data-status*="Determined" i] {
-      background-color: rgba(0, 217, 255, 0.1);
-      color: var(--color-neon-cyan);
-      border: 1px solid var(--color-neon-cyan);
-      text-shadow: 0 0 6px rgba(0, 217, 255, 0.3);
+      background-color: rgba(0, 255, 255, 0.1);
+      color: var(--color-telemetry-cyan);
+      border: 1px solid var(--color-telemetry-cyan);
+      text-shadow: 0 0 6px rgba(0, 255, 255, 0.3);
     }
 
     .status-badge[data-status*="Scheduled" i],
     .status-badge[data-status*="Hold" i] {
-      background-color: rgba(255, 0, 110, 0.1);
-      color: var(--color-neon-magenta);
-      border: 1px solid var(--color-neon-magenta);
-      text-shadow: 0 0 6px rgba(255, 0, 110, 0.3);
+      background-color: rgba(255, 107, 107, 0.1);
+      color: var(--color-alert-hold);
+      border: 1px solid var(--color-alert-hold);
+      text-shadow: 0 0 6px rgba(255, 107, 107, 0.3);
     }
 
     .card-countdown {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
       gap: var(--spacing-sm);
-      margin-top: var(--spacing-md);
-      padding-top: var(--spacing-md);
+      padding: var(--spacing-lg);
       border-top: 1px solid var(--color-border);
     }
 
@@ -559,12 +838,12 @@
       font-family: var(--font-mono);
       font-size: var(--type-2xl);
       font-weight: 700;
-      color: var(--color-neon-cyan);
+      color: var(--color-phosphor-green);
       line-height: 1;
       font-variant-numeric: tabular-nums;
       text-shadow:
-        0 0 8px var(--color-neon-cyan),
-        0 0 16px rgba(0, 217, 255, 0.4);
+        0 0 8px var(--color-phosphor-green),
+        0 0 16px rgba(57, 255, 20, 0.4);
     }
 
     .card-countdown-label {
@@ -572,6 +851,7 @@
       color: var(--color-text-tertiary);
       text-transform: uppercase;
       letter-spacing: 0.08em;
+      font-family: var(--font-mono);
     }
 
     .card-status-text {
@@ -580,27 +860,31 @@
       font-style: italic;
       text-align: center;
       padding: var(--spacing-md) 0;
+      font-family: var(--font-mono);
+      font-weight: 600;
     }
 
     footer {
-      border-top: 2px solid var(--color-neon-purple);
+      border-top: 2px solid var(--color-phosphor-green);
       padding: var(--spacing-2xl) var(--spacing-md);
       text-align: center;
       color: var(--color-text-tertiary);
       font-size: var(--type-sm);
       position: relative;
       z-index: 1;
-      box-shadow: inset 0 1px 10px rgba(128, 0, 255, 0.1);
+      box-shadow: inset 0 1px 10px rgba(57, 255, 20, 0.1);
+      font-family: var(--font-mono);
     }
 
     .error-message {
-      background-color: rgba(239, 68, 68, 0.1);
-      border: 1px solid #dc2626;
+      background-color: rgba(255, 107, 107, 0.1);
+      border: 1px solid var(--color-alert-hold);
       color: #fca5a5;
       padding: var(--spacing-md) var(--spacing-lg);
-      border-radius: 4px;
+      border-radius: 0;
       margin-bottom: var(--spacing-md);
       display: none;
+      font-family: var(--font-mono);
     }
 
     .error-message.show {
@@ -608,26 +892,18 @@
     }
 
     @media (max-width: 768px) {
-      .launch-card {
-        clip-path: polygon(
-          0% 0%,
-          93% 0%,
-          100% 6%,
-          100% 100%,
-          7% 100%,
-          0% 94%
-        );
+      .centerpiece-section {
+        min-height: 60vh;
+        padding: var(--spacing-2xl) var(--spacing-md);
       }
 
-      .launch-card::before {
-        clip-path: polygon(
-          0% 0%,
-          93% 0%,
-          100% 6%,
-          100% 100%,
-          7% 100%,
-          0% 94%
-        );
+      .centerpiece-scene {
+        height: 500px;
+      }
+
+      .centerpiece-section::before {
+        font-size: var(--type-xs);
+        height: 2rem;
       }
     }
 
@@ -650,6 +926,7 @@
 
       .hero-content {
         gap: var(--spacing-2xl);
+        grid-template-columns: 1fr;
       }
 
       .countdown-display {
@@ -664,41 +941,69 @@
         font-size: var(--type-xl);
       }
 
-      .launch-card {
-        clip-path: polygon(
-          0% 0%,
-          90% 0%,
-          100% 5%,
-          100% 100%,
-          10% 100%,
-          0% 95%
-        );
+      .centerpiece-section {
+        min-height: 50vh;
+        padding: var(--spacing-lg) var(--spacing-md);
       }
 
-      .launch-card::before {
-        clip-path: polygon(
-          0% 0%,
-          90% 0%,
-          100% 5%,
-          100% 100%,
-          10% 100%,
-          0% 95%
-        );
+      .centerpiece-scene {
+        height: 350px;
+        margin-top: 1.5rem;
+      }
+
+      .centerpiece-section::before {
+        font-size: 0.65rem;
+        height: 1.8rem;
+      }
+
+      [data-ticker] {
+        height: 2.5rem;
+        font-size: 0.65rem;
+        gap: var(--spacing-lg);
       }
     }
   </style>
 </head>
 <body>
+  <div data-ticker aria-label="Mission Control Status">
+    <div class="ticker-item">
+      <span data-led class="led-active"></span>
+      <span class="ticker-label">STATUS:</span>
+      <span class="ticker-value">OPERATIONAL</span>
+    </div>
+    <div class="ticker-item">
+      <span class="ticker-label">T-MINUS:</span>
+      <span class="ticker-value" id="ticker-countdown">CALCULATING</span>
+    </div>
+    <div class="ticker-item">
+      <span data-led></span>
+      <span class="ticker-label">SYSTEMS:</span>
+      <span class="ticker-value">NOMINAL</span>
+    </div>
+    <div class="ticker-item">
+      <span class="ticker-label">GROUND:</span>
+      <span class="ticker-value">READY</span>
+    </div>
+    <div class="ticker-item">
+      <span data-led class="led-caution"></span>
+      <span class="ticker-label">WEATHER:</span>
+      <span class="ticker-value">MONITORING</span>
+    </div>
+  </div>
+
+  <div data-grid aria-hidden="true"></div>
+
   <main>
     <section class="hero">
       <div class="container">
         <div class="hero-content">
-          <div class="hero-text">
-            <h1>SpaceX Launch Board</h1>
-            <p>Track upcoming SpaceX missions in real-time. Live countdowns to the next launch into the cosmos.</p>
+          <div class="hero-text" data-parallax="near">
+            <h1>MISSION CONTROL</h1>
+            <p>Launch Board | Real-Time Telemetry</p>
+            <p style="margin-top: var(--spacing-lg); font-size: var(--type-sm); color: var(--color-phosphor-amber);">T-MINUS: Tracking SpaceX Operations</p>
           </div>
-          <div class="featured-countdown" data-featured-countdown>
-            <div class="featured-label">Next Launch</div>
+          <div class="featured-countdown" data-featured-countdown data-parallax="near">
+            <div class="featured-label">▸ Next Launch</div>
             <div class="featured-mission" data-featured-mission>Loading...</div>
             <div class="countdown-display">
               <div class="countdown-unit">
@@ -723,21 +1028,141 @@
       </div>
     </section>
 
+    <section class="centerpiece-section">
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0);">PAD 39A // VEHICLE INTEGRATION</span>
+      <div class="centerpiece-scene">
+        <div data-parallax="far" style="position: absolute; width: 100%; height: 100%; background-image: linear-gradient(90deg, transparent 24%, rgba(0, 255, 255, 0.04) 25%, rgba(0, 255, 255, 0.04) 26%, transparent 27%, transparent 74%, rgba(0, 255, 255, 0.04) 75%, rgba(0, 255, 255, 0.04) 76%, transparent 77%, transparent), linear-gradient(0deg, transparent 24%, rgba(0, 255, 255, 0.04) 25%, rgba(0, 255, 255, 0.04) 26%, transparent 27%, transparent 74%, rgba(0, 255, 255, 0.04) 75%, rgba(0, 255, 255, 0.04) 76%, transparent 77%, transparent); background-size: 60px 60px; opacity: 0.08; pointer-events: none;"></div>
+
+        <div data-parallax="mid" style="position: relative; width: 100%; height: 100%;">
+          <svg data-scene viewBox="0 0 800 1000" preserveAspectRatio="xMidYMid meet" style="width: 100%; height: 100%; min-height: 500px;" aria-hidden="true">
+            <!-- Tower structure -->
+            <g data-tower>
+              <!-- Tower base/foundation -->
+              <line x1="160" y1="937.5" x2="640" y2="937.5" stroke="#39ff14" stroke-width="3" opacity="0.8"/>
+              <line x1="176" y1="950" x2="624" y2="950" stroke="#39ff14" stroke-width="1.5" opacity="0.5"/>
+
+              <!-- Flame trench -->
+              <polyline points="240,937.5 256,975 544,975 560,937.5" fill="none" stroke="#ff6b6b" stroke-width="2" opacity="0.6"/>
+              <line x1="280" y1="956.25" x2="520" y2="956.25" stroke="#ff6b6b" stroke-width="1" opacity="0.4"/>
+
+              <!-- Main tower columns (left and right) -->
+              <line x1="224" y1="125" x2="224" y2="937.5" stroke="#39ff14" stroke-width="2.5" opacity="0.9"/>
+              <line x1="576" y1="125" x2="576" y2="937.5" stroke="#39ff14" stroke-width="2.5" opacity="0.9"/>
+
+              <!-- Tower bracing lattice -->
+              <line x1="232" y1="187.5" x2="568" y2="187.5" stroke="#39ff14" stroke-width="1.5" opacity="0.7"/>
+              <line x1="232" y1="312.5" x2="568" y2="312.5" stroke="#39ff14" stroke-width="1.5" opacity="0.7"/>
+              <line x1="232" y1="437.5" x2="568" y2="437.5" stroke="#39ff14" stroke-width="1.5" opacity="0.7"/>
+              <line x1="232" y1="562.5" x2="568" y2="562.5" stroke="#39ff14" stroke-width="1.5" opacity="0.7"/>
+              <line x1="232" y1="687.5" x2="568" y2="687.5" stroke="#39ff14" stroke-width="1.5" opacity="0.7"/>
+              <line x1="232" y1="812.5" x2="568" y2="812.5" stroke="#39ff14" stroke-width="1.5" opacity="0.7"/>
+
+              <!-- Diagonal bracing -->
+              <line x1="224" y1="187.5" x2="272" y2="312.5" stroke="#39ff14" stroke-width="1" opacity="0.5"/>
+              <line x1="272" y1="312.5" x2="224" y2="437.5" stroke="#39ff14" stroke-width="1" opacity="0.5"/>
+              <line x1="576" y1="187.5" x2="528" y2="312.5" stroke="#39ff14" stroke-width="1" opacity="0.5"/>
+              <line x1="528" y1="312.5" x2="576" y2="437.5" stroke="#39ff14" stroke-width="1" opacity="0.5"/>
+
+              <!-- Service arm 1 (lower, reaching to rocket) -->
+              <polyline points="224,437.5 144,437.5 112,475" fill="none" stroke="#ffb81c" stroke-width="2.5" opacity="0.9"/>
+              <line x1="224" y1="450" x2="120" y2="450" stroke="#ffb81c" stroke-width="1.5" opacity="0.6"/>
+
+              <!-- Service arm 2 (upper-mid, reaching to rocket) -->
+              <polyline points="224,312.5 120,312.5 96,350" fill="none" stroke="#ffb81c" stroke-width="2.5" opacity="0.9"/>
+              <line x1="224" y1="300" x2="112" y2="300" stroke="#ffb81c" stroke-width="1.5" opacity="0.6"/>
+
+              <!-- Tower crane/mast at top -->
+              <line x1="400" y1="62.5" x2="400" y2="125" stroke="#39ff14" stroke-width="2" opacity="0.9"/>
+              <circle cx="400" cy="50" r="4.8" fill="none" stroke="#39ff14" stroke-width="2"/>
+
+              <!-- Crane boom -->
+              <polyline points="400,75 480,25 520,50" fill="none" stroke="#ffb81c" stroke-width="2" opacity="0.7"/>
+
+              <!-- Lightning mast -->
+              <line x1="544" y1="75" x2="544" y2="25" stroke="#00ffff" stroke-width="1.5" opacity="0.8"/>
+              <circle cx="544" cy="12.5" r="3.2" fill="none" stroke="#00ffff" stroke-width="1.5"/>
+
+              <!-- Tower beacon lights -->
+              <circle cx="400" cy="187.5" r="3.2" fill="none" stroke="#00ffff" stroke-width="2" data-beacon/>
+              <circle cx="400" cy="437.5" r="3.2" fill="none" stroke="#00ffff" stroke-width="2" data-beacon/>
+              <circle cx="400" cy="687.5" r="3.2" fill="none" stroke="#00ffff" stroke-width="2" data-beacon/>
+
+              <!-- Umbilical lines (subtle) -->
+              <polyline points="280,625 256,687.5 240,750" fill="none" stroke="#ffb81c" stroke-width="1" opacity="0.4"/>
+              <polyline points="520,625 544,687.5 560,750" fill="none" stroke="#ffb81c" stroke-width="1" opacity="0.4"/>
+            </g>
+
+            <!-- Rocket (Falcon 9 style, standing in tower) -->
+            <g data-rocket>
+              <!-- Rocket body (main fuselage) -->
+              <line x1="400" y1="812.5" x2="400" y2="125" stroke="#39ff14" stroke-width="3.5" opacity="0.95"/>
+
+              <!-- Interstage -->
+              <circle cx="400" cy="375" r="17.6" fill="none" stroke="#39ff14" stroke-width="2" opacity="0.8"/>
+
+              <!-- First stage section -->
+              <polyline points="380,687.5 380,437.5 400,375 420,437.5 420,687.5" fill="none" stroke="#39ff14" stroke-width="2" opacity="0.8"/>
+
+              <!-- Landing legs (folded) -->
+              <polyline points="380,750 360,850 344,937.5" fill="none" stroke="#ffb81c" stroke-width="2" opacity="0.7"/>
+              <polyline points="420,750 440,850 456,937.5" fill="none" stroke="#ffb81c" stroke-width="2" opacity="0.7"/>
+
+              <!-- Engines (3 circles at base for Merlin engines) -->
+              <circle cx="384" cy="837.5" r="6.4" fill="none" stroke="#ff6b6b" stroke-width="2" opacity="0.8" data-engine-glow/>
+              <circle cx="400" cy="850" r="8" fill="none" stroke="#ff6b6b" stroke-width="2" opacity="0.8" data-engine-glow/>
+              <circle cx="416" cy="837.5" r="6.4" fill="none" stroke="#ff6b6b" stroke-width="2" opacity="0.8" data-engine-glow/>
+
+              <!-- Engine plume (subtle) -->
+              <ellipse cx="400" cy="887.5" rx="14.4" ry="31.25" fill="none" stroke="#ffb81c" stroke-width="1.5" opacity="0.5" data-engine-glow/>
+
+              <!-- Second stage / upper stage -->
+              <polyline points="388,350 388,225 400,175 412,225 412,350" fill="none" stroke="#39ff14" stroke-width="2" opacity="0.8"/>
+
+              <!-- Avionics bay (nose cone section) -->
+              <circle cx="400" cy="150" r="9.6" fill="none" stroke="#39ff14" stroke-width="2" opacity="0.9"/>
+
+              <!-- Nose cone (tip) -->
+              <polygon points="400,100 392,150 408,150" fill="none" stroke="#39ff14" stroke-width="2.5" opacity="0.95"/>
+
+              <!-- Grid fins (small aerodynamic fins for return booster) -->
+              <polyline points="388,250 376,275 372,300" fill="none" stroke="#39ff14" stroke-width="1.5" opacity="0.6"/>
+              <polyline points="412,250 424,275 428,300" fill="none" stroke="#39ff14" stroke-width="1.5" opacity="0.6"/>
+
+              <!-- Beacon lights on rocket -->
+              <circle cx="400" cy="300" r="2.4" fill="none" stroke="#00ffff" stroke-width="2" data-beacon/>
+              <circle cx="400" cy="200" r="2.4" fill="none" stroke="#00ffff" stroke-width="2" data-beacon/>
+
+              <!-- Umbilical connections (LOX/fuel lines) -->
+              <path d="M 380 500 Q 320 500 304 562.5" fill="none" stroke="#ffb81c" stroke-width="1.5" opacity="0.5"/>
+              <path d="M 420 500 Q 480 500 496 562.5" fill="none" stroke="#ffb81c" stroke-width="1.5" opacity="0.5"/>
+
+              <!-- Vent shimmer (subtle vent near LOX connection) -->
+              <circle cx="300" cy="568.75" r="2" fill="none" stroke="#00ffff" stroke-width="1" opacity="0.6"/>
+              <circle cx="500" cy="568.75" r="2" fill="none" stroke="#00ffff" stroke-width="1" opacity="0.6"/>
+            </g>
+
+            <!-- Horizon line (distant) -->
+            <line x1="0" y1="975" x2="800" y2="975" stroke="#39ff14" stroke-width="0.5" opacity="0.3"/>
+          </svg>
+        </div>
+      </div>
+    </section>
+
     <section class="launch-board">
       <div class="container">
         <div class="board-header">
-          <h2>Upcoming Launches</h2>
-          <div class="data-source-badge" data-source="sample">Sample Data</div>
+          <h2>▸ Upcoming Launches</h2>
+          <div class="data-source-badge" data-source="sample">⬤ Sample Data</div>
         </div>
         <div class="error-message" id="error-message"></div>
         <div class="launch-grid" id="launch-grid">
-          <p style="grid-column: 1 / -1; text-align: center; color: var(--color-text-tertiary);">Loading launches...</p>
+          <p style="grid-column: 1 / -1; text-align: center; color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: var(--type-sm);">Loading missions...</p>
         </div>
       </div>
     </section>
 
     <footer>
-      <p>SpaceX Launch Board &copy; 2026. Data from Launch Library 2 API.</p>
+      <p>▸ SPACEX MISSION CONTROL ▸ Launch Intelligence System v2026 ▸ Data from Launch Library 2 API ▸</p>
     </footer>
   </main>
 
@@ -830,6 +1255,7 @@
 
     let launchesData = [];
     let updateInterval = null;
+    let currentScrollY = 0;
 
     function getOrbitDescription(mission) {
       if (!mission) return "Orbital deployment information not available";
@@ -867,7 +1293,7 @@
       return String(value).padStart(2, '0');
     }
 
-    function renderLaunchCard(launch) {
+    function renderLaunchCard(launch, index) {
       const launchTime = new Date(launch.net).getTime();
       const countdown = calculateCountdown(launchTime);
       const isLaunched = countdown.total === 0;
@@ -879,6 +1305,8 @@
       const padLocation = siteName ? `${padName}, ${siteName}` : padName;
       const orbitDesc = getOrbitDescription(launch.mission);
       const formattedDate = formatDateUTC(launch.net);
+      const designationId = `MISSION-${String(index + 1).padStart(3, '0')}`;
+      const ledClass = isLaunched ? 'led-caution' : (countdown.total < 86400 ? 'led-active' : '');
 
       const card = document.createElement("div");
       card.className = "launch-card";
@@ -887,6 +1315,10 @@
 
       if (isLaunched) {
         card.innerHTML = `
+          <div data-designation>
+            <span data-led class="${ledClass}"></span>
+            <span>${designationId}</span>
+          </div>
           <div class="card-header">
             <div class="mission-name" data-field="mission">${launch.name}</div>
           </div>
@@ -916,6 +1348,10 @@
         `;
       } else {
         card.innerHTML = `
+          <div data-designation>
+            <span data-led class="${ledClass}"></span>
+            <span>${designationId}</span>
+          </div>
           <div class="card-header">
             <div class="mission-name" data-field="mission">${launch.name}</div>
           </div>
@@ -970,12 +1406,12 @@
       grid.innerHTML = "";
 
       if (!launches || launches.length === 0) {
-        grid.innerHTML = '<p style="grid-column: 1 / -1; text-align: center; color: var(--color-text-tertiary);">No upcoming launches found.</p>';
+        grid.innerHTML = '<p style="grid-column: 1 / -1; text-align: center; color: var(--color-text-tertiary); font-family: var(--font-mono);">No upcoming launches detected.</p>';
         return;
       }
 
-      launches.forEach(launch => {
-        grid.appendChild(renderLaunchCard(launch));
+      launches.forEach((launch, index) => {
+        grid.appendChild(renderLaunchCard(launch, index));
       });
     }
 
@@ -1027,7 +1463,44 @@
             missionEl.textContent = nextLaunch.name;
           }
         }
+
+        const tickerEl = document.getElementById("ticker-countdown");
+        if (tickerEl) {
+          tickerEl.textContent = `${countdown.days}D ${formatCountdownValue(countdown.hours)}H ${formatCountdownValue(countdown.minutes)}M`;
+        }
       }
+    }
+
+    function handleParallax() {
+      const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      if (prefersReduced) {
+        document.querySelectorAll("[data-parallax]").forEach(el => {
+          el.style.transform = "translateY(0)";
+        });
+        return;
+      }
+
+      // Read scrollY synchronously for jsdom compatibility
+      const y = window.scrollY || window.pageYOffset || document.documentElement.scrollTop;
+
+      const parallaxElements = document.querySelectorAll("[data-parallax]");
+
+      parallaxElements.forEach(el => {
+        const speedType = el.getAttribute("data-parallax");
+
+        // Assign distinct constant speeds to different parallax types
+        let speedFactor = 0.1;
+        if (speedType === "far") speedFactor = 0.12;
+        else if (speedType === "mid") speedFactor = 0.3;
+        else if (speedType === "near") speedFactor = 0.08;
+
+        // Constant clamp value (140px <= 0.3 * 520 scene height)
+        const MAX = 140;
+        const clampedOffset = Math.max(-MAX, Math.min(MAX, -y * speedFactor));
+
+        el.style.transform = `translateY(${clampedOffset}px)`;
+      });
     }
 
     async function fetchLaunches() {
@@ -1038,7 +1511,7 @@
         const launches = data.results || [];
         const filtered = launches.filter(l => new Date(l.net).getTime() > Date.now()).slice(0, 12);
         if (filtered.length >= 6) {
-          document.querySelector("[data-source]").textContent = "Live Data";
+          document.querySelector("[data-source]").textContent = "⬤ Live Data";
           document.querySelector("[data-source]").setAttribute("data-source", "live");
           return filtered;
         }
@@ -1046,7 +1519,7 @@
         console.log("API fetch failed, using fallback:", e.message);
       }
 
-      document.querySelector("[data-source]").textContent = "Sample Data";
+      document.querySelector("[data-source]").textContent = "⬤ Sample Data";
       document.querySelector("[data-source]").setAttribute("data-source", "sample");
       return FALLBACK_LAUNCHES.filter(l => new Date(l.net).getTime() > Date.now()).slice(0, 12);
     }
@@ -1058,6 +1531,9 @@
 
       if (updateInterval) clearInterval(updateInterval);
       updateInterval = setInterval(updateCountdowns, 1000);
+
+      handleParallax();
+      window.addEventListener("scroll", handleParallax);
     }
 
     if (document.readyState === "loading") {

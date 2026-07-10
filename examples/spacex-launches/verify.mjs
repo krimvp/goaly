@@ -1,351 +1,475 @@
-import test from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import jsdomPkg from 'jsdom';
+import path from 'node:path';
+import { JSDOM } from 'jsdom';
 
-const { JSDOM, VirtualConsole } = jsdomPkg;
+const ROOT = process.cwd();
+const HTML_PATH = path.join(ROOT, 'index.html');
+const DESIGN_PATH = path.join(ROOT, 'DESIGN.md');
 
-function parseTime(raw) {
-  if (raw == null) return NaN;
-  let t = Date.parse(raw);
-  if (!Number.isFinite(t)) {
-    const n = Number(raw);
-    if (Number.isFinite(n)) t = n;
+// Deterministic frozen base instant, before any realistic future-dated sample
+// launch, so the offline fallback renders positive T-minus values.
+const BASE_NOW = Date.parse('2026-01-01T00:00:00Z');
+let clockOffset = 0; // advanced by the live-countdown test
+const nowMs = () => BASE_NOW + clockOffset;
+
+// Controllable scroll position + desktop viewport reference for the parallax test.
+let SCROLL = 0;
+const VH_REF = 900; // px height of a ~1440px-wide desktop viewport (for vh->px)
+
+let dom, window, doc;
+
+function makeFakeDate() {
+  const RealDate = Date;
+  class FakeDate extends RealDate {
+    constructor(...args) {
+      if (args.length === 0) super(nowMs());
+      else super(...args);
+    }
+    static now() { return nowMs(); }
   }
-  return t;
+  return FakeDate;
 }
 
-function loadPage() {
-  assert.ok(existsSync('index.html'), 'index.html must exist at the repository root');
-  const html = readFileSync('index.html', 'utf8');
-  const FIXED = Date.now();
-  const virtualConsole = new VirtualConsole();
-  const dom = new JSDOM(html, {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function styleText() {
+  return [...doc.querySelectorAll('style')].map((s) => s.textContent || '').join('\n');
+}
+
+function launchCards() {
+  return [...doc.querySelectorAll('[data-launch-time]')]
+    .filter((c) => c.querySelector('[data-field="mission"]'));
+}
+
+function expectedCountdown(dtIso, offset = 0) {
+  const launchMs = Date.parse(dtIso);
+  const total = Math.max(0, Math.floor((launchMs - (BASE_NOW + offset)) / 1000));
+  return {
+    total,
+    days: Math.floor(total / 86400),
+    hours: Math.floor((total % 86400) / 3600),
+    minutes: Math.floor((total % 3600) / 60),
+    seconds: total % 60,
+  };
+}
+
+function readTotal(card) {
+  const g = (p) => parseInt((card.querySelector(`[data-countdown="${p}"]`).textContent || '').trim(), 10);
+  return g('days') * 86400 + g('hours') * 3600 + g('minutes') * 60 + g('seconds');
+}
+
+function toPx(str) {
+  if (!str) return null;
+  const m = String(str).match(/(-?[0-9.]+)\s*(vh|vw|px|%)?/i);
+  if (!m) return null;
+  const num = parseFloat(m[1]);
+  if (!isFinite(num)) return null;
+  const unit = (m[2] || '').toLowerCase();
+  if (unit === 'vh') return (num / 100) * VH_REF;
+  if (unit === 'px' || unit === '') return num;
+  return null; // vw / % are not usable as an absolute reference
+}
+function isBigPx(v) {
+  const px = toPx(v);
+  return px != null && px >= 480;
+}
+function cssBlocks(css) {
+  const out = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(css))) out.push([m[1].trim(), m[2]]);
+  return out;
+}
+
+function integrated() {
+  const rocket = doc.querySelector('[data-rocket]');
+  const tower = doc.querySelector('[data-tower]');
+  const svg = rocket ? rocket.closest('svg') : null;
+  return { rocket, tower, svg };
+}
+
+function sceneSelectorTokens() {
+  const { svg } = integrated();
+  const tokens = new Set();
+  let node = svg;
+  while (node && node.nodeType === 1) {
+    if (node.id) tokens.add('#' + node.id);
+    for (const c of node.classList || []) tokens.add('.' + c);
+    if (node.tagName.toLowerCase() === 'section') break;
+    node = node.parentElement;
+  }
+  return tokens;
+}
+
+// Concrete declared height (px) of the scene/section — the section-relative
+// reference for the parallax clamp bound. null when nothing concrete is declared.
+function sceneHeightPx() {
+  const { svg } = integrated();
+  const cands = [];
+  const push = (v) => { const px = toPx(v); if (px != null && px > 0) cands.push(px); };
+  if (svg) {
+    push(svg.getAttribute('height'));
+    push(svg.style && svg.style.height);
+    push(svg.style && svg.style.minHeight);
+  }
+  const tokens = sceneSelectorTokens();
+  for (const [sel, body] of cssBlocks(styleText())) {
+    if (![...tokens].some((t) => sel.includes(t))) continue;
+    const re = /(?:min-)?height\s*:\s*([^;]+)/gi;
+    let m;
+    while ((m = re.exec(body))) push(m[1]);
+  }
+  if (!cands.length) return null;
+  return Math.max(...cands);
+}
+
+before(async () => {
+  assert.ok(existsSync(HTML_PATH), 'index.html must exist at repository root');
+  const html = readFileSync(HTML_PATH, 'utf8');
+  dom = new JSDOM(html, {
     runScripts: 'dangerously',
     pretendToBeVisual: true,
-    url: 'https://verify.test/',
-    virtualConsole,
-    beforeParse(window) {
-      const RealDate = window.Date;
-      class MockDate extends RealDate {
-        constructor(...args) {
-          if (args.length === 0) super(FIXED);
-          else super(...args);
-        }
-        static now() { return FIXED; }
-      }
-      window.Date = MockDate;
-      window.fetch = () => Promise.reject(new Error('network disabled for verification'));
-      if (!window.matchMedia) {
-        window.matchMedia = (q) => ({
+    url: 'https://localhost/',
+    beforeParse(win) {
+      win.Date = makeFakeDate();
+      // Force OFFLINE so the bundled fallback dataset renders.
+      win.fetch = () => Promise.reject(new Error('offline: network disabled for verification'));
+      if (!win.matchMedia) {
+        win.matchMedia = (q) => ({
           matches: false, media: q, onchange: null,
           addListener() {}, removeListener() {},
-          addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; },
+          addEventListener() {}, removeEventListener() {},
+          dispatchEvent() { return false; },
         });
       }
-      window.IntersectionObserver = class { constructor() {} observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } };
-      window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
-      window.scrollTo = () => {};
+      // IO that immediately reports the target fully in view, so parallax gated
+      // behind in-view detection still activates under test.
+      win.IntersectionObserver = class {
+        constructor(cb) { this._cb = cb; }
+        observe(el) {
+          try {
+            this._cb([{ isIntersecting: true, intersectionRatio: 1, target: el,
+              boundingClientRect: {}, intersectionRect: {}, rootBounds: null, time: 0 }], this);
+          } catch { /* ignore */ }
+        }
+        unobserve() {} disconnect() {} takeRecords() { return []; }
+      };
+      if (!win.ResizeObserver) {
+        win.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+      }
+      Object.defineProperty(win, 'scrollY', { configurable: true, get: () => SCROLL });
+      Object.defineProperty(win, 'pageYOffset', { configurable: true, get: () => SCROLL });
+      win.scrollTo = win.scrollTo || (() => {});
     },
   });
-  return { dom, FIXED, html };
-}
+  window = dom.window;
+  doc = window.document;
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    if (launchCards().length >= 6) break;
+    await sleep(25);
+  }
+});
 
-function waitFor(dom, selector, min, timeout = 6000) {
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const doc = dom.window.document;
-    (function poll() {
-      const n = doc.querySelectorAll(selector).length;
-      if (n >= min) return resolve(n);
-      if (Date.now() - start > timeout) return reject(new Error(`timed out waiting for >=${min} of "${selector}" (offline fallback did not render); got ${n}`));
-      setTimeout(poll, 50);
-    })();
+after(() => {
+  // Guarantee the process exits: kill jsdom's per-second countdown interval + rAF.
+  try { if (window) window.close(); } catch { /* ignore */ }
+});
+
+// =================== functional non-regression ===================
+
+test('offline fallback renders at least 6 launch cards', () => {
+  assert.ok(launchCards().length >= 6, `expected >=6 fallback cards, got ${launchCards().length}`);
+});
+
+test('data-source indicator reflects the sample/offline dataset', () => {
+  const el = doc.querySelector('[data-source]');
+  assert.ok(el, '[data-source] indicator must exist');
+  const signal = `${el.getAttribute('data-source') || ''} ${el.textContent || ''}`.toLowerCase();
+  assert.match(signal, /sample|fallback|offline/, 'indicator must show the offline/sample source');
+});
+
+test('semantic landmark present', () => {
+  assert.ok(doc.querySelector('main'), 'a <main> landmark is required for accessibility');
+});
+
+test('every card exposes required non-empty telemetry fields', () => {
+  const fields = ['mission', 'vehicle', 'pad', 'orbit', 'status', 'date-utc'];
+  for (const card of launchCards()) {
+    for (const f of fields) {
+      const el = card.querySelector(`[data-field="${f}"]`);
+      assert.ok(el, `card missing [data-field="${f}"]`);
+      assert.ok((el.textContent || '').trim().length > 0, `[data-field="${f}"] must be non-empty`);
+    }
+    const vehicle = card.querySelector('[data-field="vehicle"]').textContent;
+    assert.match(vehicle, /falcon|starship|heavy/i, `vehicle must name a SpaceX vehicle, got "${vehicle}"`);
+  }
+});
+
+test('per-card countdown equals computed T-minus at t0', () => {
+  for (const card of launchCards()) {
+    const dt = card.getAttribute('data-launch-time');
+    assert.ok(dt, 'card must carry data-launch-time');
+    const exp = expectedCountdown(dt, 0);
+    assert.ok(exp.total > 0, `fallback launch ${dt} must be in the future relative to frozen now`);
+    for (const part of ['days', 'hours', 'minutes', 'seconds']) {
+      const el = card.querySelector(`[data-countdown="${part}"]`);
+      assert.ok(el, `card missing [data-countdown="${part}"]`);
+      const got = parseInt((el.textContent || '').trim(), 10);
+      assert.equal(got, exp[part], `countdown ${part} for ${dt}: expected ${exp[part]}, got "${el.textContent}"`);
+    }
+  }
+});
+
+test('featured hero countdown exists and matches the next launch at t0', () => {
+  const hero = doc.querySelector('[data-featured-countdown]');
+  assert.ok(hero, '[data-featured-countdown] hero must exist');
+  for (const part of ['days', 'hours', 'minutes', 'seconds']) {
+    assert.ok(hero.querySelector(`[data-countdown="${part}"]`), `hero missing [data-countdown="${part}"]`);
+  }
+  const first = launchCards()[0];
+  const exp = expectedCountdown(first.getAttribute('data-launch-time'), 0);
+  const heroDays = parseInt(hero.querySelector('[data-countdown="days"]').textContent.trim(), 10);
+  assert.equal(heroDays, exp.days, 'hero countdown must match the next (first) launch');
+});
+
+test('page is self-contained: no external scripts/styles/images', () => {
+  const external = /^(https?:)?\/\//i;
+  for (const s of doc.querySelectorAll('script[src]')) {
+    assert.ok(!external.test(s.getAttribute('src')), `external script not allowed: ${s.getAttribute('src')}`);
+  }
+  for (const l of doc.querySelectorAll('link[href]')) {
+    const rel = (l.getAttribute('rel') || '').toLowerCase();
+    if (rel.includes('stylesheet') || rel.includes('preconnect') || rel.includes('font')) {
+      assert.ok(!external.test(l.getAttribute('href')), `external stylesheet/font not allowed: ${l.getAttribute('href')}`);
+    }
+  }
+  for (const img of doc.querySelectorAll('img[src]')) {
+    assert.ok(!external.test(img.getAttribute('src')), `external image not allowed: ${img.getAttribute('src')}`);
+  }
+  assert.ok(doc.querySelector('style'), 'inline <style> required');
+  assert.ok(doc.querySelector('script:not([src])'), 'inline <script> required');
+});
+
+test('mission-control HUD: ticker, grid, status LEDs, designations, T-MINUS', () => {
+  const ticker = doc.querySelector('[data-ticker]');
+  assert.ok(ticker, 'a telemetry ticker [data-ticker] is required');
+  assert.ok((ticker.textContent || '').trim().length > 0, 'ticker must contain telemetry text');
+
+  const grid = doc.querySelector('[data-grid]');
+  assert.ok(grid, 'a technical grid overlay [data-grid] is required');
+
+  const leds = doc.querySelectorAll('[data-led]');
+  assert.ok(leds.length >= 3, `expected >=3 status LEDs [data-led], got ${leds.length}`);
+
+  for (const card of launchCards()) {
+    const desig = card.querySelector('[data-designation]');
+    assert.ok(desig, 'each card must carry a designation strip [data-designation]');
+    assert.ok((desig.textContent || '').trim().length > 0, '[data-designation] must be non-empty');
+  }
+
+  assert.match(doc.body.textContent || '', /T[\s\u2212-]*MINUS/i, 'T-MINUS microcopy required somewhere');
+});
+
+test('telemetry typography + animation + palette tokens declared in CSS', () => {
+  const css = styleText();
+  assert.match(css, /font-family\s*:[^;{}]*mono/i, 'monospace telemetry typography required');
+  assert.match(css, /@keyframes[^{]*\{[\s\S]*?opacity/i, 'a blinking/pulsing (opacity) keyframe is required');
+  assert.match(css, /--[\w-]+\s*:/, 'CSS custom-property design tokens required');
+});
+
+// =================== NEW: integrated rocket-in-tower centerpiece ===================
+
+test('centerpiece is ONE integrated inline SVG scene with a coherent viewBox', () => {
+  const { rocket, tower, svg } = integrated();
+  assert.ok(rocket, 'rocket group ([data-rocket]) required');
+  assert.ok(tower, 'launch tower group ([data-tower]) required');
+  assert.equal(rocket.tagName.toLowerCase(), 'g', '[data-rocket] must be a <g> group inside the scene svg (not a standalone svg)');
+  assert.equal(tower.tagName.toLowerCase(), 'g', '[data-tower] must be a <g> group inside the scene svg (not a standalone svg)');
+  assert.ok(svg, 'rocket group must live inside an <svg>');
+  assert.equal(tower.closest('svg'), svg, 'rocket and tower must share ONE integrated <svg> scene (currently they are two separate SVGs)');
+  const vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  assert.equal(vb.length, 4, 'scene <svg> must declare a coherent 4-value viewBox');
+  const vbw = vb[2], vbh = vb[3];
+  assert.ok(vbw > 0 && vbh > 0, 'viewBox must have positive width/height');
+  assert.ok(vbh > vbw, `scene must be tall/slender (viewBox h ${vbh} must exceed w ${vbw})`);
+});
+
+test('centerpiece: rocket + tower are rich stroke-based line-art, aria-hidden', () => {
+  const { rocket, tower, svg } = integrated();
+  const geoSel = 'path, line, polyline, polygon, rect, circle, ellipse';
+  const rgeo = rocket.querySelectorAll(geoSel);
+  const tgeo = tower.querySelectorAll(geoSel);
+  assert.ok(rgeo.length >= 6, `rocket must be drawn from stroke geometry (>=6 elements, got ${rgeo.length})`);
+  assert.ok(tgeo.length >= 8, `tower must be a lattice with service arms (>=8 stroke elements, got ${tgeo.length})`);
+  const ah = (el) => !!el && el.getAttribute('aria-hidden') === 'true';
+  assert.ok(ah(svg) || ah(svg.closest('[aria-hidden="true"]')), 'decorative scene svg must be aria-hidden');
+  const all = [...svg.querySelectorAll(geoSel)];
+  const solid = all.filter((e) => {
+    const f = (e.getAttribute('fill') || '').trim().toLowerCase();
+    if (!f || f === 'none' || f === 'transparent') return false;
+    const fo = parseFloat(e.getAttribute('fill-opacity'));
+    const o = parseFloat(e.getAttribute('opacity'));
+    const translucent = (!isNaN(fo) && fo < 0.9) || (!isNaN(o) && o < 0.9);
+    return !translucent;
   });
-}
+  assert.ok(solid.length <= Math.ceil(all.length * 0.15),
+    `scene must be stroke-only line-art; too many opaque solid-filled elements (${solid.length}/${all.length})`);
+});
 
-// --- CSSOM helpers: bind design assertions to the REAL rendered elements. ---
-
-// Every base (non reduced-motion) CSSStyleRule, flattened out of media blocks.
-function baseStyleRules(doc) {
-  const win = doc.defaultView;
-  const STYLE = (win.CSSRule && win.CSSRule.STYLE_RULE) || 1;
-  const MEDIA = (win.CSSRule && win.CSSRule.MEDIA_RULE) || 4;
-  const out = [];
-  const walk = (rules) => {
-    for (const r of rules) {
-      if (r.type === STYLE) out.push(r);
-      else if (r.type === MEDIA) {
-        if (!/prefers-reduced-motion/i.test((r.media && r.media.mediaText) || '')) walk(r.cssRules || []);
-      }
+test('centerpiece: scene dominates its section (large declared height + backdrop header)', () => {
+  const { svg } = integrated();
+  assert.ok(svg, 'scene svg required');
+  const inlineBig = isBigPx(svg.getAttribute('height'))
+    || isBigPx(svg.style && svg.style.height)
+    || isBigPx(svg.style && svg.style.minHeight);
+  let cssBig = false;
+  if (!inlineBig) {
+    const tokens = sceneSelectorTokens();
+    for (const [sel, body] of cssBlocks(styleText())) {
+      if (![...tokens].some((t) => sel.includes(t))) continue;
+      const re = /(?:min-)?height\s*:\s*([^;]+)/gi;
+      let m;
+      while ((m = re.exec(body))) { if (isBigPx(m[1])) { cssBig = true; break; } }
+      if (cssBig) break;
     }
+  }
+  assert.ok(inlineBig || cssBig,
+    'scene must render tall (>=~500px / 60-80vh): declare a large height on the scene svg or its section (the old doodles were ~140-300px)');
+
+  let section = svg;
+  while (section && section.tagName && section.tagName.toLowerCase() !== 'section') section = section.parentElement;
+  assert.ok(section, 'the centerpiece must live in its own <section>');
+  assert.match(section.textContent || '', /integration|pad\s*39a|vehicle/i,
+    'centerpiece section needs a mission-control header strip (e.g. "PAD 39A // VEHICLE INTEGRATION")');
+});
+
+test('motion: line-drawing reveal + keyframes + reduced-motion policy declared', () => {
+  const css = styleText();
+  assert.match(css, /stroke-dashoffset/i, 'stroke-dashoffset line-drawing reveal required');
+  assert.match(css, /@keyframes/i, 'CSS @keyframes animation required');
+  assert.match(css, /prefers-reduced-motion/i, 'prefers-reduced-motion policy required');
+  const { svg } = integrated();
+  assert.ok(svg.querySelector('[data-beacon]'), 'a blinking beacon ([data-beacon]) is required in the scene');
+  assert.ok(svg.querySelector('[data-engine-glow]'), 'an engine-glow element ([data-engine-glow]) is required in the scene');
+});
+
+// =================== NEW: parallax — real differentiated motion + section-relative clamp ===================
+
+test('parallax: >=2 layers move at DIFFERENT non-zero speeds and the scene stays clamped in its section', async () => {
+  const layers = [...doc.querySelectorAll('[data-parallax]')];
+  assert.ok(layers.length >= 2, `at least two [data-parallax] layers required, got ${layers.length}`);
+
+  const { svg } = integrated();
+  const sceneLayer = svg && svg.closest('[data-parallax]');
+  assert.ok(sceneLayer, 'the rocket/tower scene must sit inside a [data-parallax] layer');
+  const sceneIdx = layers.indexOf(sceneLayer);
+
+  const H = sceneHeightPx();
+  assert.ok(H && H > 0, 'scene/section must declare a concrete height so the parallax clamp can be section-relative');
+
+  const tyOf = (el) => {
+    const t = (el.style && el.style.transform) || '';
+    const m = t.match(/translateY\(\s*(-?[0-9.]+)px\s*\)/i)
+      || t.match(/translate(?:3d)?\(\s*[^,]+,\s*(-?[0-9.]+)px/i);
+    return m ? parseFloat(m[1]) : 0;
   };
-  for (const sheet of doc.styleSheets) {
-    try { walk(sheet.cssRules); } catch { /* unreadable sheet */ }
+  const drive = async (s) => {
+    SCROLL = s;
+    window.dispatchEvent(new window.Event('scroll'));
+    await sleep(40); // let any rAF-throttled handler flush
+    return layers.map((el) => tyOf(el));
+  };
+
+  // (1) LIVE, DIFFERENTIATED motion: at some non-zero scroll, at least two layers
+  // translate by non-zero AND unequal amounts (real parallax at distinct speeds).
+  // A missing/no-op scroll handler leaves every layer at 0 and fails here.
+  let differentiated = false;
+  for (const s of [8, 20, 45, 90, 180, 360]) {
+    const mags = (await drive(s)).map((v) => Math.abs(v));
+    const moving = mags.filter((v) => v > 0.5);
+    const distinct = new Set(moving.map((v) => Math.round(v * 10) / 10));
+    if (moving.length >= 2 && distinct.size >= 2) { differentiated = true; break; }
   }
-  return out;
-}
+  assert.ok(differentiated,
+    'at least two [data-parallax] layers must move by NON-ZERO, DIFFERENT amounts under scroll (live parallax at distinct speeds, goal #3); a static/no-op layer set leaves every translateY at 0 and fails');
 
-// Strip pseudo-classes/elements so `.card:hover`/`.card::before` still target the card.
-function cleanSelector(sel) {
-  return sel.replace(/::?[a-zA-Z-]+(\([^)]*\))?/g, '');
-}
-
-function ruleMatchesAny(rule, els) {
-  const cleaned = cleanSelector(rule.selectorText || '');
-  for (const part of cleaned.split(',')) {
-    const sel = part.trim();
-    if (!sel) continue;
-    for (const el of els) {
-      try { if (el.matches(sel)) return true; } catch { /* invalid selector fragment */ }
+  // (2) SECTION-RELATIVE CLAMP: under large scroll the SCENE must never be pushed
+  // out of its section — |translateY| stays within 30% of the scene height. A real
+  // 10-15% clamp passes; an unclamped scrollY*speed handler (or a flat multi-thousand-
+  // px clamp) drives the scene off-screen and fails.
+  const sceneBound = 0.30 * H;
+  const globalBound = 2.5 * H; // generous ceiling; still catches runaway/unclamped layers
+  for (const s of [3000, 30000, 200000]) {
+    const vals = await drive(s);
+    const sceneMag = Math.abs(vals[sceneIdx]);
+    assert.ok(sceneMag <= sceneBound,
+      `at scrollY=${s} the rocket/tower scene translated ${sceneMag.toFixed(1)}px, exceeding ${sceneBound.toFixed(1)}px (30% of the ${H.toFixed(0)}px scene height); clamp/attenuate it so the scene stays substantially inside its section (goal #3)`);
+    for (let i = 0; i < vals.length; i++) {
+      const mag = Math.abs(vals[i]);
+      assert.ok(mag <= globalBound,
+        `at scrollY=${s} parallax layer #${i} translated ${mag.toFixed(1)}px, exceeding ${globalBound.toFixed(0)}px; every [data-parallax] layer must be clamped/attenuated (goal #3)`);
     }
   }
-  return false;
-}
 
-// Concatenated cssText of every base rule whose selector targets one of `els`.
-function boundCss(rules, els) {
-  return rules.filter((r) => ruleMatchesAny(r, els)).map((r) => r.cssText).join('\n');
-}
+  SCROLL = 0;
+  window.dispatchEvent(new window.Event('scroll'));
+});
 
-function ancestors(el, n) {
-  const out = [];
-  let cur = el.parentElement;
-  while (cur && out.length < n && cur.tagName !== 'BODY' && cur.tagName !== 'HTML') {
-    out.push(cur);
-    cur = cur.parentElement;
+// =================== LIVE countdown (second time point) ===================
+
+test('countdown is LIVE: digits tick and recompute from data-launch-time', async () => {
+  const cards = launchCards();
+  assert.ok(cards.length >= 6, 'need cards to verify live countdown');
+  const card = cards[0];
+  const dt = card.getAttribute('data-launch-time');
+  const t0 = expectedCountdown(dt, 0);
+  assert.equal(readTotal(card), t0.total, 'displayed T-minus must equal computed value at t0');
+
+  clockOffset += 5000;
+  const deadline = Date.now() + 8000;
+  let changed = false;
+  while (Date.now() < deadline) {
+    if (readTotal(card) !== t0.total) { changed = true; break; }
+    await sleep(100);
   }
-  return out;
-}
+  assert.ok(changed, 'countdown must tick on its own interval as time advances');
 
-// element + its own subtree (NOT ancestors) — the facet/glass must be ON the card, not a shared outer wrapper.
-function selfScope(el) {
-  return [el, ...el.querySelectorAll('*')];
-}
-
-// element + a few ancestors + subtree — for typography/numeric traits that may live on a container.
-function wideScope(el, up = 3) {
-  return [el, ...ancestors(el, up), ...el.querySelectorAll('*')];
-}
-
-// ---------------------------------------------------------------------------
-// FUNCTIONAL NON-REGRESSION: the redesign must keep every existing feature
-// working, verified against the bundled fallback dataset with fetch disabled.
-// ---------------------------------------------------------------------------
-test('offline fallback renders a real SpaceX launch board with correct countdowns', async () => {
-  const { dom, FIXED, html } = loadPage();
-  try {
-    await waitFor(dom, '[data-launch-time]', 6);
-    const doc = dom.window.document;
-
-    const cards = [...doc.querySelectorAll('[data-launch-time]')];
-    assert.ok(cards.length >= 6, `expected >=6 launch cards with [data-launch-time], got ${cards.length}`);
-
-    const fields = ['mission', 'vehicle', 'pad', 'orbit', 'status', 'date-utc'];
-    const missionNames = new Set();
-    for (const card of cards) {
-      const got = {};
-      for (const f of fields) {
-        const el = card.querySelector(`[data-field="${f}"]`);
-        assert.ok(el, `a launch card is missing [data-field="${f}"]`);
-        got[f] = el.textContent.trim();
-        assert.ok(got[f].length > 0, `a launch card has empty [data-field="${f}"]`);
-      }
-      assert.match(got.vehicle, /falcon|starship|heavy/i, `[data-field="vehicle"] must name a real SpaceX vehicle (Falcon 9 / Falcon Heavy / Starship), got "${got.vehicle}"`);
-      assert.ok(got.pad.length >= 6, `[data-field="pad"] must give a real launch site + pad (>=6 chars), got "${got.pad}"`);
-      assert.ok(got.orbit.length >= 6, `[data-field="orbit"] must give a real orbit/payload summary (>=6 chars), got "${got.orbit}"`);
-      assert.match(got['date-utc'], /UTC/i, `[data-field="date-utc"] must display the time in UTC, got "${got['date-utc']}"`);
-      assert.match(got['date-utc'], /\d/, `[data-field="date-utc"] must contain a parseable date with digits, got "${got['date-utc']}"`);
-      missionNames.add(got.mission.toLowerCase());
-    }
-    assert.ok(missionNames.size >= 6, `mission names must be distinct across launches, got ${missionNames.size} unique among ${cards.length} cards`);
-
-    const future = cards.filter((c) => {
-      const t = parseTime(c.getAttribute('data-launch-time'));
-      return Number.isFinite(t) && t > FIXED;
-    });
-    assert.ok(future.length >= 6, `expected >=6 upcoming (future-dated) launches so countdowns tick, got ${future.length}`);
-
-    let checked = 0;
-    for (const card of future) {
-      const t = parseTime(card.getAttribute('data-launch-time'));
-      const parts = ['days', 'hours', 'minutes', 'seconds'].map((p) => {
-        const el = card.querySelector(`[data-countdown="${p}"]`);
-        assert.ok(el, `a future launch card is missing countdown part [data-countdown="${p}"]`);
-        return parseInt(el.textContent.replace(/[^0-9]/g, ''), 10);
-      });
-      const [d, h, m, s] = parts;
-      assert.ok(Number.isFinite(d) && d >= 0, 'days must be a non-negative integer');
-      assert.ok(h >= 0 && h < 24, `hours out of range: ${h}`);
-      assert.ok(m >= 0 && m < 60, `minutes out of range: ${m}`);
-      assert.ok(s >= 0 && s < 60, `seconds out of range: ${s}`);
-      const shown = d * 86400 + h * 3600 + m * 60 + s;
-      const expected = Math.floor((t - FIXED) / 1000);
-      assert.ok(Math.abs(shown - expected) <= 2, `countdown must be computed from data-launch-time: shown ${shown}s vs expected ${expected}s`);
-      checked++;
-    }
-    assert.ok(checked >= 6, 'must verify countdowns on at least 6 upcoming launches');
-
-    const hero = doc.querySelector('[data-featured-countdown]');
-    assert.ok(hero, 'a featured hero countdown element [data-featured-countdown] must exist');
-    for (const p of ['days', 'hours', 'minutes', 'seconds']) {
-      assert.ok(hero.querySelector(`[data-countdown="${p}"]`), `hero countdown missing [data-countdown="${p}"]`);
-    }
-
-    const src = doc.querySelector('[data-source]');
-    assert.ok(src, 'a data-source indicator element [data-source] must exist');
-    const srcText = `${src.getAttribute('data-source') || ''} ${src.textContent || ''}`.toLowerCase();
-    assert.match(srcText, /sample|fallback|offline|demo/, 'with the network disabled the [data-source] indicator must reflect sample/fallback data');
-
-    // Self-contained: inline script, no external framework/CDN/font dependency.
-    assert.match(html, /<script[^>]*>[\s\S]*?<\/script>/i, 'index.html must contain an inline <script>');
-    assert.doesNotMatch(html, /<script[^>]+src\s*=\s*["']https?:/i, 'index.html must not load external scripts (no JS frameworks/CDN)');
-    for (const link of html.match(/<link\b[^>]*>/gi) || []) {
-      if (/rel\s*=\s*["']?stylesheet/i.test(link)) {
-        assert.doesNotMatch(link, /href\s*=\s*["']https?:/i, 'index.html must not load an external stylesheet/font CDN required for the page to work');
-      }
-    }
-
-    // Semantic landmarks (requirement 8).
-    assert.ok(doc.querySelector('main'), 'page must use a <main> landmark');
-    assert.ok(doc.querySelector('footer'), 'page must use a <footer> landmark');
-    assert.ok(doc.querySelector('section, article'), 'page must use <section>/<article> landmarks');
-  } finally {
-    dom.window.close();
+  const t1 = expectedCountdown(dt, 5000);
+  assert.equal(readTotal(card), t1.total, 'ticked value must equal T-minus recomputed at t1');
+  assert.equal(t0.total - t1.total, 5, 'advancing 5s must reduce T-minus by exactly 5s');
+  for (const c of launchCards()) {
+    const e = expectedCountdown(c.getAttribute('data-launch-time'), 5000);
+    assert.equal(readTotal(c), e.total, 'every card must recompute from its own data-launch-time at t1');
   }
 });
 
-// ---------------------------------------------------------------------------
-// NEON CRYSTAL REDESIGN — each visual trait is bound to the ACTUAL rendered
-// element it must style (the launch cards, the hero countdown, the display
-// heading, the countdown digits). A decoy <style> block on unused selectors
-// (e.g. `.__x{...}`) matches none of these elements and therefore FAILS.
-// ---------------------------------------------------------------------------
-test('the launch cards are faceted neon-crystal glass shards', async () => {
-  const { dom } = loadPage();
-  try {
-    await waitFor(dom, '[data-launch-time]', 6);
-    const doc = dom.window.document;
-    const rules = baseStyleRules(doc);
-    assert.ok(rules.length >= 10, `the parsed stylesheet must contain real CSS rules, got ${rules.length}`);
+// =================== design-system documentation ===================
 
-    const cards = [...doc.querySelectorAll('[data-launch-time]')];
-    assert.ok(cards.length >= 6, `expected >=6 launch cards, got ${cards.length}`);
-
-    // (4) Every card is a faceted shard: a rule matching the card (or its subtree)
-    //     sets clip-path: polygon(...). (Absent from the pre-redesign tree.)
-    // (4) Every card uses glassmorphism: backdrop-filter: blur(...) on the card/subtree.
-    let cardsWithGlow = 0;
-    for (const card of cards) {
-      const css = boundCss(rules, selfScope(card));
-      assert.match(css, /clip-path\s*:\s*polygon\s*\(/i,
-        'each launch card must be a faceted crystal shard: a rule matching the card must set clip-path: polygon(...) (requirement 4)');
-      assert.match(css, /(?:-webkit-)?backdrop-filter\s*:[^;{}]*blur\s*\(/i,
-        'each launch card must use glassmorphism: a rule matching the card must set backdrop-filter: blur(...) (requirement 4)');
-      if (/(?:box|text)-shadow\s*:/i.test(css)) cardsWithGlow++;
-    }
-    // (5/7) The cards carry a neon glow edge (base or hover).
-    assert.ok(cardsWithGlow >= 1,
-      'launch cards must carry a neon glow (box-shadow/text-shadow on a rule matching a card) (requirements 5,7)');
-  } finally {
-    dom.window.close();
+test('DESIGN.md documents the rebuilt centerpiece + parallax rules', () => {
+  assert.ok(existsSync(DESIGN_PATH), 'DESIGN.md must exist at repository root');
+  const md = readFileSync(DESIGN_PATH, 'utf8');
+  const low = md.toLowerCase();
+  assert.match(md, /#[0-9a-fA-F]{6}\b/, 'DESIGN.md must document palette hex values');
+  const need = [
+    [/palette/, 'palette'],
+    [/scale/, 'type/spacing scale'],
+    [/spacing/, 'spacing scale'],
+    [/phosphor|green/, 'phosphor green accent'],
+    [/cyan/, 'cyan accent'],
+    [/mono/, 'monospace/telemetry typography'],
+    [/rocket/, 'rocket line-art rules'],
+    [/tower/, 'tower line-art rules'],
+    [/stroke/, 'stroke width/glow rules'],
+    [/parallax/, 'parallax rules'],
+    [/clamp|attenuat/, 'parallax clamp/attenuation rule'],
+    [/proportion|3\/4|three[\s-]*quarter|slender|aspect/, 'rocket/tower proportions'],
+    [/integrated|single .*(svg|scene)|one .*(svg|scene)/, 'the integrated single-svg scene'],
+    [/reduced[\s-]*motion/, 'reduced-motion policy'],
+  ];
+  for (const [re, label] of need) {
+    assert.match(low, re, `DESIGN.md must document ${label}`);
   }
-});
-
-test('the hero, headings and countdown digits carry the neon treatment', async () => {
-  const { dom, html } = loadPage();
-  try {
-    await waitFor(dom, '[data-launch-time]', 6);
-    const doc = dom.window.document;
-    const rules = baseStyleRules(doc);
-    const styleText = [...doc.querySelectorAll('style')].map((s) => s.textContent || '').join('\n');
-    assert.ok(styleText.length > 500, 'inline CSS is implausibly small for a full redesign');
-
-    // (5) The featured hero countdown digits glow.
-    const featured = doc.querySelector('[data-featured-countdown]');
-    assert.ok(featured, '[data-featured-countdown] must exist');
-    const heroCss = boundCss(rules, wideScope(featured, 3));
-    assert.match(heroCss, /(?:box|text)-shadow\s*:/i,
-      'the featured countdown must glow: a box-shadow/text-shadow rule must be bound to the hero countdown (requirement 5)');
-
-    // (6) A display heading uses ultra-wide uppercase treatment.
-    const headings = [...doc.querySelectorAll('h1, h2, h3')];
-    assert.ok(headings.length >= 1, 'the page must have a display heading');
-    const anyUppercase = headings.some((h) => /text-transform\s*:\s*uppercase/i.test(boundCss(rules, wideScope(h, 3))));
-    const anyTracked = headings.some((h) => /letter-spacing\s*:/i.test(boundCss(rules, wideScope(h, 3))));
-    assert.ok(anyUppercase, 'a display heading must be uppercase (text-transform: uppercase bound to a heading) (requirement 6)');
-    assert.ok(anyTracked, 'a display heading must set letter-spacing for the ultra-wide display treatment (requirement 6)');
-
-    // (6) Countdown digits use tabular numerals (digital/terminal feel).
-    const digit = doc.querySelector('[data-countdown]');
-    assert.ok(digit, 'a [data-countdown] digit element must exist');
-    const digitCss = boundCss(rules, wideScope(digit, 4));
-    assert.match(digitCss, /tabular-nums/i,
-      'countdown digits must use tabular numerals (font-variant-numeric: tabular-nums bound to the countdown) (requirement 6)');
-
-    // (4/5) A neon / holographic gradient accent — bound to the hero or a card if
-    //       possible, otherwise present as a global accent.
-    const gradientRe = /(?:linear|radial|conic)-gradient\s*\(/i;
-    const cards = [...doc.querySelectorAll('[data-launch-time]')];
-    const boundGradient = gradientRe.test(heroCss) ||
-      cards.some((c) => gradientRe.test(boundCss(rules, selfScope(c))));
-    assert.ok(boundGradient || gradientRe.test(styleText),
-      'a neon/holographic gradient accent must be used (requirements 4-5)');
-
-    // (7) Motion is wired and gated behind prefers-reduced-motion.
-    const win = doc.defaultView;
-    const KEYFRAMES = (win.CSSRule && win.CSSRule.KEYFRAMES_RULE) || 7;
-    const MEDIA = (win.CSSRule && win.CSSRule.MEDIA_RULE) || 4;
-    let keyframes = 0, reducedMotion = 0;
-    const scan = (ruleList) => {
-      for (const r of ruleList) {
-        if (r.type === KEYFRAMES) keyframes++;
-        else if (r.type === MEDIA) {
-          if (/prefers-reduced-motion/i.test((r.media && r.media.mediaText) || '')) reducedMotion++;
-          if (r.cssRules) scan(r.cssRules);
-        }
-      }
-    };
-    for (const sheet of doc.styleSheets) { try { scan(sheet.cssRules); } catch { /* ignore */ } }
-    assert.ok(keyframes >= 1, `there must be at least one @keyframes animation for the neon motion (requirement 7), found ${keyframes}`);
-    assert.match(styleText, /animation(?:-name)?\s*:/i, 'motion must be wired via an animation declaration (requirement 7)');
-    assert.ok(reducedMotion >= 1, 'all motion must be disabled under a @media (prefers-reduced-motion) query (requirement 7)');
-
-    // (8) Responsive down to small mobile: at least one max-width media query.
-    assert.match(styleText, /@media[^{]*max-width/i, 'the layout must stay responsive via a max-width media query (requirement 8)');
-
-    // Reference html so it participates (self-contained already checked in group A).
-    assert.ok(html.length > 0);
-  } finally {
-    dom.window.close();
-  }
-});
-
-// ---------------------------------------------------------------------------
-// DESIGN.md must be rewritten for the new neon crystal system.
-// ---------------------------------------------------------------------------
-test('DESIGN.md documents the neon crystal design system', () => {
-  assert.ok(existsSync('DESIGN.md'), 'DESIGN.md must exist at the repository root');
-  const d = readFileSync('DESIGN.md', 'utf8');
-
-  const hexes = d.match(/#[0-9a-fA-F]{6}\b/g) || [];
-  assert.ok(hexes.length >= 3, `DESIGN.md must document a palette with >=3 hex colors, found ${hexes.length}`);
-
-  // Core design-system sections.
-  assert.match(d, /palette/i, 'DESIGN.md must document the palette');
-  assert.match(d, /type\s*[- ]?scale|typographic scale/i, 'DESIGN.md must document the type scale');
-  assert.match(d, /spacing/i, 'DESIGN.md must document the spacing scale');
-  assert.match(d, /grid/i, 'DESIGN.md must document the layout grid');
-
-  // New neon crystal vocabulary — proves DESIGN.md was rewritten for this system.
-  assert.match(d, /neon/i, 'DESIGN.md must describe the neon aesthetic');
-  assert.match(d, /crystal|facet|prism|shard/i, 'DESIGN.md must describe the crystalline/faceted treatment');
-  assert.match(d, /glass|glassmorphism|backdrop/i, 'DESIGN.md must document the glass/backdrop treatment');
-  assert.match(d, /gradient/i, 'DESIGN.md must document gradients');
-  assert.match(d, /prefers-reduced-motion|reduced[- ]?motion/i, 'DESIGN.md must document the reduced-motion rule');
-
-  // Neon prism palette hues (requirement 5): cyan + magenta/pink + purple/uv.
-  assert.match(d, /cyan/i, 'DESIGN.md palette must document the electric cyan hue');
-  assert.match(d, /magenta|pink/i, 'DESIGN.md palette must document the hot magenta/pink hue');
-  assert.match(d, /purple|violet|ultraviolet/i, 'DESIGN.md palette must document the ultraviolet/purple hue');
 });
