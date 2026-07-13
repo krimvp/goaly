@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractBalancedJson, extractJson } from './json-extract';
+import { extractBalancedJson, extractJson, isTruncatedJson } from './json-extract';
 
 describe('extractBalancedJson', () => {
   it('extracts a bare JSON object substring', () => {
@@ -26,6 +26,33 @@ describe('extractBalancedJson', () => {
 
   it('returns undefined for an unclosed object', () => {
     expect(extractBalancedJson('{"a": 1')).toBeUndefined();
+  });
+});
+
+describe('isTruncatedJson', () => {
+  it('is false when there is no opening brace at all', () => {
+    expect(isTruncatedJson('no json here')).toBe(false);
+  });
+
+  it('is false for a complete, balanced object', () => {
+    expect(isTruncatedJson('{"a":1}')).toBe(false);
+  });
+
+  it('is false for a balanced object with trailing prose', () => {
+    expect(isTruncatedJson('{"a":1} some trailing commentary')).toBe(false);
+  });
+
+  it('is true when an opening brace is never closed', () => {
+    expect(isTruncatedJson('{"a": 1')).toBe(true);
+  });
+
+  it('is true when a nested object is left open', () => {
+    expect(isTruncatedJson('{"a": {"b": 2')).toBe(true);
+  });
+
+  it('ignores an unbalanced brace inside a string literal', () => {
+    // The only brace is inside a string, so the object IS balanced ({ ... }) — not truncated.
+    expect(isTruncatedJson('{"detail":"contains } brace"}')).toBe(false);
   });
 });
 

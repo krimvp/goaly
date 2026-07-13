@@ -262,6 +262,27 @@ describe('AgentCompiler — generate verifier', () => {
     await expect(compiler.compile(config)).rejects.toThrow();
   });
 
+  it('gives a distinct, actionable error when the LLM response is truncated mid-JSON', async () => {
+    // Arrange — an opening brace whose depth never returns to 0 (cut off before the closing brace),
+    // the shape produced when an authoring call runs out of turns/output budget mid-answer.
+    const llm = new FakeLlm(['{"command": "npm test", "rubric": "some rubric', 'never reached']);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({ verifier: { kind: 'generate' } });
+
+    // Act + Assert
+    await expect(compiler.compile(config)).rejects.toThrow(/truncated mid-JSON/);
+  });
+
+  it('still reports plain absence of JSON distinctly from truncation', async () => {
+    // Arrange — no '{' anywhere, so this is NOT the truncated-JSON failure mode.
+    const llm = new FakeLlm(['sorry, I cannot help with that']);
+    const compiler = new AgentCompiler({ llm });
+    const config = makeConfig({ verifier: { kind: 'generate' } });
+
+    // Act + Assert
+    await expect(compiler.compile(config)).rejects.toThrow('LLM response contained no JSON object');
+  });
+
   it('rejects when the JSON is missing the required command', async () => {
     // Arrange
     const llm = new FakeLlm([JSON.stringify({ rubric: 'no command here' })]);
@@ -605,6 +626,31 @@ describe('AgentCompiler — authoring session-resume (revise rounds)', () => {
 
     expect(llm.requests[1]?.resumeSessionId).toBeUndefined();
     expect(llm.requests[1]?.prompt).toContain('Goal:');
+  });
+
+  it('forces a fresh session (does not resume) when the retry feedback is a truncated-JSON failure', async () => {
+    // Arrange — feedback carrying the TRUNCATED_JSON_MARKER text, as compileRetryFeedback would
+    // produce from a truncated-mid-JSON COMPILE_FAILED reason. Even though the provider CAN resume
+    // and feedback is present (the two conditions that normally trigger a resume), truncation must
+    // override that: resuming the session that just ran out of budget tends to re-hit the same wall.
+    const llm = new FakeLlm(
+      [completion('npm test', 'sess-1'), completion('npm test -- --coverage', 'sess-2')],
+      { supportsResume: true },
+    );
+    const compiler = new AgentCompiler({ llm });
+    const truncationFeedback =
+      'The previous attempt to author the verification failed: AgentCompiler: LLM response was ' +
+      'truncated mid-JSON (unbalanced braces) — it likely ran out of turns or output budget before ' +
+      'finishing the JSON object.';
+
+    await compiler.compile(genConfig);
+    await compiler.compile(genConfig, truncationFeedback);
+
+    // No resume on the truncation-triggered round — a fresh, goal-carrying full prompt instead.
+    expect(llm.requests[1]?.resumeSessionId).toBeUndefined();
+    expect(llm.requests[1]?.mintSession).toBe(true);
+    expect(llm.requests[1]?.prompt).toContain('Goal:');
+    expect(llm.requests[1]?.prompt).toContain('truncated mid-JSON');
   });
 
   it('sends the full prompt on a feedback round when the provider cannot resume (default FakeLlm)', async () => {
