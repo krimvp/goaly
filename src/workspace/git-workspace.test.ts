@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -95,6 +96,16 @@ describe('GitWorkspace (integration, real git)', () => {
     // The real index must still be clean (the change remains unstaged).
     const status = spawnSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' });
     expect(status.stdout).toContain(' M file.txt');
+  });
+
+  it('diffHash keeps its throwaway index under .goaly/.tmp and cleans it up', async () => {
+    const ws = new GitWorkspace(root);
+    await ws.diffHash();
+    const tmpDir = join(root, '.goaly', '.tmp');
+    expect(existsSync(tmpDir)).toBe(true);
+    // The temporary index file is deleted in the finally block; only the dir remains.
+    const entries = await readdir(tmpDir);
+    expect(entries.filter((e) => e.startsWith('goaly-idx-'))).toHaveLength(0);
   });
 
   it('diff includes untracked files with their CONTENT (not just the name)', async () => {
