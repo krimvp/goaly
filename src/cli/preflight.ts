@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { runProcess } from '../util/spawn';
 import { which } from '../util/which';
 import { codecFor, isAgentCli } from '../agent-cli/registry';
@@ -20,7 +20,7 @@ export type PreflightProbes = {
   /** Is `dir` inside a git work tree? Defaults to `git rev-parse --is-inside-work-tree`. */
   isGitWorkTree?: (dir: string) => Promise<boolean>;
   /** Run a git subcommand in `dir`. Defaults to the shared {@link runProcess}. */
-  git?: (dir: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<{ code: number; stdout: string; stderr: string }>;
+  git?: (dir: string, args: string[], env?: Record<string, string | undefined>) => Promise<{ code: number; stdout: string; stderr: string }>;
 };
 
 async function defaultIsGitWorkTree(dir: string): Promise<boolean> {
@@ -28,7 +28,7 @@ async function defaultIsGitWorkTree(dir: string): Promise<boolean> {
   return r.code === 0 && r.stdout.trim() === 'true';
 }
 
-function defaultGit(dir: string, args: string[], env?: NodeJS.ProcessEnv) {
+function defaultGit(dir: string, args: string[], env?: Record<string, string | undefined>) {
   return runProcess('git', args, { cwd: dir, ...(env !== undefined ? { env } : {}) });
 }
 
@@ -85,10 +85,11 @@ export async function preflightRun(
 }
 
 /**
- * Auto-initialize a git repository for hands-off operation. Called before the preflight when
- * `--auto-init` is set: creates the repo, stages all existing files, and makes an initial commit
- * so goaly has a stable baseline to diff against. Also ensures `.goaly/` is git-ignored so the
- * run state dir never appears in `git status`.
+ * Auto-initialize a git repository for hands-off operation. Called after the dry-run gate and
+ * before the run lock: creates the repo, stages all existing files, drops any pre-existing `.goaly`
+ * runtime dir from the baseline, and makes an initial commit so goaly has a stable baseline to
+ * diff against. Also ensures `.goaly/` is git-ignored so the run state dir never appears in
+ * `git status`.
  *
  * Fail-closed: if any step errors, returns a clear message so the run aborts before any token is
  * spent. The caller must still run the normal preflight afterwards to confirm the workspace is
@@ -111,10 +112,10 @@ export async function maybeAutoInitGitRepo(
   }
 
   // Make sure goaly's state dir is ignored from the start, so the first commit and every `git status` stay clean.
-  await ensureGoalyIgnored(opts.workspace);
+  ensureGoalyIgnored(opts.workspace);
 
   // Use a one-off author identity so the baseline commit works even on machines with no global git user configured.
-  const env: NodeJS.ProcessEnv = {
+  const env: Record<string, string> = {
     GIT_AUTHOR_NAME: 'goaly',
     GIT_AUTHOR_EMAIL: 'goaly@local',
     GIT_COMMITTER_NAME: 'goaly',
@@ -126,6 +127,12 @@ export async function maybeAutoInitGitRepo(
     return `git add failed during --auto-init in ${opts.workspace}: ${add.stderr.trim()}`;
   }
 
+  // Never commit a pre-existing .goaly state dir into the baseline: it is runtime data, not source.
+  const reset = await git(opts.workspace, ['reset', '--quiet', '--', '.goaly'], env);
+  if (reset.code !== 0) {
+    return `git reset failed during --auto-init in ${opts.workspace}: ${reset.stderr.trim()}`;
+  }
+
   const commit = await git(opts.workspace, ['commit', '-q', '--allow-empty', '-m', 'goaly baseline'], env);
   if (commit.code !== 0) {
     return `git commit failed during --auto-init in ${opts.workspace}: ${commit.stderr.trim()}`;
@@ -134,16 +141,16 @@ export async function maybeAutoInitGitRepo(
   return null;
 }
 
-async function ensureGoalyIgnored(dir: string): Promise<void> {
+function ensureGoalyIgnored(dir: string): void {
   const path = `${dir}/.gitignore`;
   let existing = '';
   try {
-    existing = await readFile(path, 'utf8');
+    existing = readFileSync(path, 'utf8');
   } catch {
     existing = '';
   }
   const marker = '.goaly/';
   if (existing.split('\n').some((line) => line.trim() === marker)) return;
   const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
-  await writeFile(path, `${existing}${prefix}${marker}\n`, 'utf8');
+  writeFileSync(path, `${existing}${prefix}${marker}\n`, 'utf8');
 }

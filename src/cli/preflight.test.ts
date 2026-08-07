@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -141,6 +141,26 @@ describe('maybeAutoInitGitRepo', () => {
       const ignore = await readFile(join(dir, '.gitignore'), 'utf8');
       expect(ignore).toContain('node_modules/');
       expect(ignore).toContain('.goaly/');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not commit a pre-existing .goaly state dir into the baseline', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'goaly-autoinit-state-'));
+    try {
+      await writeFile(join(dir, 'README.md'), '# hello', 'utf8');
+      await mkdir(join(dir, '.goaly', 'run-old'), { recursive: true });
+      await writeFile(join(dir, '.goaly', 'run-old', 'log.jsonl'), '{}\n', 'utf8');
+      const err = await maybeAutoInitGitRepo({ workspace: dir, autoInit: true });
+      expect(err).toBeNull();
+
+      const tracked = spawnSync('git', ['ls-tree', '-r', '--name-only', 'HEAD'], { cwd: dir });
+      expect(tracked.stdout.toString()).toContain('README.md');
+      expect(tracked.stdout.toString()).not.toContain('.goaly');
+
+      const status = spawnSync('git', ['status', '--porcelain'], { cwd: dir });
+      expect(status.stdout.toString()).not.toContain('.goaly');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -738,6 +738,23 @@ describe('main() — --dry-run validates and prints, and starts nothing', () => 
     expect(existsSync(join(root, STATE_DIR))).toBe(false);
   });
 
+  it('dry-run in a non-git directory shows auto-init true without mutating the filesystem', async () => {
+    const bare = await mkdtemp(join(tmpdir(), 'goaly-main-dryrun-bare-'));
+    try {
+      const res = await capture(() =>
+        main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+          '--dry-run', '--workspace', bare]),
+      );
+      expect(res.code).toBe(0);
+      expect(res.out).toContain('auto-init     true');
+      // --dry-run must stay read-only: no git repo, no .goaly dir, no run directory.
+      expect(existsSync(join(bare, '.git'))).toBe(false);
+      expect(existsSync(join(bare, '.goaly'))).toBe(false);
+    } finally {
+      await rm(bare, { recursive: true, force: true });
+    }
+  });
+
   it('reads a .goalyrc and reports it as a source', async () => {
     await writeFile(join(root, '.goalyrc'), JSON.stringify({ 'max-iterations': 7 }), 'utf8');
     const res = await capture(() =>
