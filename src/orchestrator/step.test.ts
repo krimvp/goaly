@@ -93,6 +93,61 @@ describe('step() transitions', () => {
     if (cmds[0]?.tag === 'RUN_AGENT') expect(cmds[0].prompt).toContain(contract.goal);
   });
 
+  describe('frozen verification files in the worker prompt', () => {
+    // The observed trap (real --generate run): the goal said "include a test script (node test.mjs)"
+    // and the compiler pinned test.mjs as the frozen verifier. The worker — never told the file was
+    // frozen — "created" it, tripped the anti-tamper guard, and deadlocked the run (no-diff abort).
+    const filesContract = makeFakeContract({
+      generatedFiles: [{ path: 'test.mjs', sha256: 'a'.repeat(64) }],
+    });
+
+    function firstPrompt(c: typeof filesContract): string {
+      const [s1] = step(initial(makeConfig())[0], { tag: 'CONTRACT_COMPILED', contract: c });
+      const [s2, cmds2] = step(s1, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } });
+      // generatedFiles route through PREPARING; a bare contract goes straight to RUNNING_AGENT.
+      const cmds =
+        s2.tag === 'PREPARING'
+          ? step(s2, {
+              tag: 'WORKSPACE_PREPARED',
+              prepared: { status: 'proceed' },
+              setupRan: false,
+            })[1]
+          : cmds2;
+      if (cmds[0]?.tag !== 'RUN_AGENT') throw new Error('expected RUN_AGENT');
+      return cmds[0].prompt;
+    }
+
+    it('the initial prompt NAMES the pinned files and bars ANY edit — even a goal-requested one', () => {
+      const prompt = firstPrompt(filesContract);
+      expect(prompt).toContain('test.mjs');
+      expect(prompt).toContain('Frozen verification files');
+      expect(prompt).toContain('fails verification as tampering');
+      // The goal-collision rule: a goal artifact at a frozen path is already satisfied.
+      expect(prompt).toContain('already satisfied');
+    });
+
+    it('a contract WITHOUT authored files adds no frozen-files section (legacy prompt unchanged)', () => {
+      const prompt = firstPrompt(makeFakeContract());
+      expect(prompt).not.toContain('Frozen verification files');
+    });
+
+    it('the loop prompt repeats the frozen-file guard after a red iteration', () => {
+      const [s1] = step(initial(makeConfig())[0], { tag: 'CONTRACT_COMPILED', contract: filesContract });
+      const [s2] = step(s1, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } });
+      const [s3] = step(s2, {
+        tag: 'WORKSPACE_PREPARED',
+        prepared: { status: 'proceed' },
+        setupRan: false,
+      });
+      const v1 = step(s3, agentRan('0000000', '0000001'))[0];
+      const [cont, cmds] = step(v1, { tag: 'VERIFIED', verdict: failVerdict('tampered: test.mjs') });
+      expect(cont.tag).toBe('RUNNING_AGENT');
+      if (cmds[0]?.tag !== 'RUN_AGENT') throw new Error('expected RUN_AGENT');
+      expect(cmds[0].prompt).toContain('Frozen verification files');
+      expect(cmds[0].prompt).toContain('test.mjs');
+    });
+  });
+
   it('seeds the FIRST RUN_AGENT session from config.seedSessionId (Capability C inheritance)', () => {
     const config = makeConfig({ seedSessionId: 'prior-session-xyz' as never });
     const [s0] = initial(config);

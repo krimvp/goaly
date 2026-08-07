@@ -661,6 +661,10 @@ kill an hours-long run. All defaults, no flags needed
 - **Crash-safety end to end.** Every run-log append is fsync'd write-ahead; a torn tail is
   tolerated on read and repaired on the next append. A per-run lock stops two processes driving the
   same run (stale locks self-heal). A terminated-but-corrupt line still fails closed.
+- **A process-level bug never orphans the run.** A last-resort guard catches any uncaught
+  exception / unhandled rejection that escapes every seam, prints the stack with the `--resume`
+  hint, reaps live child processes (so no agent CLI keeps editing or spending after goaly is gone),
+  and exits 1 — never a raw crash, never swallow-and-continue.
 - **Budgets survive `--resume`.** Prior token spend is folded out of the log and re-armed against
   `--budget-tokens`. (The wall-clock budget restarts per process — the crash-to-resume gap is idle
   time, not spend.)
