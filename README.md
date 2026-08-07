@@ -30,8 +30,8 @@ goaly -d "add a /health endpoint returning 200"
 goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
 ```
 
-Requires Node ≥ 20 and `git`. Exit codes: `0` DONE · `1` FAILED/ABORTED · `2` usage error ·
-`130` interrupted (Ctrl-C — the run stays resumable).
+Requires Node ≥ 20 and `git` (auto-initialized on first run if absent). Exit codes: `0` DONE ·
+`1` FAILED/ABORTED · `2` usage error · `130` interrupted (Ctrl-C — the run stays resumable).
 
 ## How it works
 
@@ -76,6 +76,7 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Best-of-N worker](docs/reference.md#best-of-n-parallel-worker---candidates) | `--candidates N` | N isolated attempts per iteration; the frozen ladder picks the winner. Or just say *"use 4 subagents"*. |
 | [Parallel waves](docs/reference.md#cooperative-parallel-waves---parallel-phases-experimental) | `--parallel-phases` | Independent phases run concurrently, merge with git plumbing, re-verify. Experimental. |
 | [Worktrees](docs/reference.md#worktrees---worktree) | `--worktree <name>` | The whole run in an isolated checkout; merge back with plain git. |
+| [Git bootstrap](docs/reference.md#git-bootstrap-auto-init) | *(default)* | Runs in a bare directory: auto-initializes git, commits a baseline, and ignores `.goaly/`. Opt out with `--no-auto-init`. |
 | [Harness autonomy](docs/reference.md#harness-autonomy---harness-autonomy) | `--harness-autonomy` | Let the agent install & build for a from-scratch goal; a refusal names the fix, and the reviewed diff auto-pins to the run-start commit so agent commits stay visible. |
 | [Dry run](docs/reference.md#dry-run---dry-run) | `--dry-run` | Validate the flags + `.goalyrc` and print the resolved config. Writes nothing, spends nothing. |
 | [Adversarial review](docs/reference.md#hardening-against-reward-hacking) | `--adversarial` | Critics attack the contract before Seal; refuters attack every green before Sign-off. |

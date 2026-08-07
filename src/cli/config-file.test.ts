@@ -51,6 +51,11 @@ describe('overlayFromConfig', () => {
     expect('autonomous' in overlay).toBe(false);
   });
 
+  it('preserves auto-init false so a config file can disable the default-on behavior', () => {
+    const overlay = overlayFromConfig({ 'auto-init': false }, '.goalyrc');
+    expect(overlay).toEqual({ 'auto-init': false });
+  });
+
   it('stringifies numbers so they flow through the CLI coercion seam', () => {
     const overlay = overlayFromConfig({ 'budget-tokens': 500000, 'max-seal-revisions': 0 }, '.goalyrc');
     expect(overlay).toEqual({ 'budget-tokens': '500000', 'max-seal-revisions': '0' });
