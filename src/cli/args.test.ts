@@ -1515,6 +1515,43 @@ describe('--dry-run', () => {
   });
 });
 
+describe('--auto-init', () => {
+  it('defaults ON so autonomous runs work in a bare directory', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+    expect(a.autoInit).toBe(true);
+  });
+
+  it('is explicitly off with --no-auto-init', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--no-auto-init']);
+    expect(a.autoInit).toBe(false);
+  });
+
+  it('can be toggled from a config file', async () => {
+    const off = await parseArgs(
+      ['run', '--goal', 'g', '--verify-cmd', 'true', '--workspace', '/proj'],
+      undefined,
+      fakeConfig({ '/proj/.goalyrc': '{ "auto-init": false }' }),
+    );
+    expect(off.autoInit).toBe(false);
+
+    const on = await parseArgs(
+      ['run', '--goal', 'g', '--verify-cmd', 'true', '--workspace', '/proj'],
+      undefined,
+      fakeConfig({ '/proj/.goalyrc': '{ "auto-init": true }' }),
+    );
+    expect(on.autoInit).toBe(true);
+  });
+
+  it('a CLI --no-auto-init overrides a config-file true', async () => {
+    const a = await parseArgs(
+      ['run', '--goal', 'g', '--verify-cmd', 'true', '--workspace', '/proj', '--no-auto-init'],
+      undefined,
+      fakeConfig({ '/proj/.goalyrc': '{ "auto-init": true }' }),
+    );
+    expect(a.autoInit).toBe(false);
+  });
+});
+
 describe('--max-plan-retries', () => {
   it('defaults to 2 (mirrors --max-compile-retries)', async () => {
     const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);

@@ -59,6 +59,7 @@ export const PER_INVOCATION_FLAGS: ReadonlySet<string> = new Set([
   'goal-file',
   'inherit-session',
   'intent-file',
+  'no-auto-init',
   'note',
   'resume',
   'rubric-file',
@@ -106,6 +107,7 @@ const ConfigFileSchema = z
     'stuck-crash-threshold': FlagValue.optional(),
     'stuck-unevaluable-threshold': FlagValue.optional(),
     'diff-ignore': FlagValue.optional(),
+    'auto-init': FlagValue.optional(),
     baseline: FlagValue.optional(),
     'delta-verify': FlagValue.optional(),
     'cost-table': FlagValue.optional(),
@@ -191,7 +193,14 @@ export function overlayFromConfig(raw: unknown, source: string): RawFlags {
   for (const [flag, value] of Object.entries(parsed)) {
     if (value === undefined) continue;
     if (typeof value === 'boolean') {
-      if (value) overlay[flag] = true; // false → omit (matches CLI flag-absence semantics)
+      if (value) {
+        overlay[flag] = true; // true sets the flag
+      } else if (flag === 'auto-init') {
+        // `auto-init` defaults to true, so an explicit `false` must be preserved so the user can
+        // disable it from a config file (matches `--no-auto-init` on the CLI).
+        overlay[flag] = false;
+      }
+      // Other booleans: false → omit (matches CLI flag-absence semantics).
       continue;
     }
     // A LIST value (e.g. `approver-models`) is joined into the comma-separated wire form so it flows

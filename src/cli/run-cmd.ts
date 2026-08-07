@@ -19,7 +19,7 @@ import { renderResolvedConfig } from './dry-run';
 import type { RunExtension } from '../domain/events';
 import { acquireRunLock, RunLockedError, type RunLock } from '../runlog/lock';
 import { killActiveChildren } from '../util/spawn';
-import { preflightRun } from './preflight';
+import { maybeAutoInitGitRepo, preflightRun } from './preflight';
 import { compactRun } from '../followup/compaction';
 import { resumeHint, renderResumeHint, type ResumeHint } from './resume-cmd';
 import { resolveModels } from './models';
@@ -321,6 +321,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       harness: parsed.harness,
       llmProvider: parsed.llmProvider,
       workspace: parsed.workspace,
+      autoInit: parsed.autoInit,
     });
     if (problem !== null) {
       io.err(`goaly: ${problem}\n`);
@@ -346,6 +347,19 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
   const resuming = parsed.resumeRunId !== undefined;
   const runId: RunId =
     parsed.resumeRunId !== undefined ? asRunId(parsed.resumeRunId) : asRunId(`run-${randomUUID()}`);
+
+  // Auto-initialize a git repository for hands-off runs. This mutation happens AFTER the dry-run
+  // gate (so --dry-run stays read-only) but BEFORE the run lock, so the rest of the run sees a
+  // stable git baseline. It is logged loudly via the startup banner below.
+  const autoInitError = await maybeAutoInitGitRepo({
+    workspace: parsed.workspace,
+    autoInit: parsed.autoInit,
+  });
+  if (autoInitError !== null) {
+    io.err(`goaly: ${autoInitError}
+`);
+    return { code: 2, runId, outcome: undefined };
+  }
 
   // Exclusive per-run lock: two goaly processes appending to one run log would interleave duplicate
   // seq values and corrupt it logically. A crashed holder self-heals (stale-pid detection); a LIVE

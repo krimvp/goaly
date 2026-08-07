@@ -141,6 +141,12 @@ export type ParsedArgs = {
    * lock, no log file, no worktree. Per-invocation, so it is never read from a config file.
    */
   dryRun: boolean;
+  /**
+   * Auto-initialize a git repository when the workspace isn't one, so hands-off / autonomous runs
+   * work without manual `git init`. goaly creates a baseline commit and adds `.goaly/` to
+   * `.gitignore`. Pure wiring — never enters the frozen contract.
+   */
+  autoInit: boolean;
   workspace: string;
   /**
    * Diff baseline (issue #47): the git ref/SHA `diff()`/Sign-off compare the working tree against,
@@ -275,7 +281,7 @@ Usage:
                [--sandbox-net none|allow|allow:<host,…>]
                [--sandbox-image <ref>] [--sandbox-runtime docker|podman]
                [--cost-table <path>] [--baseline <ref>] [--delta-verify] [--workspace <dir>]
-               [--worktree [<name>]] [--dry-run]
+               [--worktree [<name>]] [--dry-run] [--auto-init] [--no-auto-init]
                [--resume <runId> [--note "<text>"]]
                [--from-run <runId> [--inherit-session]]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
@@ -335,6 +341,13 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                       edit and no tracked file touched. A loud log line names each authored file and
                       how to keep it ('git add -f'). The integrity guard still pins them by content
                       hash on disk (excluded ≠ unprotected). Absent ⇒ the compiler picks the dir.
+
+Git bootstrap (hands-off by default):
+  --auto-init       if the workspace is not a git repository, initialize it, stage all files, commit a
+                    "goaly baseline", and add '.goaly/' to '.gitignore' — then proceed. Default ON so
+                    autonomous runs work anywhere; use --no-auto-init to keep the old fail-closed "not a
+                    git repository" behavior.
+  --no-auto-init    refuse to start if the workspace is not already a git repository.
 
 Diff baseline (issue #47 — keep a run's diff small without touching the user's git history):
   --baseline <ref>  compute the worker's diff (the approver's Sign-off input) against <ref> — any git
@@ -798,6 +811,7 @@ const VALUELESS_FLAGS = new Set([
   'defaults',
   'inherit-session',
   'dry-run',
+  'no-auto-init',
 ]);
 
 /**
@@ -1243,6 +1257,10 @@ export async function parseArgs(
     // Per-invocation: read from `cliFlags`, never the config overlay (a persisted `dry-run: true`
     // would silently make every run in that tree a no-op).
     dryRun: cliFlags['dry-run'] !== undefined,
+    // --no-auto-init is a per-invocation opt-out (like --dry-run); the config file uses `auto-init: false`.
+    autoInit: cliFlags['no-auto-init'] !== undefined
+      ? false
+      : (boolFlag(flags, 'auto-init') ?? true),
     workspace: str(flags, 'workspace') ?? process.cwd(),
     baseline: str(flags, 'baseline'),
     verifyDir: str(flags, 'verify-dir'),
@@ -1727,6 +1745,7 @@ function baseArgs(
     llmProviderExplicit: false,
     harnessAutonomy: undefined,
     dryRun: false,
+    autoInit: true,
     workspace,
     baseline: undefined,
     verifyDir: undefined,

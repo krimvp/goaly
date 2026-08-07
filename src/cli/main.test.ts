@@ -623,15 +623,16 @@ describe('main() — follow-up (Capability C) guards & resume-cmd (Capability A)
     expect(err).toContain('runs list');
   });
 
-  it('exits 2 with git guidance when the workspace is not a git repository', async () => {
+  it('exits 2 with git guidance when the workspace is not a git repository and --no-auto-init is set', async () => {
     // `root` is a bare temp dir (no git init) — the preflight must say so BEFORE any spend.
     const { code, err } = await captureStderr(() =>
       main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
-        '--workspace', root]),
+        '--workspace', root, '--no-auto-init']),
     );
     expect(code).toBe(2);
     expect(err).toContain('not a git repository');
     expect(err).toContain('git init');
+    expect(err).toContain('--auto-init');
   });
 
   it('exits 2 when --inherit-session is used without --from-run', async () => {

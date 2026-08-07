@@ -641,6 +641,20 @@ goaly worktree remove feature-x --force --delete-branch
   tournament; `--worktree` is the persistent, named counterpart a whole run can live in. They
   compose.
 
+## Git bootstrap (`--auto-init`)
+
+`--auto-init` is **on by default**. If the workspace is not a git repository, goaly initializes
+it, stages the existing files, commits a baseline (`goaly baseline`), and adds `.goaly/` to
+`.gitignore`. This makes hands-off / autonomous runs work in any directory without manual `git
+init`.
+
+- The baseline commit gives goaly a stable `HEAD` to diff against for stuck-detection and the
+  approver's Sign-off review.
+- `.goaly/` is added to `.gitignore` immediately, so the run state dir never appears in `git status`.
+- No global git user identity is required: the baseline commit uses a one-off author identity.
+- Use `--no-auto-init` (or `"auto-init": false` in `.goalyrc`) to keep the historical fail-closed
+  behavior: refuse to start if the workspace is not already a git repository.
+
 ## Reliability
 
 goaly fails closed but not eagerly: a wrong green must be impossible, and a transient blip must not
