@@ -755,6 +755,23 @@ describe('main() — --dry-run validates and prints, and starts nothing', () => 
     }
   });
 
+  it('dry-run with --worktree in a non-git directory reports the intended worktree', async () => {
+    const bare = await mkdtemp(join(tmpdir(), 'goaly-main-dryrun-wt-'));
+    try {
+      const res = await capture(() =>
+        main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+          '--dry-run', '--workspace', bare, '--worktree', 'feat']),
+      );
+      expect(res.code).toBe(0);
+      expect(res.out).toContain('worktree      feat');
+      expect(res.out).toContain('auto-init     true');
+      // --dry-run stays read-only: no worktree materialized.
+      expect(existsSync(join(bare, '.goaly', 'worktrees', 'feat'))).toBe(false);
+    } finally {
+      await rm(bare, { recursive: true, force: true });
+    }
+  });
+
   it('reads a .goalyrc and reports it as a source', async () => {
     await writeFile(join(root, '.goalyrc'), JSON.stringify({ 'max-iterations': 7 }), 'utf8');
     const res = await capture(() =>

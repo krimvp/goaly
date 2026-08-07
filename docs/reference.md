@@ -634,6 +634,9 @@ goaly worktree remove feature-x --force --delete-branch
 - **Merge-back is plain git.** Runs never commit; the end-of-run hint shows the two steps
   (commit inside the worktree, then `git merge goaly/<name>`). `remove` keeps the branch by default;
   `--delete-branch` opts out (an unmerged branch then needs `--force`).
+- **Auto-init composes.** `--worktree` in a bare directory auto-initializes the main repo first
+  (when `--auto-init` is on, the default), then creates the worktree on the freshly-committed
+  baseline.
 - **Fail-closed safety.** Creating over an existing worktree, an unresolvable `--base`, or an
   invalid name (one safe path component: `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`) all refuse. `remove`
   refuses while a live goaly run is inside (always) and refuses a dirty tree without `--force`.
