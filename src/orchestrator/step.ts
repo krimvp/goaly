@@ -725,6 +725,31 @@ function describeRungs(rungs: readonly Rung[]): string {
     .join('\n');
 }
 
+/**
+ * The frozen-verification-file guard rail, carried by every worker prompt when the contract pins
+ * authored files (`generatedFiles`). The anti-tamper rung hashes them BEFORE the bar runs and fails
+ * closed on ANY byte change — but a worker that was never told they exist will happily rewrite one
+ * the moment the GOAL names the same path (the observed trap: goal "include a test script (node
+ * test.mjs)" + a compiler-pinned test.mjs → the worker "created" test.mjs, tripped the tamper guard,
+ * and deadlocked the run into a no-diff abort). Naming the files plus the goal-collision rule costs
+ * a few prompt tokens and removes the trap: a goal artifact at a frozen path is ALREADY SATISFIED by
+ * the placed file. Empty when the contract pins nothing (legacy prompts stay byte-for-byte).
+ */
+function buildFrozenFilesSection(contract: CompiledContract): string {
+  if (contract.generatedFiles.length === 0) return '';
+  const list = contract.generatedFiles.map((f) => `  - ${f.path}`).join('\n');
+  return [
+    '# Frozen verification files (never touch them)',
+    'The contract pins these verification files byte-for-byte; they are ALREADY PLACED in the workspace:',
+    list,
+    'Do NOT create, edit, overwrite, rename, or delete them: ANY change — even a fix or an',
+    'improvement — fails verification as tampering with the frozen bar. If the goal asks you to',
+    'create a file at one of these paths, that part of the goal is already satisfied by the placed',
+    'file: leave it exactly as-is.',
+    '',
+  ].join('\n');
+}
+
 function buildInitialPrompt(
   contract: CompiledContract,
   installTools?: readonly string[],
@@ -741,6 +766,7 @@ function buildInitialPrompt(
     describeRungs(contract.rungs),
     contract.rubric ? `\nOverall rubric:\n${contract.rubric}` : '',
     '',
+    buildFrozenFilesSection(contract),
     'Make the changes needed to satisfy the contract. Do not weaken or rewrite the checks themselves.',
     '',
     VERIFICATION_DIVISION_OF_LABOR,
@@ -818,6 +844,7 @@ function buildLoopPrompt(
     '',
     'Continue working toward the goal. Do not modify the success contract or its tests.',
     '',
+    buildFrozenFilesSection(contract),
     VERIFICATION_DIVISION_OF_LABOR,
   ].join('\n');
 }
