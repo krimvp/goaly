@@ -1,4 +1,4 @@
-import { readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { DiffHash } from '../domain/ids';
@@ -179,7 +179,12 @@ export class GitWorkspace implements Workspace {
    * on any git failure — never returns a silently empty/partial tree.
    */
   async #snapshotTree(): Promise<string> {
-    const tmpIndex = join(tmpdir(), `goaly-idx-${process.pid}-${tmpIndexCounter++}`);
+    // Keep throwaway index files inside the workspace (under the already-excluded .goaly dir)
+    // instead of the system tmpdir: same filesystem as the repo, survives tmpdir-full / cross-fs
+    // edge cases, and cleans up with the workspace if anything goes wrong.
+    const tmpDir = join(this.#root, '.goaly', '.tmp');
+    await mkdir(tmpDir, { recursive: true });
+    const tmpIndex = join(tmpDir, `goaly-idx-${process.pid}-${tmpIndexCounter++}`);
     // Ensure no stale index file exists at that path.
     await rm(tmpIndex, { force: true });
 
