@@ -11,6 +11,9 @@ import type { Verifier } from './verifier';
  * Fail-closed: a rung that THROWS is treated as a hard failure (`pass: false`,
  * `confidence: 1`) and short-circuits — a malformed grader is never a green.
  */
+/** Max chars of one rung's detail folded into a green ladder's evidence block. */
+const GREEN_EVIDENCE_LIMIT = 300;
+
 export class Ladder implements Verifier {
   readonly #rungs: readonly Verifier[];
 
@@ -21,6 +24,7 @@ export class Ladder implements Verifier {
 
   async verify(workspace: Workspace, goal: string, rubric: string): Promise<Verdict> {
     const confidences: number[] = [];
+    const details: string[] = [];
     const rungsTotal = this.#rungs.length;
 
     for (let i = 0; i < this.#rungs.length; i++) {
@@ -50,14 +54,23 @@ export class Ladder implements Verifier {
       if (!verdict.pass) return { ...verdict, rungsPassed: i, rungsTotal };
 
       confidences.push(verdict.confidence);
+      details.push(verdict.detail);
     }
 
     // All rungs passed (an empty list is vacuously green: pass, confidence 1). Depth = every rung.
     const confidence = confidences.length === 0 ? 1 : Math.min(...confidences);
+    // Fold each rung's own detail into the green detail as EVIDENCE. The Sign-off approver reviews
+    // this text (fenced untrusted) and a bare "all N checks passed" gives a skeptic nothing to check
+    // — the observed false veto: "detail is vague … without showing what was actually tested" → a
+    // vetoed green, a wasted worker iteration. The summary line stays first and unchanged; each
+    // rung's evidence is capped so a chatty judge detail can't bloat the approver prompt.
+    const evidence = details
+      .map((d, i) => `  ${i + 1}. ${d.length > GREEN_EVIDENCE_LIMIT ? `${d.slice(0, GREEN_EVIDENCE_LIMIT)}…` : d}`)
+      .join('\n');
     return {
       pass: true,
       confidence,
-      detail: `all ${rungsTotal} checks passed`,
+      detail: `all ${rungsTotal} checks passed${evidence.length > 0 ? `\n${evidence}` : ''}`,
       rungsPassed: rungsTotal,
       rungsTotal,
     };

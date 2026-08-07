@@ -64,7 +64,7 @@ describe('Ladder', () => {
     expect(verdict).toEqual({
       pass: true,
       confidence: 0.6,
-      detail: 'all 3 checks passed',
+      detail: 'all 3 checks passed\n  1. det\n  2. judge a\n  3. judge b',
       rungsPassed: 3,
       rungsTotal: 3,
     });
@@ -169,10 +169,29 @@ describe('Ladder', () => {
     expect(verdict).toEqual({
       pass: true,
       confidence: 1,
-      detail: 'all 2 checks passed',
+      detail: 'all 2 checks passed\n  1. a\n  2. b',
       rungsPassed: 2,
       rungsTotal: 2,
     });
+  });
+
+  it('a green ladder folds per-rung evidence into the detail (the approver reviews it)', async () => {
+    // The Sign-off approver sees only the ladder detail on green; a bare summary gives a skeptic
+    // nothing to check and invites a false veto. Each rung's own detail is the evidence.
+    const det = rung({ pass: true, confidence: 1, detail: 'node test.mjs: exit 0' });
+    const judge = rung({ pass: true, confidence: 0.9, detail: 'meets the rubric' });
+    const verdict = await new Ladder([det, judge]).verify(ws, GOAL, RUBRIC);
+    expect(verdict.detail).toContain('all 2 checks passed');
+    expect(verdict.detail).toContain('node test.mjs: exit 0');
+    expect(verdict.detail).toContain('meets the rubric');
+  });
+
+  it('caps one rung\'s folded evidence so a chatty judge cannot bloat the approver prompt', async () => {
+    const chatty = rung({ pass: true, confidence: 1, detail: 'x'.repeat(1000) });
+    const verdict = await new Ladder([chatty]).verify(ws, GOAL, RUBRIC);
+    expect(verdict.pass).toBe(true);
+    expect(verdict.detail.length).toBeLessThan(400);
+    expect(verdict.detail).toContain('…');
   });
 
   describe('graded depth scoring — rungsPassed / rungsTotal (issue #85)', () => {
