@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GitWorkspace, type ExecResult, type ExecFn, type RunExecWrapper } from './git-workspace';
@@ -80,7 +80,11 @@ export class GitWorktreeHost implements WorktreeHost {
    * The user's real index/HEAD/branch are untouched (a fresh `GIT_INDEX_FILE`). Throws fail-closed.
    */
   async promoteTree(treeish: string): Promise<void> {
-    const tmpIndex = join(tmpdir(), `goaly-promote-idx-${process.pid}-${Date.now()}`);
+    // Keep the throwaway promotion index inside the workspace (under the excluded .goaly dir)
+    // so it is on the same filesystem as the repo and avoids tmpdir reliability edge cases.
+    const tmpDir = join(this.#root, '.goaly', '.tmp');
+    await mkdir(tmpDir, { recursive: true });
+    const tmpIndex = join(tmpDir, `goaly-promote-idx-${process.pid}-${Date.now()}`);
     const env: NodeJS.ProcessEnv = { ...process.env, GIT_INDEX_FILE: tmpIndex };
     try {
       const before = await this.#trackedPaths();

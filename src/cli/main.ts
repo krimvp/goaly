@@ -6,6 +6,7 @@ import { STATE_DIR } from './compose';
 import { runRuns } from './runs';
 import { runWorktree } from './worktree-cmd';
 import { WorktreeManager, WorktreeError } from '../workspace/worktree-manager';
+import { maybeAutoInitGitRepo } from './preflight';
 import { executeRun } from './run-cmd';
 
 // The run path lives in run-cmd.ts (`executeRun`) so the goaly-ui server drives runs through the
@@ -66,6 +67,17 @@ export async function main(argv: string[]): Promise<number> {
   // Skipped here so `--worktree --dry-run` reports the intended wiring instead of materializing it.
   let worktree: { name: string; mergeHint: string } | undefined;
   if (parsed.worktreeRun !== undefined && !parsed.dryRun) {
+    // A worktree needs an initialized repo to hang off. With --auto-init (default on), create it
+    // now so `--worktree` is also hands-off in a bare directory.
+    const autoInitError = await maybeAutoInitGitRepo({
+      workspace: parsed.workspace,
+      autoInit: parsed.autoInit,
+    });
+    if (autoInitError !== null) {
+      process.stderr.write(`goaly: ${autoInitError}\n`);
+      return 2;
+    }
+
     if (parsed.worktreeRun === true && parsed.resumeRunId !== undefined) {
       process.stderr.write(
         'goaly: --resume needs the NAMED worktree the run lives in — pass --worktree <name> ' +

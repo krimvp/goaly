@@ -623,15 +623,16 @@ describe('main() — follow-up (Capability C) guards & resume-cmd (Capability A)
     expect(err).toContain('runs list');
   });
 
-  it('exits 2 with git guidance when the workspace is not a git repository', async () => {
+  it('exits 2 with git guidance when the workspace is not a git repository and --no-auto-init is set', async () => {
     // `root` is a bare temp dir (no git init) — the preflight must say so BEFORE any spend.
     const { code, err } = await captureStderr(() =>
       main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
-        '--workspace', root]),
+        '--workspace', root, '--no-auto-init']),
     );
     expect(code).toBe(2);
     expect(err).toContain('not a git repository');
     expect(err).toContain('git init');
+    expect(err).toContain('--auto-init');
   });
 
   it('exits 2 when --inherit-session is used without --from-run', async () => {
@@ -735,6 +736,40 @@ describe('main() — --dry-run validates and prints, and starts nothing', () => 
     expect(res.out).toContain('build the thing');
     // The state dir is the first thing a real run writes (`acquireRunLock` mkdirs it).
     expect(existsSync(join(root, STATE_DIR))).toBe(false);
+  });
+
+  it('dry-run in a non-git directory shows auto-init true without mutating the filesystem', async () => {
+    const bare = await mkdtemp(join(tmpdir(), 'goaly-main-dryrun-bare-'));
+    try {
+      const res = await capture(() =>
+        main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+          '--dry-run', '--workspace', bare]),
+      );
+      expect(res.code).toBe(0);
+      expect(res.out).toContain('auto-init     true');
+      // --dry-run must stay read-only: no git repo, no .goaly dir, no run directory.
+      expect(existsSync(join(bare, '.git'))).toBe(false);
+      expect(existsSync(join(bare, '.goaly'))).toBe(false);
+    } finally {
+      await rm(bare, { recursive: true, force: true });
+    }
+  });
+
+  it('dry-run with --worktree in a non-git directory reports the intended worktree', async () => {
+    const bare = await mkdtemp(join(tmpdir(), 'goaly-main-dryrun-wt-'));
+    try {
+      const res = await capture(() =>
+        main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+          '--dry-run', '--workspace', bare, '--worktree', 'feat']),
+      );
+      expect(res.code).toBe(0);
+      expect(res.out).toContain('worktree      feat');
+      expect(res.out).toContain('auto-init     true');
+      // --dry-run stays read-only: no worktree materialized.
+      expect(existsSync(join(bare, '.goaly', 'worktrees', 'feat'))).toBe(false);
+    } finally {
+      await rm(bare, { recursive: true, force: true });
+    }
   });
 
   it('reads a .goalyrc and reports it as a source', async () => {

@@ -634,12 +634,29 @@ goaly worktree remove feature-x --force --delete-branch
 - **Merge-back is plain git.** Runs never commit; the end-of-run hint shows the two steps
   (commit inside the worktree, then `git merge goaly/<name>`). `remove` keeps the branch by default;
   `--delete-branch` opts out (an unmerged branch then needs `--force`).
+- **Auto-init composes.** `--worktree` in a bare directory auto-initializes the main repo first
+  (when `--auto-init` is on, the default), then creates the worktree on the freshly-committed
+  baseline.
 - **Fail-closed safety.** Creating over an existing worktree, an unresolvable `--base`, or an
   invalid name (one safe path component: `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`) all refuse. `remove`
   refuses while a live goaly run is inside (always) and refuses a dirty tree without `--force`.
 - **Distinct from best-of-N:** `--candidates` makes ephemeral worktrees for one iteration's
   tournament; `--worktree` is the persistent, named counterpart a whole run can live in. They
   compose.
+
+## Git bootstrap (`--auto-init`)
+
+`--auto-init` is **on by default**. If the workspace is not a git repository, goaly initializes
+it, stages the existing files, commits a baseline (`goaly baseline`), and adds `.goaly/` to
+`.gitignore`. This makes hands-off / autonomous runs work in any directory without manual `git
+init`.
+
+- The baseline commit gives goaly a stable `HEAD` to diff against for stuck-detection and the
+  approver's Sign-off review.
+- `.goaly/` is added to `.gitignore` immediately, so the run state dir never appears in `git status`.
+- No global git user identity is required: the baseline commit uses a one-off author identity.
+- Use `--no-auto-init` (or `"auto-init": false` in `.goalyrc`) to keep the historical fail-closed
+  behavior: refuse to start if the workspace is not already a git repository.
 
 ## Reliability
 

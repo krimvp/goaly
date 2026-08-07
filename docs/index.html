@@ -152,6 +152,7 @@
       <li><span class="fi-name">Best-of-N attempts</span><span class="fi-desc"><code>--candidates N</code> races N isolated attempts per iteration and keeps the one that climbs furthest.</span></li>
       <li><span class="fi-name">Parallel waves</span><span class="fi-desc"><code>--parallel-phases</code> runs independent plan phases concurrently and re-verifies every merge.</span></li>
       <li><span class="fi-name">Named worktrees</span><span class="fi-desc"><code>--worktree</code> isolates the whole run in its own checkout — your main tree is never touched.</span></li>
+      <li><span class="fi-name">Git bootstrap</span><span class="fi-desc"><code>--auto-init</code> is on by default: run goaly in a bare directory and it creates the repo, commits a baseline, and ignores <code>.goaly/</code>. Use <code>--no-auto-init</code> to keep the fail-closed check.</span></li>
       <li><span class="fi-name">Adversarial review</span><span class="fi-desc"><code>--adversarial</code> red-teams the contract before Seal and attacks every green before Sign-off.</span></li>
       <li><span class="fi-name">Web UI</span><span class="fi-desc"><code>goaly ui</code> is a local control center: a mission dashboard, a live run pipeline, a session inspector into the agent's turns, and the Seal in a browser review station.</span></li>
       <li><span class="fi-name">Watch &amp; steer</span><span class="fi-desc">Tail any live run, stop cleanly, resume with a note — you can add room, never lower the bar.</span></li>
@@ -204,7 +205,7 @@
   <div class="wrap">
     <div class="legal">
       <a class="brand" href="#top"><img src="assets/favicon.svg" alt="" /> goaly</a>
-      <span>MIT · Node ≥ 20 &amp; git · © <span id="year">2026</span> · built with Claude Code</span>
+      <span>MIT · Node ≥ 20 &amp; git (auto-initialized if missing) · © <span id="year">2026</span> · built with Claude Code</span>
     </div>
   </div>
 </footer>

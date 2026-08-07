@@ -96,6 +96,7 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
       title: 'Environment',
       rows: [
         ['workspace', parsed.workspace],
+        ['auto-init', String(parsed.autoInit)],
         ...opt('worktree', typeof parsed.worktreeRun === 'string' ? parsed.worktreeRun : undefined),
         ['sandbox', parsed.sandbox.mode],
         ['log-level', parsed.logLevel],
