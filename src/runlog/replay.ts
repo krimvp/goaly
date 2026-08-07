@@ -5,7 +5,95 @@ import type { Command, OrchestratorEvent, RunExtension } from '../domain/events'
 import type { ContractHash, DiffHash } from '../domain/ids';
 import type { OrchestratorState } from '../orchestrator/state';
 import { initial, step } from '../orchestrator/step';
+import { normalizeDetail } from '../orchestrator/stuck';
+import { isUnevaluable } from '../domain/verdict';
 import type { RunLogEntry } from './runlog';
+
+/**
+ * Streak relief on `--resume` — the counted stuck detectors re-derive their streaks by replaying the
+ * log, so a run that ABORTED at the harness-crash threshold hits it again on the very first fold and
+ * terminates before the harness gets a single turn. That is wrong on its face: `--resume` is the
+ * operator's explicit statement that something was changed (a flag, a credential, an autonomy level,
+ * the tree), and goaly's own remediation already tells them to work around it by hand with
+ * `--resume … --stuck-crash-threshold 4`.
+ *
+ * This computes that workaround instead of asking for it: for each COUNTED detector, raise its
+ * threshold by the length of the streak the log has already banked, so the resumed run must earn a
+ * fresh streak of the configured length before aborting again. Deliberate properties:
+ *
+ *  - Derived from the ENTRIES, not the replayed state: a terminal `ABORTED` state has already
+ *    discarded its `LoopCtx`, so the histories are unreachable there.
+ *  - Measured off the ORIGINAL (header) thresholds, so resuming repeatedly re-measures rather than
+ *    compounding a bump on top of a bump.
+ *  - Only for a run that actually ABORTED; a resume of an interrupted or at-cap run changes nothing.
+ *  - Only the counted detectors. `noDiff` is a TOGGLE, not a counter, so "relief" could only mean
+ *    disabling it for the rest of the run — too blunt to do implicitly (it is also already excused
+ *    when the previous turn crashed/timed out/was truncated). Pass `--stuck-no-diff false` for that.
+ *
+ * It is not a weakening of stuck detection: the returned overlay is persisted as an ordinary
+ * RUN_EXTENDED marker (ADR 0012 — operational knobs only, the frozen contract is unreachable
+ * through it), so it is auditable in the log, and an explicit `--stuck-*` flag still overrides it.
+ * Pure: no IO, no clock.
+ */
+export function resumeStreakRelief(
+  config: RunConfig,
+  entries: readonly RunLogEntry[],
+): NonNullable<RunExtension['stuck']> {
+  if (entries[entries.length - 1]?.stateTagAfter !== 'ABORTED') return {};
+  const base = config.stuckPolicy;
+  const crash = trailingCrashStreak(entries);
+  const uneval = trailingUnevaluableStreak(entries);
+  const repeat = trailingRepeatStreak(entries);
+  return {
+    ...(crash > 0 ? { harnessCrashThreshold: base.harnessCrashThreshold + crash } : {}),
+    ...(uneval > 0 ? { unevaluableThreshold: base.unevaluableThreshold + uneval } : {}),
+    ...(repeat > 1 ? { repeatFailureThreshold: base.repeatFailureThreshold + repeat } : {}),
+  };
+}
+
+/** How many of the most recent harness turns crashed, back-to-back. Mirrors `isCrashStreak`. */
+function trailingCrashStreak(entries: readonly RunLogEntry[]): number {
+  let streak = 0;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const event = entries[i]?.event;
+    if (event?.tag !== 'AGENT_RAN') continue;
+    if (event.run.status !== 'crashed') break;
+    streak++;
+  }
+  return streak;
+}
+
+/** How many of the most recent ladder verdicts were could-not-evaluate. Mirrors `isUnevaluableStreak`. */
+function trailingUnevaluableStreak(entries: readonly RunLogEntry[]): number {
+  let streak = 0;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const event = entries[i]?.event;
+    if (event?.tag !== 'VERIFIED') continue;
+    if (!isUnevaluable(event.verdict)) break;
+    streak++;
+  }
+  return streak;
+}
+
+/**
+ * How many of the most recent ladder verdicts were the SAME normalized failure, back-to-back.
+ * Mirrors `isRepeating` over `verifierDetailHistory`, including its reset on a pass (the reducer
+ * clears that history whenever the ladder goes green).
+ */
+function trailingRepeatStreak(entries: readonly RunLogEntry[]): number {
+  let streak = 0;
+  let signature: string | undefined;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const event = entries[i]?.event;
+    if (event?.tag !== 'VERIFIED') continue;
+    if (event.verdict.pass) break;
+    const detail = normalizeDetail(event.verdict.detail);
+    if (signature === undefined) signature = detail;
+    else if (detail !== signature) break;
+    streak++;
+  }
+  return streak;
+}
 
 /**
  * The header config with every logged RUN_EXTENDED overlay applied, in order (operator control,

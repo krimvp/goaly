@@ -68,6 +68,14 @@ export type LoopCtx = {
   readonly runStatusHistory: readonly HarnessRunResult['status'][];
   /** Output of the most recent agent run — surfaced verbatim when a crash streak aborts the run. */
   readonly lastRunOutput: string | undefined;
+  /**
+   * The codec-recognised remediation for the most recent agent run, when its CLI named an
+   * actionable fix in its own failure output (see {@link HarnessRunResult.hint}) — e.g. droid
+   * refusing an action at its `--auto` tier. Used ONLY to replace the generic remediation text of a
+   * `STUCK_HARNESS_CRASH` abort; it never affects any classification or transition. The reducer
+   * carries the string, it never derives it (invariant #8: per-CLI string matching lives in the codec).
+   */
+  readonly lastRunHint: string | undefined;
   readonly lastBudget: BudgetSnapshot | undefined;
   /** The ladder verdict of the current iteration (set in VERIFYING, read at Sign-off). */
   readonly lastVerdict: Verdict | undefined;
@@ -96,6 +104,14 @@ export type OrchestratorState =
       readonly config: RunConfig;
       /** How many plan "revise" rounds have already happened (0 on the first authoring). */
       readonly reviseRound: number;
+      /**
+       * How many bounded plan-RETRY rounds have already happened within this authoring (0 on the
+       * first attempt), capped by `config.maxPlanRetries`. Distinct from `reviseRound`, which counts
+       * HUMAN plan-Seal revisions: this counts automatic re-asks after a `PLAN_FAILED` (a
+       * non-JSON/unschematic reply), with the parse error fed back as guidance. Reset to 0 on each
+       * fresh authoring, exactly like `compileRound`, so every revise round gets its own budget.
+       */
+      readonly planRound: number;
     }
   | {
       /** The plan Seal: approve / reject / revise the frozen plan. Phased only. */
@@ -234,6 +250,7 @@ export function initialCtx(
     lastRunStatus: undefined,
     runStatusHistory: [],
     lastRunOutput: undefined,
+    lastRunHint: undefined,
     lastBudget: undefined,
     lastVerdict: undefined,
     feedback: undefined,

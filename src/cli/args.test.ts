@@ -1420,3 +1420,109 @@ describe('parseArgs', () => {
     });
   });
 });
+
+/**
+ * `--harness-autonomy` (droid's `--auto` tier). Pure wiring, like `--model`: it rides `ParsedArgs`,
+ * never `RunConfig`, so it can never reach the frozen contract.
+ */
+describe('--harness-autonomy', () => {
+  const base = ['run', '--goal', 'g', '--verify-cmd', 'true'];
+
+  it('is undefined by default (keep the codec\'s own least-privilege level)', async () => {
+    expect((await parseArgs(base)).harnessAutonomy).toBeUndefined();
+  });
+
+  it('parses each tier', async () => {
+    for (const level of ['low', 'medium', 'high'] as const) {
+      const a = await parseArgs([...base, '--harness-autonomy', level]);
+      expect(a.harnessAutonomy).toBe(level);
+    }
+  });
+
+  it('fails closed on an unknown tier', async () => {
+    await expect(parseArgs([...base, '--harness-autonomy', 'full'])).rejects.toThrow(UsageError);
+  });
+
+  it('is settable from a config file', async () => {
+    const a = await parseArgs(
+      [...base, '--workspace', '/proj'],
+      undefined,
+      fakeConfig({ '/proj/.goalyrc': '{ "harness-autonomy": "medium" }' }),
+    );
+    expect(a.harnessAutonomy).toBe('medium');
+  });
+});
+
+/**
+ * The usage synopsis advertises `--verify-cmd | --generate` as mutually exclusive, but both were
+ * accepted and `--generate` silently won — the command was discarded with no error and no warning.
+ * PROVENANCE decides which behavior is right, so the check lives where both layers are still visible.
+ */
+describe('--verify-cmd vs --generate', () => {
+  it('rejects both on the COMMAND LINE (a genuine contradiction)', async () => {
+    await expect(
+      parseArgs(['run', '--goal', 'g', '--verify-cmd', 'npm test', '--generate']),
+    ).rejects.toThrow(/mutually exclusive/);
+  });
+
+  it('lets a CLI --generate override a config-file verify-cmd, but says so', async () => {
+    const a = await parseArgs(
+      ['run', '--goal', 'g', '--generate', '--workspace', '/proj'],
+      undefined,
+      fakeConfig({ '/proj/.goalyrc': '{ "verify-cmd": "npm test" }' }),
+    );
+    expect(a.config.verifier).toMatchObject({ kind: 'generate' });
+    expect(a.warnings.join('\n')).toContain('npm test');
+    expect(a.warnings.join('\n')).toContain('.goalyrc');
+  });
+
+  it('keeps a config-file verify-cmd when --generate is not passed (no warning)', async () => {
+    const a = await parseArgs(
+      ['run', '--goal', 'g', '--workspace', '/proj'],
+      undefined,
+      fakeConfig({ '/proj/.goalyrc': '{ "verify-cmd": "npm test" }' }),
+    );
+    expect(a.config.verifier).toEqual({ kind: 'existing', ref: 'npm test' });
+    expect(a.warnings).toEqual([]);
+  });
+
+  it('a plain --verify-cmd run warns about nothing', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+    expect(a.warnings).toEqual([]);
+  });
+});
+
+describe('--dry-run', () => {
+  it('is off by default and set by the bare flag', async () => {
+    expect((await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true'])).dryRun).toBe(false);
+    expect((await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--dry-run'])).dryRun).toBe(true);
+  });
+
+  it('is valueless, so it never swallows the positional goal', async () => {
+    const a = await parseArgs(['run', '--dry-run', 'build the thing', '--verify-cmd', 'true']);
+    expect(a.dryRun).toBe(true);
+    expect(a.config.goal).toBe('build the thing');
+  });
+
+  it('is per-invocation: a config file cannot turn every run into a no-op', async () => {
+    await expect(
+      parseArgs(
+        ['run', '--goal', 'g', '--verify-cmd', 'true', '--workspace', '/proj'],
+        undefined,
+        fakeConfig({ '/proj/.goalyrc': '{ "dry-run": true }' }),
+      ),
+    ).rejects.toThrow(UsageError);
+  });
+});
+
+describe('--max-plan-retries', () => {
+  it('defaults to 2 (mirrors --max-compile-retries)', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+    expect(a.config.maxPlanRetries).toBe(2);
+  });
+
+  it('is settable, including 0 to restore the single-shot behavior', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--max-plan-retries', '0']);
+    expect(a.config.maxPlanRetries).toBe(0);
+  });
+});

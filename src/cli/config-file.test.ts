@@ -6,11 +6,13 @@ import {
   loadConfig,
   overlayFromConfig,
   defaultConfigFileReader,
+  CONFIG_FILE_KEYS,
   IMPLICIT_CONFIG_FILENAME,
   HOME_CONFIG_LABEL,
+  PER_INVOCATION_FLAGS,
   type ConfigFileReader,
 } from './config-file';
-import { UsageError } from './args';
+import { UsageError, USAGE } from './args';
 
 /** A reader backed by an in-memory map keyed by full path; missing files are `undefined`. */
 function fakeReader(files: Record<string, string>): ConfigFileReader {
@@ -205,5 +207,78 @@ describe('loadConfig', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * The `.goalyrc` schema is `.strict()`, so a flag it omits cannot be persisted AT ALL — the file's
+ * own promise ("keys mirror the CLI flag names in kebab-case") is load-bearing, not decorative. It
+ * had drifted: ~24 pure-wiring flags were missing, `--stuck-crash-threshold` among them, which
+ * goaly's own STUCK_HARNESS_CRASH remediation tells you to pass on every resume.
+ *
+ * This pins the invariant so it cannot rot again: DOCUMENTED ⇒ CONFIGURABLE. `USAGE` is the
+ * user-facing flag contract, so it is the source of truth; the only allowed subtractions are the
+ * enumerated per-invocation flags and the two lists below.
+ */
+describe('config-file schema vs. the documented CLI flags (drift guard)', () => {
+  /**
+   * Flag-SHAPED tokens in `USAGE` that are not `goaly run` flags. Enumerated (not pattern-matched)
+   * so a genuinely new flag can never hide behind a loose heuristic.
+   */
+  const NOT_A_RUN_FLAG = new Set([
+    // Subcommand flags: `goaly ui` / `goaly worktree`.
+    'port',
+    'base',
+    'force',
+    'delete-branch',
+    // Another tool's flags, named in prose because a goaly flag maps onto them.
+    'auto', // droid's autonomy tier, which --harness-autonomy sets
+    'rm', // docker/podman `run --rm`, in the sandbox-runtime description
+    'json', // a harness CLI's own output-format flag
+    // Prose, not a flag: an adjective and a glob over the --stuck-* family.
+    'baseline-style',
+    'stuck-',
+  ]);
+
+  const documented = new Set(
+    [...USAGE.matchAll(/--([a-z][a-z0-9-]*)/g)]
+      .map((m) => m[1] as string)
+      .filter((f) => !NOT_A_RUN_FLAG.has(f)),
+  );
+
+  it('every documented run flag is settable from a config file, except the per-invocation ones', () => {
+    const keys = new Set(CONFIG_FILE_KEYS);
+    const missing = [...documented].filter((f) => !keys.has(f) && !PER_INVOCATION_FLAGS.has(f));
+    expect(missing).toEqual([]);
+  });
+
+  it('every config-file key is a real, documented flag (no dead keys)', () => {
+    const dead = CONFIG_FILE_KEYS.filter((k) => !documented.has(k));
+    expect(dead).toEqual([]);
+  });
+
+  it('no per-invocation flag leaks into the config schema', () => {
+    const leaked = CONFIG_FILE_KEYS.filter((k) => PER_INVOCATION_FLAGS.has(k));
+    expect(leaked).toEqual([]);
+  });
+
+  it('accepts the previously-missing wiring keys', () => {
+    const overlay = overlayFromConfig(
+      {
+        'diff-ignore': 'coverage,build',
+        stream: true,
+        'stuck-crash-threshold': 4,
+        'harness-autonomy': 'medium',
+        'max-plan-retries': 3,
+      },
+      '.goalyrc',
+    );
+    expect(overlay).toEqual({
+      'diff-ignore': 'coverage,build',
+      stream: true,
+      'stuck-crash-threshold': '4',
+      'harness-autonomy': 'medium',
+      'max-plan-retries': '3',
+    });
   });
 });

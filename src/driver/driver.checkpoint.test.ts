@@ -150,3 +150,84 @@ describe('drive() — resume reconstructs the diff baseline from the log', () =>
     expect(ws2.baselineCalls).toEqual([]);
   });
 });
+
+describe('drive() — the run-start review baseline survives --resume via the header (autonomy pin)', () => {
+  /** Resume deps where every LLM/agent seam throws if touched — a terminal log re-runs nothing. */
+  function resumeDeps(ws: FakeWorkspace, log: InMemoryRunLog): DriverDeps {
+    return {
+      compiler: new FakeCompiler(new Error('must not run')),
+      seal: new FakeSealGate({ kind: 'reject', reason: 'must not run' }),
+      harness: new FakeHarness([{ throwError: 'must not run' }], ws),
+      makeLadder: () => new FakeVerifier([passVerdict()]),
+      approver: new FakeApprover([]),
+      workspace: ws,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(false),
+      runlog: log,
+    };
+  }
+
+  it('a fresh run records a non-HEAD baseline in the header; the HEAD default is omitted', async () => {
+    const pinned = new FakeWorkspace('0000abc');
+    pinned.setBaseline('run-start-sha'); // compose's --baseline / raised-autonomy auto-pin
+    const pinnedLog = new InMemoryRunLog();
+    await driveToDone(pinned, pinnedLog);
+    expect((await pinnedLog.read())!.header.baseline).toBe('run-start-sha');
+
+    const unpinnedLog = new InMemoryRunLog();
+    await driveToDone(new FakeWorkspace('0000abc'), unpinnedLog);
+    expect((await unpinnedLog.read())!.header.baseline).toBeUndefined();
+  });
+
+  it('resume re-adopts the recorded baseline for BOTH keys when nothing else owns it', async () => {
+    const ws = new FakeWorkspace('0000abc');
+    ws.setBaseline('run-start-sha');
+    const log = new InMemoryRunLog();
+    await driveToDone(ws, log);
+
+    // Resume with a fresh workspace at the HEAD default (no --baseline re-passed, no checkpoint
+    // in the log): the header's run-start pin must be re-adopted — the agent may have committed
+    // mid-run at raised autonomy, so falling back to a moved HEAD would empty the reviewed diff.
+    const ws2 = new FakeWorkspace('0000abc');
+    const outcome = await drive(resumeDeps(ws2, log), makeConfig({ goal: 'checkpoint goal' }), runId, {
+      resume: true,
+    });
+    expect(outcome.status).toBe('DONE');
+    expect(ws2.baseline).toBe('run-start-sha');
+  });
+
+  it('a logged checkpoint still wins over the header baseline (real progress beats the run-start pin)', async () => {
+    const ws = new FakeWorkspace('0000abc');
+    ws.setBaseline('run-start-sha');
+    const log = new InMemoryRunLog();
+    await driveToDone(ws, log);
+    const tree = DiffHash.parse('d'.repeat(40));
+    const at = log.entries.findIndex((e) => e.event.tag === 'AGENT_RAN') + 1;
+    log.entries.splice(at, 0, {
+      runId,
+      seq: log.entries.length + 1,
+      ts: 1,
+      contractHash: contract.contractHash,
+      event: { tag: 'CHECKPOINTED', tree },
+      stateTagAfter: 'VERIFYING',
+    });
+
+    const ws2 = new FakeWorkspace('0000abc');
+    await drive(resumeDeps(ws2, log), makeConfig({ goal: 'checkpoint goal' }), runId, { resume: true });
+    // Both were adopted in order — run-start pin first, then the checkpoint re-point on top.
+    expect(ws2.baseline).toBe('d'.repeat(40));
+  });
+
+  it('a --baseline re-passed at resume (workspace off its HEAD default) beats the header', async () => {
+    const ws = new FakeWorkspace('0000abc');
+    ws.setBaseline('run-start-sha');
+    const log = new InMemoryRunLog();
+    await driveToDone(ws, log);
+
+    const ws2 = new FakeWorkspace('0000abc');
+    ws2.setBaseline('explicit-override'); // compose applied a re-passed --baseline before drive()
+    await drive(resumeDeps(ws2, log), makeConfig({ goal: 'checkpoint goal' }), runId, { resume: true });
+    expect(ws2.baseline).toBe('explicit-override');
+    expect(ws2.baselineCalls).not.toContain('run-start-sha');
+  });
+});

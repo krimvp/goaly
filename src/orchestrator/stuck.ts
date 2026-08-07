@@ -87,7 +87,10 @@ export function detectStuck(ctx: LoopCtx): StuckReason | null {
   // environment/harness failure as "your code is wrong". Names the actual harness error, not the red.
   const crashThreshold = ctx.config.stuckPolicy.harnessCrashThreshold;
   if (isCrashStreak(ctx.runStatusHistory, crashThreshold)) {
-    return { kind: 'crash', message: harnessCrashReason(crashThreshold, ctx.lastRunOutput ?? '') };
+    return {
+      kind: 'crash',
+      message: harnessCrashReason(crashThreshold, ctx.lastRunOutput ?? '', ctx.lastRunHint),
+    };
   }
 
   // Contract unevaluable — the frozen verifier ladder could not be EVALUATED to a real pass/fail
@@ -148,19 +151,27 @@ const CRASH_OUTPUT_LIMIT = 500;
  * completing a turn. This is an environment/harness failure (the agent never ran), NOT a problem with
  * the code or the frozen contract — so the message points the user at the harness, not at a downstream
  * verifier red, and surfaces the harness's own error output verbatim so the real cause is visible.
+ *
+ * `hint` is a codec-recognised remediation the CLI named in its OWN output (see
+ * {@link HarnessRunResult.hint}) — e.g. droid refusing an action at its `--auto` tier. When present
+ * it REPLACES the generic install/auth advice, which in that situation is three dead ends: the CLI
+ * is installed, authenticated and runnable, and the real fix was already in the log. The abort kind
+ * and the fail-closed outcome are identical either way — only the guidance changes.
  */
-function harnessCrashReason(threshold: number, output: string): string {
+function harnessCrashReason(threshold: number, output: string, hint?: string): string {
   const trimmed = output.trim();
   const snippet =
     trimmed.length > CRASH_OUTPUT_LIMIT ? `${trimmed.slice(0, CRASH_OUTPUT_LIMIT)}…` : trimmed;
   const tail = snippet.length > 0 ? ` Last harness output: ${snippet}` : '';
-  return (
+  const head =
     `STUCK_HARNESS_CRASH: the coding-agent harness exited abnormally ${threshold} times in a row — ` +
-    'it never completed a turn, so this is a harness/environment failure, not a problem with your ' +
-    'code or the frozen contract. Check that the agent CLI is installed, authenticated, and runnable ' +
-    'in this directory (try invoking it directly), then re-run — optionally with a different ' +
-    `--harness.${tail}`
-  );
+    'it never completed a turn, so this is not a problem with your code or the frozen contract. ';
+  const advice =
+    hint !== undefined && hint.length > 0
+      ? hint
+      : 'Check that the agent CLI is installed, authenticated, and runnable in this directory (try ' +
+        'invoking it directly), then re-run — optionally with a different --harness.';
+  return `${head}${advice}${tail}`;
 }
 
 /** True when the last `threshold` harness runs all crashed (a consecutive crash streak). */

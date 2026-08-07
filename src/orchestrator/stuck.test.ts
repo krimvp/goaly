@@ -189,6 +189,27 @@ describe('detectStuck', () => {
       expect(detectStuck(ctx)?.message).toContain('claude: command not found');
     });
 
+    it('prefers the codec-recognised remediation over the generic install/auth advice', () => {
+      // droid refusing an action at its --auto tier: the CLI is installed, authenticated and
+      // runnable, so the generic advice is three dead ends. The codec named the real fix.
+      const ctx = makeCtx({
+        runStatusHistory: ['crashed', 'crashed'],
+        lastRunOutput: 'Exec ended early: insufficient permission to proceed.',
+        lastRunHint: 'droid REFUSED an action at its autonomy level — re-run with --harness-autonomy medium.',
+      });
+      const message = detectStuck(ctx)?.message ?? '';
+      expect(message).toContain('STUCK_HARNESS_CRASH'); // same typed abort, same fail-closed outcome
+      expect(message).toContain('--harness-autonomy medium');
+      expect(message).not.toContain('is installed, authenticated');
+      // The harness's own output is still appended verbatim.
+      expect(message).toContain('insufficient permission to proceed');
+    });
+
+    it('falls back to the generic advice when the codec recognised nothing', () => {
+      const ctx = makeCtx({ runStatusHistory: ['crashed', 'crashed'], lastRunOutput: 'boom' });
+      expect(detectStuck(ctx)?.message).toContain('is installed, authenticated');
+    });
+
     it('honors a custom threshold', () => {
       const ctx = makeCtx({
         config: makeConfig({ stuckPolicy: { harnessCrashThreshold: 3 } }),

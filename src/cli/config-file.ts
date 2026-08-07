@@ -22,6 +22,12 @@ import { UsageError, type RawFlags } from './args';
  * Keys mirror the CLI flag names in kebab-case (`max-iterations`, `verify-cmd`) — one spelling,
  * no aliases. This is an external seam: it parses with Zod and fails closed (invalid JSON, an
  * unknown key, or a non-primitive value is a usage error, never a silent ignore).
+ *
+ * "Mirror the CLI flags" is a promise the `.strict()` schema below makes literal: an unlisted key is
+ * a HARD usage error, so a flag missing from the schema cannot be persisted at all. The exclusions
+ * are therefore a deliberate, enumerated set ({@link PER_INVOCATION_FLAGS}) rather than an accident
+ * of what someone remembered to add — and `config-file.test.ts` enforces that by diffing the schema
+ * against every flag the CLI documents.
  */
 
 /** The implicit config file discovered in the workspace/cwd (and at the home level). JSON content. */
@@ -34,10 +40,36 @@ export const HOME_CONFIG_LABEL = `~/${IMPLICIT_CONFIG_FILENAME}`;
 const FlagValue = z.union([z.string(), z.number(), z.boolean()]);
 
 /**
+ * Flags that are meaningful for ONE invocation only and so are deliberately NOT settable from a
+ * config file. Three kinds:
+ *   - run identity / targeting (`resume`, `from-run`, `inherit-session`, `workspace`, `worktree`,
+ *     `config` itself) — persisting these would point every run in the tree at one prior run;
+ *   - one-shot steering (`note`, `dry-run`) — a persisted `dry-run: true` would silently turn every
+ *     run in the tree into a no-op;
+ *   - alternate SOURCES for a value that already has a key (`goal-file` / `intent-file` /
+ *     `rubric-file`, and the `defaults` alias for `autonomous`) — one spelling, no aliases.
+ * Exported so the drift test can assert this is the complete difference between the CLI's documented
+ * flags and the schema below.
+ */
+export const PER_INVOCATION_FLAGS: ReadonlySet<string> = new Set([
+  'config',
+  'defaults',
+  'dry-run',
+  'from-run',
+  'goal-file',
+  'inherit-session',
+  'intent-file',
+  'note',
+  'resume',
+  'rubric-file',
+  'workspace',
+  'worktree',
+]);
+
+/**
  * The accepted config shape — every CLI flag that makes sense to set repeatedly, keyed by its
  * kebab-case (flag-mirroring) name. `.strict()` rejects unknown keys so a typo fails loudly
- * instead of being silently dropped. Per-invocation flags (`--resume`, `--workspace`, `--config`)
- * are intentionally absent — they don't belong in shared, repeated config.
+ * instead of being silently dropped. The only omissions are {@link PER_INVOCATION_FLAGS}.
  */
 const ConfigFileSchema = z
   .object({
@@ -54,15 +86,39 @@ const ConfigFileSchema = z
     phased: FlagValue.optional(),
     'max-phases': FlagValue.optional(),
     'max-plan-revisions': FlagValue.optional(),
+    'max-plan-retries': FlagValue.optional(),
+    'parallel-phases': FlagValue.optional(),
     'plan-file': FlagValue.optional(),
     'planner-model': FlagValue.optional(),
     'max-seal-revisions': FlagValue.optional(),
     'max-compile-retries': FlagValue.optional(),
     'verify-dir': FlagValue.optional(),
     smoke: FlagValue.optional(),
+    'setup-cmd': FlagValue.optional(),
+    'no-setup': FlagValue.optional(),
+    'setup-timeout-ms': FlagValue.optional(),
+    'install-missing-tools': FlagValue.optional(),
     'stuck-no-diff': FlagValue.optional(),
     'stuck-repeat-threshold': FlagValue.optional(),
     'stuck-oscillation': FlagValue.optional(),
+    // The sharp one: goaly's own STUCK_HARNESS_CRASH remediation tells you to pass this on resume,
+    // so being unable to persist it meant retyping it on every single resume.
+    'stuck-crash-threshold': FlagValue.optional(),
+    'stuck-unevaluable-threshold': FlagValue.optional(),
+    'diff-ignore': FlagValue.optional(),
+    baseline: FlagValue.optional(),
+    'delta-verify': FlagValue.optional(),
+    'cost-table': FlagValue.optional(),
+    stream: FlagValue.optional(),
+    'stream-transcript': FlagValue.optional(),
+    'stream-file': FlagValue.optional(),
+    explain: FlagValue.optional(),
+    'explain-model': FlagValue.optional(),
+    adversarial: FlagValue.optional(),
+    'adversarial-plan-critics': FlagValue.optional(),
+    'adversarial-contract-critics': FlagValue.optional(),
+    'adversarial-refuters': FlagValue.optional(),
+    'critic-model': FlagValue.optional(),
     'budget-tokens': FlagValue.optional(),
     'budget-wall-ms': FlagValue.optional(),
     'harness-timeout-ms': FlagValue.optional(),
@@ -71,6 +127,9 @@ const ConfigFileSchema = z
     'verify-timeout-ms': FlagValue.optional(),
     'max-agent-turns': FlagValue.optional(),
     harness: FlagValue.optional(),
+    'harness-autonomy': FlagValue.optional(),
+    'base-url': FlagValue.optional(),
+    'llm-api-key-env': FlagValue.optional(),
     model: FlagValue.optional(),
     'llm-model': FlagValue.optional(),
     'judge-model': FlagValue.optional(),
@@ -96,6 +155,13 @@ const ConfigFileSchema = z
     'sandbox-runtime': FlagValue.optional(),
   })
   .strict();
+
+/**
+ * Every key the config file accepts. Exported so the drift test can diff it against the flags the
+ * CLI documents — the check that keeps "keys mirror the CLI flags" true as flags are added, rather
+ * than something a reader discovers is false only when `.strict()` rejects their `.goalyrc`.
+ */
+export const CONFIG_FILE_KEYS: readonly string[] = Object.keys(ConfigFileSchema.shape);
 
 /**
  * Validate a parsed JSON config and normalize it into a {@link RawFlags} overlay keyed by the

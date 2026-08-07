@@ -50,6 +50,7 @@ import { GoalyCodeHarness } from '../goaly-code/harness';
 import { NodeToolHost, type ShellExec } from '../goaly-code/fs-host';
 import { FileSessionStore } from '../goaly-code/session-store';
 import { codecFor, type AgentCli } from '../agent-cli/registry';
+import type { AutonomyLevel } from '../agent-cli/droid-codec';
 import { runProcess } from '../util/spawn';
 import { augmentToolPath, scrubEnv } from '../workspace/scrub-env';
 import { resolveProfile } from '../sandbox';
@@ -85,6 +86,13 @@ export type ComposeOptions = {
    * user actually picked — never unconditionally `claude`.
    */
   llmProvider?: LlmProviderChoice;
+  /**
+   * `--harness-autonomy`: how much the WRITE-role CLI may do, for harnesses that gate privileged
+   * actions behind a tier (droid's `--auto`). Absent ⇒ the codec's own least-privilege default.
+   * Deliberately NOT applied to the read-only LLM provider below: a judge/approver/compiler must
+   * never be able to mutate the tree it is judging, whatever the worker is allowed to do.
+   */
+  harnessAutonomy?: AutonomyLevel | undefined;
   /** Raw model-selection flags; resolved into per-seam models via the cascade. */
   models?: ModelSelection;
   /** Per-step subprocess timeouts (harness / LLM steps / verify command). Each absent ⇒ default. */
@@ -550,12 +558,19 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
         ? options.harnessFactory(options.workspaceRoot)
         : options.harness === 'goaly-code'
           ? makeGoalyCodeHarness(options, models, stateDir, logger, launcher)
-          : makeHarness(options.harness, models.harness, timeouts.harnessMs, timeouts.harnessIdleMs, {
-              launcher,
-              workspace: options.workspaceRoot,
-              policy: options.sandbox ?? defaultPolicy(),
-              ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
-            }),
+          : makeHarness(
+              options.harness,
+              models.harness,
+              timeouts.harnessMs,
+              timeouts.harnessIdleMs,
+              {
+                launcher,
+                workspace: options.workspaceRoot,
+                policy: options.sandbox ?? defaultPolicy(),
+                ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
+              },
+              options.harnessAutonomy,
+            ),
     makeLadder: (contract) => {
       // Surface the frozen authored bar (`generatedFiles`) in the diff the two LLM keys review, even
       // though it's git-excluded (issue #52) from the user's `git status`. Without this the judge sees
@@ -830,6 +845,7 @@ function makeHarness(
   timeoutMs: number | undefined,
   idleTimeoutMs: number | undefined,
   sandbox: HarnessSandbox,
+  autonomy?: AutonomyLevel | undefined,
 ): HarnessAdapter {
   const exec = sandboxedHarnessExec(choice, timeoutMs, idleTimeoutMs, sandbox);
   const opts = {
@@ -844,7 +860,8 @@ function makeHarness(
   // The fake harness has no codec; every real CLI is a thin binding of its codec over the one
   // generic AgentCliHarness (seam #1). The codec→choice map lives once in `codecFor`.
   if (choice === 'fake') return new NoopHarness();
-  return new AgentCliHarness(codecFor(choice), opts);
+  // `autonomy` is the WRITE role's knob only; `codecFor` ignores it for CLIs without a tier.
+  return new AgentCliHarness(codecFor(choice, { autonomy }), opts);
 }
 
 /**

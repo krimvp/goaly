@@ -77,6 +77,40 @@ const fieldExtractor: FieldExtractor = (obj) => {
   return fields;
 };
 
+/**
+ * The phrases droid emits when it REFUSES an action because the run's `--auto` tier is too low
+ * (observed on 0.164.0: "Exec ended early: insufficient permission to proceed. Re-run with --auto
+ * medium or --auto high."). Matched case-insensitively against the CLI's own output — this is the
+ * one place such matching belongs, because the codec is the module that owns droid's dialect.
+ */
+const PERMISSION_GATE_PATTERNS: readonly RegExp[] = [
+  /insufficient permission to proceed/i,
+  /re-?run with\s+--auto\s+(?:medium|high)/i,
+];
+
+/**
+ * Recognise droid's autonomy refusal and name the actual fix. Without this the run reads as a
+ * generic harness crash and `STUCK_HARNESS_CRASH` tells the operator to check that the CLI is
+ * installed, authenticated and runnable — all of which are true, and none of which is the problem.
+ * The refusal is fatal-by-construction for a from-scratch goal: at `low` the agent cannot run
+ * `npm install` or a build, so a contract requiring a populated tree can never go green.
+ *
+ * Advice only — the run stays `crashed`. Never throws.
+ */
+const diagnose = (input: { stdout: string; stderr: string; code: number | null }): string | undefined => {
+  if (input.code === 0) return undefined;
+  const haystack = `${input.stdout}\n${input.stderr}`;
+  if (!PERMISSION_GATE_PATTERNS.some((p) => p.test(haystack))) return undefined;
+  return (
+    'droid REFUSED an action at its current autonomy level — this is a permission gate, not a ' +
+    'broken install or a bad login. At the default `--auto low` the agent may edit files but may ' +
+    'NOT run git, package installs, or builds, so a from-scratch goal (npm install / build / test) ' +
+    'is unreachable by construction. Re-run with `--harness-autonomy medium` (or `high`). Above ' +
+    '`low` the agent can also `git commit`, so goaly auto-pins the reviewed diff to the run-start ' +
+    'commit — override with `--baseline <ref>` if you want a different base.'
+  );
+};
+
 /** droid's native stream-json mapping onto the canonical {@link AgentStreamEvent} taxonomy. */
 const streamExtractor: StreamEventExtractor = (obj) => {
   const type = typeof obj['type'] === 'string' ? obj['type'] : '';
@@ -167,6 +201,7 @@ export function makeDroidCodec(auto: AutonomyLevel = DEFAULT_AUTONOMY): AgentCli
     parse(stdout) {
       return parseAgentOutput(stdout, fieldExtractor);
     },
+    diagnose,
     classify(input) {
       return classifyFlatRun({
         parsed: parseAgentOutput(input.stdout, fieldExtractor),
@@ -176,6 +211,7 @@ export function makeDroidCodec(auto: AutonomyLevel = DEFAULT_AUTONOMY): AgentCli
         sessionId: input.sessionId,
         unknownSession: UNKNOWN_SESSION,
         estimator: input.estimator,
+        hint: diagnose({ stdout: input.stdout, stderr: input.stderr, code: input.code }),
       });
     },
     interactiveResume(id) {
@@ -193,3 +229,6 @@ export const droidStreamExtractor = streamExtractor;
 
 /** Field strategy for droid's flat result envelope, re-exported for embedders/tests. */
 export const droidExtractor = fieldExtractor;
+
+/** droid's autonomy-refusal recogniser, re-exported for embedders/tests. */
+export const droidDiagnose = diagnose;

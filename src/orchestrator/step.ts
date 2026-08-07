@@ -25,7 +25,7 @@ export type StepResult = readonly [OrchestratorState, Command[]];
 export function initial(config: RunConfig): StepResult {
   if (config.phased) {
     return [
-      { tag: 'PLANNING', config, reviseRound: 0 },
+      { tag: 'PLANNING', config, reviseRound: 0, planRound: 0 },
       [{ tag: 'COMPILE_PLAN', config }],
     ];
   }
@@ -38,7 +38,7 @@ export function initial(config: RunConfig): StepResult {
 export function step(state: OrchestratorState, event: OrchestratorEvent): StepResult {
   switch (state.tag) {
     case 'PLANNING':
-      return stepPlanning(state.config, state.reviseRound, event);
+      return stepPlanning(state.config, state.reviseRound, state.planRound, event);
     case 'AWAIT_PLAN_SEAL':
       return stepAwaitPlanSeal(state.config, state.plan, state.reviseRound, event);
     case 'ADVANCING_PHASE':
@@ -67,22 +67,50 @@ export function step(state: OrchestratorState, event: OrchestratorEvent): StepRe
 // ---- phased: PLAN → plan Seal → phase loop → ACCEPT (issue #48) ------------
 
 /**
- * PLAN — author the frozen plan. A `PLAN_COMPILED` advances to the plan Seal; a `PLAN_FAILED` is a
- * typed, fail-closed terminal FAILED (a planner error / unparseable / over-long plan is never a
- * skipped check). Re-planning is the bounded, gated revise path at the plan Seal, not an auto-retry.
+ * PLAN — author the frozen plan. A `PLAN_COMPILED` advances to the plan Seal; a `PLAN_FAILED` is
+ * re-asked with the error as guidance up to `maxPlanRetries` times, then becomes a typed,
+ * fail-closed terminal FAILED (an unparseable / over-long plan is never a skipped check).
+ *
+ * The bounded retry mirrors the compiler's (issue #51): the same class of correctable authoring
+ * mistake — a reply with no JSON object, a schema miss — should not discard the whole run, and the
+ * planner sits at iteration 0 where a discarded run costs everything downstream of it. The only
+ * other re-author path is the HUMAN plan-Seal revise, which can never fire here because the run has
+ * already ended. The reducer stays pure: it emits a feedback-carrying `COMPILE_PLAN` (a command the
+ * revise path already uses) and the Driver performs the re-ask.
  */
-function stepPlanning(config: RunConfig, reviseRound: number, event: OrchestratorEvent): StepResult {
+function stepPlanning(
+  config: RunConfig,
+  reviseRound: number,
+  planRound: number,
+  event: OrchestratorEvent,
+): StepResult {
   switch (event.tag) {
     case 'PLAN_COMPILED':
       return [
         { tag: 'AWAIT_PLAN_SEAL', config, plan: event.plan, reviseRound },
         [{ tag: 'REQUEST_PLAN_SEAL', plan: event.plan }],
       ];
-    case 'PLAN_FAILED':
+    case 'PLAN_FAILED': {
+      if (planRound < config.maxPlanRetries) {
+        return [
+          { tag: 'PLANNING', config, reviseRound, planRound: planRound + 1 },
+          [{ tag: 'COMPILE_PLAN', config, feedback: planRetryFeedback(event.reason) }],
+        ];
+      }
       return [{ tag: 'FAILED', reason: event.reason, iterations: 0, contractHash: undefined }, []];
+    }
     default:
       throw invalidTransition('PLANNING', event);
   }
+}
+
+/** Turn a PLAN_FAILED reason into actionable re-authoring guidance for the next plan attempt. */
+function planRetryFeedback(reason: string): string {
+  return (
+    `The previous attempt to author the plan failed: ${reason}. ` +
+    'Reply with ONE JSON object and nothing else — no prose, no markdown fences — matching the ' +
+    'shape described at the start of this session, and keep the phase count within the stated limit.'
+  );
 }
 
 /**
@@ -121,8 +149,9 @@ function stepAwaitPlanSeal(
           [],
         ];
       }
+      // A fresh authoring gets a fresh retry budget (mirrors `compileRound` on a Seal revise).
       return [
-        { tag: 'PLANNING', config, reviseRound: reviseRound + 1 },
+        { tag: 'PLANNING', config, reviseRound: reviseRound + 1, planRound: 0 },
         [{ tag: 'COMPILE_PLAN', config, feedback: event.decision.feedback }],
       ];
     }
@@ -542,6 +571,9 @@ function stepRunningAgent(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
     lastRunStatus: event.run.status,
     runStatusHistory: [...ctx.runStatusHistory, event.run.status],
     lastRunOutput: event.run.output,
+    // Carried, never derived: the codec recognised this (see `AgentCliCodec.diagnose`). A run that
+    // named no remediation clears any stale one from the previous turn.
+    lastRunHint: event.run.hint,
     lastBudget: event.budget,
   };
   return [{ tag: 'VERIFYING', ctx: next }, [{ tag: 'RUN_VERIFIER', contract: next.contract }]];

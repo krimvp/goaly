@@ -8,6 +8,7 @@ rationale in [`DESIGN.md`](../DESIGN.md) and [`docs/adr/`](adr/), the terse cont
 ## Contents
 
 - [CLI cookbook](#cli-cookbook)
+- [Dry run](#dry-run---dry-run)
 - [Config file](#config-file)
 - [Model & provider selection](#model--provider-selection)
 - [Harnesses](#harnesses)
@@ -120,6 +121,13 @@ goaly run --goal "..." --verify-cmd "npm test" --sandbox=bwrap --sandbox-net all
 # USD cost overlay on the spend report (tokens-only without it):
 goaly run --goal "..." --verify-cmd "npm test" --cost-table ./prices.json
 
+# Validate the flags + .goalyrc and print the resolved config, without starting a run:
+goaly run --goal "..." --generate --phased --dry-run
+
+# From-scratch build with droid: raise its autonomy so it may install & build (default is `low`,
+# which forbids both — and `low` is what keeps `git diff HEAD` honest, so raise it deliberately):
+goaly run --goal "..." --generate --harness droid --harness-autonomy medium
+
 # Inspect past runs (read-only; re-runs nothing) — or in the browser:
 goaly runs list
 goaly runs show run-<id>
@@ -132,6 +140,31 @@ goaly ui                          # http://127.0.0.1:4180, localhost-only
 
 Goal, intent, and rubric each accept exactly one source: inline (`--goal "…"`), a file
 (`--goal-file <path>`), or stdin (`--goal -`). More than one source per field is a usage error.
+
+`--verify-cmd` and `--generate` are mutually exclusive: passing both **on the command line** is a
+usage error. A `--generate` on the command line still overrides a `verify-cmd` inherited from a
+config file — that is an ordinary one-off override — but says so with a warning naming the source
+that lost.
+
+## Dry run (`--dry-run`)
+
+Resolve everything, run nothing:
+
+```bash
+goaly run --goal "..." --generate --phased --dry-run
+```
+
+It prints the fully-merged, fully-validated configuration — resolved verifier intent, harness and
+autonomy, provider and every model, budgets, per-step timeouts, stuck thresholds, baseline, sandbox,
+and which config files contributed — then exits `0`.
+
+It runs **after** every read-only check a real run performs (config merge, `--cost-table`,
+`--baseline` resolution, `--resume` / `--from-run` log reads, the preflight) and **before** the first
+byte is written. So a dry run fails exactly the way the real run would, with the same message and
+the same exit code — and on success leaves no run directory, no lock, no diagnostics log, and no
+`--worktree`. Nothing is spent: no LLM is called, because the contract is compiled after this point.
+
+`--dry-run` is per-invocation and cannot be set from a config file.
 
 ## Config file
 
@@ -156,13 +189,21 @@ Keys mirror the CLI flags in kebab-case. Full precedence:
   "verify-cmd": "npm test",
   "autonomous": true,
   "max-iterations": 8,
-  "budget-tokens": 500000
+  "budget-tokens": 500000,
+  "diff-ignore": "coverage,build",
+  "stuck-crash-threshold": 4,
+  "stream": true
 }
 ```
 
-Booleans take `true`/`false` (`false` = "not set"). Per-invocation flags — `--workspace`,
-`--resume`, `--config` itself — are never read from a file. An unknown key, non-primitive value,
-or invalid JSON is a usage error (the config seam parses with Zod and fails closed).
+Booleans take `true`/`false` (`false` = "not set"). An unknown key, non-primitive value, or invalid
+JSON is a usage error (the config seam parses with Zod and fails closed).
+
+**Every documented `goaly run` flag is settable from a file**, except the per-invocation ones, which
+are deliberately excluded and enumerated: `--resume`, `--from-run`, `--inherit-session`,
+`--workspace`, `--worktree`, `--config` itself, `--note`, `--dry-run`, the `--*-file` input-source
+selectors, and the `--defaults` alias. Because the schema is strict, that list is the whole
+difference — and a test enforces it, so a newly added flag cannot quietly become unpersistable.
 
 ## Model & provider selection
 
@@ -203,6 +244,36 @@ Approver-panel flags (`--approver-quorum`, `--approver-models`, `--approver-lens
   ends the turn as `truncated` — not a failure — and the loop grants another iteration. Raise to
   100–200 for hard from-scratch tasks. A no-op for the CLI harnesses (they manage their own turn
   budgets).
+
+### Harness autonomy (`--harness-autonomy`)
+
+`low | medium | high` — how much the write-role CLI is allowed to do, for CLIs that gate privileged
+actions behind a tier. Today that is **droid** (`droid exec --auto <level>`); harnesses without such
+a tier ignore the flag. Absent ⇒ the CLI's own least-privilege level.
+
+droid's default is **`low`**: edit files, but no git, no package installs, no builds. That default is
+load-bearing — `low` cannot `git commit`, and a commit would empty `git diff HEAD`, which is the diff
+both keys review. It is also **fatal for a from-scratch build**: the first thing an agent must do on
+an empty tree is install dependencies, so a `--generate` contract that requires a populated tree can
+never go green at `low`. Raise it deliberately:
+
+```bash
+goaly run --goal "..." --generate --harness droid --harness-autonomy medium
+```
+
+Above `low` the agent can `git commit`, which would move `HEAD` and hide the committed work from
+both keys — so goaly **auto-pins the review baseline** to the run-start commit's SHA whenever the
+tier is raised (announced in the log; an explicit `--baseline <ref>` wins). The pin is recorded in
+the run-log header, so a `--resume` re-adopts it even after the agent has committed. Only a tree
+with no resolvable `HEAD` (a fresh `git init` with no commits) can't be pinned — goaly then warns
+loudly and falls back to the manual `--baseline` advice.
+
+The **read-only** LLM role (judge / approver / compiler) never receives this: it stays on droid's
+read-only default by construction, so a reviewer can never mutate the tree it is reviewing.
+
+If droid refuses an action at its current tier, goaly recognises the refusal and the resulting
+`STUCK_HARNESS_CRASH` names `--harness-autonomy` instead of the generic "check your install and
+auth" advice — see [Stuck detection](#stuck-detection).
 
 Adding your own harness is one codec module + one registration line — see
 [`adding-a-harness.md`](adding-a-harness.md).
@@ -254,9 +325,15 @@ Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject:
 Piping the goal via stdin (`--goal -`) consumes stdin, so there's nothing left for the prompt —
 use `--autonomous` or `--goal-file`.
 
-**Compile is resilient, not one-shot.** A `COMPILE_FAILED` (a correctable authoring mistake)
+**Authoring is resilient, not one-shot.** A `COMPILE_FAILED` (a correctable authoring mistake)
 re-authors the verification with the error fed back, up to `--max-compile-retries` (default 2;
-`0` disables). Exhausting the budget is a typed `FAILED`, never a skipped check. Where the provider
+`0` disables). A `PLAN_FAILED` under `--phased` does the same one step earlier, up to
+`--max-plan-retries` (default 2; `0` disables) — without it a single non-JSON reply from the
+planner ends the run at iteration 0, before any work, and the only other re-author path (the
+plan-Seal revise) can never fire because the run has already ended. A **timeout** in either seam is
+reported with a hint to raise `--llm-timeout-ms` rather than consuming the retry budget: re-issuing a
+call that timed out only times out again. Exhausting either budget is a typed `FAILED`, never a
+skipped check or a plan accepted unvalidated. Where the provider
 supports it (the `claude` CLI), every re-author round — compile retry, Seal revise, red-team
 re-author, re-plan — resumes the author's own prior session and sends only the feedback as a small
 delta turn (falling back to a fresh full-prompt call on any resume failure). goaly mints its own
@@ -367,6 +444,25 @@ Details that make these accurate rather than trigger-happy:
 - **A no-diff iteration is excused** when the agent never had a fair chance to act: the previous
   turn timed out, crashed, or was truncated, or the ladder is green and a fresh Sign-off veto is
   the only blocker. A perpetually truncated run still terminates at `--max-iterations` / budget.
+- **A harness that REFUSED is not a harness that crashed.** When the agent CLI names an actionable
+  fix in its own failure output — droid's "insufficient permission to proceed / re-run with `--auto`
+  medium" being the canonical case — the codec recognises it and `STUCK_HARNESS_CRASH` carries that
+  remediation instead of the generic "check the CLI is installed, authenticated, and runnable",
+  which in that situation is three dead ends. The classification is unchanged: the run is still a
+  fail-closed `crashed`, still typed the same way. Only the guidance differs. Per-CLI string
+  matching lives in the codec, never in the reducer, so the stuck detectors still key purely on
+  facts goaly owns.
+
+**Streak relief on `--resume`.** The counted streaks are not stored — they are re-derived by the
+replay-fold — so a run that aborted at the crash threshold used to hit it again on the very first
+fold and terminate before the harness got a single turn, no matter what you had just fixed.
+Resuming is your explicit signal that something changed, so goaly now raises each tripped threshold
+by the length of the streak the log already banked: the resumed run must earn a fresh streak before
+aborting again. It applies to the three counted detectors (harness-crash, contract-unevaluable,
+repeat-failure), is measured off the run's original thresholds so repeated resumes re-measure rather
+than compound, is recorded as an ordinary `RUN_EXTENDED` marker (auditable in the log), and any
+explicit `--stuck-*` on the resume command line still wins. `no-diff` is a toggle rather than a
+counter, so it is not relieved — pass `--stuck-no-diff false` for that resume.
 
 ## Diff baselines (`--baseline` and `--delta-verify`)
 
@@ -379,6 +475,11 @@ diff. The baseline only changes what `diff()` is computed *against*; the working
 drives stuck detection is unaffected. goaly can also advance the baseline internally via a private
 tree snapshot (`git write-tree` through a throwaway index — no commit, no `HEAD`/branch/index
 movement), recorded in the run log so `--resume` reconstructs it.
+
+The run-start baseline (an explicit `--baseline`, or the automatic pin applied when
+[harness autonomy](#harness-autonomy---harness-autonomy) is raised) is recorded in the run-log
+header, and a `--resume` **re-adopts** it — a re-passed `--baseline` wins, and a logged internal
+checkpoint still re-points on top. So the pin survives a crash even if the agent committed mid-run.
 
 **`--delta-verify`** (default off) keeps the LLM **judge's** prompt flat on long runs: after each
 continuation iteration goaly takes an internal checkpoint so the next judge reviews only that
@@ -740,7 +841,15 @@ budget:      501,774 / 500,000 tokens (100%) — budget exceeded
   backstop.
 - **Estimated when unreported:** if turns are streaming but the CLI reports no `usage`, goaly
   counts spend locally from the streamed turns (~4 chars/token) and marks it `estimated` in the
-  report. Estimated tokens still count against the cap.
+  report. Estimated tokens still count against the cap. A CLI running in a **buffered** output mode
+  emits nothing to estimate from, so a harness that also reports no `usage` there leaves
+  `--budget-tokens` blind for that layer and `--budget-wall-ms` is the real cap. (Adding
+  `--harness-idle-timeout-ms` puts the CLI into its streaming mode, which restores the estimate —
+  and, on some CLIs, a `usage` block the buffered mode omits.)
+- **A failed turn still bills what it reported.** A turn that did real work and then crashed, timed
+  out, or was truncated is accounted for from its own envelope — a refused or interrupted turn is
+  not free, and dropping its count is what would make the budget silently blind. The status is
+  unchanged by this; only the spend stops being discarded.
 - **Cost is opt-in** (`--cost-table <path>`): a JSON file mapping model → price — either a flat
   USD-per-1M-tokens number or a per-category object (`input` / `output` / `cacheRead` /
   `cacheWrite`, plus optional `default`); a `"default"` key prices unlisted models. Unpriced

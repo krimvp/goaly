@@ -76,6 +76,8 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Best-of-N worker](docs/reference.md#best-of-n-parallel-worker---candidates) | `--candidates N` | N isolated attempts per iteration; the frozen ladder picks the winner. Or just say *"use 4 subagents"*. |
 | [Parallel waves](docs/reference.md#cooperative-parallel-waves---parallel-phases-experimental) | `--parallel-phases` | Independent phases run concurrently, merge with git plumbing, re-verify. Experimental. |
 | [Worktrees](docs/reference.md#worktrees---worktree) | `--worktree <name>` | The whole run in an isolated checkout; merge back with plain git. |
+| [Harness autonomy](docs/reference.md#harness-autonomy---harness-autonomy) | `--harness-autonomy` | Let the agent install & build for a from-scratch goal; a refusal names the fix, and the reviewed diff auto-pins to the run-start commit so agent commits stay visible. |
+| [Dry run](docs/reference.md#dry-run---dry-run) | `--dry-run` | Validate the flags + `.goalyrc` and print the resolved config. Writes nothing, spends nothing. |
 | [Adversarial review](docs/reference.md#hardening-against-reward-hacking) | `--adversarial` | Critics attack the contract before Seal; refuters attack every green before Sign-off. |
 | [Approver panels](docs/reference.md#hardening-against-reward-hacking) | `--approver-quorum`, `--approver-models` | Sign-off as a refute-first multi-vote panel, optionally across distinct models. |
 | [Sandboxing](docs/reference.md#sandboxing) | `--sandbox`, `--sandbox-net` | OS-jail the agent and verifier (bwrap / firejail / container), with egress allowlists. |
@@ -84,7 +86,7 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Web UI](docs/reference.md#web-ui-goaly-ui) | `goaly ui` | A local control center: mission dashboard, live pipeline + session inspector, worktrees, and a browser Seal review station. Localhost-only. |
 | [Spend & budgets](docs/reference.md#spend-report--budgets) | `--budget-tokens`, `--cost-table` | Per-layer token report (cache included); budgets survive resume. |
 | [Observability](docs/reference.md#observability) | `--stream`, `--explain`, `--log-level` | Live agent turns, durable transcripts, plain-language narration. |
-| [Reliability](docs/reference.md#reliability) | *(defaults)* | Preflight, bounded retries, safe Ctrl-C, fsync'd write-ahead log. |
+| [Reliability](docs/reference.md#reliability) | *(defaults)* | Preflight, bounded retries (contract *and* plan), safe Ctrl-C, fsync'd write-ahead log. |
 
 ## Usage
 
@@ -100,6 +102,9 @@ goaly run --goal "..." --verify-cmd "npm test" --model claude-opus-4-8 --llm-mod
 # No coding CLI at all — goaly's own agent loop on any OpenAI-compatible endpoint:
 goaly run --goal "..." --verify-cmd "npm test" --harness goaly-code \
           --base-url http://localhost:11434/v1 --model qwen2.5-coder
+
+# Check what a run WOULD do — flags, .goalyrc, models, budgets — without starting one:
+goaly run --goal "..." --generate --dry-run
 
 # Inspect and follow runs (read-only), or open the browser UI:
 goaly runs list

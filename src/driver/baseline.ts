@@ -87,6 +87,17 @@ export class Baseline {
   }
 
   /**
+   * Re-adopt the RUN-START baseline recorded in the run-log header on `--resume` (an explicit
+   * `--baseline` or the raised-autonomy auto-pin): re-point BOTH the active (judge) and the
+   * cumulative (approver) baselines, exactly as compose + the constructor would have at run start.
+   * Must be called BEFORE {@link hydrateResume} so a logged checkpoint / phase boundary still wins.
+   */
+  adoptRunStart(ref: string): void {
+    this.#deps.workspace.setBaseline(ref);
+    this.#approver = ref;
+  }
+
+  /**
    * Re-point both baselines from a resumed log fold (issue #47/#49): the active (judge) baseline to the
    * last internal checkpoint, and the cumulative (approver) baseline to the current phase's start.
    * Null ⇒ keep what the constructor captured (a classic run, or no phase advanced yet).

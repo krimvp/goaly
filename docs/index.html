@@ -158,6 +158,8 @@
       <li><span class="fi-name">Crash-safe</span><span class="fi-desc">A write-ahead log survives a crash at any byte; budgets survive <code>--resume</code>.</span></li>
       <li><span class="fi-name">Sandboxing</span><span class="fi-desc"><code>--sandbox</code> jails the agent and the verify command, with per-seam network policy.</span></li>
       <li><span class="fi-name">Follow-ups</span><span class="fi-desc"><code>--from-run</code> starts a new, re-verified goal that knows what just happened.</span></li>
+      <li><span class="fi-name">Dry run</span><span class="fi-desc"><code>--dry-run</code> resolves your flags and <code>.goalyrc</code> and prints the config a run would use — writing nothing and spending nothing.</span></li>
+      <li><span class="fi-name">Harness autonomy</span><span class="fi-desc"><code>--harness-autonomy</code> lets the agent install and build for a from-scratch goal; if it refuses an action, the abort names the fix instead of blaming your install. Raising it auto-pins the reviewed diff to the run-start commit, so an agent <code>git commit</code> stays visible to both keys (and the pin survives <code>--resume</code>).</span></li>
     </ul>
 
     <p class="lede footnote reveal">

@@ -86,6 +86,18 @@ describe('FileRunLog', () => {
     }
   });
 
+  it('round-trips the optional run-start baseline in the header (raised-autonomy pin survival)', async () => {
+    const dir = await freshDir();
+    try {
+      const header: RunLogHeader = { ...makeHeader(), baseline: 'a'.repeat(40) };
+      const log = new FileRunLog(dir);
+      await log.writeHeader(header);
+      expect((await log.read())?.header.baseline).toBe('a'.repeat(40));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('returns null for a fresh directory with no header', async () => {
     const dir = await freshDir();
     try {

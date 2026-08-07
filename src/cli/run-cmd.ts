@@ -5,7 +5,7 @@ import { USAGE, defaultLlmProvider, isHarnessChoice, type ParsedArgs } from './a
 import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
 import { drive } from '../driver/driver';
-import { refResolves } from '../workspace/git-workspace';
+import { refResolves, resolveRef } from '../workspace/git-workspace';
 import { asRunId, type RunId } from '../domain/ids';
 import type { RunOutcome } from '../domain/events';
 import type { RunConfig } from '../domain/config';
@@ -14,7 +14,9 @@ import type { PlanGate } from '../plan/plan-gate';
 import type { PhasedStreamSink } from '../agent-cli/stream';
 import { readRun } from '../runlog/inspect';
 import { FileRunLog } from '../runlog/file-runlog';
-import { extendedRunConfig, applyRunExtension } from '../runlog/replay';
+import { extendedRunConfig, applyRunExtension, resumeStreakRelief } from '../runlog/replay';
+import { renderResolvedConfig } from './dry-run';
+import type { RunExtension } from '../domain/events';
 import { acquireRunLock, RunLockedError, type RunLock } from '../runlog/lock';
 import { killActiveChildren } from '../util/spawn';
 import { preflightRun } from './preflight';
@@ -208,6 +210,22 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
     }
   }
 
+  // Raised harness autonomy AUTO-PINS the review baseline (read-only, so it belongs up here with
+  // the --baseline validation): above the least-privilege tier the agent may `git commit`, which
+  // moves HEAD and empties the HEAD-relative diff BOTH keys review — so pin the diff to the
+  // run-start commit's SHA (a symbolic HEAD would move with the commit). An explicit --baseline
+  // wins; a resume reconstructs its baseline from the run log instead; an unborn HEAD (fresh
+  // `git init`, nothing to pin to) degrades to the loud warning below.
+  let autoPinnedBaseline: string | undefined;
+  if (
+    parsed.harnessAutonomy !== undefined &&
+    parsed.harnessAutonomy !== 'low' &&
+    parsed.baseline === undefined &&
+    parsed.resumeRunId === undefined
+  ) {
+    autoPinnedBaseline = (await resolveRef(parsed.workspace, 'HEAD')) ?? undefined;
+  }
+
   // Capability C (`--from-run`): recover the prior run, build its compaction, and (with
   // --inherit-session) seed the session. A normal run passes through unchanged.
   const followup = await resolveFollowup(parsed, io.err);
@@ -273,11 +291,24 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
     }
     const stored = await new FileRunLog(path.join(stateDir, resumeRunId)).read();
     if (stored !== null) {
+      // Relieve any stuck streak the log has already banked (see `resumeStreakRelief`): without it
+      // a run that ABORTED at the crash / unevaluable / repeat threshold re-aborts on the resume
+      // fold before the harness gets a single turn, no matter what the operator just fixed. Merged
+      // UNDER `parsed.resumeExtend` so an explicit `--stuck-*` on this command line still wins.
+      const relief = resumeStreakRelief(stored.header.config, stored.entries);
+      let extend = parsed.resumeExtend;
+      if (Object.keys(relief).length > 0) {
+        extend = { ...parsed.resumeExtend, stuck: { ...relief, ...parsed.resumeExtend?.stuck } };
+        io.err(
+          `goaly: --resume: relieving the stuck streak this run banked ` +
+            `(${describeRelief(relief)}) — resuming is your signal that something changed, so the ` +
+            `resumed run must earn a fresh streak before aborting again\n`,
+        );
+        // Rebound so the Driver persists the relief as a RUN_EXTENDED marker (auditable in the log).
+        parsed = { ...parsed, resumeExtend: extend };
+      }
       const effective = extendedRunConfig(stored.header.config, stored.entries);
-      runConfig =
-        parsed.resumeExtend !== undefined
-          ? applyRunExtension(effective, parsed.resumeExtend)
-          : effective;
+      runConfig = extend !== undefined ? applyRunExtension(effective, extend) : effective;
     }
   }
 
@@ -295,6 +326,21 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       io.err(`goaly: ${problem}\n`);
       return { code: 2, runId: undefined, outcome: undefined };
     }
+  }
+
+  // `--dry-run`: the LAST read-only point. Everything above validates (config merge, --cost-table,
+  // --baseline resolution, --from-run/--resume log reads, preflight) and everything below MUTATES —
+  // `acquireRunLock` mkdirs the run directory. Printing here means a dry run exercises exactly the
+  // checks a real run would, with the same messages and the same exit code, and still writes nothing.
+  if (parsed.dryRun) {
+    // Display-only rebind: the dry run must show the baseline the real run would actually use,
+    // including the autonomy auto-pin resolved above (annotated so the provenance is visible).
+    const shown =
+      autoPinnedBaseline !== undefined
+        ? { ...parsed, baseline: `${autoPinnedBaseline} (auto-pinned: harness-autonomy ${parsed.harnessAutonomy})` }
+        : parsed;
+    io.out(renderResolvedConfig(shown, runConfig));
+    return { code: 0, runId: undefined, outcome: undefined };
   }
 
   const resuming = parsed.resumeRunId !== undefined;
@@ -337,12 +383,17 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
         harness: parsed.harness,
         models: parsed.models,
         llmProvider: parsed.llmProvider,
+        ...(parsed.harnessAutonomy !== undefined ? { harnessAutonomy: parsed.harnessAutonomy } : {}),
         workspaceRoot: parsed.workspace,
         runId,
         ...(followup.followupSeed !== undefined ? { followupSeed: followup.followupSeed } : {}),
         ...(parsed.baseUrl !== undefined ? { baseUrl: parsed.baseUrl } : {}),
         ...(llmApiKey !== undefined ? { llmApiKey } : {}),
-        ...(parsed.baseline !== undefined ? { baseline: parsed.baseline } : {}),
+        ...(parsed.baseline !== undefined
+          ? { baseline: parsed.baseline }
+          : autoPinnedBaseline !== undefined
+            ? { baseline: autoPinnedBaseline }
+            : {}),
         ...(parsed.verifyDir !== undefined ? { verifyDir: parsed.verifyDir } : {}),
         ...(parsed.planFile !== undefined ? { planFile: parsed.planFile } : {}),
         logLevel: parsed.logLevel,
@@ -388,11 +439,59 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       resumeWith: `goaly --resume ${runId}${worktreeName !== undefined ? ` --worktree ${worktreeName}` : ''}`,
       watchWith: `goaly runs watch ${runId}${worktreeName !== undefined ? ` --workspace ${parsed.workspace}` : ''}`,
       harness: parsed.harness,
+      ...(parsed.harnessAutonomy !== undefined ? { harnessAutonomy: parsed.harnessAutonomy } : {}),
       autonomous: parsed.config.autonomous,
       ...(parsed.configSources.length > 0 ? { configFile: parsed.configSources.join(', ') } : {}),
       ...(egressAllowlist !== undefined ? { egressAllowlist: egressAllowlist.join(', ') } : {}),
       ...startupFields(parsed),
     });
+
+    // Non-fatal parse-time findings (e.g. a CLI --generate that overrode a config-file verify-cmd):
+    // surfaced, never swallowed. `parseArgs` collects them because it has no output channel.
+    for (const warning of parsed.warnings) {
+      deps.logger?.warn(warning, {});
+    }
+
+    // Raising harness autonomy buys installs/builds at the cost of the orchestrator's HEAD-relative
+    // diff: above the least-privilege tier the agent can `git commit`, which empties `git diff HEAD`
+    // and hides work from BOTH keys (the judge and the Sign-off approver). goaly therefore AUTO-PINS
+    // the review baseline to the run-start commit (resolved above) — loudly, so the operator knows
+    // which diff the keys review. Only an unpinnable tree (unborn HEAD) or a resume of a run that
+    // predates baseline recording is left with the manual --baseline advice.
+    if (parsed.harnessAutonomy !== undefined && parsed.harnessAutonomy !== 'low') {
+      const level = parsed.harnessAutonomy;
+      if (autoPinnedBaseline !== undefined) {
+        deps.logger?.info(
+          `harness autonomy raised to '${level}' — the agent may now run git/installs/builds. ` +
+            `Review baseline auto-pinned to the run-start commit (${autoPinnedBaseline.slice(0, 12)}) so an ` +
+            'agent `git commit` stays visible to the judge and the Sign-off approver; ' +
+            'override with --baseline <ref>.',
+          { harness: parsed.harness, harnessAutonomy: level, baseline: autoPinnedBaseline },
+        );
+      } else if (parsed.baseline !== undefined) {
+        deps.logger?.info(
+          `harness autonomy raised to '${level}' — the agent may now run git/installs/builds. ` +
+            `The judge and the Sign-off approver review the diff against --baseline ${parsed.baseline}, ` +
+            'so an agent `git commit` stays visible.',
+          { harness: parsed.harness, harnessAutonomy: level, baseline: parsed.baseline },
+        );
+      } else if (resuming) {
+        deps.logger?.info(
+          `harness autonomy raised to '${level}' — the agent may now run git/installs/builds. ` +
+            'The resumed run re-adopts the review baseline it recorded at run start (older logs ' +
+            'without one fall back to HEAD — pin with --baseline <ref> then).',
+          { harness: parsed.harness, harnessAutonomy: level },
+        );
+      } else {
+        deps.logger?.warn(
+          `harness autonomy raised to '${level}' — the agent may now run git/installs/builds. ` +
+            'The review baseline could not be auto-pinned (no resolvable HEAD in this tree), so a ' +
+            '`git commit` from the agent empties `git diff HEAD` and the judge and Sign-off approver ' +
+            'would review an empty diff; pin with --baseline <ref> once a commit exists.',
+          { harness: parsed.harness, harnessAutonomy: level },
+        );
+      }
+    }
 
     // Natural-language delegation is a GOAL/NOTE REWRITE, so it must be loudly auditable: name the
     // matched phrase and what it was mapped to (or that the explicit flag won) every time.
@@ -466,6 +565,25 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
 }
 
 /**
+ * Human-readable summary of a {@link resumeStreakRelief} overlay, for the one-line notice the resume
+ * path prints. Names each raised threshold and its new value so the relief is auditable on screen,
+ * not just in the log's RUN_EXTENDED marker.
+ */
+function describeRelief(relief: NonNullable<RunExtension['stuck']>): string {
+  const parts: string[] = [];
+  if (relief.harnessCrashThreshold !== undefined) {
+    parts.push(`--stuck-crash-threshold ${relief.harnessCrashThreshold}`);
+  }
+  if (relief.unevaluableThreshold !== undefined) {
+    parts.push(`--stuck-unevaluable-threshold ${relief.unevaluableThreshold}`);
+  }
+  if (relief.repeatFailureThreshold !== undefined) {
+    parts.push(`--stuck-repeat-threshold ${relief.repeatFailureThreshold}`);
+  }
+  return parts.join(', ');
+}
+
+/**
  * A one-line, always-on "what do I do now" for the common terminal reasons — the zero-cost,
  * non-LLM complement to `--explain`. A first-time user seeing `status: ABORTED / reason:
  * STUCK_NO_DIFF` should not need to read the architecture docs to know the next step. Matched on
@@ -480,6 +598,10 @@ export function nextStepHint(o: RunOutcome): string | undefined {
   // Every "…and continue" hint names the EXACT extension flag: a terminal run replays back to the
   // same terminal state on a plain resume — only a --resume extension (ADR 0012) un-terminates it.
   const table: readonly (readonly [RegExp, string])[] = [
+    // A harness that REFUSED an action (droid at `--auto low`) is not a crashing CLI: the reason
+    // already carries the codec's remediation, so point at the autonomy flag rather than at
+    // install/auth, and at a plain resume rather than at raising the crash threshold.
+    [/STUCK_HARNESS_CRASH[\s\S]*autonomy level/, `the harness refused an action at its autonomy level — raise it and continue: ${resume} --harness-autonomy medium`],
     [/STUCK_HARNESS_CRASH/, `the agent CLI kept crashing — run it once by hand to check install/auth, then continue: ${resume} --stuck-crash-threshold 4`],
     [/CONTRACT_UNEVALUABLE/, `the verification could not RUN (environment problem, not a code red) — fix the tool/network it names, then continue: ${resume} --stuck-unevaluable-threshold 4`],
     [/TOOLS_MISSING/, `install the tools named above (or rerun with --install-missing-tools true)`],

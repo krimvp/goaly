@@ -220,13 +220,14 @@ export async function drive(
     });
   emitTelemetry({ kind: 'run_started', runId, resume: options.resume === true, ts: deps.clock.now() });
   // Capture the run's START baseline BEFORE any internal checkpoint (or the resume re-point below)
-  // advances it. On a FRESH run this is `--baseline`/HEAD as compose applied it. On --resume it is
-  // whatever compose re-applied THIS invocation: `--baseline` is not persisted in the log, so a resumed
-  // run that omits the flag falls back to HEAD here (the approver then reviews HEAD→now instead of
-  // ref→now). That is safe for what delta-verify guards against — goaly makes no commits mid-run, so
-  // every iteration's work is post-HEAD and stays fully in the approver's view; only pre-existing
-  // ref→HEAD committed code drops out, which the deterministic rungs cover anyway. Phased runs instead
-  // re-pin from the log below. Under --delta-verify the terminal Sign-off approver is pinned to a CUMULATIVE baseline —
+  // advances it. On a FRESH run this is `--baseline`/HEAD as compose applied it (including the
+  // raised-autonomy auto-pin), and bootstrap records it in the run-log header. On --resume it is
+  // whatever compose re-applied THIS invocation; a run resumed without the flag re-adopts the
+  // header's recorded baseline in bootstrap (see `adoptRunStart`), so the pin survives a crash —
+  // essential at raised harness autonomy, where the agent may have committed mid-run and a MOVED
+  // HEAD would empty the diff both keys review. Only a pre-recording log falls back to HEAD, which
+  // is safe when goaly's harness makes no commits (every iteration's work stays post-HEAD). Phased
+  // runs instead re-pin from the log below. Under --delta-verify the terminal Sign-off approver is pinned to a CUMULATIVE baseline —
   // `approverBaseline` — so it reviews the whole change a per-iteration judge would never see at once
   // (the cumulative guard, issue #49). It starts at the run-start baseline and, in a --phased run,
   // advances to each PHASE boundary (so the approver reviews that phase's whole cumulative diff) while
@@ -912,11 +913,17 @@ async function bootstrap(
 ): Promise<Bootstrapped> {
   if (options.resume !== true) {
     const [state, commands] = initial(config);
+    // Record the run-start review baseline (an explicit `--baseline` or the raised-autonomy
+    // auto-pin, applied by compose before drive()) so `--resume` can re-adopt the pin. The `HEAD`
+    // default is deliberately NOT recorded: re-adopting a symbolic HEAD is a no-op, and omitting it
+    // keeps old-log parity.
+    const runStartBaseline = deps.workspace.currentBaseline();
     await deps.runlog.writeHeader({
       runId,
       startedAt: deps.clock.now(),
       config,
       ...(options.harness !== undefined ? { harness: options.harness } : {}),
+      ...(runStartBaseline !== 'HEAD' ? { baseline: runStartBaseline } : {}),
     });
     return { state, commands, seq: 0, contractHash: null, ladder: null, pendingNote: null };
   }
@@ -927,6 +934,18 @@ async function bootstrap(
   if (options.extend !== undefined && isTerminal(resumed.state)) {
     log.warn('resume extension did not un-terminate the run — the terminal outcome stands', {
       state: resumed.state.tag,
+    });
+  }
+  // Re-adopt the run-start review baseline recorded in the header (an explicit `--baseline` or the
+  // raised-autonomy auto-pin) when nothing else owns it this invocation: a re-passed `--baseline`
+  // has already moved the workspace off its `HEAD` default (compose wins), and a logged checkpoint
+  // is re-pointed by `hydrateResume` right below (the fold wins). Without this, resuming a run
+  // whose agent had committed at raised autonomy fell back to the MOVED HEAD — an empty diff for
+  // both keys, the exact failure the pin exists to prevent.
+  if (resumed.headerBaseline !== null && deps.workspace.currentBaseline() === 'HEAD') {
+    baseline.adoptRunStart(resumed.headerBaseline);
+    log.info('resume: re-adopted the run-start review baseline from the run log', {
+      baseline: resumed.headerBaseline,
     });
   }
   // Re-point both baselines from the resumed fold (issue #47/#49): the active baseline to the last
@@ -982,6 +1001,11 @@ type Resumed = {
   /** The current phase's start tree SHA (last PHASE_ADVANCED), for re-pinning the approver (#49). */
   phaseBaseline: DiffHash | null;
   /**
+   * The run-start review baseline recorded in the header (`--baseline` / the raised-autonomy
+   * auto-pin), or null for the `HEAD` default and for logs that predate the field.
+   */
+  headerBaseline: string | null;
+  /**
    * The prior run's TOTAL token spend folded from the log, so `drive()` can re-arm the LIVE budget
    * meter. Without this a resumed run restarted `--budget-tokens` from zero — a run resumed near
    * its cap got a whole fresh budget, and repeated resumes could overshoot it arbitrarily. Null on
@@ -1014,6 +1038,7 @@ async function resume(
       contract: null,
       baseline: null,
       phaseBaseline: null,
+      headerBaseline: null,
       priorSpend: null,
       pendingNote: null,
     };
@@ -1061,6 +1086,7 @@ async function resume(
     contract,
     baseline,
     phaseBaseline,
+    headerBaseline: stored.header.baseline ?? null,
     priorSpend,
     pendingNote,
   };

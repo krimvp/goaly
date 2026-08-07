@@ -122,6 +122,21 @@ export interface AgentCliCodec {
    */
   readonly readonlyMintSession?: boolean;
 
+  /**
+   * Recognise an ACTIONABLE remediation in this CLI's own failure output and phrase it for the
+   * operator — the one place per-CLI error strings are allowed to be matched, because a codec is
+   * the module that owns its CLI's dialect. The canonical case: droid exits non-zero with
+   * "insufficient permission to proceed / re-run with --auto medium", which goaly would otherwise
+   * report as a generic "check the CLI is installed and authenticated" environment failure while
+   * the real fix sat two lines up in the same log.
+   *
+   * ADVICE ONLY. It never influences `classify`'s status — the run stays `crashed` and fail-closed
+   * (invariant #4), and the stuck classification still keys purely on facts goaly owns (invariant
+   * #8). It only replaces the REMEDIATION TEXT of the resulting abort. Optional: a codec with
+   * nothing to recognise omits it and the generic guidance stands. Must never throw.
+   */
+  diagnose?(input: { stdout: string; stderr: string; code: number | null }): string | undefined;
+
   /** Tolerantly parse this CLI's stdout into the shared {@link AgentOutput}. Never throws. */
   parse(stdout: string): AgentOutput | null;
 
@@ -292,15 +307,34 @@ export function classifyFlatRun(opts: {
   sessionId?: string | undefined;
   unknownSession: string;
   estimator?: StreamTokenEstimator | undefined;
+  /** Optional codec-recognised remediation for a FAILED run (see {@link AgentCliCodec.diagnose}). */
+  hint?: string | undefined;
 }): HarnessRunResult {
-  const { parsed, code, stderr, timedOut, sessionId, unknownSession, estimator } = opts;
+  const { parsed, code, stderr, timedOut, sessionId, unknownSession, estimator, hint } = opts;
   const session = coerceSessionId(parsed?.sessionId ?? sessionId, unknownSession);
+
+  // Spend is accounted for EVERY status, not just `completed`. A turn that did real work and then
+  // exited non-zero (droid refusing an action at its `--auto` tier is the canonical case) still
+  // burned the tokens its envelope reports; dropping them here made `--budget-tokens` silently
+  // blind for the run and the spend report say "unknown" while the log showed real usage. The
+  // status classification above is untouched — this only stops throwing away a fact we already hold.
+  const acct = accountTokens(parsed?.tokens, estimator);
+  const spend = {
+    ...acct,
+    // The split belongs only to a provider-REPORTED count; a local estimate has no category split.
+    ...(acct.tokenSource === 'reported' && parsed?.breakdown !== undefined
+      ? { tokenBreakdown: parsed.breakdown }
+      : {}),
+  };
+  const advice = hint !== undefined && hint.length > 0 ? { hint } : {};
 
   if (timedOut === true) {
     return HarnessRunResult.parse({
       output: parsed?.text ?? stderr,
       sessionId: session,
       status: 'timeout',
+      ...spend,
+      ...advice,
     });
   }
   if (code !== 0) {
@@ -308,6 +342,8 @@ export function classifyFlatRun(opts: {
       output: stderr.length > 0 ? stderr : (parsed?.text ?? ''),
       sessionId: session,
       status: 'crashed',
+      ...spend,
+      ...advice,
     });
   }
   if (parsed === null || parsed.text.length === 0) {
@@ -315,18 +351,17 @@ export function classifyFlatRun(opts: {
       output: stderr,
       sessionId: session,
       status: 'truncated',
+      ...spend,
+      ...advice,
     });
   }
   const status: HarnessRunResult['status'] = parsed.isError === true ? 'truncated' : 'completed';
-  const acct = accountTokens(parsed.tokens, estimator);
   return HarnessRunResult.parse({
     output: parsed.text,
     sessionId: session,
     status,
-    ...acct,
-    // The split belongs only to a provider-REPORTED count; a local estimate has no category split.
-    ...(acct.tokenSource === 'reported' && parsed.breakdown !== undefined
-      ? { tokenBreakdown: parsed.breakdown }
-      : {}),
+    ...spend,
+    // A `completed` run has nothing to remediate; a soft-error `truncated` one may.
+    ...(status === 'truncated' ? advice : {}),
   });
 }

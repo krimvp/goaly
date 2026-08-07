@@ -19,7 +19,7 @@ import {
   failVerdict,
   approve,
 } from '../testing/fakes';
-import { replay, extendedRunConfig } from './replay';
+import { replay, extendedRunConfig, applyRunExtension, resumeStreakRelief } from './replay';
 
 const runId = RunId.parse('run-replay');
 const contract = makeFakeContract({ goal: 'replayed goal' });
@@ -336,5 +336,114 @@ describe('replay() — RUN_EXTENDED (operator extension, ADR 0012)', () => {
       ...stored!.entries,
     ]);
     expect(consumed.pendingNote).toBeNull();
+  });
+});
+
+/**
+ * Streak relief on `--resume`. The counted stuck detectors re-derive their streaks by replaying the
+ * log, so a run that ABORTED at the harness-crash threshold re-aborted on the very first fold —
+ * before the harness got a single turn, no matter what the operator had just fixed. goaly's own
+ * remediation already said to work around it by hand (`--resume … --stuck-crash-threshold 4`);
+ * this computes that instead of asking for it.
+ */
+describe('resumeStreakRelief', () => {
+  /** One log entry, with `stateTagAfter` controlling whether the run reads as terminal. */
+  function e(seq: number, event: OrchestratorEvent, stateTagAfter = 'RUNNING_AGENT'): RunLogEntry {
+    return {
+      runId,
+      seq,
+      ts: 1_700_000_000_000 + seq,
+      contractHash: contract.contractHash,
+      event,
+      stateTagAfter: stateTagAfter as RunLogEntry['stateTagAfter'],
+    };
+  }
+
+  const budget = { exceeded: false };
+  const dh = (h: string): DiffHash => DiffHash.parse(h);
+  const ran = (status: 'crashed' | 'completed', i: number): OrchestratorEvent => ({
+    tag: 'AGENT_RAN',
+    run: {
+      output: 'out',
+      sessionId: SessionId.parse('s-1'),
+      status,
+    },
+    prevDiffHash: dh(String(i).padStart(7, '0')),
+    diffHash: dh(String(i + 1).padStart(7, '0')),
+    budget,
+  });
+  const verified = (v: { pass: boolean; detail: string; evaluable?: boolean }): OrchestratorEvent => ({
+    tag: 'VERIFIED',
+    verdict: { confidence: 1, ...v },
+  });
+
+  const config = makeConfig({ goal: 'g' });
+
+  it('raises the crash threshold by the streak the log banked', () => {
+    const entries = [e(1, ran('crashed', 1)), e(2, ran('crashed', 2), 'ABORTED')];
+    // Default threshold 2 + a 2-long trailing streak: the resumed run must crash twice more.
+    expect(resumeStreakRelief(config, entries)).toEqual({ harnessCrashThreshold: 4 });
+  });
+
+  it('measures only the TRAILING streak (a completed turn breaks it)', () => {
+    const entries = [
+      e(1, ran('crashed', 1)),
+      e(2, ran('completed', 2)),
+      e(3, ran('crashed', 3), 'ABORTED'),
+    ];
+    expect(resumeStreakRelief(config, entries)).toEqual({ harnessCrashThreshold: 3 });
+  });
+
+  it('does nothing for a run that did not ABORT', () => {
+    const entries = [e(1, ran('crashed', 1)), e(2, ran('crashed', 2), 'RUNNING_AGENT')];
+    expect(resumeStreakRelief(config, entries)).toEqual({});
+  });
+
+  it('does nothing for an ABORTED run with no banked streak (e.g. a budget abort)', () => {
+    const entries = [e(1, ran('completed', 1)), e(2, verified({ pass: true, detail: 'ok' }), 'ABORTED')];
+    expect(resumeStreakRelief(config, entries)).toEqual({});
+  });
+
+  it('relieves the contract-unevaluable streak', () => {
+    const entries = [
+      e(1, verified({ pass: false, detail: 'cannot run', evaluable: false })),
+      e(2, verified({ pass: false, detail: 'cannot run', evaluable: false }), 'ABORTED'),
+    ];
+    // Both counters see this: the same two entries are also two identical failures.
+    expect(resumeStreakRelief(config, entries)).toMatchObject({ unevaluableThreshold: 4 });
+  });
+
+  it('relieves the repeat-failure streak on the NORMALIZED signature', () => {
+    // Identical but for a timestamp — exactly what `normalizeDetail` scrubs, and what the detector
+    // counts as a repeat. Relief must measure the same thing the detector does.
+    const entries = [
+      e(1, verified({ pass: false, detail: 'FAIL at 2026-01-01T00:00:00Z in parser.ts' })),
+      e(2, verified({ pass: false, detail: 'FAIL at 2026-01-01T00:00:01Z in parser.ts' })),
+      e(3, verified({ pass: false, detail: 'FAIL at 2026-01-01T00:00:02Z in parser.ts' }), 'ABORTED'),
+    ];
+    expect(resumeStreakRelief(config, entries)).toEqual({ repeatFailureThreshold: 6 });
+  });
+
+  it('does not compound across repeated resumes (measured off the ORIGINAL thresholds)', () => {
+    const entries = [e(1, ran('crashed', 1)), e(2, ran('crashed', 2), 'ABORTED')];
+    // Even with a prior relief already logged as a RUN_EXTENDED overlay, the next relief is
+    // computed from the HEADER config — so it re-measures rather than stacking bump on bump.
+    const withPriorRelief = [
+      extensionEntry(3, { stuck: { harnessCrashThreshold: 4 } }),
+      ...entries.map((x) => ({ ...x, seq: x.seq + 3 })),
+    ];
+    expect(resumeStreakRelief(config, withPriorRelief)).toEqual({ harnessCrashThreshold: 4 });
+  });
+
+  it('is applied through the ordinary RUN_EXTENDED overlay path (auditable, overridable)', () => {
+    const relief = resumeStreakRelief(config, [
+      e(1, ran('crashed', 1)),
+      e(2, ran('crashed', 2), 'ABORTED'),
+    ]);
+    const extended = applyRunExtension(config, { stuck: relief });
+    expect(extended.stuckPolicy.harnessCrashThreshold).toBe(4);
+    // The frozen contract is untouched — an extension can only move operational knobs.
+    expect(extended.goal).toBe(config.goal);
+    expect(extended.verifier).toEqual(config.verifier);
   });
 });

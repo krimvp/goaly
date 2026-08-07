@@ -423,3 +423,22 @@ export async function refResolves(root: string, ref: string, exec: ExecFn = real
   });
   return r.code === 0;
 }
+
+/**
+ * Resolve `ref` to its full commit/object SHA in the repo at `root`, or `null` when it does not
+ * resolve (including an unborn HEAD in a fresh `git init`). Used to PIN the review baseline to the
+ * run-start commit when `--harness-autonomy` is raised: a symbolic `HEAD` moves when the agent
+ * commits, so the pin must capture the SHA it names at run start. Never throws.
+ */
+export async function resolveRef(
+  root: string,
+  ref: string,
+  exec: ExecFn = realExec,
+): Promise<string | null> {
+  const r = await exec('git', ['-C', root, 'rev-parse', '--verify', '--quiet', `${ref}^{object}`], {
+    cwd: root,
+  });
+  if (r.code !== 0) return null;
+  const sha = r.stdout.trim();
+  return sha.length > 0 ? sha : null;
+}

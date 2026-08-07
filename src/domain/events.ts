@@ -23,6 +23,16 @@ export const HarnessRunResult = z.object({
    * reported one. Present only for a `reported` count (an estimate has no split); absent otherwise.
    */
   tokenBreakdown: TokenBreakdown.optional(),
+  /**
+   * An ACTIONABLE remediation the CODEC recognised in this CLI's own failure output — e.g. droid
+   * refusing an action at its current `--auto` tier. Advice only: it never changes the `status`
+   * above (which stays classified from facts goaly owns — its own timeout, the exit code — per
+   * invariant #8), it only replaces the generic "check your install/auth" guidance in the
+   * `STUCK_HARNESS_CRASH` abort with the fix the harness itself named. Per-CLI string knowledge
+   * lives in the codec (`AgentCliCodec.diagnose`), never in the reducer; the reducer only ever
+   * carries this string through. Absent ⇒ nothing recognised.
+   */
+  hint: z.string().min(1).optional(),
 });
 export type HarnessRunResult = z.infer<typeof HarnessRunResult>;
 
