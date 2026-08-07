@@ -76,7 +76,7 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Best-of-N worker](docs/reference.md#best-of-n-parallel-worker---candidates) | `--candidates N` | N isolated attempts per iteration; the frozen ladder picks the winner. Or just say *"use 4 subagents"*. |
 | [Parallel waves](docs/reference.md#cooperative-parallel-waves---parallel-phases-experimental) | `--parallel-phases` | Independent phases run concurrently, merge with git plumbing, re-verify. Experimental. |
 | [Worktrees](docs/reference.md#worktrees---worktree) | `--worktree <name>` | The whole run in an isolated checkout; merge back with plain git. |
-| [Harness autonomy](docs/reference.md#harness-autonomy---harness-autonomy) | `--harness-autonomy` | Let the agent install & build for a from-scratch goal; a refusal names the fix, not "check your install". |
+| [Harness autonomy](docs/reference.md#harness-autonomy---harness-autonomy) | `--harness-autonomy` | Let the agent install & build for a from-scratch goal; a refusal names the fix, and the reviewed diff auto-pins to the run-start commit so agent commits stay visible. |
 | [Dry run](docs/reference.md#dry-run---dry-run) | `--dry-run` | Validate the flags + `.goalyrc` and print the resolved config. Writes nothing, spends nothing. |
 | [Adversarial review](docs/reference.md#hardening-against-reward-hacking) | `--adversarial` | Critics attack the contract before Seal; refuters attack every green before Sign-off. |
 | [Approver panels](docs/reference.md#hardening-against-reward-hacking) | `--approver-quorum`, `--approver-models` | Sign-off as a refute-first multi-vote panel, optionally across distinct models. |

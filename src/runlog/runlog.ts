@@ -13,12 +13,19 @@ import { OrchestratorEvent } from '../domain/events';
  * that knows it after the run ends. It is OPTIONAL so logs written before this field existed still
  * parse (invariant #6, fail-closed on read). Read by the follow-up resume-hint (Capability A) to
  * print the harness-correct interactive-resume command.
+ *
+ * `baseline` records the run-start review baseline the workspace was pinned to (an explicit
+ * `--baseline`, or the raised-autonomy auto-pin) — compose-time wiring like `harness`, never the
+ * frozen contract. Recorded only when it differs from the `HEAD` default; `--resume` re-adopts it
+ * so the pin survives a crash (at raised autonomy the agent may have committed mid-run, and falling
+ * back to a MOVED HEAD would hand both keys an empty diff). Optional so older logs still parse.
  */
 export const RunLogHeader = z.object({
   runId: RunId,
   startedAt: z.number(),
   config: RunConfig,
   harness: z.string().min(1).optional(),
+  baseline: z.string().min(1).optional(),
 });
 export type RunLogHeader = z.infer<typeof RunLogHeader>;
 

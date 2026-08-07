@@ -5,7 +5,7 @@ import { USAGE, defaultLlmProvider, isHarnessChoice, type ParsedArgs } from './a
 import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
 import { drive } from '../driver/driver';
-import { refResolves } from '../workspace/git-workspace';
+import { refResolves, resolveRef } from '../workspace/git-workspace';
 import { asRunId, type RunId } from '../domain/ids';
 import type { RunOutcome } from '../domain/events';
 import type { RunConfig } from '../domain/config';
@@ -210,6 +210,22 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
     }
   }
 
+  // Raised harness autonomy AUTO-PINS the review baseline (read-only, so it belongs up here with
+  // the --baseline validation): above the least-privilege tier the agent may `git commit`, which
+  // moves HEAD and empties the HEAD-relative diff BOTH keys review — so pin the diff to the
+  // run-start commit's SHA (a symbolic HEAD would move with the commit). An explicit --baseline
+  // wins; a resume reconstructs its baseline from the run log instead; an unborn HEAD (fresh
+  // `git init`, nothing to pin to) degrades to the loud warning below.
+  let autoPinnedBaseline: string | undefined;
+  if (
+    parsed.harnessAutonomy !== undefined &&
+    parsed.harnessAutonomy !== 'low' &&
+    parsed.baseline === undefined &&
+    parsed.resumeRunId === undefined
+  ) {
+    autoPinnedBaseline = (await resolveRef(parsed.workspace, 'HEAD')) ?? undefined;
+  }
+
   // Capability C (`--from-run`): recover the prior run, build its compaction, and (with
   // --inherit-session) seed the session. A normal run passes through unchanged.
   const followup = await resolveFollowup(parsed, io.err);
@@ -317,7 +333,13 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
   // `acquireRunLock` mkdirs the run directory. Printing here means a dry run exercises exactly the
   // checks a real run would, with the same messages and the same exit code, and still writes nothing.
   if (parsed.dryRun) {
-    io.out(renderResolvedConfig(parsed, runConfig));
+    // Display-only rebind: the dry run must show the baseline the real run would actually use,
+    // including the autonomy auto-pin resolved above (annotated so the provenance is visible).
+    const shown =
+      autoPinnedBaseline !== undefined
+        ? { ...parsed, baseline: `${autoPinnedBaseline} (auto-pinned: harness-autonomy ${parsed.harnessAutonomy})` }
+        : parsed;
+    io.out(renderResolvedConfig(shown, runConfig));
     return { code: 0, runId: undefined, outcome: undefined };
   }
 
@@ -367,7 +389,11 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
         ...(followup.followupSeed !== undefined ? { followupSeed: followup.followupSeed } : {}),
         ...(parsed.baseUrl !== undefined ? { baseUrl: parsed.baseUrl } : {}),
         ...(llmApiKey !== undefined ? { llmApiKey } : {}),
-        ...(parsed.baseline !== undefined ? { baseline: parsed.baseline } : {}),
+        ...(parsed.baseline !== undefined
+          ? { baseline: parsed.baseline }
+          : autoPinnedBaseline !== undefined
+            ? { baseline: autoPinnedBaseline }
+            : {}),
         ...(parsed.verifyDir !== undefined ? { verifyDir: parsed.verifyDir } : {}),
         ...(parsed.planFile !== undefined ? { planFile: parsed.planFile } : {}),
         logLevel: parsed.logLevel,
@@ -428,14 +454,43 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
 
     // Raising harness autonomy buys installs/builds at the cost of the orchestrator's HEAD-relative
     // diff: above the least-privilege tier the agent can `git commit`, which empties `git diff HEAD`
-    // and hides work from BOTH keys (the judge and the Sign-off approver). Never silent.
+    // and hides work from BOTH keys (the judge and the Sign-off approver). goaly therefore AUTO-PINS
+    // the review baseline to the run-start commit (resolved above) — loudly, so the operator knows
+    // which diff the keys review. Only an unpinnable tree (unborn HEAD) or a resume of a run that
+    // predates baseline recording is left with the manual --baseline advice.
     if (parsed.harnessAutonomy !== undefined && parsed.harnessAutonomy !== 'low') {
-      deps.logger?.warn(
-        `harness autonomy raised to '${parsed.harnessAutonomy}' — the agent may now run git/installs/builds. ` +
-          'A `git commit` from the agent empties `git diff HEAD`, so the judge and Sign-off approver ' +
-          'would review an empty diff; pin the review baseline with --baseline <ref> if that matters.',
-        { harness: parsed.harness, harnessAutonomy: parsed.harnessAutonomy },
-      );
+      const level = parsed.harnessAutonomy;
+      if (autoPinnedBaseline !== undefined) {
+        deps.logger?.info(
+          `harness autonomy raised to '${level}' — the agent may now run git/installs/builds. ` +
+            `Review baseline auto-pinned to the run-start commit (${autoPinnedBaseline.slice(0, 12)}) so an ` +
+            'agent `git commit` stays visible to the judge and the Sign-off approver; ' +
+            'override with --baseline <ref>.',
+          { harness: parsed.harness, harnessAutonomy: level, baseline: autoPinnedBaseline },
+        );
+      } else if (parsed.baseline !== undefined) {
+        deps.logger?.info(
+          `harness autonomy raised to '${level}' — the agent may now run git/installs/builds. ` +
+            `The judge and the Sign-off approver review the diff against --baseline ${parsed.baseline}, ` +
+            'so an agent `git commit` stays visible.',
+          { harness: parsed.harness, harnessAutonomy: level, baseline: parsed.baseline },
+        );
+      } else if (resuming) {
+        deps.logger?.info(
+          `harness autonomy raised to '${level}' — the agent may now run git/installs/builds. ` +
+            'The resumed run re-adopts the review baseline it recorded at run start (older logs ' +
+            'without one fall back to HEAD — pin with --baseline <ref> then).',
+          { harness: parsed.harness, harnessAutonomy: level },
+        );
+      } else {
+        deps.logger?.warn(
+          `harness autonomy raised to '${level}' — the agent may now run git/installs/builds. ` +
+            'The review baseline could not be auto-pinned (no resolvable HEAD in this tree), so a ' +
+            '`git commit` from the agent empties `git diff HEAD` and the judge and Sign-off approver ' +
+            'would review an empty diff; pin with --baseline <ref> once a commit exists.',
+          { harness: parsed.harness, harnessAutonomy: level },
+        );
+      }
     }
 
     // Natural-language delegation is a GOAL/NOTE REWRITE, so it must be loudly auditable: name the

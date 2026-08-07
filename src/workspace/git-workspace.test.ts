@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { GitWorkspace, refResolves } from './git-workspace';
+import { GitWorkspace, refResolves, resolveRef } from './git-workspace';
 import type { ExecFn, RunExecWrapper } from './git-workspace';
 
 /** Run a git command synchronously in `cwd`, throwing on failure (setup only). */
@@ -468,6 +468,22 @@ describe('GitWorkspace (integration, real git)', () => {
     const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim();
     expect(await refResolves(root, sha)).toBe(true);
     expect(await refResolves(root, 'no-such-ref')).toBe(false);
+  });
+
+  it('resolveRef pins HEAD to its commit SHA and returns null for an unknown ref (autonomy auto-pin)', async () => {
+    const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim();
+    expect(await resolveRef(root, 'HEAD')).toBe(sha);
+    expect(await resolveRef(root, 'no-such-ref')).toBeNull();
+  });
+
+  it('resolveRef returns null on an unborn HEAD (fresh git init — nothing to pin the baseline to)', async () => {
+    const bare = await mkdtemp(join(tmpdir(), 'goaly-gw-resolveref-'));
+    try {
+      git(bare, 'init', '-q');
+      expect(await resolveRef(bare, 'HEAD')).toBeNull();
+    } finally {
+      await rm(bare, { recursive: true, force: true });
+    }
   });
 
   describe('isEmptyOfSource (from-scratch detection, Fix B1)', () => {

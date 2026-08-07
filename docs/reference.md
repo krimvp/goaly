@@ -261,8 +261,12 @@ never go green at `low`. Raise it deliberately:
 goaly run --goal "..." --generate --harness droid --harness-autonomy medium
 ```
 
-Above `low` the agent can `git commit`, so pin what the judge and the Sign-off approver review with
-`--baseline <ref>` if that matters. goaly logs a warning whenever the tier is raised.
+Above `low` the agent can `git commit`, which would move `HEAD` and hide the committed work from
+both keys — so goaly **auto-pins the review baseline** to the run-start commit's SHA whenever the
+tier is raised (announced in the log; an explicit `--baseline <ref>` wins). The pin is recorded in
+the run-log header, so a `--resume` re-adopts it even after the agent has committed. Only a tree
+with no resolvable `HEAD` (a fresh `git init` with no commits) can't be pinned — goaly then warns
+loudly and falls back to the manual `--baseline` advice.
 
 The **read-only** LLM role (judge / approver / compiler) never receives this: it stays on droid's
 read-only default by construction, so a reviewer can never mutate the tree it is reviewing.
@@ -471,6 +475,11 @@ diff. The baseline only changes what `diff()` is computed *against*; the working
 drives stuck detection is unaffected. goaly can also advance the baseline internally via a private
 tree snapshot (`git write-tree` through a throwaway index — no commit, no `HEAD`/branch/index
 movement), recorded in the run log so `--resume` reconstructs it.
+
+The run-start baseline (an explicit `--baseline`, or the automatic pin applied when
+[harness autonomy](#harness-autonomy---harness-autonomy) is raised) is recorded in the run-log
+header, and a `--resume` **re-adopts** it — a re-passed `--baseline` wins, and a logged internal
+checkpoint still re-points on top. So the pin survives a crash even if the agent committed mid-run.
 
 **`--delta-verify`** (default off) keeps the LLM **judge's** prompt flat on long runs: after each
 continuation iteration goaly takes an internal checkpoint so the next judge reviews only that

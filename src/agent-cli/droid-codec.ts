@@ -105,9 +105,9 @@ const diagnose = (input: { stdout: string; stderr: string; code: number | null }
     'droid REFUSED an action at its current autonomy level — this is a permission gate, not a ' +
     'broken install or a bad login. At the default `--auto low` the agent may edit files but may ' +
     'NOT run git, package installs, or builds, so a from-scratch goal (npm install / build / test) ' +
-    'is unreachable by construction. Re-run with `--harness-autonomy medium` (or `high`). Note that ' +
-    'above `low` the agent can also `git commit`, which empties `git diff HEAD` — pin the reviewed ' +
-    'diff with `--baseline <ref>` if that matters.'
+    'is unreachable by construction. Re-run with `--harness-autonomy medium` (or `high`). Above ' +
+    '`low` the agent can also `git commit`, so goaly auto-pins the reviewed diff to the run-start ' +
+    'commit — override with `--baseline <ref>` if you want a different base.'
   );
 };
 

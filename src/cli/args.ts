@@ -342,7 +342,9 @@ Diff baseline (issue #47 — keep a run's diff small without touching the user's
                     (fail-closed on an unknown ref). Use it to chain multi-step builds: point run
                     N+1 at where run N finished, so each run reviews only its own delta — no
                     user-visible commits required. The no-op tree hash that drives stuck-detection is
-                    unaffected (it always hashes the working tree). Precedence: CLI flag > config.
+                    unaffected (it always hashes the working tree). Recorded in the run-log header
+                    (like the raised-autonomy auto-pin) and re-adopted on --resume — a re-passed
+                    --baseline wins over the recorded one. Precedence: CLI flag > config.
   --delta-verify    (issue #49) keep the per-iteration JUDGE prompt flat across a long run: after each
                     continuation iteration goaly takes an internal checkpoint (a --baseline-style tree,
                     no commit) so the NEXT iteration's judge reviews only that iteration's delta, not
@@ -491,10 +493,12 @@ Harness selection:
                         Default: the CLI's own least-privilege level (droid: low = edit files, but
                         NO git / installs / builds). Raise it for a FROM-SCRATCH build: at low the
                         agent cannot run 'npm install' or a build, so a --generate contract that
-                        requires a populated tree is unreachable by construction. TRADEOFF: above
-                        low the agent can also 'git commit', which empties 'git diff HEAD' and hides
-                        work from the judge and the Sign-off approver — pin the diff with --baseline
-                        <ref> if that matters. Harnesses without an autonomy tier ignore this flag.
+                        requires a populated tree is unreachable by construction. Above low the
+                        agent can also 'git commit', so goaly AUTO-PINS the reviewed diff to the
+                        run-start commit's SHA (recorded in the run log; --resume re-adopts it) —
+                        an explicit --baseline <ref> overrides the pin. Only a tree with no
+                        resolvable HEAD can't be pinned (goaly warns loudly then). Harnesses
+                        without an autonomy tier ignore this flag.
 
 Model selection (all optional; default = each tool's own default):
   --model <m>           model for the harness AND the LLM steps (the global default)
