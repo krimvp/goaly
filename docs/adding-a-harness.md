@@ -53,6 +53,7 @@ type HarnessRunResult = {
   sessionId: SessionId;
   status: 'completed' | 'crashed' | 'truncated' | 'timeout';
   tokensUsed?: number;
+  hint?: string;   // an actionable remediation your codec recognised (§5) — advice, never a status
 };
 ```
 
@@ -96,6 +97,12 @@ interface AgentCliCodec {
 
   parse(stdout: string): AgentOutput | null;        // tolerant final-result parse; never throws
   classify(input: CodecClassifyInput): HarnessRunResult;  // process outcome → status (§2)
+
+  // OPTIONAL (§5): recognise an ACTIONABLE remediation in this CLI's own failure output and phrase
+  // it for the operator. This is the ONE place per-CLI error strings may be matched, because the
+  // codec is the module that owns its CLI's dialect. Advice only — it never changes `classify`'s
+  // status, it only replaces the generic remediation text of a STUCK_HARNESS_CRASH abort.
+  diagnose?(input: { stdout: string; stderr: string; code: number | null }): string | undefined;
 
   // OPTIONAL (§4): how to CONTINUE this CLI's own interactive session after a goaly run ends —
   // `goaly runs resume-cmd <id>` and the end-of-run banner. Returns the command + an optional caveat.
@@ -195,11 +202,17 @@ call what counts as "no text"). `parseAgentOutput` returns `null` when nothing u
 
 `classify` turns a finished process into a Zod-parsed `HarnessRunResult`. For the standard policy,
 delegate to the shared `classifyFlatRun({ parsed, code, stderr, timedOut, sessionId, unknownSession,
-estimator? })` (from `src/agent-cli/codec.ts`, used by claude **and** droid). The optional
+estimator?, hint? })` (from `src/agent-cli/codec.ts`, used by claude **and** droid). The optional
 `estimator` (issue #24) is the `StreamTokenEstimator` `runCodecHarness` threads in when the run
 streamed: when the parsed envelope carries **no** `usage`, `classifyFlatRun` falls back to its local
 estimate and stamps `tokenSource: 'estimated'` (vs `'reported'` for a real count). A non-streaming run
-simply reports unknown spend, exactly as before:
+simply reports unknown spend, exactly as before. `hint` is your `diagnose` result (§5), attached to
+any non-`completed` status.
+
+**Spend is accounted on every status, not just `completed`.** A turn that did real work and then
+crashed, timed out, or was truncated still burned the tokens its envelope reports, so
+`classifyFlatRun` carries them through on all four outcomes. Don't return early from a failure
+branch without the accounting — dropping it makes `--budget-tokens` silently blind for the run.
 
 | Condition | status |
 |---|---|
@@ -314,6 +327,45 @@ that omits it makes `resume-cmd` report a typed "no resume command" for that har
 goaly-code (no external CLI) is routed there to the follow-up path instead (`--from-run
 --inherit-session`).
 
+### 5. Failure diagnosis — `diagnose(input)` *(optional)*
+
+When a harness turn fails, goaly's `STUCK_HARNESS_CRASH` abort tells the operator to check that the
+CLI is installed, authenticated, and runnable. That is the right advice for a *crash* — and three
+dead ends when the CLI actually **refused** an action it was capable of, and said so in its own
+output. `diagnose` lets your codec recognise that case and supply the real remediation:
+
+```ts
+diagnose(input) {
+  if (input.code === 0) return undefined;
+  if (!/insufficient permission/i.test(`${input.stdout}\n${input.stderr}`)) return undefined;
+  return 'myagent refused an action at its current permission level — re-run with `--harness-autonomy medium`.';
+}
+
+classify(input) {
+  return classifyFlatRun({
+    /* …as in §2… */
+    hint: this.diagnose?.(input),
+  });
+}
+```
+
+Three rules make this safe:
+
+- **Advice, never classification.** The status stays whatever §2 decided — a refused run is still a
+  fail-closed `crashed`, and the abort is still the same typed `STUCK_HARNESS_CRASH`. Only the
+  remediation sentence changes. Never use `diagnose` to talk a failure into looking like a success.
+- **This is the only place error strings may be matched.** Invariant #8 forbids the stuck detectors
+  from guessing at exit codes or error text; they classify solely from facts goaly owns. Your codec
+  is exempt because it *is* the module that owns its CLI's dialect — the reducer only ever carries
+  the resulting string through, never derives it.
+- **Match narrowly and never throw.** Anchor on phrasing the CLI emits verbatim, gate on a non-zero
+  exit, and return `undefined` for anything you don't positively recognise — a wrong hint is worse
+  than no hint, because the generic advice at least sends the operator somewhere real.
+
+`droidCodec.diagnose` (`droid-codec.ts`) is the worked example: it recognises droid's autonomy
+refusal ("Exec ended early: insufficient permission to proceed. Re-run with --auto medium") and
+points at `--harness-autonomy`.
+
 ## Skeleton (copy `src/agent-cli/claude-codec.ts` and adapt)
 
 ```ts
@@ -402,18 +454,35 @@ read-only `AgentCliLlmProvider({ codec: codecFor(choice) })` — so the codec is
 one place and the harness and LLM-provider paths can never drift.
 
 ```ts
-// src/agent-cli/registry.ts — add the literal to AgentCli + one case to codecFor
+// src/agent-cli/registry.ts — add the literal to AgentCli (and the AGENT_CLIS set) + one case to codecFor
 import { myagentCodec } from './myagent-codec';
 export type AgentCli = 'claude' | 'codex' | 'droid' | 'pi' | 'myagent';
-// ...inside codecFor(cli):
+// ...inside codecFor(cli, opts?):
 case 'myagent': return myagentCodec;
 ```
+
+`codecFor(cli, opts?)` takes an optional `CodecOptions` bag of **per-run knobs**. Today it carries
+one field, `autonomy` (`low | medium | high`, from `--harness-autonomy`), for CLIs that gate
+privileged actions behind a tier. Every field is optional and a codec is free to ignore one it has
+no analogue for, so most codecs return their module-level singleton and ignore `opts` entirely —
+only build a fresh codec when a knob actually applies:
+
+```ts
+case 'myagent':
+  return opts?.autonomy === undefined ? myagentCodec : makeMyagentCodec(opts.autonomy);
+```
+
+Apply an autonomy knob in `harnessArgs` **only** — never in `readonlyArgs`. The read-only role is
+the judge / approver / compiler, which must never be able to mutate the tree it is reviewing,
+whatever the worker is allowed to do. Note also that only `makeHarness` passes `opts`: the preflight,
+the sandbox exec, and `resume-cmd` read the autonomy-independent surface (`command`,
+`promptOnStdin`, `interactiveResume`) and call `codecFor(choice)` bare.
 
 `HarnessChoice` (`= AgentCli | 'fake' | 'goaly-code'`) and `LlmProviderChoice` (`= AgentCli | 'openai'`)
 pick up the new value from the union automatically; allow it in `parseHarness`/`parseLlmProvider`
 (`src/cli/args.ts`). That's
-the whole write-role wiring — `makeHarness` is already generic (`new AgentCliHarness(codecFor(choice),
-opts)`), and `opts` carries `{ model?, timeoutMs?, idleTimeoutMs?, cwd? }`.
+the whole write-role wiring — `makeHarness` is already generic (`new AgentCliHarness(codecFor(choice,
+{ autonomy }), opts)`), and `opts` carries `{ model?, timeoutMs?, idleTimeoutMs?, cwd? }`.
 
 Optionally export `myagentCodec` from `src/index.ts` for embedders.
 
@@ -627,9 +696,10 @@ with/without streaming) — see `src/harness/stream-extractors.test.ts` and `src
 
 - [ ] An `AgentCliCodec` in `src/agent-cli/<name>-codec.ts`: `fieldExtractor` (or the shared `flatExtractor`) + a `parse` over `parseAgentOutput`; the extractor never throws and emits `text` only for real results.
 - [ ] Two argv dialects: `harnessArgs` runs **writable** (it can edit the tree); `readonlyArgs` runs **read-only**. Flags first, prompt last; `--model` (when set) before the prompt positional.
-- [ ] `classify` never throws; uses `classifyFlatRun` (or a documented bespoke policy) and returns a `HarnessRunResult.parse(...)`d value; session id uses `coerceSessionId(..., this.unknownSession)`.
+- [ ] `classify` never throws; uses `classifyFlatRun` (or a documented bespoke policy) and returns a `HarnessRunResult.parse(...)`d value; session id uses `coerceSessionId(..., this.unknownSession)`; spend is accounted on **every** status, not just `completed`.
 - [ ] Registered in `src/agent-cli/registry.ts` (the `AgentCli` union + one `codecFor` case) and allowed in `parseHarness`/`parseLlmProvider` (`src/cli/args.ts`); documented the assumed CLI contract in a header comment. (`makeHarness`/`makeLlmProvider` are already generic — no per-CLI case.)
 - [ ] Added to `adapter.contract.test.ts` (an `AgentCliHarness` over your codec); codec-level tests for `parse` / argv dialects / `classify`; `npm run typecheck` and `npm test` are green.
 - [ ] (optional, streaming — issue #23) A `streamExtractor` (the shared `sdkStreamExtractor` / `flatStreamExtractor`, or a custom one); `harnessArgs`/`readonlyArgs` branch on `stream` if the streaming output format is a different flag; final result is identical with/without streaming; streaming test added.
+- [ ] (optional) A `diagnose` that recognises an actionable refusal in the CLI's own failure output and names the fix; matched narrowly, gated on a non-zero exit, never throws, never influences the status; wired into `classify` as `hint`.
 - [ ] (optional, only if read-only) Confirmed `readonlyArgs` is genuinely read-only — the LLM-provider role is then **automatic** via `codecFor` (no extra wiring); tested by constructing `AgentCliLlmProvider({ codec })` with a fake `exec` (returns parsed text, carries the read-only flag, fails closed).
 ```

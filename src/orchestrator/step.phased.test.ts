@@ -48,10 +48,43 @@ describe('phased reducer (issue #48): PLAN → plan Seal → phase loop → ACCE
     expect(cmds[0]).toEqual({ tag: 'REQUEST_PLAN_SEAL', plan });
   });
 
-  it('PLAN_FAILED → terminal FAILED (fail-closed, never a skipped decomposition)', () => {
-    const [s0] = initial(makeConfig({ phased: true }));
+  it('PLAN_FAILED → terminal FAILED once the retry budget is spent (fail-closed)', () => {
+    // maxPlanRetries 0 keeps the historical single-shot behavior: the first failure is terminal.
+    const [s0] = initial(makeConfig({ phased: true, maxPlanRetries: 0 }));
     const [s1] = step(s0, { tag: 'PLAN_FAILED', reason: 'planner blew up' });
     expect(s1).toMatchObject({ tag: 'FAILED', reason: 'planner blew up' });
+  });
+
+  it('PLAN_FAILED re-asks the planner with the error as feedback, bounded by maxPlanRetries', () => {
+    // A single non-JSON reply used to discard the whole run at iteration 0 — the same correctable
+    // authoring mistake --max-compile-retries exists for, one step earlier in the pipeline.
+    const [s0] = initial(makeConfig({ phased: true, maxPlanRetries: 2 }));
+
+    const [s1, cmds1] = step(s0, { tag: 'PLAN_FAILED', reason: 'no JSON object' });
+    expect(s1).toMatchObject({ tag: 'PLANNING', planRound: 1 });
+    expect(cmds1[0]).toMatchObject({ tag: 'COMPILE_PLAN' });
+    // The parse error is fed back as guidance, exactly like compileRetryFeedback.
+    const feedback = (cmds1[0] as { feedback?: string }).feedback ?? '';
+    expect(feedback).toContain('no JSON object');
+
+    const [s2] = step(s1, { tag: 'PLAN_FAILED', reason: 'no JSON object' });
+    expect(s2).toMatchObject({ tag: 'PLANNING', planRound: 2 });
+
+    // Budget spent → typed FAILED carrying the last reason. Never a plan accepted unvalidated.
+    const [s3] = step(s2, { tag: 'PLAN_FAILED', reason: 'still no JSON' });
+    expect(s3).toMatchObject({ tag: 'FAILED', reason: 'still no JSON', iterations: 0 });
+  });
+
+  it('a plan-Seal revise resets the retry budget (each authoring gets its own)', () => {
+    const [s0] = initial(makeConfig({ phased: true, maxPlanRetries: 1 }));
+    const [s1] = step(s0, { tag: 'PLAN_FAILED', reason: 'no JSON' });
+    expect(s1).toMatchObject({ tag: 'PLANNING', planRound: 1 });
+    const [s2] = step(s1, { tag: 'PLAN_COMPILED', plan });
+    const [s3] = step(s2, {
+      tag: 'PLAN_SEAL_DECIDED',
+      decision: { kind: 'revise', feedback: 'split phase 2' },
+    });
+    expect(s3).toMatchObject({ tag: 'PLANNING', reviseRound: 1, planRound: 0 });
   });
 
   it('plan Seal approve → compiles phase 0 with a derived config (sub-goal + --generate)', () => {

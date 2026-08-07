@@ -42,6 +42,7 @@ describe('RunConfig lifetime views', () => {
       autonomous: c.autonomous,
       maxSealRevisions: c.maxSealRevisions,
       maxCompileRetries: c.maxCompileRetries,
+      maxPlanRetries: c.maxPlanRetries,
       maxPlanRevisions: c.maxPlanRevisions,
     });
     expect(pickDriverWiring(c)).toEqual({

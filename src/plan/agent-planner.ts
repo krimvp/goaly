@@ -4,6 +4,7 @@ import { Plan, type PhasePlan } from '../domain/plan';
 import { freezePlan } from '../util/hash';
 import { extractBalancedJson } from '../util/json-extract';
 import type { LlmProvider } from '../llm/provider';
+import { looksLikeLlmTimeout } from '../compile/agent-compiler';
 import type { Planner } from './planner';
 
 /** Schema for the JSON the planning LLM must emit (validated fail-closed, invariant #6). */
@@ -66,7 +67,21 @@ export class AgentPlanner implements Planner {
     this.#llm = opts.llm;
   }
 
+  /**
+   * Author (or re-author) the frozen plan. A throw becomes a typed `PLAN_FAILED`, which the reducer
+   * re-asks up to `--max-plan-retries` times with the reason as guidance — except for a TIMEOUT,
+   * which is annotated here so the operator is pointed at `--llm-timeout-ms` instead of at a retry
+   * budget that cannot help.
+   */
   async plan(config: RunConfig, feedback?: string): Promise<PhasePlan> {
+    try {
+      return await this.#author(config, feedback);
+    } catch (e) {
+      throw withTimeoutHint(e);
+    }
+  }
+
+  async #author(config: RunConfig, feedback?: string): Promise<PhasePlan> {
     const parts = [`Goal: ${config.goal}`, `Author at most ${config.maxPhases} phases.`];
     if (feedback !== undefined && feedback.length > 0) {
       parts.push(`Reviewer feedback on the previous plan (revise accordingly): ${feedback}`);
@@ -110,4 +125,25 @@ export class AgentPlanner implements Planner {
 
     return freezePlan(parseGenerated(text));
   }
+}
+
+/**
+ * The actionable remedy folded into a timeout-`PLAN_FAILED` — the planner's mirror of the
+ * compiler's (follow-on G). Re-asking a call that timed out just times out again, so the retry
+ * budget added alongside this (`--max-plan-retries`) is the wrong lever here and the message says so.
+ */
+const LLM_TIMEOUT_HINT =
+  'Hint: the plan-authoring LLM call timed out — raise --llm-timeout-ms (current default 600000), ' +
+  'or reduce concurrent load. Re-issuing the same heavy call will keep timing out, so bumping the ' +
+  'timeout is the remedy, not more --max-plan-retries.';
+
+/**
+ * Wrap a timed-out authoring error with the raise-`--llm-timeout-ms` hint so it flows into the
+ * PLAN_FAILED reason; any non-timeout error is rethrown unchanged (its own message is the signal).
+ * Shares the compiler's detector so the two authoring seams classify a timeout identically.
+ */
+function withTimeoutHint(e: unknown): Error {
+  const message = e instanceof Error ? e.message : String(e);
+  if (!looksLikeLlmTimeout(message)) return e instanceof Error ? e : new Error(message);
+  return new Error(`AgentPlanner: ${message}\n\n${LLM_TIMEOUT_HINT}`);
 }

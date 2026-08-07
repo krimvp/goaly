@@ -61,8 +61,11 @@ export async function main(argv: string[]): Promise<number> {
   // `parsed.workspace` (baseline validation, --from-run/--resume log reads, preflight, state dir,
   // run lock, composeDeps) — one rewrite here and every downstream consumer composes against the
   // worktree, so the main tree is never touched.
+  // `--dry-run` must write NOTHING, and this block is the one mutation that happens before
+  // `executeRun` is even reached — `manager.ensure` creates a git worktree and a branch on disk.
+  // Skipped here so `--worktree --dry-run` reports the intended wiring instead of materializing it.
   let worktree: { name: string; mergeHint: string } | undefined;
-  if (parsed.worktreeRun !== undefined) {
+  if (parsed.worktreeRun !== undefined && !parsed.dryRun) {
     if (parsed.worktreeRun === true && parsed.resumeRunId !== undefined) {
       process.stderr.write(
         'goaly: --resume needs the NAMED worktree the run lives in — pass --worktree <name> ' +

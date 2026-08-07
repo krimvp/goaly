@@ -146,6 +146,20 @@ describe('nextStepHint — always-on next-step guidance for terminal outcomes', 
     expect(nextStepHint(aborted('STUCK_HARNESS_CRASH: boom'))).toContain('--stuck-crash-threshold');
   });
 
+  it('points a permission REFUSAL at the autonomy flag, not at install/auth', () => {
+    // A harness that refused an action is not a crashing CLI: "run it once by hand to check
+    // install/auth" and "--stuck-crash-threshold 4" are both dead ends there.
+    const hint =
+      nextStepHint(
+        aborted(
+          'STUCK_HARNESS_CRASH: the coding-agent harness exited abnormally 2 times in a row — ' +
+            'droid REFUSED an action at its current autonomy level — re-run with --harness-autonomy medium.',
+        ),
+      ) ?? '';
+    expect(hint).toContain('--harness-autonomy medium');
+    expect(hint).not.toContain('--stuck-crash-threshold');
+  });
+
   it('stays quiet on DONE, unknown reasons, and user interrupts (already self-describing)', () => {
     expect(nextStepHint(outcome())).toBeUndefined();
     expect(nextStepHint(aborted('some novel reason'))).toBeUndefined();
@@ -579,5 +593,90 @@ describe('main() — follow-up (Capability C) guards & resume-cmd (Capability A)
     );
     expect(code).toBe(0);
     expect(out).toContain('claude --resume claude-real-1');
+  });
+});
+
+/**
+ * `--dry-run` (end to end). The whole point is that it exercises the same validation a real run
+ * does — and then writes nothing. Both halves are asserted: the resolved config on stdout, and an
+ * untouched filesystem.
+ */
+describe('main() — --dry-run validates and prints, and starts nothing', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'goaly-main-dryrun-'));
+    const git = (...args: string[]): void => {
+      const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test User');
+    await writeFile(join(root, 'f.txt'), 'x\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function capture(fn: () => Promise<number>): Promise<{ code: number; out: string }> {
+    const writes: string[] = [];
+    const origOut = process.stdout.write.bind(process.stdout);
+    const origErr = process.stderr.write.bind(process.stderr);
+    const sink = ((s: string | Uint8Array): boolean => {
+      writes.push(typeof s === 'string' ? s : Buffer.from(s).toString());
+      return true;
+    }) as typeof process.stdout.write;
+    process.stdout.write = sink;
+    process.stderr.write = sink;
+    try {
+      return { code: await fn(), out: writes.join('') };
+    } finally {
+      process.stdout.write = origOut;
+      process.stderr.write = origErr;
+    }
+  }
+
+  it('exits 0, prints the resolved config, and creates no run directory', async () => {
+    const res = await capture(() =>
+      main(['run', 'build the thing', '--verify-cmd', 'npm test', '--harness', 'fake',
+        '--autonomous', '--workspace', root, '--dry-run']),
+    );
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('existing command: npm test');
+    expect(res.out).toContain('build the thing');
+    // The state dir is the first thing a real run writes (`acquireRunLock` mkdirs it).
+    expect(existsSync(join(root, STATE_DIR))).toBe(false);
+  });
+
+  it('reads a .goalyrc and reports it as a source', async () => {
+    await writeFile(join(root, '.goalyrc'), JSON.stringify({ 'max-iterations': 7 }), 'utf8');
+    const res = await capture(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--dry-run']),
+    );
+    expect(res.code).toBe(0);
+    expect(res.out).toMatch(/max-iterations\s+7/);
+    expect(res.out).toContain('.goalyrc');
+  });
+
+  it('still fails the same way a real run would (validation is not skipped)', async () => {
+    const res = await capture(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--baseline', 'no-such-ref', '--dry-run']),
+    );
+    expect(res.code).toBe(2);
+    expect(existsSync(join(root, STATE_DIR))).toBe(false);
+  });
+
+  it('does not materialize a --worktree', async () => {
+    const res = await capture(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--worktree', 'feat', '--dry-run']),
+    );
+    expect(res.code).toBe(0);
+    expect(existsSync(join(root, '.goaly', 'worktrees', 'feat'))).toBe(false);
   });
 });

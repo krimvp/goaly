@@ -250,13 +250,29 @@ describe('runDetail — phased projection (issue #48)', () => {
     const h: RunLogHeader = {
       runId: RunId.parse(runId),
       startedAt: 1,
-      config: makeConfig({ phased: true }),
+      // maxPlanRetries 0: the first PLAN_FAILED is terminal, so the projection shows FAILED.
+      config: makeConfig({ phased: true, maxPlanRetries: 0 }),
     };
     const entries = [entry(runId, { tag: 'PLAN_FAILED', reason: 'no JSON' })];
     const d = runDetail(h, entries);
     expect(d.plan).toBeNull();
     expect(d.planFailures).toEqual(['no JSON']);
     expect(d.status).toBe('FAILED');
+  });
+
+  it('a PLAN_FAILED inside the retry budget leaves the run INCOMPLETE, not FAILED', () => {
+    seq = 0;
+    const runId = 'run-planretry';
+    const h: RunLogHeader = {
+      runId: RunId.parse(runId),
+      startedAt: 1,
+      config: makeConfig({ phased: true, maxPlanRetries: 2 }),
+    };
+    const entries = [entry(runId, { tag: 'PLAN_FAILED', reason: 'no JSON' })];
+    const d = runDetail(h, entries);
+    // The failure is still recorded (never swallowed) — the run is simply mid-re-ask, not dead.
+    expect(d.planFailures).toEqual(['no JSON']);
+    expect(d.status).toBe('INCOMPLETE');
   });
 });
 

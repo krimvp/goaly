@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { SessionId } from '../domain/ids';
 import { HarnessRunResult } from '../domain/events';
 import { AgentCliHarness } from '../harness/agent-cli-harness';
-import { droidCodec, makeDroidCodec } from './droid-codec';
+import { droidCodec, droidDiagnose, makeDroidCodec } from './droid-codec';
 import { type AgentExecFn } from './codec';
 
 /** Build a fake exec that records its args/prompts and returns a canned process result. */
@@ -276,5 +276,105 @@ describe('AgentCliHarness(droidCodec)', () => {
 
     expect(res.status).toBe('completed');
     expect(res.tokensUsed).toBeUndefined();
+  });
+});
+
+/**
+ * The autonomy tier was hardcoded to `low` with no CLI flag and no `.goalyrc` key, so a from-scratch
+ * goal was unreachable by construction: at `low` droid refuses installs and builds, which is the
+ * very first thing an agent must do on an empty tree. `low` stays the DEFAULT (it is what keeps
+ * `git diff HEAD` honest — it cannot `git commit`), but it is now reachable.
+ */
+describe('droid autonomy (--harness-autonomy)', () => {
+  const opts = { prompt: 'go', model: undefined, stream: false };
+
+  it('defaults to low — the least privilege that still lets the agent edit the tree', () => {
+    expect(droidCodec.harnessArgs(opts)).toContain('low');
+    expect(makeDroidCodec().harnessArgs(opts)).toEqual(droidCodec.harnessArgs(opts));
+  });
+
+  it('passes the requested tier to --auto', () => {
+    for (const level of ['low', 'medium', 'high'] as const) {
+      const args = makeDroidCodec(level).harnessArgs(opts);
+      expect(args[args.indexOf('--auto') + 1]).toBe(level);
+    }
+  });
+
+  it('never passes --auto in the READ-ONLY role, whatever the write tier is', () => {
+    // A judge/approver/compiler must not be able to mutate the tree it is judging.
+    for (const level of ['low', 'medium', 'high'] as const) {
+      expect(makeDroidCodec(level).readonlyArgs({ prompt: 'p', model: undefined, stream: false })).not.toContain(
+        '--auto',
+      );
+    }
+  });
+});
+
+/**
+ * droid's permission gate exits non-zero, which goaly classified as a harness CRASH and reported as
+ * "check that the CLI is installed, authenticated, and runnable" — three dead ends, while droid's
+ * own output named the fix two lines earlier. The status stays `crashed` (fail-closed); only the
+ * REMEDIATION changes.
+ */
+describe('droid permission-gate diagnosis', () => {
+  /** The real refusal droid emits when an action exceeds the run's --auto tier. */
+  const refusal = 'Exec ended early: insufficient permission to proceed.\nRe-run with --auto medium or --auto high.';
+
+  it('recognises the refusal and names --harness-autonomy', () => {
+    const hint = droidDiagnose({ stdout: refusal, stderr: '', code: 1 });
+    expect(hint).toContain('--harness-autonomy medium');
+    expect(hint).toContain('permission gate');
+  });
+
+  it('reads the refusal from stderr too', () => {
+    expect(droidDiagnose({ stdout: '', stderr: refusal, code: 1 })).toBeDefined();
+  });
+
+  it('recognises nothing on an ordinary failure or a clean exit', () => {
+    expect(droidDiagnose({ stdout: 'ENOENT: no such file', stderr: '', code: 1 })).toBeUndefined();
+    // A zero exit is not a refusal even if the text appears (e.g. the agent quoting a doc).
+    expect(droidDiagnose({ stdout: refusal, stderr: '', code: 0 })).toBeUndefined();
+  });
+
+  it('attaches the hint to the classified run without changing its status', () => {
+    const run = droidCodec.classify({ stdout: refusal, stderr: '', code: 1 });
+    expect(run.status).toBe('crashed'); // still fail-closed
+    expect(run.hint).toContain('--harness-autonomy');
+  });
+
+  it('leaves a normal completed run with no hint', () => {
+    const run = droidCodec.classify({ stdout: droidRealSample, stderr: '', code: 0 });
+    expect(run.status).toBe('completed');
+    expect(run.hint).toBeUndefined();
+  });
+});
+
+/**
+ * A turn that did real work and then exited non-zero still burned the tokens its envelope reports.
+ * The classifier used to return early on every non-`completed` status and throw that count away,
+ * which is what made `--budget-tokens` silently blind and the spend report say "unknown".
+ */
+describe('token accounting on non-completed runs', () => {
+  /** The captured envelope, but reported alongside a non-zero exit (the permission-gate shape). */
+  const refusedWithUsage = droidRealSample;
+
+  it('reports the envelope usage on a crashed run', () => {
+    const run = droidCodec.classify({ stdout: refusedWithUsage, stderr: 'boom', code: 1 });
+    expect(run.status).toBe('crashed');
+    expect(run.tokensUsed).toBe(13718); // 13716 in + 2 out
+    expect(run.tokenSource).toBe('reported');
+  });
+
+  it('reports the envelope usage on a timed-out run', () => {
+    const run = droidCodec.classify({ stdout: refusedWithUsage, stderr: '', code: null, timedOut: true });
+    expect(run.status).toBe('timeout');
+    expect(run.tokensUsed).toBe(13718);
+  });
+
+  it('still reports NO usage when the envelope carries none (never a silent zero)', () => {
+    const run = droidCodec.classify({ stdout: '', stderr: 'died', code: 1 });
+    expect(run.status).toBe('crashed');
+    expect(run.tokensUsed).toBeUndefined();
+    expect(run.tokenSource).toBeUndefined();
   });
 });

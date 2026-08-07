@@ -8,6 +8,7 @@ import { resolveInputSources, defaultReaders, type InputReaders } from './input-
 import { loadConfig, type LoadedConfig } from './config-file';
 import { parseDelegationDirective } from './delegation';
 import type { AgentCli } from '../agent-cli/registry';
+import type { AutonomyLevel } from '../agent-cli/droid-codec';
 import type { WorktreeCommand } from './worktree-cmd';
 import { WorktreeName } from '../workspace/worktree-manager';
 
@@ -126,6 +127,20 @@ export type ParsedArgs = {
    * recorded harness re-derives the provider only when it was NOT explicit.
    */
   llmProviderExplicit: boolean;
+  /**
+   * `--harness-autonomy`: how much the write-role CLI may do, for harnesses that gate privileged
+   * actions behind a tier (droid's `--auto`). Pure WIRING like `models` — it never enters the frozen
+   * contract, so it lives here rather than on `RunConfig`. `undefined` ⇒ keep the codec's own
+   * least-privilege default. Precedence: CLI flag > config file.
+   */
+  harnessAutonomy: AutonomyLevel | undefined;
+  /**
+   * `--dry-run`: resolve and print the effective configuration, then exit 0 WITHOUT starting a run.
+   * Short-circuits after every read-only validation (config merge, `--baseline`, `--resume`
+   * /`--from-run` log reads, preflight) and before the first byte is written — no run directory, no
+   * lock, no log file, no worktree. Per-invocation, so it is never read from a config file.
+   */
+  dryRun: boolean;
   workspace: string;
   /**
    * Diff baseline (issue #47): the git ref/SHA `diff()`/Sign-off compare the working tree against,
@@ -190,6 +205,13 @@ export type ParsedArgs = {
   /** Config files that supplied default flags, lowest-precedence first (pure wiring; for logging). */
   configSources: string[];
   /**
+   * Non-fatal parse-time findings the CLI must SURFACE rather than swallow (e.g. a CLI `--generate`
+   * that overrode a config-file `verify-cmd`). Collected here instead of written directly because
+   * `parseArgs` is library code with no output channel — `executeRun` prints them and the UI can
+   * render them. Empty on a clean parse.
+   */
+  warnings: string[];
+  /**
    * OpenAI-compatible endpoint base URL for `--harness goaly-code` / `--llm-provider openai` (e.g.
    * `https://api.openai.com/v1`). Pure wiring — never enters the frozen contract. Absent ⇒ those
    * targets fail closed at composition with a clear message.
@@ -231,14 +253,17 @@ Usage:
   goaly run --goal "<goal>" [--verify-cmd "<cmd>" | --generate [--intent "<hint>"]]
                [--smoke "<cmd>"] [--setup-cmd "<cmd>" | --no-setup] [--setup-timeout-ms N]
                [--install-missing-tools true|false]
-               [--rubric "<rubric>"] [--autonomous] [--max-iterations N] [--candidates N]
-               [--phased [--max-phases N] [--max-plan-revisions N] [--plan-file <p>]
-                         [--planner-model <m>] [--parallel-phases]]
+               [--rubric "<rubric>"] [--autonomous] [--max-iterations N]
+               [--candidates N] [--resume-best-of-incomplete rerun|collapse]
+               [--phased [--max-phases N] [--max-plan-revisions N] [--max-plan-retries N]
+                         [--plan-file <p>] [--planner-model <m>] [--parallel-phases]]
                [--max-seal-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
                [--stuck-oscillation true|false] [--stuck-crash-threshold N]
-               [--harness claude|codex|droid|pi|goaly-code] [--max-agent-turns N] [--model <m>]
+               [--stuck-unevaluable-threshold N]
+               [--harness claude|codex|droid|pi|goaly-code] [--harness-autonomy low|medium|high]
+               [--max-agent-turns N] [--model <m>]
                [--llm-model <m>] [--approver-quorum N] [--approver-diversity-temp T]
                [--approver-models m1,m2,…] [--approver-lenses l1,l2,…]
                [--adversarial [--adversarial-plan-critics N] [--adversarial-contract-critics N]
@@ -250,7 +275,7 @@ Usage:
                [--sandbox-net none|allow|allow:<host,…>]
                [--sandbox-image <ref>] [--sandbox-runtime docker|podman]
                [--cost-table <path>] [--baseline <ref>] [--delta-verify] [--workspace <dir>]
-               [--worktree [<name>]]
+               [--worktree [<name>]] [--dry-run]
                [--resume <runId> [--note "<text>"]]
                [--from-run <runId> [--inherit-session]]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
@@ -276,7 +301,8 @@ Goal / intent / rubric input (choose ONE source per field):
   --intent/--intent-file and --rubric/--rubric-file work the same way.
   Giving a field more than one source — or piping stdin to more than one field — is an error.
 
-Verification:
+Verification (--verify-cmd and --generate are mutually exclusive — passing both on the command line
+is a usage error; --generate still overrides a verify-cmd inherited from a config file, loudly):
   --verify-cmd   point at an existing command that must exit 0
   --generate     have the agent author the verification (optionally guided by --intent)
   --smoke <cmd>  add an artifact-RUNNING smoke rung (issue #53): an extra deterministic, ungameable
@@ -353,6 +379,13 @@ Stuck-detection tuning:
                                   instead of a misleading no-diff/repeat abort that blames (and
                                   discards) possibly-correct work. Still fail-closed (never DONE).
 
+  On --resume of a run that ABORTED on a counted streak (harness-crash, contract-unevaluable, or
+  repeat-failure), the banked streak is RELIEVED: the matching threshold is raised by the length of
+  the trailing streak the log replays, so the resumed run gets a real turn instead of re-aborting on
+  history. Resuming is the operator's signal that something was changed. The relief is logged and
+  recorded as a normal RUN_EXTENDED marker; an explicit --stuck-* flag always wins over it. no-diff
+  is a toggle, not a counter, so it is not relieved — pass --stuck-no-diff false for that resume.
+
 Phased decomposition (issue #48 — split one big goal into a frozen plan of small, verified phases):
   --phased            turn one big goal into a PLAN of ordered sub-goals, each run as its OWN frozen,
                       two-key contract with an internal checkpoint (issue #47) between phases so each
@@ -417,12 +450,19 @@ Best-of-N parallel worker (issue #85 — tournament-select candidates against th
                       the fan-out as a RUN_EXTENDED candidates overlay (ADR 0012) and keeps any
                       remaining note text as worker guidance.
 
-Compile resilience (issue #51):
+Authoring resilience (issue #51):
   --max-compile-retries N    on a COMPILE_FAILED, re-author the verification with the error as
                              feedback up to N times before failing the run (default 2; 0 disables).
                              A correctable authoring mistake (bad path, transient parse miss) no
                              longer discards a valid plan. Exhausting the budget is still a typed
                              FAILED — never a skipped check.
+  --max-plan-retries N       the same, one step earlier: on a PLAN_FAILED under --phased, re-ask the
+                             planner with the error as feedback up to N times (default 2; 0
+                             disables). Without it a single non-JSON reply ends the run at iteration
+                             0, before any work — and the only other re-author path (the plan-Seal
+                             revise) can never fire, because the run has already ended. A timeout is
+                             instead reported with a hint to raise --llm-timeout-ms: re-asking a
+                             call that timed out only times out again.
 
 Adversarial review (opt-in; a run without --adversarial is byte-for-byte unchanged):
   --adversarial         red-team the loop at three points: an adversarial critic panel on the phased
@@ -442,6 +482,19 @@ Adversarial review (opt-in; a run without --adversarial is byte-for-byte unchang
   --adversarial-refuters N          refuter votes on a green ladder (default 3; 0 skips the rung)
   --critic-model <m>    model for all adversarial critics/refuters (cascades like the other
                         LLM-step models: --critic-model → --llm-model → --model)
+
+Harness selection:
+  --harness <name>      the write-role coding agent: claude (default) | codex | droid | pi |
+                        goaly-code | fake.
+  --harness-autonomy <level>  low | medium | high — how much the harness CLI is allowed to do, for
+                        CLIs that gate privileged actions behind a tier (today: droid's --auto).
+                        Default: the CLI's own least-privilege level (droid: low = edit files, but
+                        NO git / installs / builds). Raise it for a FROM-SCRATCH build: at low the
+                        agent cannot run 'npm install' or a build, so a --generate contract that
+                        requires a populated tree is unreachable by construction. TRADEOFF: above
+                        low the agent can also 'git commit', which empties 'git diff HEAD' and hides
+                        work from the judge and the Sign-off approver — pin the diff with --baseline
+                        <ref> if that matters. Harnesses without an autonomy tier ignore this flag.
 
 Model selection (all optional; default = each tool's own default):
   --model <m>           model for the harness AND the LLM steps (the global default)
@@ -740,6 +793,7 @@ const VALUELESS_FLAGS = new Set([
   'stream-transcript',
   'defaults',
   'inherit-session',
+  'dry-run',
 ]);
 
 /**
@@ -979,6 +1033,28 @@ export async function parseArgs(
   }
   const flags: RawFlags = { ...overlayFlags, ...cliFlags };
 
+  // `--verify-cmd | --generate` is advertised as mutually exclusive in the usage synopsis, and
+  // `cliInputToRunConfig` silently resolves it in favour of --generate. PROVENANCE decides which of
+  // those two is right, and only this scope knows it (the config layer has already been flattened by
+  // the time domain/config.ts sees the input):
+  //   - both typed on the COMMAND LINE ⇒ a genuine contradiction the user must resolve (fail closed);
+  //   - `verify-cmd` from a .goalyrc layer + --generate typed now ⇒ an ordinary, useful one-off
+  //     override — keep --generate, but never silently: name the source that lost.
+  const warnings: string[] = [];
+  if (cliFlags['generate'] !== undefined && cliFlags['verify-cmd'] !== undefined) {
+    throw new UsageError(
+      '--verify-cmd and --generate are mutually exclusive: --verify-cmd points at an EXISTING ' +
+        'command, --generate has the agent AUTHOR one. Pass exactly one.',
+    );
+  }
+  if (cliFlags['generate'] !== undefined && overlayFlags['verify-cmd'] !== undefined) {
+    const from = configSources.length > 0 ? configSources.join(' / ') : 'the config file';
+    warnings.push(
+      `--generate overrides the 'verify-cmd' from ${from} ('${String(overlayFlags['verify-cmd'])}') — ` +
+        'the verification will be AUTHORED, not the configured command.',
+    );
+  }
+
   // Goal/intent/rubric may come from inline flags, files, or stdin — resolve to strings first.
   const resolved = await resolveInputSources(flags, readers);
 
@@ -1062,6 +1138,9 @@ export async function parseArgs(
       : {}),
     ...(str(flags, 'max-compile-retries') !== undefined
       ? { maxCompileRetries: str(flags, 'max-compile-retries') }
+      : {}),
+    ...(str(flags, 'max-plan-retries') !== undefined
+      ? { maxPlanRetries: str(flags, 'max-plan-retries') }
       : {}),
     ...(boolFlag(flags, 'stuck-no-diff') !== undefined
       ? { stuckNoDiff: boolFlag(flags, 'stuck-no-diff') }
@@ -1156,6 +1235,10 @@ export async function parseArgs(
     models: parseModels(flags),
     llmProvider: parseLlmProvider(str(flags, 'llm-provider'), harness),
     llmProviderExplicit: flags['llm-provider'] !== undefined,
+    harnessAutonomy: parseHarnessAutonomy(str(flags, 'harness-autonomy')),
+    // Per-invocation: read from `cliFlags`, never the config overlay (a persisted `dry-run: true`
+    // would silently make every run in that tree a no-op).
+    dryRun: cliFlags['dry-run'] !== undefined,
     workspace: str(flags, 'workspace') ?? process.cwd(),
     baseline: str(flags, 'baseline'),
     verifyDir: str(flags, 'verify-dir'),
@@ -1179,6 +1262,7 @@ export async function parseArgs(
     sandbox: parseSandbox(flags),
     costTablePath: str(flags, 'cost-table'),
     configSources,
+    warnings,
     baseUrl: str(flags, 'base-url'),
     llmApiKeyEnv: str(flags, 'llm-api-key-env') ?? 'OPENAI_API_KEY',
   };
@@ -1417,6 +1501,18 @@ function parseHarness(value: string | undefined): HarnessChoice {
   throw new UsageError(`unknown harness: ${value} (expected claude | codex | droid | pi | goaly-code | fake)`);
 }
 
+/**
+ * `--harness-autonomy low|medium|high` — how much the write-role CLI may do, for harnesses that gate
+ * privileged actions behind a tier (today only droid's `--auto`). Absent ⇒ `undefined`, meaning
+ * "keep the codec's own least-privilege default" (never a level chosen here), so the flag's absence
+ * is byte-for-byte the historical behavior. Fails closed on anything else.
+ */
+function parseHarnessAutonomy(value: string | undefined): AutonomyLevel | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'low' || value === 'medium' || value === 'high') return value;
+  throw new UsageError(`--harness-autonomy: expected low | medium | high, got '${value}'`);
+}
+
 function parseLlmProvider(value: string | undefined, harness: HarnessChoice): LlmProviderChoice {
   if (value === undefined) return defaultLlmProvider(harness);
   if (value === 'claude' || value === 'codex' || value === 'droid' || value === 'pi' || value === 'openai') {
@@ -1625,6 +1721,8 @@ function baseArgs(
     models: ModelSelection.parse({}),
     llmProvider: 'claude',
     llmProviderExplicit: false,
+    harnessAutonomy: undefined,
+    dryRun: false,
     workspace,
     baseline: undefined,
     verifyDir: undefined,
@@ -1644,6 +1742,7 @@ function baseArgs(
     sandbox: SandboxPolicy.parse({}),
     costTablePath: undefined,
     configSources: [],
+    warnings: [],
     baseUrl: undefined,
     llmApiKeyEnv: 'OPENAI_API_KEY',
     resumeExtend: undefined,

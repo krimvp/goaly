@@ -3,6 +3,7 @@ import { SessionId } from '../domain/ids';
 import { claudeCodec } from './claude-codec';
 import { codexCodec } from './codex-codec';
 import { droidCodec, makeDroidCodec } from './droid-codec';
+import { codecFor } from './registry';
 import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -267,5 +268,30 @@ describe('defaultAgentExec cwd (the agent runs IN the workspace)', () => {
     const exec = defaultAgentExec('node', 5000, false);
     const r = await exec(['-e', 'process.stdout.write(process.cwd())'], { prompt: '' });
     expect(await realpath(r.stdout.trim())).toBe(await realpath(process.cwd()));
+  });
+});
+
+/**
+ * `codecFor` had no options, so the droid codec's autonomy knob (`makeDroidCodec`) was reachable
+ * only by embedders importing it directly — there was no path from a CLI flag to the tier.
+ */
+describe('codecFor — per-run codec options', () => {
+  const opts = { prompt: 'go', model: undefined, stream: false };
+
+  it('threads autonomy into the droid codec', () => {
+    const args = codecFor('droid', { autonomy: 'medium' }).harnessArgs(opts);
+    expect(args[args.indexOf('--auto') + 1]).toBe('medium');
+  });
+
+  it('returns the default (low) singleton when no autonomy is requested', () => {
+    expect(codecFor('droid')).toBe(codecFor('droid'));
+    expect(codecFor('droid').harnessArgs(opts)).toContain('low');
+    expect(codecFor('droid', {}).harnessArgs(opts)).toContain('low');
+  });
+
+  it('is inert for CLIs with no autonomy tier (they keep their singletons)', () => {
+    for (const cli of ['claude', 'codex', 'pi'] as const) {
+      expect(codecFor(cli, { autonomy: 'high' })).toBe(codecFor(cli));
+    }
   });
 });

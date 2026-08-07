@@ -107,6 +107,16 @@ export const RunConfig = z.object({
    * retry (a single bad compile is terminal, the previous behavior).
    */
   maxCompileRetries: z.number().int().nonnegative().default(2),
+  /**
+   * Max bounded plan-retry-with-feedback rounds — the `--phased` planner's mirror of
+   * {@link maxCompileRetries} (the follow-up named in ADR 0011). A `PLAN_FAILED` used to be terminal
+   * on FIRST sight at iteration 0, so one non-JSON reply from the authoring model discarded the whole
+   * run before a token was spent on the goal — the exact "correctable authoring mistake" the compile
+   * retry exists for, and no less likely at the front of the pipeline than in the middle of it. The
+   * reducer stays pure (a counter + a feedback-carrying command) and exhausting the budget is still a
+   * typed `FAILED`, never a plan accepted unvalidated. 0 disables retry (the previous behavior).
+   */
+  maxPlanRetries: z.number().int().nonnegative().default(2),
   maxIterations: z.number().int().positive().default(10),
   /**
    * Best-of-N parallel worker (issue #85). When > 1, each loop iteration fans out K independent worker
@@ -266,7 +276,7 @@ export type ContractInput = Pick<
 /** The pre-loop, human-gated renegotiation bounds (Seal / plan revise + compile retry). */
 export type GatePolicy = Pick<
   RunConfig,
-  'autonomous' | 'maxSealRevisions' | 'maxCompileRetries' | 'maxPlanRevisions'
+  'autonomous' | 'maxSealRevisions' | 'maxCompileRetries' | 'maxPlanRetries' | 'maxPlanRevisions'
 >;
 /** Operational loop policy the pure reducer reads: iteration cap, stuck, budget, phasing, tools. */
 export type LoopPolicy = Pick<
@@ -289,6 +299,7 @@ export const pickGatePolicy = (c: GatePolicy): GatePolicy => ({
   autonomous: c.autonomous,
   maxSealRevisions: c.maxSealRevisions,
   maxCompileRetries: c.maxCompileRetries,
+  maxPlanRetries: c.maxPlanRetries,
   maxPlanRevisions: c.maxPlanRevisions,
 });
 /** Extract the {@link LoopPolicy} fields. Pure. */
@@ -332,6 +343,7 @@ export const CliInput = z.object({
   autonomous: z.coerce.boolean().optional(),
   maxSealRevisions: z.coerce.number().int().nonnegative().optional(),
   maxCompileRetries: z.coerce.number().int().nonnegative().optional(),
+  maxPlanRetries: z.coerce.number().int().nonnegative().optional(),
   maxIterations: z.coerce.number().int().positive().optional(),
   /**
    * Best-of-N parallel worker (issue #85): a positive-int candidate count (default 1), capped at 16
@@ -454,6 +466,7 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     ...(input.maxCompileRetries !== undefined
       ? { maxCompileRetries: input.maxCompileRetries }
       : {}),
+    ...(input.maxPlanRetries !== undefined ? { maxPlanRetries: input.maxPlanRetries } : {}),
     ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
     ...(input.candidates !== undefined ? { candidates: input.candidates } : {}),
     ...(input.resumeBestOfIncomplete !== undefined
