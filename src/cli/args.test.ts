@@ -329,7 +329,31 @@ describe('parseArgs', () => {
         contractCritics: 2,
         contractCritiqueRounds: 1,
         refuters: 3,
+        // The one review step that is ON by default (issue #118): a false red costs the WHOLE run.
+        satisfiabilityCritic: true,
       });
+    });
+
+    it('--no-satisfiability-critic opts out of the default-on FALSE-RED critic', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--no-satisfiability-critic',
+      ]);
+      expect(a.config.adversarial.satisfiabilityCritic).toBe(false);
+      // It is INDEPENDENT of --adversarial: opting out changes nothing else.
+      expect(a.config.adversarial.enabled).toBe(false);
+    });
+
+    it('leaves the satisfiability critic on when --adversarial is enabled', async () => {
+      const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--adversarial']);
+      expect(a.config.adversarial.satisfiabilityCritic).toBe(true);
+    });
+
+    it('takes the goal positionally after the valueless --no-satisfiability-critic', async () => {
+      const a = await parseArgs([
+        'run', '--no-satisfiability-critic', 'build the widget', '--verify-cmd', 'true',
+      ]);
+      expect(a.config.goal).toBe('build the widget');
+      expect(a.config.adversarial.satisfiabilityCritic).toBe(false);
     });
 
     it('--adversarial enables the steps and widens the approver quorum to 3', async () => {

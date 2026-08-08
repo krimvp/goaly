@@ -265,6 +265,17 @@ export const RunConfig = z.object({
       contractCritiqueRounds: z.number().int().min(0).default(1),
       /** Refuter votes on a green ladder. 0 skips the refuter rung even when enabled. */
       refuters: z.number().int().min(0).default(3),
+      /**
+       * FALSE-RED satisfiability critic (issue #118) — the ONLY member of this block that is ON by
+       * default and INDEPENDENT of `enabled`. One extra compile-time LLM call asks whether a
+       * CORRECT, COMPLETE implementation could still FAIL the authored bar (the mirror of the four
+       * false-green lenses). It runs only under `--generate` and only once the contract actually
+       * authored verification files; `--no-satisfiability-critic` opts out. Default-on because the
+       * asymmetry is extreme: a false red burns the WHOLE run against an unsatisfiable bar, while
+       * the guard costs one call before the freeze. Still advisory — a broken critic passes the
+       * contract through, and the Seal gate stands behind it.
+       */
+      satisfiabilityCritic: z.boolean().default(true),
     })
     .default({}),
   /**
@@ -410,6 +421,12 @@ export const CliInput = z.object({
   adversarialPlanCritics: z.coerce.number().int().min(0).optional(),
   adversarialContractCritics: z.coerce.number().int().min(0).optional(),
   adversarialRefuters: z.coerce.number().int().min(0).optional(),
+  /**
+   * FALSE-RED satisfiability critic (issue #118), default ON under `--generate`. A plain (never
+   * coerced) boolean: `--no-satisfiability-critic` must be able to turn it OFF, and `z.coerce.boolean`
+   * would read the string "false" as true.
+   */
+  satisfiabilityCritic: z.boolean().optional(),
 });
 export type CliInput = z.infer<typeof CliInput>;
 
@@ -468,6 +485,7 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     planCritics?: number;
     contractCritics?: number;
     refuters?: number;
+    satisfiabilityCritic?: boolean;
   } = {};
   if (input.adversarial !== undefined) adversarial.enabled = input.adversarial;
   if (input.adversarialPlanCritics !== undefined)
@@ -475,6 +493,9 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
   if (input.adversarialContractCritics !== undefined)
     adversarial.contractCritics = input.adversarialContractCritics;
   if (input.adversarialRefuters !== undefined) adversarial.refuters = input.adversarialRefuters;
+  // Default-ON and independent of `--adversarial`: only an explicit opt-out changes it.
+  if (input.satisfiabilityCritic !== undefined)
+    adversarial.satisfiabilityCritic = input.satisfiabilityCritic;
 
   return RunConfig.parse({
     goal: input.goal,

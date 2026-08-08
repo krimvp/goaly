@@ -398,6 +398,26 @@ describe('AgentCompiler — rubric guardrails (issue #55)', () => {
     expect(system).toContain('OFFLINE');
   });
 
+  /**
+   * Issue #118 — the bar is FROZEN, so an assertion no correct implementation can pass reds every
+   * iteration and burns the whole run. The prompt names the exact #114 footgun rather than a vague
+   * "avoid flaky tests", and says what to do instead.
+   */
+  it('warns the author off UNSATISFIABLE assertions, naming the post-mockRestore case', async () => {
+    const llm = new FakeLlm([JSON.stringify({ command: 'npm test', rubric: '' })]);
+    const compiler = new AgentCompiler({ llm });
+    await compiler.compile(makeConfig({ verifier: { kind: 'generate' } }));
+
+    const system = llm.requests[0]?.system ?? '';
+    expect(system).toContain('DO NOT AUTHOR AN UNSATISFIABLE BAR');
+    expect(system).toContain('mockRestore()');
+    expect(system).toMatch(/CLEAR `mock\.calls`/);
+    expect(system).toMatch(/CAPTURE the count into a local variable BEFORE restoring/);
+    expect(system).toMatch(/floating-point equality/);
+    // Strictness is not the thing being discouraged.
+    expect(system).toContain('Strictness is good; unsatisfiability is a bug');
+  });
+
   it('refuses (fail-closed) an authored command that references an out-of-repo path', async () => {
     const llm = new FakeLlm([
       JSON.stringify({ command: 'bash /tmp/goaly-phase-verify.sh', rubric: '' }),

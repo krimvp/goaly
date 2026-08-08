@@ -62,6 +62,7 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
         ['max-seal-revisions', String(config.maxSealRevisions)],
         ['max-compile-retries', String(config.maxCompileRetries)],
         ['adversarial', describeAdversarial(config)],
+        ['satisfiability-critic', describeSatisfiabilityCritic(config)],
       ],
     },
     {
@@ -157,6 +158,15 @@ function describeAdversarial(config: RunConfig): string {
   const a = config.adversarial;
   if (!a.enabled) return 'off';
   return `on (plan critics ${a.planCritics}, contract critics ${a.contractCritics}, refuters ${a.refuters})`;
+}
+
+/**
+ * The FALSE-RED critic (issue #118) is ON by default and INDEPENDENT of `--adversarial`, so it gets
+ * its own row — and says when it is on-but-inert (an `existing` verifier authored no bar to check).
+ */
+function describeSatisfiabilityCritic(config: RunConfig): string {
+  if (!config.adversarial.satisfiabilityCritic) return 'off (--no-satisfiability-critic)';
+  return config.verifier.kind === 'generate' ? 'on' : 'on (n/a: --verify-cmd authored no bar)';
 }
 
 function modelRows(parsed: ParsedArgs): Row[] {

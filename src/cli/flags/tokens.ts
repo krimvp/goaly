@@ -34,6 +34,7 @@ const VALUELESS_FLAGS = new Set([
   'defaults',
   'inherit-session',
   'dry-run',
+  'no-satisfiability-critic',
 ]);
 
 /**

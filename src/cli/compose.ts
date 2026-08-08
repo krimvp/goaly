@@ -271,11 +271,10 @@ function seedCompiler(inner: VerifierCompiler, seed: string | undefined): Verifi
 }
 
 /**
- * Wrap the compiler with the `--adversarial` contract red-team when enabled; identity otherwise
- * (a default run builds NO critic provider and pays nothing). Wraps the INNER compiler so the
- * follow-up seed (outermost) still reaches the first authoring attempt. The panel's provider is
- * metered under the `'compile'` phase — critique spend is part of authoring the contract, not a
- * new spend category (mirrors how the usage-shape classifier rides the compiler's phase).
+ * Wrap the compiler with the pre-Seal contract critics; identity when none apply. Two INDEPENDENT
+ * switches share this decorator and its one bounded re-author loop: the opt-in `--adversarial`
+ * red-team panel, and the default-ON FALSE-RED satisfiability critic (issue #118; `--generate`
+ * only). Wraps the INNER compiler so the seed still reaches attempt 1; critics meter as `'compile'`.
  */
 function critiqueCompiler(
   inner: VerifierCompiler,
@@ -286,15 +285,16 @@ function critiqueCompiler(
   facts: WorkspaceFacts | undefined,
 ): VerifierCompiler {
   const adv = config.adversarial;
-  if (!adv.enabled || adv.contractCritics <= 0 || adv.contractCritiqueRounds <= 0) return inner;
+  const critics = adv.enabled ? adv.contractCritics : 0;
+  const satisfiability = adv.satisfiabilityCritic && config.verifier.kind === 'generate';
+  if (adv.contractCritiqueRounds <= 0 || (critics <= 0 && !satisfiability)) return inner;
   return new CritiquedCompiler({
     inner,
     llm: makeLlm(),
-    critics: adv.contractCritics,
+    critics, satisfiability,
     rounds: adv.contractCritiqueRounds,
     readFile: (rel) => readFile(path.join(workspaceRoot, rel), 'utf8'),
-    ...(facts !== undefined ? { facts: facts.summary } : {}),
-    logger,
+    logger, ...(facts !== undefined ? { facts: facts.summary } : {}),
   });
 }
 

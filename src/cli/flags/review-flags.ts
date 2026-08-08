@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { UsageError, str, type RawFlags } from './tokens';
+import { UsageError, str, boolFlag, type RawFlags } from './tokens';
 
 /**
  * Validate `--approver-quorum N` at the seam (issue #84): a positive integer reviewer count for the
@@ -29,6 +29,18 @@ export function parseAdversarialCount(flags: RawFlags, name: string): number | u
     throw new UsageError(`--${name}: expected a non-negative integer, got '${v}'`);
   }
   return parsed.data;
+}
+
+/**
+ * Parse `--no-satisfiability-critic` (issue #118) — the opt-out for the DEFAULT-ON FALSE-RED
+ * satisfiability critic. Returns the critic's ENABLED state, so the flag's presence means `false`;
+ * absent ⇒ undefined so the adversarial-block default (`true`) applies. Tri-state via
+ * {@link boolFlag} so a `.goalyrc` can persist `"no-satisfiability-critic": false` (i.e. keep the
+ * critic on) and a later CLI flag still wins, fail-closed on any other value.
+ */
+export function parseSatisfiabilityCritic(flags: RawFlags): boolean | undefined {
+  const off = boolFlag(flags, 'no-satisfiability-critic');
+  return off === undefined ? undefined : !off;
 }
 
 /**

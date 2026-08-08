@@ -112,6 +112,57 @@ describe('composeDeps — phased wiring (issue #48)', () => {
   });
 });
 
+/**
+ * Issue #118 — the FALSE-RED satisfiability critic is the ONE pre-Seal review step that is wired ON
+ * by default, and it is wired independently of `--adversarial` (which stays off by default).
+ */
+describe('composeDeps — satisfiability critic wiring (issue #118)', () => {
+  const opts = () => ({
+    harness: 'fake' as const,
+    workspaceRoot: '/tmp/x',
+    runId: asRunId('run-1'),
+    llm: new FakeLlm(['{}']),
+    noLogConsole: true,
+    logFs: new InMemoryLogFs(),
+  });
+  const generate = { kind: 'generate' } as const;
+
+  it('wraps a --generate compiler by default, with --adversarial still off', () => {
+    const config = makeConfig({ verifier: generate });
+    expect(config.adversarial.enabled).toBe(false);
+    expect(composeDeps(config, opts()).compiler.constructor.name).toBe('CritiquedCompiler');
+  });
+
+  it('leaves the compiler unwrapped when the critic is opted out and --adversarial is off', () => {
+    const config = makeConfig({
+      verifier: generate,
+      adversarial: { satisfiabilityCritic: false },
+    });
+    expect(composeDeps(config, opts()).compiler.constructor.name).toBe('AgentCompiler');
+  });
+
+  it('never wraps an existing (user-supplied) verifier for the satisfiability critic alone', () => {
+    // Nothing was authored, so there is no bar of goaly's making to check for satisfiability.
+    expect(composeDeps(makeConfig(), opts()).compiler.constructor.name).toBe('AgentCompiler');
+  });
+
+  it('still wraps for the --adversarial panel when the satisfiability critic is opted out', () => {
+    const config = makeConfig({
+      verifier: generate,
+      adversarial: { enabled: true, satisfiabilityCritic: false },
+    });
+    expect(composeDeps(config, opts()).compiler.constructor.name).toBe('CritiquedCompiler');
+  });
+
+  it('honors contractCritiqueRounds: 0 as a full opt-out of the pre-Seal critique', () => {
+    const config = makeConfig({
+      verifier: generate,
+      adversarial: { enabled: true, contractCritiqueRounds: 0 },
+    });
+    expect(composeDeps(config, opts()).compiler.constructor.name).toBe('AgentCompiler');
+  });
+});
+
 describe('composeDeps — per-reviewer approver models (follow-up to issue #84)', () => {
   const baseInput = {
     goal: 'g',

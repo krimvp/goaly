@@ -1227,8 +1227,8 @@ veto/feedback-shaped, never a third key that can promote a red:
 
 - **Contract red-team (before Seal).** A lensed critic panel (`--adversarial-contract-critics`,
   default 2) attacks each compiled `--generate` contract — gaming/vacuity, rubric-command mismatch,
-  tamper/hard-code surface, reproducibility. Critical findings trigger a bounded re-author round.
-  Skipped for `--verify-cmd` (your own bar isn't second-guessed).
+  tamper/hard-code surface, reproducibility, and false-red/satisfiability. Critical findings trigger
+  a bounded re-author round. Skipped for `--verify-cmd` (your own bar isn't second-guessed).
 - **Plan critique (before the plan Seal, `--phased`).** The same shape
   (`--adversarial-plan-critics`, default 2) attacks the authored plan; a `--plan-file` plan is
   never critiqued.
@@ -1243,6 +1243,51 @@ veto/feedback-shaped, never a third key that can promote a red:
 - `--adversarial` also widens Sign-off to a 3-reviewer panel unless `--approver-quorum` is set;
   `--critic-model` picks one model for all critics/refuters. Panels short-circuit once decided and
   share cached prompt prefixes. Without the flag, a run is byte-for-byte unchanged.
+
+### The satisfiability critic (false-red guard)
+
+Flag: `--no-satisfiability-critic` (the critic itself is ON by default under `--generate`).
+
+
+Everything above attacks a **false green** — could a lazy worker pass this bar without meeting the
+goal? The mirror failure is a **false red**: a frozen bar that *no* correct implementation can pass.
+That one costs the entire run — every iteration reds, the worker keeps "fixing" already-correct
+code, and the loop ends at `maxIterations` or the budget with a good tree thrown away.
+
+So goaly runs one extra critic **before the freeze**, under a fifth lens — `FALSE-RED /
+SATISFIABILITY`: *could a correct, complete implementation still FAIL this bar?* It looks for
+
+- assertions no implementation can satisfy — above all a spy/mock **call-count assertion made after
+  the spy was restored or reset** (vitest `mockRestore()`/`mockReset()`/`restoreAllMocks()` and jest
+  `restoreAllMocks()` clear `mock.calls`, so a later `expect(spy).toHaveBeenCalled()` reds a perfect
+  implementation), or an assertion on state the test itself already tore down;
+- bars over-coupled to one import graph, file layout, or internal structure instead of the
+  observable behavior the goal names;
+- assertions on nondeterministic values (wall-clock timing, iteration order, generated ids, exact
+  float equality) or on the environment (locale, timezone, CPU count, absolute paths).
+
+Details that matter:
+
+- **On by default** — the only pre-Seal review step that is. The asymmetry justifies it: a false red
+  burns a whole run; the guard is *one* LLM call at compile time. It is **independent of
+  `--adversarial`**, which stays off by default.
+- **One call per re-author round**, and only when `--generate` actually authored verification files
+  (nothing authored ⇒ nothing to check; `--verify-cmd` is never checked at all).
+- **Never softening.** A finding is "critical" only if the critic can *name* a correct implementation
+  the bar would still red. The re-author feedback says **make this bar satisfiable by a correct
+  implementation — never make it easier**: no assertion a correct implementation would already pass
+  may be deleted or loosened, and the re-authored bar must still be **red on the current tree**
+  (the soundness pre-flight is the backstop that enforces it).
+- **Advisory and fail-open**, like the other pre-Seal critics: a critic that errors or returns
+  unparseable output drops its findings and the contract proceeds to Seal. It can never weaken a rung.
+- **Metered** under the compile phase against `--budget-tokens`, and it uses `--critic-model` like
+  the other critics.
+- The compiler's own authoring prompt carries the matching "do not author these" rule, naming the
+  post-`mockRestore` call-count assertion explicitly — the critic is defense in depth, not the only
+  guard.
+
+Opt out with `--no-satisfiability-critic` (config-file key `no-satisfiability-critic`). With
+`--adversarial` on, the same lens is also cycled as the fifth member of the contract red-team panel.
 
 **The verify command runs with a credential-scrubbed environment.** Credential-looking variables
 (`*_TOKEN`, `*_KEY`, `*SECRET*`, `AWS_*`, `GITHUB_*`, …) are stripped so they can't be exfiltrated

@@ -33,6 +33,7 @@ import {
   parseApproverDiversityTemp,
   parseApproverLenses,
   parseApproverQuorum,
+  parseSatisfiabilityCritic,
 } from './flags/review-flags';
 import { parseSandbox } from './flags/sandbox-flags';
 import { parseLogLevel, parseWorkspaceMode } from './flags/misc-flags';
@@ -605,6 +606,9 @@ export async function parseArgs(
       : {}),
     ...(parseAdversarialCount(flags, 'adversarial-refuters') !== undefined
       ? { adversarialRefuters: parseAdversarialCount(flags, 'adversarial-refuters') }
+      : {}),
+    ...(parseSatisfiabilityCritic(flags) !== undefined
+      ? { satisfiabilityCritic: parseSatisfiabilityCritic(flags) }
       : {}),
   });
 

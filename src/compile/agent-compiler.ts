@@ -95,7 +95,17 @@ const SYSTEM_PROMPT =
   '- List in "requiredTools" the external programs the command and setup assume ALREADY exist on PATH ' +
   '— the language toolchain and test runner (e.g. ["cargo"], ["python","pytest"], ["go"], ' +
   '["node","npm"]). These are what goaly probes (and installs, or aborts on) before the loop; do NOT ' +
-  'list shell builtins or coreutils. Omit when the command relies only on builtins.';
+  'list shell builtins or coreutils. Omit when the command relies only on builtins.\n' +
+  '- DO NOT AUTHOR AN UNSATISFIABLE BAR (issue #118). The bar is FROZEN: an assertion no correct ' +
+  'implementation can ever pass reds every iteration and burns the entire run. Specifically: (1) NEVER ' +
+  'assert a spy/mock CALL COUNT after the spy was restored or reset — vitest `mockRestore()` / ' +
+  '`mockReset()` / `restoreAllMocks()` and jest `restoreAllMocks()` CLEAR `mock.calls`, so ' +
+  '`expect(spy).toHaveBeenCalled()` AFTER the restore fails even for a perfect implementation. ' +
+  'CAPTURE the count into a local variable BEFORE restoring (and restore in a `finally`), then assert ' +
+  'on that local. (2) Do not assert on wall-clock timing, collection/iteration ordering, generated ' +
+  'ids, or exact floating-point equality — assert tolerances/sets/shapes instead. (3) Do not pin one ' +
+  'internal file layout or import graph when the goal names observable BEHAVIOR. (4) Do not depend on ' +
+  'locale, timezone, CPU count, or absolute paths. Strictness is good; unsatisfiability is a bug.';
 
 /**
  * Reject a verification command that trivially exits 0 without measuring anything.

@@ -280,6 +280,22 @@ Adversarial review (opt-in; a run without --adversarial is byte-for-byte unchang
   --critic-model <m>    model for all adversarial critics/refuters (cascades like the other
                         LLM-step models: --critic-model → --llm-model → --model)
 
+Satisfiability critic (ON by default under --generate — the one review step that is):
+  --no-satisfiability-critic  turn OFF the FALSE-RED satisfiability critic. The four --adversarial
+                        lenses all attack FALSE GREENS (could a lazy worker pass this bar without
+                        meeting the goal?). This is the mirror: ONE extra LLM call, before the
+                        freeze, asking whether a CORRECT, COMPLETE implementation could still FAIL
+                        the authored bar — an assertion no implementation can satisfy (the classic:
+                        a spy call-count assertion made AFTER mockRestore() cleared mock.calls), a
+                        bar coupled to one file layout instead of observable behavior, an assertion
+                        on timing / ordering / ids / float equality or on the environment. A finding
+                        triggers the same bounded re-author round, told to make the bar SATISFIABLE
+                        — never easier (it must still be RED on the current tree). Default-on
+                        because a false red costs the ENTIRE run while the guard costs one call.
+                        Runs only when --generate actually authored verification files; advisory
+                        (a broken critic ⇒ pass-through) and metered under the compile phase; uses
+                        --critic-model like the other critics.
+
 Harness selection:
   --harness <name>      the write-role coding agent: claude (default) | codex | droid | pi |
                         goaly-code.

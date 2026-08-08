@@ -667,6 +667,20 @@
         }
       ]
     },
+    "no-satisfiability-critic": {
+      "description": "Default for the --no-satisfiability-critic flag. Explicit CLI flags always override.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
     "critic-model": {
       "description": "Default for the --critic-model flag. Explicit CLI flags always override.",
       "anyOf": [
@@ -1737,6 +1751,20 @@
           },
           "adversarial-refuters": {
             "description": "Default for the --adversarial-refuters flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "no-satisfiability-critic": {
+            "description": "Default for the --no-satisfiability-critic flag. Explicit CLI flags always override.",
             "anyOf": [
               {
                 "type": "string"
