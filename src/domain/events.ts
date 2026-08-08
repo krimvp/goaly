@@ -217,10 +217,13 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     /** The adjudicator's own justification (or why it could not run — then `defective` is false). */
     reason: z.string(),
     /**
-     * The GENERALIZED anti-pattern the adjudicator named, when it named one. Carried for future
-     * corpus/reporting use; it never influences this run's outcome.
+     * The GENERALIZED anti-pattern the adjudicator named, when it named one. It never influences
+     * this run's outcome; it is what the cross-run DEFECT CORPUS (issue #122) records, so the
+     * compiler stops re-authoring this defect on FUTURE runs.
      */
     pattern: z.string().optional(),
+    /** The generalized SHAPE of the offending assertion, when named. Corpus input, like `pattern`. */
+    assertionShape: z.string().optional(),
     /** LLM spend of the adjudication (absent when no adjudicator ran). */
     llm: TokenUsage.optional(),
   }),

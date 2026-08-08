@@ -19,6 +19,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cap.
 
 ### Added
+- The **defect corpus** — goaly's first CROSS-RUN feedback loop (issue #122). When a run's in-loop
+  adjudication rules a frozen bar `CONTRACT_DEFECTIVE`, one compact, Zod-schema'd record is appended
+  to `~/.goaly/defects.jsonl` (overridable with `--defect-corpus <path>`): the adjudicator's
+  GENERALIZED anti-pattern and assertion shape, the language/test-runner derived from the FROZEN
+  contract, and `contractHash` + `runId` for provenance — never source, never the diff, never the
+  failure text. Later `--generate` runs inject the entries relevant to that workspace's
+  language/runner into the contract-authoring prompt as a bounded "known false-red patterns — do not
+  author these" section, and log which patterns were injected. The safeguards are STRUCTURAL: only an
+  adjudicated defective verdict can mint an appendable record (nothing else type-checks against the
+  append), the record builder has no input through which worker-supplied text could arrive, and the
+  strict schema has NO field for iterations, duration, spend or severity — "this was hard" is
+  inexpressible, so it can never become "author an easier bar". Fail-OPEN in every direction (a
+  missing/corrupt/unparseable corpus, or a failed write, degrades to exactly the previous behavior),
+  and a corpus-influenced contract still faces the critics, Seal, the pre-flight negative control,
+  the frozen ladder and both keys. `goaly config defects list|clear` inspects/resets it;
+  `--no-defect-corpus` opts out. Local only — nothing is uploaded or fetched.
 - `--recontract` successor runs (issue #117): recovery from a `CONTRACT_DEFECTIVE` bar that keeps the
   tree. `goaly --from-run <runId> --recontract` — printed verbatim by the abort — starts a NEW run
   over the predecessor's working tree, inherits its FROZEN goal, and re-runs COMPILE with the defect

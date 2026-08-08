@@ -335,8 +335,12 @@ const FAULT_SYSTEM_PROMPT = [
   'true for a defect you can point to IN THE FROZEN CHECK and justify as unsatisfiable in principle.',
   'When (and only when) you answer true, also give "pattern": a ONE-SENTENCE GENERALIZED description',
   'of the authoring anti-pattern — no file contents, no identifiers from this repo, no mention of how',
-  'hard the agent found the work.',
-  'Respond with ONLY a single JSON object {"defective": boolean, "reason": string, "pattern": string}.',
+  'hard the agent found the work — and "assertionShape": a SHORT GENERALIZED description of the',
+  'offending assertion\'s SHAPE (e.g. "call-count assertion on a spy after it was restored"), again',
+  'with no repo identifiers and no quoted source. Both are stored as reusable anti-patterns for',
+  'FUTURE contract authoring, so they must be about unsatisfiability — never about effort.',
+  'Respond with ONLY a single JSON object {"defective": boolean, "reason": string, "pattern": string,',
+  '"assertionShape": string}.',
   'No prose, no markdown, no code fences — JSON only.',
   UNTRUSTED_SYSTEM_CLAUSE,
 ].join(' ');
@@ -345,10 +349,17 @@ const FaultClassification = z.object({
   defective: z.boolean(),
   reason: z.string().optional(),
   pattern: z.string().optional(),
+  assertionShape: z.string().optional(),
 });
 
 /** The adjudicator's verdict. `defective: true` relabels the abort as CONTRACT_DEFECTIVE. */
-export type ContractFaultVerdict = { defective: boolean; reason: string; pattern?: string };
+export type ContractFaultVerdict = {
+  defective: boolean;
+  reason: string;
+  pattern?: string;
+  /** Generalized shape of the offending assertion; carried into the defect corpus (issue #122). */
+  assertionShape?: string;
+};
 
 function buildFaultPrompt(
   contract: CompiledContract,
@@ -365,7 +376,8 @@ function buildFaultPrompt(
     `THE IMPLEMENTATION THE AGENT HAS WRITTEN SO FAR:\n${wrapUntrusted(diffSummary, { label: 'DIFF' })}`,
     'Given this implementation: could ANY correct implementation of the goal make that frozen check ' +
       'pass, or is the frozen check itself defective (unsatisfiable in principle)?',
-    'Reply with ONLY the JSON {"defective": boolean, "reason": string, "pattern": string}.',
+    'Reply with ONLY the JSON {"defective": boolean, "reason": string, "pattern": string, ' +
+      '"assertionShape": string}.',
   ].join('\n\n');
 }
 
@@ -406,12 +418,16 @@ export async function classifyContractFault(
     return { defective: false, reason: 'adjudication produced no parseable verdict' };
   }
 
-  const { defective, reason, pattern } = parsed.data;
+  const { defective, reason, pattern, assertionShape } = parsed.data;
   return {
     defective,
     reason: reason ?? '',
-    // The generalized anti-pattern is only meaningful for a positive verdict; never carry it out of
-    // a "sound" answer, where it would be a stray description of a bar that is fine.
+    // The generalized anti-pattern (and the assertion shape that goes with it) is only meaningful
+    // for a positive verdict; never carry either out of a "sound" answer, where it would be a stray
+    // description of a bar that is fine — and, via the corpus, a lesson learned from nothing.
     ...(defective && pattern !== undefined && pattern.length > 0 ? { pattern } : {}),
+    ...(defective && assertionShape !== undefined && assertionShape.length > 0
+      ? { assertionShape }
+      : {}),
   };
 }

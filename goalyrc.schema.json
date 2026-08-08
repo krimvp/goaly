@@ -303,6 +303,34 @@
         }
       ]
     },
+    "defect-corpus": {
+      "description": "Default for the --defect-corpus flag. Explicit CLI flags always override.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "no-defect-corpus": {
+      "description": "Default for the --no-defect-corpus flag. Explicit CLI flags always override.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
     "smoke": {
       "description": "Default for the --smoke flag. Explicit CLI flags always override.",
       "anyOf": [
@@ -1401,6 +1429,34 @@
           },
           "verify-dir": {
             "description": "Default for the --verify-dir flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "defect-corpus": {
+            "description": "Default for the --defect-corpus flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "no-defect-corpus": {
+            "description": "Default for the --no-defect-corpus flag. Explicit CLI flags always override.",
             "anyOf": [
               {
                 "type": "string"

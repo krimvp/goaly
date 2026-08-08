@@ -30,6 +30,7 @@ rationale in [`DESIGN.md`](../DESIGN.md) and [`docs/adr/`](adr/), the terse cont
 - [Inspecting past runs](#inspecting-past-runs)
 - [Following up](#following-up-after-a-run-ends---from-run)
 - [Re-contracting a defective bar](#re-contracting-a-defective-bar---recontract)
+- [The defect corpus](#the-defect-corpus-cross-run-learning)
 - [Web UI](#web-ui-goaly-ui)
 - [Observability](#observability)
 - [Spend report & budgets](#spend-report--budgets)
@@ -359,6 +360,8 @@ uses and reports the verdict (exit `0` valid / `1` invalid / `2` unreadable) —
 validates" and "a run accepts this file" are one fact. It reports the presets a file defines
 alongside its settings. `goaly config presets [--names] [--workspace <dir>]` lists the named
 presets exactly as a run would resolve them across all layers.
+`goaly config defects list|clear [--defect-corpus <path>]` inspects or resets the cross-run
+[defect corpus](#the-defect-corpus-cross-run-learning).
 
 For editor auto-completion and inline validation, a JSON Schema is generated from the same Zod
 shape (`npm run gen:schema`) and ships as `goalyrc.schema.json` at the package root and in
@@ -1136,6 +1139,60 @@ Five guards keep this from becoming a weakening channel:
 `--recontract` requires `--from-run`; `--max-recontracts` requires `--recontract`. Both are
 per-invocation only (never settable from a config file) — a persisted re-contract would re-point
 every run in the tree at one predecessor's defective contract.
+
+## The defect corpus (cross-run learning)
+
+Every other feedback channel in goaly is *intra-run*: the verifier's failure reaches the worker, the
+veto reaches the worker, a red-team finding reaches the compiler — and then the run ends and all of
+it is gone. Author an unsatisfiable bar today and the same compiler authors it again tomorrow, in
+another project, forever.
+
+The **defect corpus** closes that loop, and it is the only cross-run state goaly keeps:
+
+1. When a run's in-loop adjudication rules a frozen bar
+   [`CONTRACT_DEFECTIVE`](#in-loop-contract-fault-adjudication-contract_defective), goaly appends
+   **one compact record** to `~/.goaly/defects.jsonl` — the adjudicator's *generalized* anti-pattern,
+   the *generalized* shape of the offending assertion, the language/test-runner derived from the
+   frozen contract, and the `contractHash` + `runId` for provenance. Never the source, never the
+   diff, never the failure text.
+2. Later `--generate` runs read it, keep the entries relevant to **this** workspace's
+   language/runner, cap them, and inject them into the contract-authoring prompt as a
+   **"known false-red patterns — do not author these"** section. Every injected pattern is logged,
+   so a run says out loud which local state shaped its bar.
+
+```bash
+goaly config defects list                    # what has been learned, with provenance
+goaly config defects clear                   # reset it
+goaly config defects list --defect-corpus ./team-defects.jsonl
+
+goaly --no-defect-corpus "…"                 # opt out entirely for this run
+goaly --defect-corpus ./team-defects.jsonl "…"   # use a different corpus file
+```
+
+`--defect-corpus <path>` and `--no-defect-corpus` are settable from a config file like other wiring
+flags; passing both is a usage error.
+
+**It cannot become a weakening channel** — the guarantees are structural, not conventions:
+
+- **Only an adjudicated `CONTRACT_DEFECTIVE` verdict can write.** The append takes a record type
+  that only the adjudication path can mint, so no other code path even compiles against it; a
+  `defective: false` verdict, an unparseable one, or a positive one with no generalized pattern
+  writes nothing.
+- **No worker-supplied text can reach a record.** The record builder has no parameter for the
+  failure signature, the diff, harness output, or file contents; everything but the adjudicator's
+  own two generalized sentences is derived from the frozen contract, and the language/runner fields
+  are closed enums.
+- **"This was hard" is inexpressible.** The schema is strict and has no iteration count, repeat
+  count, duration, token spend, or severity field — difficulty can never turn into "author an easier
+  bar". The prompt section is phrased as *impossibility* ("do not author bars that are impossible to
+  satisfy… never a reason to make the bar easier").
+- **Bounded prompt.** Filtering + a cap mean a corpus of any size produces the same small section.
+- **Fail-open, never a gate.** A missing, unreadable, corrupt, or partly unparseable corpus degrades
+  to exactly the pre-corpus behavior (bad lines are dropped on read, Zod-parsed); a failed write is
+  logged and dropped. It shapes an authoring prompt *before* the freeze and nothing else — Seal, the
+  critics, the [pre-flight negative control](#setup-preflight--soundness), the frozen ladder, and the
+  two keys for DONE all apply to a corpus-influenced contract exactly as before.
+- **Local only.** Nothing is uploaded, shared, or fetched.
 
 ## Web UI (`goaly ui`)
 

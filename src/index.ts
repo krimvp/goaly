@@ -189,6 +189,34 @@ export {
   type RunTaskFn,
 } from './training/bench';
 
+// The CROSS-RUN defect corpus (issue #122): the only state that outlives a run. Exported so an
+// embedder can inspect, relocate, or supply its own corpus — NOT so it can write one: `append`
+// takes a branded record only `fromAdjudication` (a positive CONTRACT_DEFECTIVE verdict) can mint.
+export {
+  DefectRecord,
+  DEFECT_RECORD_VERSION,
+  FileDefectCorpus,
+  defaultDefectCorpusPath,
+  fromAdjudication,
+  appendAdjudicatedDefect,
+  type DefectCorpus,
+  type AdjudicatedDefect,
+  type AdjudicationOutcome,
+} from './defects/corpus';
+export {
+  selectDefectHints,
+  formatDefectSection,
+  DEFAULT_DEFECT_HINT_CAP,
+  type DefectHint,
+} from './defects/select';
+export {
+  contractDefectContext,
+  workspaceDefectContext,
+  type DefectContext,
+  type WorkspaceDefectContext,
+} from './defects/context';
+export { resolveDefectCorpus, type DefectCorpusOptions } from './defects/wiring';
+
 // Seam #4 (real implementations) + concrete adapters/verifiers.
 export { SystemClock, type Clock } from './driver/clock';
 export { SystemBudgetMeter, type BudgetMeter } from './driver/budget';

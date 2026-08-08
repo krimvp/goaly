@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { LogLevel } from '../../log/logger';
 import { DEFAULT_MAX_RECONTRACTS } from '../../followup/recontract';
-import { str, UsageError, type RawFlags } from './tokens';
+import type { DefectCorpusOptions } from '../../defects/wiring';
+import { boolFlag, str, UsageError, type RawFlags } from './tokens';
 
 /**
  * `--recontract` (issue #117): with `--from-run <runId>`, start a SUCCESSOR run over the predecessor's
@@ -31,6 +32,24 @@ export function parseRecontract(flags: RawFlags): RecontractRequest | undefined 
     throw new UsageError(`--max-recontracts: expected a positive integer, got '${max}'`);
   }
   return { maxRecontracts: parsed.data };
+}
+
+/**
+ * Parse the cross-run defect-corpus flags (issue #122): `--no-defect-corpus` turns the whole
+ * channel off (nothing is read, injected, or recorded), `--defect-corpus <path>` moves the file off
+ * `~/.goaly/defects.jsonl`. Fails closed on the contradictory pair rather than silently picking one
+ * — an operator who passed both meant something the CLI cannot infer.
+ */
+export function parseDefectCorpus(flags: RawFlags): DefectCorpusOptions {
+  const disabled = boolFlag(flags, 'no-defect-corpus') ?? false;
+  const path = str(flags, 'defect-corpus');
+  if (disabled && path !== undefined) {
+    throw new UsageError(
+      '--defect-corpus <path> and --no-defect-corpus contradict each other — pass one or neither',
+    );
+  }
+  if (disabled) return { enabled: false };
+  return { enabled: true, ...(path !== undefined ? { path } : {}) };
 }
 
 /** Validate --log-level at the seam (fails closed on an unknown level). Default `info`. */

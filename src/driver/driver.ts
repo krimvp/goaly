@@ -43,6 +43,7 @@ import { errorMessage } from '../util/errors';
 import { noopTelemetry, type Telemetry, type TelemetryEvent } from '../telemetry/telemetry';
 import { prepareWorkspace, type PrepareTimeouts } from './prepare';
 import { classifyContractFault } from './preflight-soundness';
+import { appendAdjudicatedDefect, type DefectCorpus } from '../defects/corpus';
 import { Baseline, recordCheckpoint, type CheckpointDeps } from './baseline';
 import { logEvent } from './log-event';
 
@@ -137,6 +138,12 @@ export type DriverDeps = {
    * runtime ladder + stuck detection govern (see `prepare.ts`).
    */
   prepareLlm?: LlmProvider;
+  /**
+   * The cross-run DEFECT CORPUS (issue #122), written from EXACTLY ONE place: a `CONTRACT_DEFECTIVE`
+   * adjudication (below). Advisory and fail-open, and unable to influence THIS run — the record is
+   * minted after the run has already decided to abort. Absent (`--no-defect-corpus`) ⇒ no writes.
+   */
+  defectCorpus?: DefectCorpus;
   /**
    * Diagnostic logger (the Driver is the orchestration choke-point: it sees every Command, Event,
    * verdict and decision). Optional and defaults to a no-op so logging never affects control flow,
@@ -368,7 +375,7 @@ export async function drive(
               seq,
               config.resumeBestOfIncomplete,
             )
-          : await perform(command, deps, ladder, llmMeter, baseline, options.provenance !== undefined);
+          : await perform(command, deps, ladder, llmMeter, baseline, runId, options.provenance !== undefined);
       if (performed.seq !== undefined) seq = performed.seq;
       const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge
       if (performed.ladder !== undefined) ladder = performed.ladder;
@@ -527,6 +534,8 @@ async function perform(
    * diff — so the choice of what the approver reviews lives in one place, not threaded by hand here.
    */
   baseline: Baseline,
+  /** Provenance for a defect-corpus record (issue #122); never used for control flow. */
+  runId: RunId,
   /** True on a `--recontract` successor run (issue #117): widens the pre-flight negative control. */
   recontract = false,
 ): Promise<Performed> {
@@ -851,12 +860,27 @@ async function perform(
         command.repeatCount,
       );
       const llm = meterStep('adjudicate');
+      // The ONE sanctioned write to the cross-run defect corpus (issue #122): a positive
+      // adjudication, and nothing else, teaches the compiler. Everything recorded is goaly's own
+      // (the adjudicator's generalized pattern + facts derived from the FROZEN contract) and the
+      // helper never throws, so this can neither fail a run nor carry worker text.
+      if (deps.defectCorpus !== undefined) {
+        await appendAdjudicatedDefect(
+          deps.defectCorpus,
+          verdict,
+          { contract: command.contract, runId, now: deps.clock.now() },
+          deps.logger,
+        );
+      }
       return {
         event: {
           tag: 'CONTRACT_ADJUDICATED',
           defective: verdict.defective,
           reason: verdict.reason,
           ...(verdict.pattern !== undefined ? { pattern: verdict.pattern } : {}),
+          ...(verdict.assertionShape !== undefined
+            ? { assertionShape: verdict.assertionShape }
+            : {}),
           ...(llm !== undefined ? { llm } : {}),
         },
       };

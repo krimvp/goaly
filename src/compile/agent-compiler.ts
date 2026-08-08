@@ -265,6 +265,8 @@ export class AgentCompiler implements VerifierCompiler {
     | ((goal: string, intent: string | undefined) => Promise<UsageShape>)
     | undefined;
   readonly #facts: WorkspaceFacts | undefined;
+  /** Bounded "do not author these" section from the cross-run defect corpus; `''` when off/empty. */
+  readonly #defectSection: string;
 
   constructor(opts: {
     llm: LlmProvider;
@@ -286,12 +288,23 @@ export class AgentCompiler implements VerifierCompiler {
      * (a non-code workspace, or tests) ⇒ no facts injected and no lint — nothing is ever assumed.
      */
     facts?: WorkspaceFacts;
+    /**
+     * The CROSS-RUN defect corpus section (issue #122): a bounded, already-filtered "known
+     * false-red patterns — do not author these" block, built by `resolveDefectCorpus` from
+     * adjudicated `CONTRACT_DEFECTIVE` verdicts of PAST runs. Advisory prompt text only: it is
+     * injected strictly before the freeze, it is capped by its builder (a corpus of any size
+     * yields the same bounded section), and nothing downstream — Seal, the pre-flight negative
+     * control, the frozen ladder, the two keys — is relaxed by it. Absent/empty ⇒ the authoring
+     * prompt is byte-for-byte what it was before the corpus existed.
+     */
+    defectSection?: string;
   }) {
     this.#llm = opts.llm;
     this.#writeFile = opts.writeFile;
     this.#verifyDir = opts.verifyDir;
     this.#classifyShape = opts.classifyShape;
     this.#facts = opts.facts;
+    this.#defectSection = opts.defectSection?.trim() ?? '';
   }
 
   async compile(config: ContractInput, feedback?: string): Promise<CompiledContract> {
@@ -342,6 +355,13 @@ export class AgentCompiler implements VerifierCompiler {
       // a small model won't reliably self-discover the module system or lockfile, and an authored
       // file that can't LOAD kills the run at pre-flight instead of costing a compile-retry.
       guidanceParts.push(this.#facts.summary);
+    }
+    if (this.#defectSection.length > 0) {
+      // Learned anti-patterns from PAST runs (issue #122). Placed with the other authoring
+      // guidance, before the feedback, and phrased by its builder as unsatisfiability — never as
+      // "make the bar easier". A bar authored under its influence still faces every gate: the
+      // usage/vacuity/offline guards, the critics, Seal, and the pre-flight negative control.
+      guidanceParts.push(this.#defectSection);
     }
     if (feedback !== undefined && feedback.length > 0) {
       guidanceParts.push(

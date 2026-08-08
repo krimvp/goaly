@@ -3,6 +3,7 @@ import type { ParsedArgs } from './args';
 import { degradedModeTag } from '../domain/degraded';
 import { degradedMode } from './independence';
 import { resolveModels } from './models';
+import { defaultDefectCorpusPath } from '../defects/corpus';
 
 /**
  * `--dry-run`: resolve everything, run nothing.
@@ -30,6 +31,13 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
         ['setup', describeSetup(config)],
         ['install-missing-tools', String(config.installMissingTools)],
         ...opt('verify-dir', parsed.verifyDir),
+        // The corpus is hidden local state that shapes authoring, so --dry-run names it (issue #122).
+        [
+          'defect-corpus',
+          parsed.defects.enabled
+            ? (parsed.defects.path ?? defaultDefectCorpusPath())
+            : 'off (--no-defect-corpus)',
+        ],
         ['autonomous (Seal)', String(config.autonomous)],
       ],
     },

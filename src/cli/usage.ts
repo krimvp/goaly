@@ -26,6 +26,7 @@ Usage:
                [--phased [--max-phases N] [--max-plan-revisions N] [--max-plan-retries N]
                          [--plan-file <p>] [--planner-model <m>] [--parallel-phases]]
                [--max-seal-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
+               [--no-defect-corpus | --defect-corpus <path>]
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
                [--stuck-oscillation true|false] [--stuck-crash-threshold N]
@@ -67,6 +68,7 @@ Usage:
   goaly init [--harness <name>] [--autonomous] [--model <m>] [--verify-cmd "<cmd>"] [--yes] [--force]
              [--workspace <dir>]
   goaly config validate <path>
+  goaly config defects list|clear [--defect-corpus <path>]
   goaly completion bash|zsh|fish
 
   goaly help
@@ -112,6 +114,21 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                       edit and no tracked file touched. A loud log line names each authored file and
                       how to keep it ('git add -f'). The integrity guard still pins them by content
                       hash on disk (excluded ≠ unprotected). Absent ⇒ the compiler picks the dir.
+
+Defect corpus — the CROSS-RUN feedback loop (ON by default, issue #122):
+  --no-defect-corpus  turn OFF the defect corpus. When a run's in-loop adjudication (#116) rules a
+                      frozen bar CONTRACT_DEFECTIVE, goaly appends the adjudicator's GENERALIZED
+                      anti-pattern (never source, never the diff, never anything about how hard the
+                      work was) to ~/.goaly/defects.jsonl, and future --generate authoring receives
+                      the relevant ones as a bounded 'known false-red patterns — do not author
+                      these' section. It is advisory and fail-open: a missing or corrupt corpus
+                      behaves exactly as if the feature did not exist, it is filtered to this
+                      workspace's language/runner and capped so the prompt stays bounded, and it can
+                      never weaken the bar — the section is about IMPOSSIBILITY, and a corpus-shaped
+                      contract still faces the critics, Seal, and the pre-flight negative control.
+                      Each injected pattern is logged, so a run says which local state shaped it.
+  --defect-corpus <path>  use <path> instead of ~/.goaly/defects.jsonl (also accepted by
+                      'goaly config defects'). Contradicts --no-defect-corpus.
 
 Diff baseline (issue #47 — keep a run's diff small without touching the user's git history):
   --baseline <ref>  compute the worker's diff (the approver's Sign-off input) against <ref> — any git
@@ -686,6 +703,11 @@ Onboarding (first-time setup):
                             and report the verdict (exit 0 valid / 1 invalid). For editor
                             auto-completion, register the shipped goalyrc.schema.json (see the
                             reference's Config file section).
+  goaly config defects list|clear [--defect-corpus <path>]
+                            inspect or reset the cross-run defect corpus: 'list' prints every
+                            recorded false-red pattern with its language/runner and provenance,
+                            'clear' deletes the file. Only an adjudicated CONTRACT_DEFECTIVE
+                            verdict can ever add to it.
   goaly config presets [--names] [--workspace <dir>]
                             list the named presets — built-in plus every config layer's (name,
                             defining source, keys) — exactly as a run in <dir> would resolve

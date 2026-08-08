@@ -457,6 +457,8 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
             ? { baseline: autoPinnedBaseline }
             : {}),
         ...(parsed.verifyDir !== undefined ? { verifyDir: parsed.verifyDir } : {}),
+        // Cross-run defect corpus (issue #122) — wiring, like --verify-dir; fail-open downstream.
+        defects: parsed.defects,
         ...(parsed.planFile !== undefined ? { planFile: parsed.planFile } : {}),
         logLevel: parsed.logLevel,
         timeouts: parsed.timeouts,

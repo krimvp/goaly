@@ -168,6 +168,15 @@ is a **successor run** (`--from-run <id> --recontract`, issue #117), composed at
 keeps the tree, re-authors the bar from the defect report, and freezes a NEW contract under a NEW
 runId with the predecessor recorded in the log header. The reducer never learns it happened.
 
+That same positive verdict is also the ONLY writer of the **defect corpus** (`src/defects/`, issue
+#122) — the one piece of state that outlives a run. The Driver appends a compact, Zod-schema'd
+record (the adjudicator's generalized anti-pattern + language/runner derived from the FROZEN
+contract + provenance) to `~/.goaly/defects.jsonl`, and a LATER run's compiler receives the
+relevant, capped subset as a "do not author these" prompt section. It is structurally write-gated (a
+phantom-branded record type only the adjudication path can mint), free of any input for
+worker-supplied text, and its schema has no field in which difficulty could be expressed. Fail-open
+by design — it is an advisory prior on AUTHORING, strictly before the freeze, never a gate.
+
 **Zero-LLM is structural, not disciplinary:** `step` returns no `Promise` and is handed no
 adapters — only data. It *cannot* call an LLM. All fuzziness already happened in the Driver
 before the `Event` was built. `detectStuck` is pure over the histories stored in state.

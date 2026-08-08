@@ -37,6 +37,7 @@ import { FileWorkspace } from '../workspace/file-workspace';
 import { GitWorktreeHost } from '../workspace/git-worktree-host';
 import { writeVerificationFile } from '../workspace/workspace-files';
 import { detectWorkspaceFacts, type WorkspaceFacts } from '../workspace/workspace-facts';
+import { resolveDefectCorpus, type DefectCorpusOptions } from '../defects/wiring';
 import { FileRunLog } from '../runlog/file-runlog';
 import { StreamTranscriptSink, STREAM_FILE } from '../runlog/stream-transcript';
 import { AgentCliHarness } from '../harness/agent-cli-harness';
@@ -133,6 +134,14 @@ export type ComposeOptions = {
    * idiomatic location. Authored files are registered in `.git/info/exclude` either way.
    */
   verifyDir?: string;
+  /**
+   * The cross-run DEFECT CORPUS (issue #122): `--no-defect-corpus` / `--defect-corpus <path>`.
+   * Absent ⇒ enabled at `~/.goaly/defects.jsonl`. Both ends are wired from ONE resolution below —
+   * the writer the Driver hands to a `CONTRACT_DEFECTIVE` adjudication, and the bounded
+   * "do not author these" section the compiler injects. Fail-open: a missing/corrupt corpus
+   * degrades to exactly today's behavior.
+   */
+  defects?: DefectCorpusOptions;
   /**
    * Phased decomposition (issue #48): the `--plan-file <path>` that sources a structured plan instead
    * of authoring one with the LLM. When set (and `config.phased`), a {@link StaticPlanner} reads it;
@@ -451,6 +460,12 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   // detected, never assumed — a non-code workspace yields `undefined` and nothing is injected.
   const workspaceFacts = detectWorkspaceFacts(options.workspaceRoot);
 
+  // The cross-run defect corpus (issue #122), resolved ONCE: `section` is injected into contract
+  // authoring (bounded + filtered to this workspace's ecosystem, and logged so the hidden local
+  // state that shaped the bar is named in the run's diagnostics); `corpus` is the writer only a
+  // CONTRACT_DEFECTIVE adjudication can use. Fail-open — an absent corpus changes nothing.
+  const defects = resolveDefectCorpus(options.defects, options.workspaceRoot, logger);
+
   // ONE budget meter for the whole run — hoisted so EXPERIMENTAL parallel-wave children share it
   // (the `--budget-tokens` cap governs the fan-out, not each child separately).
   const budget = new SystemBudgetMeter(config.budget, clock);
@@ -496,6 +511,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
             writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
             ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
             ...(workspaceFacts !== undefined ? { facts: workspaceFacts } : {}),
+            ...(defects.section.length > 0 ? { defectSection: defects.section } : {}),
             // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered
             // like the authoring call) arms the gate on a confident build-and-use goal so a bar that a
             // parallel reimplementation could green is refused at compile (COMPILE_FAILED → re-authored
@@ -572,6 +588,9 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     // deterministic pre-flight rung is a broken frozen verifier or an honest red. Reuses the judge
     // model — it is a verification judgment — and is metered through the same shared meter.
     prepareLlm: llmFor(models.judge, 'preflight'),
+    // The corpus WRITER (issue #122). Handed to the Driver, which appends only from an adjudicated
+    // CONTRACT_DEFECTIVE verdict; absent under `--no-defect-corpus`, so nothing can be recorded.
+    ...(defects.corpus !== undefined ? { defectCorpus: defects.corpus } : {}),
     workspace,
     ...(worktrees !== undefined ? { worktrees } : {}),
     ...(wave !== undefined ? { wave } : {}),

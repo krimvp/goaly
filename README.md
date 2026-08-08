@@ -84,6 +84,14 @@ instead of blaming the worker. And that abort prints the way out:
 freezes a **new** contract under a **new** run id with the predecessor recorded in its header. No
 contract is ever mutated — "the bar was wrong" becomes an auditable chain, not an in-place softening.
 
+And once a bar has been adjudicated defective, goaly **remembers across runs**: the adjudicator's
+generalized anti-pattern (never your source, never the diff) is appended to `~/.goaly/defects.jsonl`
+and injected into future contract authoring as *"known false-red patterns — do not author these"*.
+It is filtered to your language/runner, capped, logged, and fail-open — and structurally incapable
+of weakening a bar: only an adjudicated `CONTRACT_DEFECTIVE` verdict can write a record, and the
+schema has no field in which "this was hard" can be said. `goaly config defects list` shows what it
+learned; `--no-defect-corpus` opts out.
+
 ## Features
 
 Everything below is documented in depth in the **[reference](docs/reference.md)**.
@@ -117,6 +125,7 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Stuck self-recovery](docs/reference.md#automatic-remediation---auto-remediate-stuck) | `--auto-remediate-stuck` | Opt-in: up to 3 bounded self-recoveries (no-diff hint, one extra repeat/crash attempt) before stopping for the operator. |
 | [Contract-fault adjudication](docs/reference.md#in-loop-contract-fault-adjudication-contract_defective) | *(defaults)* | A repeat-failure streak on a frozen authored file is re-adjudicated once, read-only, against the tree that now HAS an implementation: a `CONTRACT_DEFECTIVE` abort says the bar is broken and your tree is worth keeping. Fail-closed to today's abort. |
 | [Re-contract successor run](docs/reference.md#re-contracting-a-defective-bar---recontract) | `--recontract`, `--max-recontracts` | Recover from a `CONTRACT_DEFECTIVE` bar without discarding a correct tree: a NEW run, NEW contractHash, defect report as authoring feedback, predecessor recorded in the header. No contract is ever mutated. |
+| [Defect corpus](docs/reference.md#the-defect-corpus-cross-run-learning) | on by default; `--no-defect-corpus`, `--defect-corpus <path>`, `goaly config defects` | The one cross-run feedback loop: an adjudicated `CONTRACT_DEFECTIVE` verdict appends a generalized anti-pattern to `~/.goaly/defects.jsonl`, and future authoring gets a bounded, language-filtered "do not author these" section. Only that verdict can write; no worker text reaches a record; the schema cannot express difficulty. Fail-open. |
 
 ## Usage
 

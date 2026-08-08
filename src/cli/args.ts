@@ -6,6 +6,8 @@ import { ModelSelection } from './models';
 import { resolveInputSources, defaultReaders, type InputReaders } from './input-sources';
 import { loadConfig, type LoadedConfig } from './config-file';
 import { parseDelegationDirective } from './delegation';
+import { collectResumeExtension, type Delegation } from './flags/resume-extension';
+import type { DefectCorpusOptions } from '../defects/wiring';
 import type { AutonomyLevel } from '../agent-cli/droid-codec';
 import type { WorktreeCommand } from './worktree-cmd';
 import type { DoctorCommand } from './doctor';
@@ -37,7 +39,13 @@ import {
   parseSatisfiabilityCritic,
 } from './flags/review-flags';
 import { parseSandbox } from './flags/sandbox-flags';
-import { parseLogLevel, parseRecontract, parseWorkspaceMode, type RecontractRequest } from './flags/misc-flags';
+import {
+  parseDefectCorpus,
+  parseLogLevel,
+  parseRecontract,
+  parseWorkspaceMode,
+  type RecontractRequest,
+} from './flags/misc-flags';
 import {
   parseConfigCommand,
   parseDoctorCommand,
@@ -236,93 +244,14 @@ export type ParsedArgs = {
    * clause is already stripped from `config.goal`; an explicit `--candidates` always wins (this is
    * then still set, with `overriddenByFlag: true`, so the log can say so). Undefined ⇒ no directive.
    */
-  delegation: { candidates: number; phrase: string; overriddenByFlag: boolean } | undefined;
+  delegation: Delegation | undefined;
+  /**
+   * The cross-run DEFECT CORPUS (issue #122): `--no-defect-corpus` disables it, `--defect-corpus
+   * <path>` moves it off `~/.goaly/defects.jsonl`. Pure wiring — it shapes the AUTHORING prompt
+   * before the freeze and can never relax the frozen bar or the two keys.
+   */
+  defects: DefectCorpusOptions;
 };
-
-/**
- * Collect the operator extension for a `--resume` (ADR 0012) from EXPLICITLY-passed CLI flags
- * (never the config-file overlay — an extension is a per-invocation operator act). The values are
- * read off the already-validated RunConfig (so every coercion/floor is applied once); only flags
- * actually present become part of the extension — absent ones keep whatever the run log's
- * effective config says. `--note` is resume-only: on a fresh run there is no next-turn boundary to
- * attach it to, so it fails closed with the fix.
- */
-function collectResumeExtension(
-  flags: RawFlags,
-  config: RunConfig,
-): { extension: RunExtension | undefined; delegation: ParsedArgs['delegation'] } {
-  const resuming = str(flags, 'resume') !== undefined;
-  let note = str(flags, 'note');
-  if (!resuming) {
-    if (note !== undefined) {
-      throw new UsageError(
-        '--note steers a RESUMED run (it is appended to the next agent prompt) — pair it with ' +
-          '--resume <runId>. To guide a fresh run, put the guidance in the goal or --intent.',
-      );
-    }
-    return { extension: undefined, delegation: undefined };
-  }
-  const has = (key: string): boolean => flags[key] !== undefined;
-  // Natural-language delegation in a resume note ("try 4 parallel attempts"): the steering intent
-  // is goaly's to ACT on (a `candidates` overlay on the extension), not the worker's to read — so
-  // the directive clause is stripped and any remaining guidance stays the note. The explicit
-  // `--candidates` / `--best-of` flag wins, exactly as on a fresh run.
-  const explicit = has('candidates') || has('best-of');
-  let delegation: ParsedArgs['delegation'];
-  if (note !== undefined) {
-    const directive = parseDelegationDirective(note);
-    if (directive !== null) {
-      if (directive.candidates > MAX_CANDIDATES) {
-        throw new UsageError(
-          `"${directive.phrase}": at most ${MAX_CANDIDATES} parallel candidates are supported ` +
-            `(each is a full concurrent worker + worktree) — ask for ${MAX_CANDIDATES} or fewer`,
-        );
-      }
-      delegation = {
-        candidates: directive.candidates,
-        phrase: directive.phrase,
-        overriddenByFlag: explicit,
-      };
-      note = directive.cleaned.length > 0 ? directive.cleaned : undefined;
-    }
-  }
-  const stuck = {
-    ...(has('stuck-no-diff') ? { noDiff: config.stuckPolicy.noDiff } : {}),
-    ...(has('stuck-repeat-threshold')
-      ? { repeatFailureThreshold: config.stuckPolicy.repeatFailureThreshold }
-      : {}),
-    ...(has('stuck-oscillation') ? { oscillation: config.stuckPolicy.oscillation } : {}),
-    ...(has('stuck-crash-threshold')
-      ? { harnessCrashThreshold: config.stuckPolicy.harnessCrashThreshold }
-      : {}),
-    ...(has('stuck-unevaluable-threshold')
-      ? { unevaluableThreshold: config.stuckPolicy.unevaluableThreshold }
-      : {}),
-    ...(has('stuck-timeout-no-diff-threshold')
-      ? { timeoutNoDiffThreshold: config.stuckPolicy.timeoutNoDiffThreshold }
-      : {}),
-  };
-  const extension: RunExtension = {
-    ...(has('max-iterations') ? { maxIterations: config.maxIterations } : {}),
-    ...(has('budget-tokens') && config.budget.tokens !== undefined
-      ? { budgetTokens: config.budget.tokens }
-      : {}),
-    ...(has('budget-wall-ms') && config.budget.wallClockMs !== undefined
-      ? { budgetWallMs: config.budget.wallClockMs }
-      : {}),
-    ...(Object.keys(stuck).length > 0 ? { stuck } : {}),
-    ...(explicit
-      ? { candidates: config.candidates }
-      : delegation !== undefined
-        ? { candidates: delegation.candidates }
-        : {}),
-    ...(note !== undefined ? { note } : {}),
-  };
-  return {
-    extension: Object.keys(extension).length > 0 ? extension : undefined,
-    delegation,
-  };
-}
 
 /** Fields that may be sourced inline / from a file / from stdin; a CLI source overrides config. */
 const MULTI_SOURCE_FIELDS = ['goal', 'intent', 'rubric'] as const;
@@ -685,6 +614,7 @@ export async function parseArgs(
     workspaceMode: parseWorkspaceMode(str(flags, 'workspace-mode')),
     baseline: str(flags, 'baseline'),
     verifyDir: str(flags, 'verify-dir'),
+    defects: parseDefectCorpus(flags),
     planFile: str(flags, 'plan-file'),
     resumeRunId: str(flags, 'resume'),
     resumeExtend,
@@ -773,6 +703,7 @@ function baseArgs(
     workspaceMode: 'auto',
     baseline: undefined,
     verifyDir: undefined,
+    defects: { enabled: true },
     planFile: undefined,
     resumeRunId: undefined,
     fromRunId: undefined,

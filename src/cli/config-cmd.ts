@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { loadConfig, parseConfigDocument, type LoadedConfig } from './config-file';
 import { mergedPresets } from './presets';
 import { UsageError } from './flags/tokens';
+import { FileDefectCorpus, type DefectCorpus } from '../defects/corpus';
 
 /**
  * `goaly config` (improvement plan 3.2): config-file tooling. `validate <path>` parses a config
@@ -14,7 +15,9 @@ import { UsageError } from './flags/tokens';
 
 export type ConfigCommand =
   | { readonly kind: 'validate'; readonly path: string }
-  | { readonly kind: 'presets'; readonly names: boolean };
+  | { readonly kind: 'presets'; readonly names: boolean }
+  /** The cross-run defect corpus (issue #122): inspect it, or reset it. */
+  | { readonly kind: 'defects'; readonly action: 'list' | 'clear'; readonly path?: string };
 
 /** Run a `goaly config` subcommand; returns the process exit code (0 valid, 1 invalid, 2 usage). */
 export async function runConfig(
@@ -23,7 +26,10 @@ export async function runConfig(
   out: (s: string) => void,
   err: (s: string) => void,
   load: (dir: string) => Promise<LoadedConfig> = (dir) => loadConfig(dir, undefined),
+  /** Inject the corpus (tests); default reads the real `--defect-corpus` / `~/.goaly` file. */
+  makeCorpus: (path: string | undefined) => DefectCorpus = (p) => new FileDefectCorpus(p),
 ): Promise<number> {
+  if (cmd.kind === 'defects') return runDefects(cmd, out, makeCorpus(cmd.path));
   if (cmd.kind === 'presets') {
     let fromConfig: LoadedConfig['presets'];
     try {
@@ -86,4 +92,37 @@ export async function runConfig(
     }
     throw e;
   }
+}
+
+/**
+ * `goaly config defects list|clear` (issue #122): the operator's window onto the one piece of
+ * cross-run state goaly keeps. `list` prints every recorded false-red pattern with its
+ * language/runner and provenance (so "which hidden local state is shaping my contracts?" is one
+ * command away); `clear` resets the file. Read-only and fail-open like the corpus itself — a
+ * missing or corrupt file lists as empty rather than erroring, and neither action can ever ADD a
+ * record: only an adjudicated CONTRACT_DEFECTIVE verdict writes.
+ */
+async function runDefects(
+  cmd: { readonly action: 'list' | 'clear' },
+  out: (s: string) => void,
+  corpus: DefectCorpus,
+): Promise<number> {
+  if (cmd.action === 'clear') {
+    await corpus.clear();
+    out(`cleared the defect corpus at ${corpus.path}\n`);
+    return 0;
+  }
+  const records = corpus.read();
+  if (records.length === 0) {
+    out(`no recorded defects (${corpus.path})\n`);
+    return 0;
+  }
+  out(`${records.length} recorded defect${records.length === 1 ? '' : 's'} (${corpus.path}):\n`);
+  for (const r of records) {
+    out(`  [${r.ts}] ${r.language}/${r.runner}  ${r.pattern}\n`);
+    if (r.assertionShape !== undefined) out(`      assertion shape: ${r.assertionShape}\n`);
+    out(`      from run ${r.runId}, contract ${r.contractHash.slice(0, 12)}\n`);
+  }
+  out('\nonly an adjudicated CONTRACT_DEFECTIVE verdict can add to this; clear it with: goaly config defects clear\n');
+  return 0;
 }

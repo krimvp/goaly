@@ -186,7 +186,25 @@ export function parseConfigCommand(rest: string[]): { config: ConfigCommand; wor
       workspace: str(flags, 'workspace') ?? process.cwd(),
     };
   }
-  throw new UsageError(`unknown config subcommand: ${sub ?? '(none)'} (expected validate | presets)`);
+  if (sub === 'defects') {
+    // The cross-run defect corpus (issue #122): inspect or reset it. `--defect-corpus <path>` picks
+    // a non-default corpus, exactly as on a run. Fails closed on an unknown action.
+    const [action, ...actionRest] = subRest;
+    if (action !== 'list' && action !== 'clear') {
+      throw new UsageError(
+        `unknown config defects action: ${action ?? '(none)'} (expected list | clear)`,
+      );
+    }
+    const flags = parseFlags(actionRest).flags;
+    const corpusPath = str(flags, 'defect-corpus');
+    return {
+      config: { kind: 'defects', action, ...(corpusPath !== undefined ? { path: corpusPath } : {}) },
+      workspace: str(flags, 'workspace') ?? process.cwd(),
+    };
+  }
+  throw new UsageError(
+    `unknown config subcommand: ${sub ?? '(none)'} (expected validate | presets | defects)`,
+  );
 }
 
 /** Parse `goaly ui [--port N] [--workspace <dir>]`, each validated fail-closed at the seam. */
