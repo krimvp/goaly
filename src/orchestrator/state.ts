@@ -95,7 +95,26 @@ export type LoopCtx = {
    * declaring the whole run DONE — only the final acceptance phase's DONE ends the run.
    */
   readonly phase: PhaseCtx | undefined;
+  /**
+   * Auto-remediation ledger (improvement plan 4.2): how many bounded self-recoveries this run has
+   * already spent, per remediable stuck kind. Read by `detectStuck` (a spent `repeat`/`crash`
+   * remediation raises that detector's effective threshold by one) and by DECIDE's iteration cap
+   * (a spent `noDiff` remediation refunds the burned no-diff iteration). Only ever advanced by a
+   * `CONTINUE` decision carrying a remediation, so replaying the log reproduces it exactly.
+   */
+  readonly remediations: RemediationLedger;
 };
+
+/** Per-kind remediation spend (each kind is remediated at most once; see `planRemediation`). */
+export type RemediationLedger = {
+  readonly total: number;
+  readonly noDiff: number;
+  readonly repeat: number;
+  readonly crash: number;
+};
+
+/** The zero ledger every run starts with. */
+export const NO_REMEDIATIONS: RemediationLedger = { total: 0, noDiff: 0, repeat: 0, crash: 0 };
 
 export type OrchestratorState =
   | {
@@ -256,5 +275,6 @@ export function initialCtx(
     feedback: undefined,
     feedbackSource: undefined,
     phase,
+    remediations: NO_REMEDIATIONS,
   };
 }

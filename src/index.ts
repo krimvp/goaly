@@ -194,6 +194,7 @@ export { SystemBudgetMeter, type BudgetMeter } from './driver/budget';
 export { LlmTokenMeter, meterLlm, deltaToUsage, type LlmDelta } from './driver/llm-meter';
 export { summarizeUsage } from './runlog/usage';
 export { GitWorkspace } from './workspace/git-workspace';
+export { FileWorkspace } from './workspace/file-workspace';
 export { GitWorktreeHost } from './workspace/git-worktree-host';
 export {
   WorktreeManager,

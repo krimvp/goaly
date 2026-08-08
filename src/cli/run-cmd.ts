@@ -19,7 +19,7 @@ import { renderResolvedConfig } from './dry-run';
 import type { RunExtension } from '../domain/events';
 import { acquireRunLock, RunLockedError, type RunLock } from '../runlog/lock';
 import { killActiveChildren } from '../util/spawn';
-import { preflightRun } from './preflight';
+import { detectWorkspaceMode, preflightRun } from './preflight';
 import { compactRun } from '../followup/compaction';
 import { resumeHint, renderResumeHint, type ResumeHint } from './resume-cmd';
 import { resolveModels } from './models';
@@ -198,10 +198,21 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
     }
   }
 
+  // Resolve the concrete workspace mode early so git-specific validations can be skipped in
+  // file-mode runs.
+  const concreteWorkspaceMode =
+    parsed.workspaceMode === 'auto'
+      ? await detectWorkspaceMode(parsed.workspace)
+      : parsed.workspaceMode;
+
   // Validate --baseline (issue #47) fail-closed BEFORE the run starts: an unknown ref refuses to
   // start rather than silently degrading the diff (invariant #6, parse at the seam). On resume the
   // baseline is reconstructed from the log instead, so the flag is moot then.
-  if (parsed.baseline !== undefined && parsed.resumeRunId === undefined) {
+  if (
+    parsed.baseline !== undefined &&
+    parsed.resumeRunId === undefined &&
+    concreteWorkspaceMode === 'git'
+  ) {
     if (!(await refResolves(parsed.workspace, parsed.baseline))) {
       io.err(
         `--baseline ${parsed.baseline}: not a resolvable git ref in ${parsed.workspace}\n\n${USAGE}\n`,
@@ -218,6 +229,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
   // `git init`, nothing to pin to) degrades to the loud warning below.
   let autoPinnedBaseline: string | undefined;
   if (
+    concreteWorkspaceMode === 'git' &&
     parsed.harnessAutonomy !== undefined &&
     parsed.harnessAutonomy !== 'low' &&
     parsed.baseline === undefined &&
@@ -321,6 +333,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       harness: parsed.harness,
       llmProvider: parsed.llmProvider,
       workspace: parsed.workspace,
+      workspaceMode: parsed.workspaceMode,
     });
     if (problem !== null) {
       io.err(`goaly: ${problem}\n`);
@@ -385,6 +398,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
         llmProvider: parsed.llmProvider,
         ...(parsed.harnessAutonomy !== undefined ? { harnessAutonomy: parsed.harnessAutonomy } : {}),
         workspaceRoot: parsed.workspace,
+        workspaceMode: concreteWorkspaceMode,
         runId,
         ...(followup.followupSeed !== undefined ? { followupSeed: followup.followupSeed } : {}),
         ...(parsed.baseUrl !== undefined ? { baseUrl: parsed.baseUrl } : {}),

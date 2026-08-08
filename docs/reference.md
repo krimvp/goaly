@@ -8,6 +8,8 @@ rationale in [`DESIGN.md`](../DESIGN.md) and [`docs/adr/`](adr/), the terse cont
 ## Contents
 
 - [CLI cookbook](#cli-cookbook)
+- [Autonomy profiles](#autonomy-profiles---mode)
+- [Onboarding](#onboarding-goaly-doctor--goaly-init)
 - [Dry run](#dry-run---dry-run)
 - [Config file](#config-file)
 - [Model & provider selection](#model--provider-selection)
@@ -114,6 +116,11 @@ goaly run --goal "build a /health endpoint" --generate --smoke "node smoke.mjs"
 goaly run --goal-file ./BIG_GOAL.md --verify-cmd "npm test" --phased --autonomous --max-phases 6
 goaly run --goal-file ./BIG_GOAL.md --generate --phased --plan-file ./plan.json
 
+# EXPERIMENTAL parallel waves: group-tagged plan phases run concurrently, merge with git
+# plumbing, re-verify on the combined tree (requires --autonomous; see the reference section):
+goaly run --goal-file ./BIG_GOAL.md --verify-cmd "npm test" --phased --autonomous \
+          --parallel-phases --plan-file ./plan.json
+
 # Jail the agent AND the verifier in an OS sandbox:
 goaly run --goal "..." --verify-cmd "npm test" --sandbox                            # auto-detect
 goaly run --goal "..." --verify-cmd "npm test" --sandbox=bwrap --sandbox-net allow  # let npm fetch
@@ -133,18 +140,89 @@ goaly runs list
 goaly runs show run-<id>
 goaly runs resume-cmd run-<id>
 goaly ui                          # http://127.0.0.1:4180, localhost-only
+
+# First-time setup: check the environment, then write a starter .goalyrc:
+goaly doctor
+goaly init                        # interactive on a TTY; or headless:
+goaly init --harness codex --autonomous --yes
+
+# Tab completion (bash shown; zsh alike; fish: goaly completion fish | source):
+source <(goaly completion bash)
 ```
 
 `goaly help` lists every flag. Exit codes: `0` DONE · `1` FAILED/ABORTED · `2` usage error ·
 `130` interrupted (Ctrl-C; the run stays resumable).
 
-Goal, intent, and rubric each accept exactly one source: inline (`--goal "…"`), a file
-(`--goal-file <path>`), or stdin (`--goal -`). More than one source per field is a usage error.
+Goal, intent, and rubric each accept exactly one source: inline (`--goal "…"`, `--intent "…"`,
+`--rubric "…"`), a file (`--goal-file <path>`, `--intent-file <path>`, `--rubric-file <path>`),
+or stdin (`--goal -`). More than one source per field is a usage error. `--intent` steers what
+kind of verification `--generate` authors (e.g. "verify with an integration test, not unit
+tests"); `--rubric` overrides the frozen rubric the judge and Sign-off approver hold the work to.
 
 `--verify-cmd` and `--generate` are mutually exclusive: passing both **on the command line** is a
 usage error. A `--generate` on the command line still overrides a `verify-cmd` inherited from a
 config file — that is an ordinary one-off override — but says so with a warning naming the source
 that lost.
+
+## Autonomy profiles (`--mode`)
+
+`--mode review|hands-off|aggressive` bundles the flags that make up a coherent autonomy posture,
+so the right combination is one flag instead of five. Profiles expand **at parse time** into the
+same explicit flag values you could type by hand — the reducer and the frozen `RunConfig` see
+nothing new, and every expansion is logged. Layering: config files < profile < explicit CLI
+flags; any flag you also type beats the profile, and the override is reported loudly.
+
+| Profile | Expands to | Posture |
+| --- | --- | --- |
+| `review` | `--harness-autonomy low`, and **drops** a config-file `autonomous`/`adversarial`/`candidates` | A human at every gate; the least-privileged worker. |
+| `hands-off` | `--autonomous --harness-autonomy medium --delta-verify --candidates 1` | Unattended but conservative; warns if no independent `--approver-model(s)` is set. |
+| `aggressive` | `--autonomous --harness-autonomy high --adversarial --candidates 3 --auto-remediate-stuck` | Unattended and maximal: red-teamed contract, best-of-3 workers, full worker privileges, bounded stuck self-recovery. |
+
+```bash
+goaly "add a /health endpoint" --verify-cmd "npm test" --mode hands-off
+goaly "fix the flaky test" --generate --mode aggressive --approver-model claude-opus-4-8
+goaly "refactor the parser" --verify-cmd "npm test" --mode hands-off --harness-autonomy low  # explicit wins, loudly
+```
+
+`mode` is also a `.goalyrc` key, so a project can default to `review` while an operator opts a
+single run into `hands-off` from the command line.
+
+## Onboarding (`goaly doctor` / `goaly init`)
+
+Two subcommands cover first-time setup, so the common early failures (missing CLI, no git repo,
+unparsable config) surface as one actionable report instead of a cryptic mid-run error.
+
+**`goaly doctor`** is a READ-ONLY environment report. It checks:
+
+- the Node version against the supported floor (>= 20),
+- git availability and whether the workspace is a git work tree (not fatal — runs fall back to
+  `--workspace-mode file`; the report prints the `git init` recipe for full git-mode features),
+- which bundled harness CLIs (`claude`, `codex`, `droid`, `pi`) are on PATH — none installed is
+  only a warning, since `--harness goaly-code` works against any OpenAI-compatible endpoint,
+- presence **and validity** of `~/.goalyrc` and the workspace `.goalyrc` (an invalid config file
+  fails every run in the tree, so it is a hard failure here),
+- with `--base-url <url>`: whether the OpenAI-compatible endpoint answers (a `GET /models` probe).
+
+Exit code `0` means goaly can run here in some configuration; `1` means something goaly cannot
+work around needs fixing first. It writes nothing.
+
+**`goaly init`** writes a starter `.goalyrc` in the workspace: default harness, autonomy
+preference, optional model and verify-command defaults. It runs `goaly doctor` first so
+environment gaps are visible before defaults are saved. On a TTY it asks interactively (empty
+answers accept the defaults); with flags (`--harness`, `--autonomous`, `--model`,
+`--verify-cmd`) or `--yes` it is fully headless for CI. The candidate config is validated
+against the same fail-closed schema every run parses before a byte is written, and an existing
+`.goalyrc` is never overwritten without `--force`.
+
+```bash
+goaly doctor --base-url http://localhost:11434/v1   # is my local endpoint reachable?
+goaly init --harness goaly-code --yes               # headless starter config
+```
+
+**Shell completion.** `goaly completion bash|zsh|fish` prints a tab-completion script covering
+every subcommand and every documented flag (the list is extracted from `goaly help`, so it can
+never lag the docs). Install with one line — `source <(goaly completion bash)` (zsh alike), or
+`goaly completion fish | source` — and add it to your shell rc to make it permanent.
 
 ## Dry run (`--dry-run`)
 
@@ -204,6 +282,31 @@ are deliberately excluded and enumerated: `--resume`, `--from-run`, `--inherit-s
 `--workspace`, `--worktree`, `--config` itself, `--note`, `--dry-run`, the `--*-file` input-source
 selectors, and the `--defaults` alias. Because the schema is strict, that list is the whole
 difference — and a test enforces it, so a newly added flag cannot quietly become unpersistable.
+
+### Validating and editing configs
+
+`goaly config validate <path>` parses a config file through the exact fail-closed path every run
+uses and reports the verdict (exit `0` valid / `1` invalid / `2` unreadable) — so "this file
+validates" and "a run accepts this file" are one fact.
+
+For editor auto-completion and inline validation, a JSON Schema is generated from the same Zod
+shape (`npm run gen:schema`) and ships as `goalyrc.schema.json` at the package root and in
+`dist/`. Register it for `.goalyrc` files:
+
+- **VS Code** — in `settings.json`:
+
+  ```json
+  "json.schemas": [
+    { "fileMatch": [".goalyrc"], "url": "./node_modules/goaly/goalyrc.schema.json" }
+  ]
+  ```
+
+- **Zed** — in `settings.json` under `lsp.json-language-server.settings.json.schemas`, same
+  `fileMatch`/`url` shape.
+- **Vim/Neovim** (jsonls) — add the same entry to the server's `settings.json.schemas` list.
+
+A drift test regenerates the schema in-memory and diffs it against the checked-in file, so a new
+config key cannot ship without the schema (and `npm run build` regenerates it as its first step).
 
 ## Model & provider selection
 
@@ -426,6 +529,26 @@ The loop bails before `--max-iterations` with a typed reason when it's making no
 | contract-unevaluable | the frozen ladder could not be *evaluated* N times in a row (`CONTRACT_UNEVALUABLE`) | `--stuck-unevaluable-threshold` |
 | budget | `--budget-tokens` / `--budget-wall-ms` exhausted | the budget flags |
 
+### Automatic remediation (`--auto-remediate-stuck`)
+
+For long unattended runs, `--auto-remediate-stuck` (default off; included in `--mode aggressive`)
+lets the run spend up to **three bounded self-recoveries** — one per remediable kind — instead of
+stopping for the operator:
+
+- **no-diff** — the next prompt carries a canned "your last turn changed NOTHING — try a genuinely
+  different approach" hint, and the burned no-diff iteration is refunded against
+  `--max-iterations`. A second unchanged turn aborts.
+- **repeat-failure** — the repeat threshold is effectively raised by one, buying exactly one extra
+  attempt. The streak continuing aborts.
+- **harness-crash** — the crash threshold is effectively raised by one (on top of the driver's
+  built-in per-iteration retry). Another crash aborts with the harness's own error.
+
+`CONTRACT_UNEVALUABLE`, budget, and oscillation are **never** remediated — an environment failure,
+an operator cap, and a demonstrated cycle all need a human. Every remediation is pure reducer
+policy (it replays identically on `--resume`), is visible in the agent's next prompt
+(`AUTO-REMEDIATION n/3 …`), is logged loudly by the driver, and is counted in the abort reason if
+the run still ends stuck.
+
 Details that make these accurate rather than trigger-happy:
 
 - **Repeat-failure** normalizes volatile tokens (timestamps, PIDs, temp paths) before comparing,
@@ -493,6 +616,27 @@ If a checkpoint can't be taken, the iteration falls back to the full diff (never
 composes with `--phased`: deltas feed the judge within a phase, while the approver baseline
 advances only at phase boundaries. For a huge monolithic change, `--phased` remains the way to
 bound the cumulative diff itself.
+
+## Workspace mode (`--workspace-mode`)
+
+By default goaly uses git plumbing to hash and diff the working tree, and it requires a git
+repository. **`--workspace-mode file`** replaces git plumbing with a content-addressed file-system
+manifest: it hashes every file, renders a textual diff against stored baseline manifests, and keeps
+baseline snapshots under `.goaly/baselines/` so the run can resume. This lets goaly run in a plain
+directory without `git init`.
+
+- `--workspace-mode git` — explicit git plumbing (the preflight enforces a git repo).
+- `--workspace-mode file` — explicit file-system manifest mode.
+- `--workspace-mode auto` — pick `git` when the workspace is inside a git work tree, otherwise `file`.
+  This is the default.
+
+File mode supports the full two-key loop, stuck detection, checkpoints, and resume. It does **not**
+support worktrees, best-of-N (`--candidates > 1`), or parallel phases, because those features need git
+plumbing. Harness-autonomy auto-pinning (which pins the review baseline to the run-start HEAD SHA) is
+also git-only and is skipped in file mode.
+
+In file mode, an explicit `--baseline` must name a previously stored manifest hash (produced by a
+prior `checkpoint`), not a git ref.
 
 ## Best-of-N parallel worker (`--candidates`)
 
@@ -584,7 +728,16 @@ ACCEPT (a cumulative contract on the ORIGINAL goal) ──both keys──► DON
 
 Sequential phases leave wall-clock on the table when sub-goals are independent. With
 `--parallel-phases` (opt-in), consecutive plan phases sharing a `group` value form a **wave** that
-executes concurrently, then merges — without weakening a guarantee:
+executes concurrently, then merges — without weakening a guarantee. End-to-end:
+
+```bash
+goaly run --goal-file ./BIG_GOAL.md --verify-cmd "npm test" \
+          --phased --autonomous --parallel-phases --plan-file ./plan.json
+```
+
+It requires `--autonomous` (wave children seal their frozen contracts concurrently — an
+interactive gate cannot pause K children at once; the CLI refuses the combination otherwise,
+fail-closed), and a plan whose waves you mark with `group`:
 
 ```jsonc
 // plan.json — phases 1+2 are one wave; phase 3 runs after the merged result

@@ -5,6 +5,10 @@ import { startUiServer } from '../ui/server';
 import { STATE_DIR } from './compose';
 import { runRuns } from './runs';
 import { runWorktree } from './worktree-cmd';
+import { runDoctor } from './doctor';
+import { runInit } from './init';
+import { runConfig } from './config-cmd';
+import { renderCompletion } from './completion';
 import { WorktreeManager, WorktreeError } from '../workspace/worktree-manager';
 import { executeRun } from './run-cmd';
 
@@ -55,6 +59,30 @@ export async function main(argv: string[]): Promise<number> {
 
   if (parsed.command === 'ui' && parsed.ui !== undefined) {
     return runUi(parsed.ui, parsed.workspace);
+  }
+
+  if (parsed.command === 'doctor' && parsed.doctor !== undefined) {
+    return runDoctor(parsed.doctor, parsed.workspace, (s) => process.stdout.write(s));
+  }
+
+  if (parsed.command === 'completion' && parsed.completion !== undefined) {
+    process.stdout.write(renderCompletion(parsed.completion.shell));
+    return 0;
+  }
+
+  if (parsed.command === 'config' && parsed.configCmd !== undefined) {
+    return runConfig(
+      parsed.configCmd,
+      (s) => process.stdout.write(s),
+      (s) => process.stderr.write(s),
+    );
+  }
+
+  if (parsed.command === 'init' && parsed.init !== undefined) {
+    return runInit(parsed.init, parsed.workspace, {
+      out: (s) => process.stdout.write(s),
+      err: (s) => process.stderr.write(s),
+    });
   }
 
   // --worktree: re-root the ENTIRE run at a managed worktree BEFORE anything reads

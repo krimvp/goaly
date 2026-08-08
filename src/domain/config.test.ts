@@ -68,6 +68,7 @@ describe('RunConfig', () => {
       oscillation: true,
       harnessCrashThreshold: 2,
       unevaluableThreshold: 2,
+      autoRemediate: false,
     });
     expect(c.judge).toEqual({ quorum: 3, confidenceFloor: 0.66 });
     expect(c.diffIgnore).toEqual([]);

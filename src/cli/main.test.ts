@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -623,15 +623,24 @@ describe('main() — follow-up (Capability C) guards & resume-cmd (Capability A)
     expect(err).toContain('runs list');
   });
 
-  it('exits 2 with git guidance when the workspace is not a git repository', async () => {
+  it('exits 2 with git guidance when the workspace is not a git repository and mode is git', async () => {
     // `root` is a bare temp dir (no git init) — the preflight must say so BEFORE any spend.
     const { code, err } = await captureStderr(() =>
       main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
-        '--workspace', root]),
+        '--workspace', root, '--workspace-mode', 'git']),
     );
     expect(code).toBe(2);
     expect(err).toContain('not a git repository');
     expect(err).toContain('git init');
+  });
+
+  it('validates and starts a non-git run with --workspace-mode file via --dry-run', async () => {
+    const { code, err } = await captureStderr(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
+        '--workspace', root, '--workspace-mode', 'file', '--dry-run']),
+    );
+    expect(code).toBe(0);
+    expect(err).not.toContain('not a git repository');
   });
 
   it('exits 2 when --inherit-session is used without --from-run', async () => {
@@ -764,5 +773,60 @@ describe('main() — --dry-run validates and prints, and starts nothing', () => 
     );
     expect(res.code).toBe(0);
     expect(existsSync(join(root, '.goaly', 'worktrees', 'feat'))).toBe(false);
+  });
+});
+
+describe('main() — doctor and init onboarding subcommands', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'goaly-main-onboard-'));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function capture(fn: () => Promise<number>): Promise<{ code: number; out: string }> {
+    const writes: string[] = [];
+    const origOut = process.stdout.write.bind(process.stdout);
+    const origErr = process.stderr.write.bind(process.stderr);
+    const sink = ((s: string | Uint8Array): boolean => {
+      writes.push(typeof s === 'string' ? s : Buffer.from(s).toString());
+      return true;
+    }) as typeof process.stdout.write;
+    process.stdout.write = sink;
+    process.stderr.write = sink;
+    try {
+      return { code: await fn(), out: writes.join('') };
+    } finally {
+      process.stdout.write = origOut;
+      process.stderr.write = origErr;
+    }
+  }
+
+  it('goaly doctor prints an environment report and exits 0 here', async () => {
+    const res = await capture(() => main(['doctor', '--workspace', root]));
+    expect(res.code).toBe(0); // this host has node >= 20 and no invalid configs
+    expect(res.out).toContain('goaly doctor — environment report');
+    expect(res.out).toContain('node');
+    expect(res.out).toContain('git');
+    expect(res.out).toContain('harnesses');
+  });
+
+  it('goaly init writes .goalyrc headless from flags (and doctor runs first)', async () => {
+    const res = await capture(() =>
+      main(['init', '--harness', 'codex', '--autonomous', '--workspace', root]),
+    );
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('goaly doctor — environment report');
+    const config = JSON.parse(await readFile(join(root, '.goalyrc'), 'utf8')) as Record<string, unknown>;
+    expect(config).toEqual({ harness: 'codex', autonomous: true });
+  });
+
+  it('goaly init refuses to overwrite without --force (exit 2)', async () => {
+    await writeFile(join(root, '.goalyrc'), '{ "harness": "pi" }\n');
+    const res = await capture(() => main(['init', '--harness', 'codex', '--workspace', root]));
+    expect(res.code).toBe(2);
+    expect(res.out).toContain('--force');
   });
 });

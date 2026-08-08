@@ -8,13 +8,27 @@ import { preflightRun } from './preflight';
 const gitOk = { isGitWorkTree: async () => true };
 
 describe('preflightRun', () => {
-  it('flags a non-git workspace with actionable guidance', async () => {
+  it('flags a non-git workspace with actionable guidance when mode is git', async () => {
     const problem = await preflightRun(
-      { harness: 'claude', llmProvider: 'claude', workspace: '/some/dir' },
+      { harness: 'claude', llmProvider: 'claude', workspace: '/some/dir', workspaceMode: 'git' },
       { isGitWorkTree: async () => false, which: () => true },
     );
     expect(problem).toContain('not a git repository');
     expect(problem).toContain('git init');
+  });
+
+  it('allows a non-git workspace in file or auto mode', async () => {
+    const fileMode = await preflightRun(
+      { harness: 'fake', llmProvider: 'claude', workspace: '/some/dir', workspaceMode: 'file' },
+      { isGitWorkTree: async () => false, which: () => true },
+    );
+    expect(fileMode).toBeNull();
+
+    const autoMode = await preflightRun(
+      { harness: 'fake', llmProvider: 'claude', workspace: '/some/dir', workspaceMode: 'auto' },
+      { isGitWorkTree: async () => false, which: () => true },
+    );
+    expect(autoMode).toBeNull();
   });
 
   it('flags a missing harness CLI with install guidance, before any spend', async () => {
@@ -60,18 +74,18 @@ describe('preflightRun', () => {
     expect(problem).toBeNull();
   });
 
-  it('real git probe: true inside a repo, false in a bare temp dir', async () => {
+  it('real git probe: true inside a repo, false in a bare temp dir (git mode)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'goaly-preflight-'));
     try {
       const before = await preflightRun(
-        { harness: 'fake', llmProvider: 'claude', workspace: dir },
+        { harness: 'fake', llmProvider: 'claude', workspace: dir, workspaceMode: 'git' },
       );
       expect(before).toContain('not a git repository');
 
       const r = spawnSync('git', ['init', '-q'], { cwd: dir, encoding: 'utf8' });
       expect(r.status).toBe(0);
       const after = await preflightRun(
-        { harness: 'fake', llmProvider: 'claude', workspace: dir },
+        { harness: 'fake', llmProvider: 'claude', workspace: dir, workspaceMode: 'git' },
       );
       expect(after).toBeNull();
     } finally {

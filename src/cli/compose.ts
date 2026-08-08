@@ -29,6 +29,7 @@ import type { Planner } from '../plan/planner';
 import type { PlanGate } from '../plan/plan-gate';
 import type { SealGate } from '../compile/seal';
 import { GitWorkspace, realExec } from '../workspace/git-workspace';
+import { FileWorkspace } from '../workspace/file-workspace';
 import { GitWorktreeHost } from '../workspace/git-worktree-host';
 import { writeVerificationFile } from '../workspace/workspace-files';
 import { detectWorkspaceFacts, type WorkspaceFacts } from '../workspace/workspace-facts';
@@ -77,6 +78,11 @@ import type { ExecFn } from '../workspace/git-workspace';
 export type ComposeOptions = {
   harness: HarnessChoice;
   workspaceRoot: string;
+  /**
+   * Workspace backing mode (ADR 0018). `git` or `file` are used as-is; `auto` resolves to `git`
+   * when `workspaceRoot` is inside a git work tree and `file` otherwise.
+   */
+  workspaceMode?: 'git' | 'file' | 'auto';
   runId: RunId;
   /** Override the LLM provider (tests inject a FakeLlm; production uses the CLI provider). */
   llm?: LlmProvider;
@@ -380,13 +386,23 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
           networkForSeam(options.sandbox ?? defaultPolicy(), 'verifier'),
           options.egressProxy,
         );
-  const workspace = new GitWorkspace(options.workspaceRoot, undefined, excludes, true, runLauncher);
+  const workspaceMode = resolveWorkspaceMode(options.workspaceMode ?? 'auto', options.workspaceRoot);
+  const workspace =
+    workspaceMode === 'file'
+      ? new FileWorkspace(options.workspaceRoot, runLauncher === undefined ? realExec : runLauncher(realExec), excludes)
+      : new GitWorkspace(options.workspaceRoot, undefined, excludes, true, runLauncher);
   // Worktree host: wired for best-of-N (issue #85, `--candidates > 1`) and for EXPERIMENTAL
   // cooperative parallel waves (`--parallel-phases`) — a run using neither never touches it. It
   // shares the canonical root / exec / excludes / verify-jail so each isolated worktree hashes +
-  // scores identically to the canonical workspace.
+  // scores identically to the canonical workspace. File-mode workspaces do not support worktrees.
+  const wantsWorktrees = config.candidates > 1 || (config.phased && config.parallelPhases);
+  if (wantsWorktrees && workspaceMode === 'file') {
+    throw new EndpointConfigError(
+      'best-of-N and parallel phases require a git workspace (--workspace-mode git)',
+    );
+  }
   const worktrees =
-    config.candidates > 1 || (config.phased && config.parallelPhases)
+    wantsWorktrees
       ? new GitWorktreeHost({
           root: options.workspaceRoot,
           exec: realExec,
@@ -964,6 +980,16 @@ function goalyCodeShellExec(opts: {
     const r = await runProcess(wrapped.command, wrapped.args, { cwd: opts.root, env, ...budget });
     return { stdout: r.stdout, stderr: r.stderr, code: r.code, timedOut: r.timedOut };
   };
+}
+
+function resolveWorkspaceMode(mode: 'git' | 'file' | 'auto', root: string): 'git' | 'file' {
+  if (mode !== 'auto') return mode;
+  try {
+    const stat = require('node:fs').statSync(path.join(root, '.git'));
+    return stat.isDirectory() || stat.isFile() ? 'git' : 'file';
+  } catch {
+    return 'file';
+  }
 }
 
 /**
