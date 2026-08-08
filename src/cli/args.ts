@@ -556,14 +556,15 @@ export async function parseArgs(
   const harness = parseHarness(str(flags, 'harness'));
   const config = cliInputToRunConfig(cliInput);
 
-  // EXPERIMENTAL parallel waves: the fan-out only exists inside a phased plan (grouped sub-goals),
+  // EXPERIMENTAL parallel waves: the fan-out only exists inside a phased plan (independent sub-goals),
   // and wave children compile + Seal their contracts CONCURRENTLY — an interactive gate cannot pause
   // K children at once, so autonomy is required (the contracts are still frozen + logged loudly).
   if (config.parallelPhases && !resuming) {
     if (!config.phased) {
       throw new UsageError(
-        "--parallel-phases parallelizes a phased plan's grouped sub-goals — pair it with --phased " +
-          '(and mark consecutive phases with a shared "group" in the plan)',
+        "--parallel-phases parallelizes a phased plan's independent sub-goals — pair it with " +
+          '--phased (and declare the independence in the plan with "id"/"dependsOn", or the ' +
+          'legacy "group" sugar)',
       );
     }
     if (!config.autonomous) {

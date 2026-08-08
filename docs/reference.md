@@ -886,7 +886,8 @@ overlay on the `RUN_EXTENDED` marker — an operational knob; the frozen contrac
 ## Phased goals (`--phased`)
 
 A big goal produces a big diff — costly to judge and easy to half-finish. `--phased` turns one goal
-into a **frozen, ordered plan of small sub-goals**, runs each as its own frozen two-key contract,
+into a **frozen plan of small sub-goals** (a dependency DAG, listed dependencies-first), runs each
+as its own frozen two-key contract,
 and finishes with a **cumulative acceptance** contract on the original goal — so decomposition
 can't green a goal whose parts pass but whole doesn't.
 
@@ -902,9 +903,18 @@ ACCEPT (a cumulative contract on the ORIGINAL goal) ──both keys──► DON
 
 - **Planner seam (read-only, like the compiler).** An LLM authors the ordered phases
   (`--planner-model` picks its model), or `--plan-file <p>` supplies one:
-  `{ "phases": [{ "goal", "intent"?, "rubric"? }] }`. The plan is parsed fail-closed and frozen
-  (`planHash`, logged loudly); a planner error, bad plan, or more than `--max-phases` (default 10)
-  is a typed `PLAN_FAILED`, never a skipped decomposition.
+  `{ "phases": [{ "goal", "intent"?, "rubric"?, "id"?, "dependsOn"? }] }`. The plan is parsed
+  fail-closed and frozen (`planHash`, logged loudly); a planner error, bad plan, or more than
+  `--max-phases` (default 10) is a typed `PLAN_FAILED`, never a skipped decomposition.
+- **The plan is a DAG** ([issue #123](https://github.com/krimvp/goaly/issues/123)). A phase may name
+  itself with `"id"` and declare exactly what it needs with `"dependsOn": ["<id>", …]`
+  (`[]` = a root, no prerequisites). Phases are still *listed* in a topological order — dependencies
+  come first — and everything about the graph is checked at parse time, **fail-closed**: an unknown
+  id, a self-reference, a duplicate id, a cycle, or a forward edge is a typed `PLAN_FAILED` with the
+  offending phase named. A silently linearized plan is never produced. A phase with no `dependsOn`
+  keeps the conservative default (it depends on everything before it), so a plan that declares
+  nothing is exactly the classic linear plan. The edges are part of the canonical plan string and
+  therefore of `planHash` — frozen like everything else, so no transition can re-shuffle the graph.
 - **The plan is frozen too.** Re-planning is only the bounded, human-gated plan-Seal revise path —
   never an automatic "make phase 3 easier".
 - **Each phase is a normal run** (compiler, ladder, Sign-off, DECIDE unchanged), scoped to its
@@ -920,8 +930,9 @@ ACCEPT (a cumulative contract on the ORIGINAL goal) ──both keys──► DON
 ## Cooperative parallel waves (`--parallel-phases`, EXPERIMENTAL)
 
 Sequential phases leave wall-clock on the table when sub-goals are independent. With
-`--parallel-phases` (opt-in), consecutive plan phases sharing a `group` value form a **wave** that
-executes concurrently, then merges — without weakening a guarantee. End-to-end:
+`--parallel-phases` (opt-in), every phase whose dependencies have all completed — the plan DAG's
+current **topological frontier** — forms a **wave** that executes concurrently, then merges, without
+weakening a guarantee. End-to-end:
 
 ```bash
 goaly run --goal-file ./BIG_GOAL.md --verify-cmd "npm test" \
@@ -930,7 +941,25 @@ goaly run --goal-file ./BIG_GOAL.md --verify-cmd "npm test" \
 
 It requires `--autonomous` (wave children seal their frozen contracts concurrently — an
 interactive gate cannot pause K children at once; the CLI refuses the combination otherwise,
-fail-closed), and a plan whose waves you mark with `group`:
+fail-closed), and a plan that says which phases are independent:
+
+```jsonc
+// plan.json — parser + formatter are one frontier; the CLI wiring needs both, the docs need only the parser
+{ "phases": [
+  { "id": "parser",    "goal": "implement the parser",    "dependsOn": [] },
+  { "id": "formatter", "goal": "implement the formatter", "dependsOn": [] },
+  { "id": "cli",       "goal": "wire parser + formatter into the CLI", "dependsOn": ["parser", "formatter"] },
+  { "id": "docs",      "goal": "document the parser grammar",          "dependsOn": ["parser"] }
+] }
+```
+
+Independence is **declared and validated**, not inferred from position: reordering the list can no
+longer silently change what runs concurrently, and "`cli` needs both, `docs` needs only the parser"
+is expressible. The frontier is recomputed after each wave (here: `parser`+`formatter`, then
+`cli`+`docs`), and a `--resume` recomputes it from the log, so no completed phase is repeated.
+
+The legacy `group` sugar still works and means exactly what it always did — a *contiguous* band of
+same-`group` phases, each depending on everything before the band:
 
 ```jsonc
 // plan.json — phases 1+2 are one wave; phase 3 runs after the merged result
@@ -951,10 +980,13 @@ fail-closed), and a plan whose waves you mark with `group`:
 - **Fail-closed to sequential.** A conflict, a red re-verify, a crashed child, or a missing wave
   executor all downgrade that phase to the classic sequential run on the merged tree, under a fresh
   frozen contract for the same sub-goal. The cumulative acceptance contract still gates the whole.
-- **v1 limits:** requires `--autonomous` and a `--plan-file` with `group` fields (the LLM planner
-  doesn't author groups yet); a crash mid-wave re-runs the whole wave on `--resume`; wave-child
-  spend reports under the parent's `harness` layer. Grouped plans run strictly sequentially without
-  the flag; the grouping is frozen into `planHash`.
+- **Scheduling is pure.** The frontier is a pure function of `(frozen plan, completed phases)`
+  computed inside the reducer — no clock, no IO, no LLM (invariant #1), and identical on replay.
+- **v1 limits:** requires `--autonomous`; a crash mid-wave re-runs the whole wave on `--resume`;
+  wave-child spend reports under the parent's `harness` layer. A DAG (or grouped) plan runs strictly
+  sequentially without the flag — the list order is a valid topological order, so the result is the
+  same, only slower. The graph is frozen into `planHash`. The LLM planner may author `id`/`dependsOn`
+  (it is told the shape); a `--plan-file` is still the reliable way to get exactly the graph you want.
 
 ## Worktrees (`--worktree`)
 
@@ -1607,8 +1639,11 @@ contributor *"one term, one meaning"* reference, see [`CONTEXT.md`](../CONTEXT.m
 - **Sign-off / Approver** — the result gate: an independent, veto-only reviewer run every green
   iteration. It can block a green, never promote a red.
 - **Compiler** — the read-only LLM step that authors the verification under `--generate`.
-- **Phased / `planHash`** — `--phased` decomposes a goal into a frozen, ordered plan of sub-goals,
-  each its own two-key contract, ending in cumulative acceptance on the original goal.
+- **Phased / `planHash`** — `--phased` decomposes a goal into a frozen plan of sub-goals (a DAG,
+  listed dependencies-first), each its own two-key contract, ending in cumulative acceptance on the
+  original goal.
+- **Frontier** — the phases of a frozen plan whose dependencies have all completed: what
+  `--parallel-phases` runs concurrently, recomputed after every wave and on `--resume`.
 
 ### Verification
 

@@ -14,6 +14,7 @@ import {
   ManualBudgetMeter,
   InMemoryRunLog,
   makeFakeContract,
+  makeFakePlan,
   makeConfig,
   passVerdict,
   failVerdict,
@@ -220,6 +221,70 @@ describe('replay()', () => {
     });
     const { baseline } = replay(makeConfig(), [mk('b'.repeat(40)), mk('c'.repeat(40))]);
     expect(baseline).toBe('c'.repeat(40));
+  });
+});
+
+// ---- phased DAG resume (issue #123) ----------------------------------------
+
+describe('replay() — the phase FRONTIER is reconstructed from the log (issue #123)', () => {
+  /** A: root. B: root. C: needs A+B. D: needs only A. */
+  const dag = makeFakePlan({
+    phases: [
+      { goal: 'A', id: 'a', dependsOn: [] },
+      { goal: 'B', id: 'b', dependsOn: [] },
+      { goal: 'C', id: 'c', dependsOn: ['a', 'b'] },
+      { goal: 'D', id: 'd', dependsOn: ['a'] },
+    ],
+  });
+  const tree = DiffHash.parse('0'.repeat(40));
+  const phasedConfig = makeConfig({ phased: true, parallelPhases: true, autonomous: true });
+
+  const mk = (event: OrchestratorEvent): RunLogEntry => ({
+    runId,
+    seq: 0,
+    ts: 0,
+    contractHash: null,
+    event,
+    stateTagAfter: 'RUNNING_WAVE',
+  });
+
+  it('resumes on the NEXT frontier and repeats no completed phase', () => {
+    const { state, plan } = replay(phasedConfig, [
+      mk({ tag: 'PLAN_COMPILED', plan: dag }),
+      mk({ tag: 'PLAN_SEAL_DECIDED', decision: { kind: 'approve' } }),
+      mk({
+        tag: 'WAVE_RAN',
+        outcomes: [
+          { kind: 'merged', index: 0 },
+          { kind: 'merged', index: 1 },
+        ],
+        tree,
+      }),
+    ]);
+    expect(plan?.planHash).toBe(dag.planHash);
+    expect(state.tag).toBe('RUNNING_WAVE');
+    // The completed roots are NOT re-offered; the frontier is exactly the newly-unblocked phases.
+    if (state.tag === 'RUNNING_WAVE') expect(state.indices).toEqual([2, 3]);
+  });
+
+  it('a partially-merged frontier resumes on the unmerged member alone', () => {
+    const { state } = replay(phasedConfig, [
+      mk({ tag: 'PLAN_COMPILED', plan: dag }),
+      mk({ tag: 'PLAN_SEAL_DECIDED', decision: { kind: 'approve' } }),
+      mk({
+        tag: 'WAVE_RAN',
+        outcomes: [
+          { kind: 'merged', index: 0 },
+          { kind: 'unmerged', index: 1, reason: 'merge conflict' },
+        ],
+        tree,
+      }),
+    ]);
+    expect(state.tag).toBe('COMPILING');
+    if (state.tag === 'COMPILING') {
+      expect(state.config.goal).toBe('B');
+      expect(state.phase).toMatchObject({ index: 1, skip: [0] });
+    }
   });
 });
 

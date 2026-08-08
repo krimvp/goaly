@@ -15,16 +15,23 @@ const GeneratedPlan = z.object({
         goal: z.string().min(1),
         intent: z.string().optional(),
         rubric: z.string().optional(),
+        id: z.string().min(1).optional(),
+        dependsOn: z.array(z.string().min(1)).optional(),
       }),
     )
     .min(1),
 });
 
 const SYSTEM_PROMPT =
-  'You decompose one large software goal into an ORDERED, LINEAR plan of small sub-goals. Reply with ' +
+  'You decompose one large software goal into an ORDERED plan of small sub-goals. Reply with ' +
   'ONLY a single JSON object, no prose, no markdown fences. Shape: ' +
-  '{ "phases": Array<{ "goal": string, "intent"?: string, "rubric"?: string }> }.\n' +
+  '{ "phases": Array<{ "goal": string, "intent"?: string, "rubric"?: string, "id"?: string, ' +
+  '"dependsOn"?: string[] }> }.\n' +
   'Rules:\n' +
+  '- OPTIONAL dependency graph: give a phase a short "id" and list the ids it truly needs in ' +
+  '"dependsOn" ("dependsOn": [] means it needs nothing). Phases must still be listed in an order ' +
+  'where every dependency comes BEFORE the phase that needs it; a cycle, a forward reference, or an ' +
+  'unknown id is rejected. Omit both fields when the plan is plainly sequential.\n' +
   '- Each phase is built and verified on its own, in order, before the next begins; later phases may ' +
   'build on earlier ones. Order them so each is achievable given the previous ones are done.\n' +
   '- Keep each phase SMALL and independently verifiable, so its diff stays small (that is the whole ' +

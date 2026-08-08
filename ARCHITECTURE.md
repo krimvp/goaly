@@ -248,8 +248,12 @@ to *drive* each from the CLI, see the [`README`](README.md); this section is the
   legitimate red still proceeds.
 
 - **Phased: a frozen plan of frozen contracts (`--phased`).** A read-only **planner** seam
-  (`src/plan/`) decomposes the goal into an ordered plan of sub-goals; the plan is frozen, hashed and
-  logged like a contract (re-planning is only the bounded, human-gated plan-Seal revise path). Each
+  (`src/plan/`) decomposes the goal into a plan of sub-goals — a dependency DAG (`id`/`dependsOn`,
+  issue #123) carried as a topologically ordered list, whose graph is parsed fail-closed (a cycle,
+  dangling reference or forward edge is a typed `PLAN_FAILED`) and scheduled by a PURE
+  `(frozen plan, completed) -> ready frontier` function (`src/domain/plan-graph.ts`); the plan is
+  frozen, hashed and logged like a contract (re-planning is only the bounded, human-gated plan-Seal
+  revise path). Each
   phase runs as its own normal frozen, two-key contract with an internal checkpoint between phases, and
   the run finishes with a **cumulative ACCEPT** contract on the *original* goal — so decomposition can't
   green a goal whose parts pass but whole doesn't.

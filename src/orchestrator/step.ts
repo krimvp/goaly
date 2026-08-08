@@ -195,10 +195,11 @@ function nextPhaseIndex(phase: PhaseCtx, from: number): number {
 
 /**
  * Begin a phase: COMPILING its derived config, carrying the phase position for the eventual advance.
- * EXPERIMENTAL parallel waves: when the phase heads a not-yet-attempted group of consecutive
- * same-`group` sub-goals AND `--parallel-phases` is on, the whole group is emitted as ONE `RUN_WAVE`
+ * EXPERIMENTAL parallel waves: when the phase opens a not-yet-attempted TOPOLOGICAL FRONTIER of the
+ * frozen plan's dependency graph (issue #123 — declared `dependsOn` edges, or the `group` sugar's
+ * contiguous band) AND `--parallel-phases` is on, the whole frontier is emitted as ONE `RUN_WAVE`
  * command instead (still exactly one command per state — the Driver invariant). Everything else —
- * ungrouped plans, the acceptance phase, a re-entered (already-attempted) member, the feature off —
+ * linear plans, the acceptance phase, a re-entered (already-attempted) member, the feature off —
  * takes the classic sequential compile, byte-for-byte.
  */
 function startPhaseCompile(phase: PhaseCtx): StepResult {
@@ -222,16 +223,22 @@ function startPhaseCompile(phase: PhaseCtx): StepResult {
 }
 
 /**
- * The wave the current phase would fan out, or a singleton when it must run sequentially: the
- * feature is off, the index is the acceptance phase, the group was ALREADY attempted (`waved` — an
- * unmerged member re-runs sequentially, never re-fans-out), or the group has one live member.
+ * The topological FRONTIER the current phase would fan out (issue #123), or a singleton when it must
+ * run sequentially: the feature is off, the index is the acceptance phase, this phase's fan-out was
+ * ALREADY attempted (`waved` — an unmerged member re-runs sequentially, never re-fans-out), or the
+ * frontier has one live member. Completed (`skip`) and already-attempted (`waved`) members are
+ * removed, so a partially-merged wave can never re-offer a phase that already ran.
  */
 function pendingWaveAt(phase: PhaseCtx): readonly number[] {
   if (!phase.baseConfig.parallelPhases) return [phase.index];
   if (phase.index >= phase.plan.phases.length) return [phase.index];
-  if ((phase.waved ?? []).includes(phase.index)) return [phase.index];
+  const waved = phase.waved ?? [];
+  if (waved.includes(phase.index)) return [phase.index];
   const skip = phase.skip ?? [];
-  return waveIndicesAt(phase.plan, phase.index).filter((i) => !skip.includes(i));
+  const frontier = waveIndicesAt(phase.plan, phase.index, skip).filter(
+    (i) => !skip.includes(i) && !waved.includes(i),
+  );
+  return frontier.length > 0 ? frontier : [phase.index];
 }
 
 /**

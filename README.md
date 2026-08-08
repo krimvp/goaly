@@ -100,9 +100,9 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | --- | --- | --- |
 | [Generated verification](docs/reference.md#seal-the-contract-gate) | `--generate` | The LLM authors the check + setup; pinned by hash, guarded against tampering. |
 | [Your own bar](docs/reference.md#the-verifier-ladder) | `--verify-cmd`, `--smoke` | Any command as the deterministic rung; `--smoke` runs the built artifact. |
-| [Phased goals](docs/reference.md#phased-goals---phased) | `--phased` | A frozen plan of small sub-goals + cumulative acceptance on the original goal. |
+| [Phased goals](docs/reference.md#phased-goals---phased) | `--phased` | A frozen plan (a DAG) of small sub-goals + cumulative acceptance on the original goal. |
 | [Best-of-N worker](docs/reference.md#best-of-n-parallel-worker---candidates) | `--candidates N` | N isolated attempts per iteration; the frozen ladder picks the winner. Or just say *"use 4 subagents"*. |
-| [Parallel waves](docs/reference.md#cooperative-parallel-waves---parallel-phases-experimental) | `--parallel-phases` | Independent phases run concurrently, merge with git plumbing, re-verify. Experimental. |
+| [Parallel waves](docs/reference.md#cooperative-parallel-waves---parallel-phases-experimental) | `--parallel-phases` | Phases declare `dependsOn`; each topological frontier runs concurrently, merges with git plumbing, re-verifies. Experimental. |
 | [Worktrees](docs/reference.md#worktrees---worktree) | `--worktree <name>` | The whole run in an isolated checkout; merge back with plain git. |
 | [Harness autonomy](docs/reference.md#harness-autonomy---harness-autonomy) | `--harness-autonomy` | Let the agent install & build for a from-scratch goal; a refusal names the fix, and the reviewed diff auto-pins to the run-start commit so agent commits stay visible. |
 | [Autonomy profiles](docs/reference.md#autonomy-profiles---mode) | `--mode` | `review` / `hands-off` / `aggressive` bundle the right flag combinations; explicit flags override, loudly. |

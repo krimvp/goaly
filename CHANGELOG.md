@@ -19,6 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cap.
 
 ### Added
+- A **real dependency DAG for phased plans** (issue #123). A `SubGoal` may now name itself with a
+  stable, plan-local `id` and declare exactly what it needs with `dependsOn`, so "C needs A and B,
+  D needs only A" is expressible — previously independence was positional (`--parallel-phases`
+  grouped *consecutive* phases sharing a `group` number), so reordering a plan silently changed its
+  concurrency semantics. The graph is validated at parse time and **fail-closed** at every plan seam
+  (planner, `--plan-file`, freeze, run-log read): a duplicate id, an unknown id, a self-reference, a
+  cycle, or a forward edge is a typed plan-parse failure, never a silently linearized plan. Phases
+  are listed dependencies-first (a topological order), which keeps the sequential walk and the
+  unmerged-wave downgrade sound by construction. Scheduling is a new PURE function —
+  `(frozen plan, completed phases) -> ready frontier` (`src/domain/plan-graph.ts`) — so the wave
+  machinery now fans out the plan's current **topological frontier**, recomputed after every merge
+  and reconstructed from the log on `--resume` (no completed phase repeats). `group` is kept as
+  sugar that lowers to the same edges (a contiguous band ⇒ each member depends on everything before
+  the band), and a test proves pre-existing frozen plans keep byte-identical semantics and their
+  exact `planHash`. `id`/`dependsOn` join `canonicalPlanString` — and therefore `planHash` — only
+  when set, so the graph is frozen like the rest of the plan. The final cumulative-acceptance phase
+  on the ORIGINAL goal still runs after all phases, unchanged.
 - The **defect corpus** — goaly's first CROSS-RUN feedback loop (issue #122). When a run's in-loop
   adjudication rules a frozen bar `CONTRACT_DEFECTIVE`, one compact, Zod-schema'd record is appended
   to `~/.goaly/defects.jsonl` (overridable with `--defect-corpus <path>`): the adjudicator's

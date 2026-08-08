@@ -212,17 +212,22 @@ Phased decomposition (issue #48 — split one big goal into a frozen plan of sma
                       The whole-run --budget-tokens cap is the sum across ALL phases. The acceptance
                       contract reuses your original verification: --verify-cmd becomes the cumulative
                       deterministic bar, or --generate authors cumulative acceptance on the original goal.
-  --plan-file <p>     source the plan from a JSON file ({ "phases": [{ "goal", "intent"?, "rubric"? }] })
-                      instead of authoring it with the LLM. Parsed fail-closed; a bad file is a typed
-                      PLAN_FAILED, never a skipped decomposition.
+  --plan-file <p>     source the plan from a JSON file ({ "phases": [{ "goal", "intent"?, "rubric"?,
+                      "id"?, "dependsOn"? }] }) instead of authoring it with the LLM. "id"/"dependsOn"
+                      declare the plan's dependency DAG (phases listed dependencies-first). Parsed
+                      fail-closed; a bad file — including an unknown id, a self-reference, a cycle, or
+                      a forward edge — is a typed PLAN_FAILED, never a skipped or silently linearized
+                      decomposition.
   --max-phases N      cap the number of sub-goals a plan may contain (default 10); a longer plan is a
                       fail-closed PLAN_FAILED.
   --max-plan-revisions N  cap the free-text plan-Seal revise rounds (default 10; 0 disables revision).
   --planner-model <m> model for the planner step only (cascades like the other LLM-step models).
   --autonomous        also auto-accepts the plan AND each phase contract — still frozen + logged loudly.
-  --parallel-phases   EXPERIMENTAL, opt-in — cooperative parallel WAVES: consecutive plan phases
-                      sharing a "group" value (plan-file: {"goal": …, "group": 1}) execute
-                      CONCURRENTLY, each as its own frozen, two-key CHILD goaly run in an isolated
+  --parallel-phases   EXPERIMENTAL, opt-in — cooperative parallel WAVES: every plan phase whose
+                      dependencies have all completed (the current TOPOLOGICAL FRONTIER of the frozen
+                      plan's DAG — declared with "id"/"dependsOn", or with the legacy "group" sugar for
+                      a contiguous band) executes CONCURRENTLY,
+                      each as its own frozen, two-key CHILD goaly run in an isolated
                       git worktree on the SHARED --budget-tokens meter. The children are then merged
                       in phase order (3-way git merge-tree — plumbing only, no commits) and each
                       merged phase's frozen DETERMINISTIC rungs are RE-VERIFIED on the combined tree
@@ -231,7 +236,7 @@ Phased decomposition (issue #48 — split one big goal into a frozen plan of sma
                       the classic sequential run on the merged tree (the bar never moves, only the
                       starting tree); the cumulative ACCEPTANCE contract still gates the whole run.
                       Requires --phased and --autonomous (children seal concurrently). Without this
-                      flag, grouped plans run strictly sequentially. Resume note: a crash mid-wave
+                      flag, a DAG/grouped plan runs strictly sequentially. Resume note: a crash mid-wave
                       re-runs the WHOLE wave on --resume (children live in ephemeral worktrees).
 
 Best-of-N parallel worker (issue #85 — tournament-select candidates against the frozen ladder):
