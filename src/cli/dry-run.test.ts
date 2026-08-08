@@ -31,7 +31,10 @@ describe('renderResolvedConfig', () => {
   });
 
   it('shows the agent wiring, including the autonomy tier and its default', async () => {
-    const base = await render(['run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'droid']);
+    // --preset none: the implied hands-off default would otherwise set the tier to medium.
+    const base = await render([
+      'run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'droid', '--preset', 'none',
+    ]);
     expect(base).toMatch(/harness\s+droid/);
     expect(base).toContain("(the CLI's own default)");
     const raised = await render([

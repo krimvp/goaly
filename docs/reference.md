@@ -196,14 +196,23 @@ named block you define once under `"presets"` in any config layer, selected with
 A preset body takes the same kebab-case keys as the config file itself (minus `preset` — no
 chaining), including `mode`, so a preset can pair an autonomy posture with project wiring.
 
-**One preset ships built in**, so `--preset` works before any config file exists: `default`,
+**One preset ships built in**, so presets work before any config file exists: `default`,
 the most straightforward complete run — `{ "mode": "hands-off" }`, everything else left to the
 tool defaults. Built-in presets are deliberately **language- and toolchain-neutral**: no verify
 command, no setup command, no harness or model choice. Verification falls back to the
-`--generate` default (the LLM authors checks for whatever project it finds), so `goaly
---preset default "<goal>"` works the same in a Rust crate, a Python package, or a Node repo.
-Redefine `default` in a config file to make it yours — a redefinition replaces the built-in
-wholesale, exactly like one config layer over another.
+`--generate` default (the LLM authors checks for whatever project it finds), so it works the
+same in a Rust crate, a Python package, or a Node repo. Redefine `default` in a config file to
+make it yours — a redefinition replaces the built-in wholesale, exactly like one config layer
+over another.
+
+**`default` is truly the default: it applies without being asked for.** A run that chooses
+neither a preset nor a mode gets the `default` preset implicitly — `goaly "<goal>"` and `goaly
+--preset default "<goal>"` are the same run. The implied application is deliberately the
+**weakest tier there is**: it fills gaps only, so any key a config file or an explicit flag sets
+wins, and choosing any `--mode` or `--preset` suppresses it entirely (a chosen posture is never
+mixed with an implied one). It is announced on every run with its off-switches; `--preset none`
+opts out for one invocation, a persisted `"preset": "none"` for a whole tree, and a config-file
+`"mode"` (e.g. `review`) pins a project to an explicit posture instead.
 
 ```jsonc
 // .goalyrc — preset bodies stay toolchain-neutral; project wiring like a verify
@@ -219,19 +228,20 @@ wholesale, exactly like one config layer over another.
 ```
 
 ```bash
-goaly "fix the flaky test" --preset default  # works in any repo, no config needed
+goaly "fix the flaky test"                   # the implied 'default' preset: hands-off, any repo
 goaly "fix the flaky test" --preset ship     # one word selects the whole way of running
-goaly "audit the parser"                     # the persisted "preset": "quick" default applies
-goaly "hotfix" --preset none                 # ...and this disables it for one invocation
+goaly "audit the parser"                     # a persisted "preset": "quick" applies instead
+goaly "hotfix" --preset none                 # bare tool defaults for one invocation
 goaly config presets                         # what is defined, from which source, with which keys
 ```
 
-Like a mode, a preset expands **at parse time** into the same explicit flag values you could type
-by hand — nothing invisible reaches the loop, and every expansion is logged with its defining
-file. Layering: **config base keys < preset < `--mode` < explicit CLI flags**; any flag you also
-type beats the preset, and the override is reported loudly. A persisted `"preset"` default is
-announced on every run together with its off-switch (`--preset none`), so it can never become
-silent state. An unknown name fails closed listing what *is* defined.
+Like a mode, a chosen preset expands **at parse time** into the same explicit flag values you
+could type by hand — nothing invisible reaches the loop, and every expansion is logged with its
+defining file. Layering: **implied `default` < config base keys < chosen preset < `--mode` <
+explicit CLI flags**; any flag you also type beats the preset, and the override is reported
+loudly. A persisted `"preset"` selection is announced on every run together with its off-switch
+(`--preset none`), so it can never become silent state. An unknown name fails closed listing
+what *is* defined.
 
 Presets resolve across the built-ins plus the same three config layers; a later layer that
 redefines a name (built-in or not) replaces it **wholesale** (no body merging) — the nearest
@@ -465,7 +475,9 @@ flag (re-issuing the same heavy call would just time out again).
 
 ## Seal: the contract gate
 
-At Seal (unless `--autonomous`) goaly prints the frozen contract and prompts:
+On a non-autonomous run (e.g. `--mode review`, or `--preset none` without other autonomy flags —
+the implied [`default` preset](#named-presets---preset) otherwise runs hands-off) goaly prints
+the frozen contract at Seal and prompts:
 
 ```
 Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject:

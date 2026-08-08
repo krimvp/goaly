@@ -214,3 +214,65 @@ describe('parseArgs with --preset', () => {
     );
   });
 });
+
+describe('the implied default (no --preset, no --mode)', () => {
+  it('a bare run gets the default preset without asking, loudly, with the independence reminder', async () => {
+    const a = await parseArgs([...run], defaultReaders, noConfig);
+    expect(a.config.autonomous).toBe(true);
+    expect(a.harnessAutonomy).toBe('medium');
+    expect(a.config.deltaVerify).toBe(true);
+    expect(a.warnings.some((w) => w.includes("the 'default' preset (built-in) fills the gaps"))).toBe(true);
+    expect(a.warnings.some((w) => w.includes('pass --preset none for the bare tool defaults'))).toBe(true);
+    expect(a.warnings.some((w) => w.includes('no human at the gates'))).toBe(true);
+  });
+
+  it('fills gaps ONLY — a config-file key always beats the implied tier', async () => {
+    const a = await parseArgs(
+      [...run],
+      defaultReaders,
+      withConfig({ 'harness-autonomy': 'low' }),
+    );
+    expect(a.harnessAutonomy).toBe('low'); // config wins over the implied hands-off medium
+    expect(a.config.autonomous).toBe(true); // the genuine gaps are still filled
+  });
+
+  it('choosing a --mode suppresses the implied default entirely (pure posture, no hybrid)', async () => {
+    const a = await parseArgs([...run, '--mode', 'review'], defaultReaders, noConfig);
+    expect(a.config.autonomous).toBe(false);
+    expect(a.config.deltaVerify).toBe(false); // no hands-off leftovers
+    expect(a.warnings.some((w) => w.includes('fills the gaps'))).toBe(false);
+  });
+
+  it('a config-file mode suppresses it too (a project can pin the interactive default)', async () => {
+    const a = await parseArgs([...run], defaultReaders, withConfig({ mode: 'review' }));
+    expect(a.config.autonomous).toBe(false);
+    expect(a.harnessAutonomy).toBe('low');
+  });
+
+  it('a persisted "preset": "none" opts out for every run in the tree', async () => {
+    const a = await parseArgs([...run], defaultReaders, withConfig({ preset: 'none' }));
+    expect(a.config.autonomous).toBe(false);
+    expect(a.warnings).toEqual([]);
+  });
+
+  it('a redefined default is what gets implied', async () => {
+    const a = await parseArgs(
+      [...run],
+      defaultReaders,
+      withConfig({}, { default: { overlay: { 'max-iterations': '5' }, source: '.goalyrc' } }),
+    );
+    expect(a.config.maxIterations).toBe(5);
+    expect(a.config.autonomous).toBe(false); // the redefinition replaced hands-off wholesale
+    expect(a.warnings.some((w) => w.includes("the 'default' preset (.goalyrc) fills the gaps"))).toBe(true);
+  });
+
+  it('does not fake an explicit --candidates: goal-directive delegation still works bare', async () => {
+    const a = await parseArgs(
+      ['run', '--goal', 'fix the bug, use 4 subagents', '--verify-cmd', 'true'],
+      defaultReaders,
+      noConfig,
+    );
+    expect(a.config.candidates).toBe(4);
+    expect(a.delegation?.overriddenByFlag).toBe(false);
+  });
+});

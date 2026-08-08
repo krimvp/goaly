@@ -19,12 +19,13 @@ independent keys** — a frozen verifier *and* an independent approver — befor
 ```bash
 npm i -g goaly                 # or, from a clone: make install
 
-# Just give it a goal — the agent writes the check, runs, and verifies.
-# A human approves the frozen contract once at Seal:
+# Just give it a goal — the agent writes the check, runs, and verifies, hands-off:
+# with no preset or mode chosen the built-in 'default' preset applies (announced on
+# every run; the contract is still frozen and logged, just auto-accepted at Seal):
 goaly "add a /health endpoint returning 200"
 
-# Fully hands-off (-d auto-accepts the still-frozen, still-logged contract):
-goaly -d "add a /health endpoint returning 200"
+# Keep a human at the gates instead — approve the frozen contract once at Seal:
+goaly --mode review "add a /health endpoint returning 200"
 
 # Or point at a check you already have:
 goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
@@ -45,8 +46,9 @@ COMPILE ──► SEAL ──► setup + pre-flight ──► ┌─────
 ```
 
 - **The contract is frozen at Seal.** Its `contractHash` never changes again, and it's logged every
-  iteration to prove the bar never moved. You approve it once — or revise it with feedback, or edit
-  the authored files yourself and re-freeze. `--autonomous` skips the pause, never the freeze.
+  iteration to prove the bar never moved. Under `--mode review` you approve it once — or revise it
+  with feedback, or edit the authored files yourself and re-freeze. Autonomous runs (the implied
+  `default` preset, `--autonomous`, `-d`) skip the pause, never the freeze.
 - **The verifier ladder runs cheapest-and-hardest-to-game first**: deterministic checks (exit
   codes, tests) before any LLM judge, short-circuiting on the first fail. A rung that errors is
   **fail-closed** — a malformed grader is never a green.

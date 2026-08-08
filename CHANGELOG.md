@@ -20,15 +20,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Named presets: a `"presets"` block in any config layer defines your own flag bundles, selected
-  per run with `--preset <name>` or persistently via a top-level `"preset"` default (announced on
-  every run; `--preset none` disables it for one invocation). One language- and toolchain-neutral
-  preset ships built in — `default` (`{ "mode": "hands-off" }`, verification via the `--generate`
-  fallback, so it works in any repo) — and a config layer may redefine it wholesale. Presets
-  expand at parse time like `--mode` — config base keys < preset < `--mode` < explicit CLI flags,
-  every expansion and override logged — and may themselves set `mode`. `goaly config presets
-  [--names]` lists the resolved set (built-in included); shell completion completes `--preset`
-  values live; `goalyrc.schema.json` covers the new keys; `goaly config validate` reports presets
-  alongside settings.
+  per run with `--preset <name>` or persistently via a top-level `"preset"` selection (announced
+  on every run; `--preset none` disables it for one invocation). One language- and
+  toolchain-neutral preset ships built in — `default` (`{ "mode": "hands-off" }`, verification
+  via the `--generate` fallback, so it works in any repo) — and a config layer may redefine it
+  wholesale. Presets expand at parse time like `--mode` — implied default < config base keys <
+  chosen preset < `--mode` < explicit CLI flags, every expansion and override logged — and may
+  themselves set `mode`. `goaly config presets [--names]` lists the resolved set (built-in
+  included); shell completion completes `--preset` values live; `goalyrc.schema.json` covers the
+  new keys; `goaly config validate` reports presets alongside settings.
+
+### Changed
+- **A bare `goaly "<goal>"` now runs hands-off.** When a run chooses neither a preset nor a mode,
+  the built-in `default` preset applies implicitly — the contract is still compiled, frozen, and
+  logged, but auto-accepted at Seal, with `--harness-autonomy medium` and `--delta-verify`. The
+  implied tier is the weakest there is: it fills gaps only (any config-file key or explicit flag
+  wins), never injects `candidates` (goal-directive delegation keeps working), and is announced
+  on every run with its off-switches. Opt out per run with `--preset none`, per tree with
+  `"preset": "none"`, or pin the old interactive behavior with `--mode review` / `"mode":
+  "review"` in `.goalyrc`.
 - Non-git workspace support via `--workspace-mode git|file|auto` (default `auto`). File mode uses a
   content-addressed manifest and stores baseline snapshots under `.goaly/baselines/`, so goaly can
   run in a plain directory without `git init`. See ADR 0018.

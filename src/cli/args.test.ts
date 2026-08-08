@@ -229,9 +229,20 @@ describe('parseArgs', () => {
     });
 
     it('rejects --parallel-phases without --autonomous (children seal concurrently)', async () => {
+      // --preset none opts out of the implied hands-off default, leaving a non-autonomous run.
       await expect(
-        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--phased', '--parallel-phases']),
+        parseArgs([
+          'run', '--goal', 'g', '--verify-cmd', 'true', '--phased', '--parallel-phases', '--preset', 'none',
+        ]),
       ).rejects.toThrow(/--autonomous/);
+    });
+
+    it('the implied hands-off default satisfies the --parallel-phases autonomy requirement', async () => {
+      const a = await parseArgs(
+        ['run', '--goal', 'g', '--verify-cmd', 'true', '--phased', '--parallel-phases'],
+      );
+      expect(a.config.autonomous).toBe(true);
+      expect(a.config.parallelPhases).toBe(true);
     });
   });
 
@@ -953,8 +964,12 @@ describe('parseArgs', () => {
     });
 
     it('fails closed when stdin feeds a field but the run is NOT autonomous (the Seal prompt would deadlock)', async () => {
+      // --preset none opts out of the implied hands-off default, leaving a non-autonomous run.
       await expect(
-        parseArgs(['run', '--goal', '-', '--verify-cmd', 'true'], fakeReaders({ stdin: 'piped goal\n' })),
+        parseArgs(
+          ['run', '--goal', '-', '--verify-cmd', 'true', '--preset', 'none'],
+          fakeReaders({ stdin: 'piped goal\n' }),
+        ),
       ).rejects.toThrow(/interactive Seal prompt/);
     });
 
@@ -1429,8 +1444,12 @@ describe('parseArgs', () => {
 describe('--harness-autonomy', () => {
   const base = ['run', '--goal', 'g', '--verify-cmd', 'true'];
 
-  it('is undefined by default (keep the codec\'s own least-privilege level)', async () => {
-    expect((await parseArgs(base)).harnessAutonomy).toBeUndefined();
+  it("is 'medium' on a bare run (via the implied hands-off default)", async () => {
+    expect((await parseArgs(base)).harnessAutonomy).toBe('medium');
+  });
+
+  it('is undefined with --preset none (keep the codec\'s own least-privilege level)', async () => {
+    expect((await parseArgs([...base, '--preset', 'none'])).harnessAutonomy).toBeUndefined();
   });
 
   it('parses each tier', async () => {
@@ -1477,19 +1496,23 @@ describe('--verify-cmd vs --generate', () => {
     expect(a.warnings.join('\n')).toContain('.goalyrc');
   });
 
-  it('keeps a config-file verify-cmd when --generate is not passed (no warning)', async () => {
+  it('keeps a config-file verify-cmd when --generate is not passed (no override warning)', async () => {
     const a = await parseArgs(
       ['run', '--goal', 'g', '--workspace', '/proj'],
       undefined,
       fakeConfig({ '/proj/.goalyrc': '{ "verify-cmd": "npm test" }' }),
     );
     expect(a.config.verifier).toEqual({ kind: 'existing', ref: 'npm test' });
-    expect(a.warnings).toEqual([]);
+    expect(a.warnings.join('\n')).not.toContain('npm test'); // only the implied-default notes remain
   });
 
-  it('a plain --verify-cmd run warns about nothing', async () => {
-    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
-    expect(a.warnings).toEqual([]);
+  it('a plain --verify-cmd run carries only the implied-default notes; --preset none carries none', async () => {
+    const bare = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+    expect(bare.warnings.length).toBeGreaterThan(0);
+    expect(bare.warnings.every((w) => w.includes("'default'"))).toBe(true);
+
+    const optOut = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--preset', 'none']);
+    expect(optOut.warnings).toEqual([]);
   });
 });
 

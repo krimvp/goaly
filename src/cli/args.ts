@@ -50,7 +50,7 @@ import {
 import type { ConfigCommand } from './config-cmd';
 import { parseCompletionShell, type CompletionCommand } from './completion';
 import { applyMode, parseMode } from './modes';
-import { applyPreset, mergedPresets } from './presets';
+import { applyImpliedDefault, applyPreset, mergedPresets } from './presets';
 
 /**
  * The CLI argument coordinator (Phase 3.1 of the improvement plan): tokenizing, per-group flag
@@ -418,6 +418,14 @@ export async function parseArgs(
     );
     overlayFlags = expanded.overlay;
     presetNotes.push(...expanded.notes);
+  } else if (str({ ...overlayFlags, ...cliFlags }, 'mode') === undefined) {
+    // Neither a preset nor a mode was chosen: the 'default' preset applies IMPLICITLY, as the
+    // weakest tier — it fills gaps only (config files and explicit flags always win), and its
+    // `mode` is pre-expanded inside so the strong profile expansion below never runs unasked.
+    // `--preset none` (or a persisted `"preset": "none"`) opts out of even that.
+    const implied = applyImpliedDefault(mergedPresets(loaded.presets), overlayFlags, cliFlags);
+    overlayFlags = implied.overlay;
+    presetNotes.push(...implied.notes);
   }
 
   for (const field of MULTI_SOURCE_FIELDS) {
