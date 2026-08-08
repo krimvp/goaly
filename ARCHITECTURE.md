@@ -327,7 +327,10 @@ Rubric, Verdict, Ladder, Seal / Sign-off, Two Keys, Harness, Adapter, Driver, Or
 DECIDE, diffHash, Stuck, Autonomous** (each with an "avoid:" list, e.g. Harness ≠
 model/agent).
 
-These ADRs are recorded in [`docs/adr/`](docs/adr) (each hard-to-reverse, surprising, a real trade-off):
+These ADRs are recorded in [`docs/adr/`](docs/adr) (each hard-to-reverse, surprising, a real
+trade-off). The list below is the original design-time set; the **current, complete index** —
+including the later decisions (prepare/reliability/operator control, the UI, the symmetric threat
+model, the external observer) — lives in [`docs/adr/README.md`](docs/adr/README.md):
 
 - **0001** Wrapper over hooks (portable headless `run()`; hooks are an in-adapter optimization).
 - **0002** Compile-once-then-freeze the Contract (the anti-reward-hacking core).

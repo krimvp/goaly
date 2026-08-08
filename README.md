@@ -224,7 +224,8 @@ const stream = await readStreamTranscript('.goaly', runId);
 - [`DESIGN.md`](DESIGN.md) — what & why · [`ARCHITECTURE.md`](ARCHITECTURE.md) — how
 - [`CONTEXT.md`](CONTEXT.md) — the ubiquitous-language glossary
   ([plain-language version](docs/reference.md#glossary))
-- [`docs/adr/`](docs/adr) — decision records · [`docs/adding-a-harness.md`](docs/adding-a-harness.md)
+- [`docs/adr/`](docs/adr/README.md) — decision records ([index](docs/adr/README.md)) ·
+  [`docs/adding-a-harness.md`](docs/adding-a-harness.md)
 
 ## License
 
