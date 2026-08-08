@@ -694,9 +694,11 @@ function describeRelief(relief: NonNullable<RunExtension['stuck']>): string {
 
 /**
  * A one-line, always-on "what do I do now" for the common terminal reasons — the zero-cost,
- * non-LLM complement to `--explain`. A first-time user seeing `status: ABORTED / reason:
- * STUCK_NO_DIFF` should not need to read the architecture docs to know the next step. Matched on
- * the typed reason prefixes/tags the reducer and stuck detectors emit; unknown reasons get no hint.
+ * non-LLM complement to `--explain`. A first-time user seeing `status: ABORTED / reason: no-diff:
+ * working tree unchanged…` should not need to read the architecture docs to know the next step.
+ * Matched on the typed reason prefixes/tags the reducer and stuck detectors emit (`no-diff`,
+ * `oscillation`, `STUCK_HARNESS_CRASH`, `STUCK_TIMEOUT_NO_DIFF`, `CONTRACT_DEFECTIVE`, …); an
+ * unknown reason gets no hint.
  */
 export function nextStepHint(o: RunOutcome): string | undefined {
   const reason = o.reason ?? '';

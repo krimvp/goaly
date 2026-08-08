@@ -21,6 +21,7 @@ rationale in [`DESIGN.md`](../DESIGN.md) and [`docs/adr/`](adr/), the terse cont
 - [The verifier ladder](#the-verifier-ladder)
 - [Stuck detection](#stuck-detection)
 - [Diff baselines](#diff-baselines---baseline-and---delta-verify)
+- [Workspace mode](#workspace-mode---workspace-mode)
 - [Best-of-N parallel worker](#best-of-n-parallel-worker---candidates)
 - [Phased goals](#phased-goals---phased)
 - [Cooperative parallel waves](#cooperative-parallel-waves---parallel-phases-experimental)
@@ -393,7 +394,8 @@ Model selection is pure wiring — it never enters the frozen contract.
 | `--judge-model`, `--approver-model`, `--compiler-model`, `--critic-model`, `--explain-model` | one step each |
 | `--llm-provider` | which CLI/provider runs the LLM steps (`claude` / `codex` / `droid` / `pi` / `openai`) |
 
-Precedence per LLM step: per-step flag → `--llm-model` → `--model` → the tool's own default.
+Precedence per LLM step: per-step flag → `--llm-model` → `--model` → the tool's own default — with
+one deliberate exception for the Sign-off approver, [below](#the-sign-off-approver-does-not-inherit---model).
 `--llm-provider` **follows `--harness`** by default (`codex` → `codex`, `goaly-code` → `openai`),
 so the compiler that authors a `--generate` bar runs on the tool you picked; pass the flag to split
 the LLM steps onto a different provider than the worker.
@@ -696,7 +698,45 @@ Details that make these accurate rather than trigger-happy:
   out / couldn't start, judge errored) from a real red: the tree may be correct-but-unverified, so
   it's never blamed on the code — still fail-closed, never a green. It keys only on facts goaly
   owns, never exit-code/error-string guessing.
+- **Ephemeral verifier artifacts don't count as progress.** A conservative default set is excluded
+  from the tree hash (Python bytecode/`__pycache__`, pytest/mypy/ruff caches, JS
+  `.nyc_output`/`htmlcov`) so a verify command that regenerates them can't disguise a no-op turn.
+  The defaults never touch build output (`build/`, `dist/`, `target/`). `--diff-ignore "<p1,p2,…>"`
+  adds your own git pathspecs (deduped with the defaults; `*` spans `/`).
+- **A no-diff iteration is excused** when the agent never had a fair chance to act: the previous
+  turn timed out, crashed, or was truncated, or the ladder is green and a fresh Sign-off veto is
+  the only blocker. A perpetually truncated run still terminates at `--max-iterations` / budget.
+- **…but the timeout excuse is bounded** (`timeout-no-diff`). A worker that is killed by the
+  wall-clock cap *every* iteration used to be excused every iteration, so it burned the whole
+  `--max-iterations` budget in silent ten-minute no-ops. The excuse now lasts
+  `--stuck-timeout-no-diff-threshold - 1` consecutive turns (default 2 ⇒ exactly one excused turn,
+  the original intent), and the threshold-th one aborts with a typed `STUCK_TIMEOUT_NO_DIFF` that
+  names the real fix: more room per turn via `--harness-timeout-ms` and/or
+  `--harness-idle-timeout-ms`. A timed-out turn that *did* change the tree was progressing and does
+  not count toward the streak. This detector is deliberately **not** silenced by
+  `--stuck-no-diff false` — that toggle is about a worker that stops editing, not about one that
+  keeps being guillotined — and it is never auto-remediated, since another attempt at the same cap
+  just buys another full-length no-op.
+- **A harness that REFUSED is not a harness that crashed.** When the agent CLI names an actionable
+  fix in its own failure output — droid's "insufficient permission to proceed / re-run with `--auto`
+  medium" being the canonical case — the codec recognises it and `STUCK_HARNESS_CRASH` carries that
+  remediation instead of the generic "check the CLI is installed, authenticated, and runnable",
+  which in that situation is three dead ends. The classification is unchanged: the run is still a
+  fail-closed `crashed`, still typed the same way. Only the guidance differs. Per-CLI string
+  matching lives in the codec, never in the reducer, so the stuck detectors still key purely on
+  facts goaly owns.
 - **A repeat-failure streak may be re-adjudicated as a *contract* fault** — see below.
+
+**Streak relief on `--resume`.** The counted streaks are not stored — they are re-derived by the
+replay-fold — so a run that aborted at the crash threshold used to hit it again on the very first
+fold and terminate before the harness got a single turn, no matter what you had just fixed.
+Resuming is your explicit signal that something changed, so goaly now raises each tripped threshold
+by the length of the streak the log already banked: the resumed run must earn a fresh streak before
+aborting again. It applies to the three counted detectors (harness-crash, contract-unevaluable,
+repeat-failure), is measured off the run's original thresholds so repeated resumes re-measure rather
+than compound, is recorded as an ordinary `RUN_EXTENDED` marker (auditable in the log), and any
+explicit `--stuck-*` on the resume command line still wins. `no-diff` is a toggle rather than a
+counter, so it is not relieved — pass `--stuck-no-diff false` for that resume.
 
 ### In-loop contract-fault adjudication (`CONTRACT_DEFECTIVE`)
 
@@ -740,45 +780,9 @@ Guarantees, all of them structural:
   `--budget-tokens` under the verifier layer.
 
 The adjudicator runs on the **judge** model (the same read-only provider the pre-flight uses), not
-the compiler model that authored the bar.
-- **Ephemeral verifier artifacts don't count as progress.** A conservative default set is excluded
-  from the tree hash (Python bytecode/`__pycache__`, pytest/mypy/ruff caches, JS
-  `.nyc_output`/`htmlcov`) so a verify command that regenerates them can't disguise a no-op turn.
-  The defaults never touch build output (`build/`, `dist/`, `target/`). `--diff-ignore "<p1,p2,…>"`
-  adds your own git pathspecs (deduped with the defaults; `*` spans `/`).
-- **A no-diff iteration is excused** when the agent never had a fair chance to act: the previous
-  turn timed out, crashed, or was truncated, or the ladder is green and a fresh Sign-off veto is
-  the only blocker. A perpetually truncated run still terminates at `--max-iterations` / budget.
-- **…but the timeout excuse is bounded** (`timeout-no-diff`). A worker that is killed by the
-  wall-clock cap *every* iteration used to be excused every iteration, so it burned the whole
-  `--max-iterations` budget in silent ten-minute no-ops. The excuse now lasts
-  `--stuck-timeout-no-diff-threshold - 1` consecutive turns (default 2 ⇒ exactly one excused turn,
-  the original intent), and the threshold-th one aborts with a typed `STUCK_TIMEOUT_NO_DIFF` that
-  names the real fix: more room per turn via `--harness-timeout-ms` and/or
-  `--harness-idle-timeout-ms`. A timed-out turn that *did* change the tree was progressing and does
-  not count toward the streak. This detector is deliberately **not** silenced by
-  `--stuck-no-diff false` — that toggle is about a worker that stops editing, not about one that
-  keeps being guillotined — and it is never auto-remediated, since another attempt at the same cap
-  just buys another full-length no-op.
-- **A harness that REFUSED is not a harness that crashed.** When the agent CLI names an actionable
-  fix in its own failure output — droid's "insufficient permission to proceed / re-run with `--auto`
-  medium" being the canonical case — the codec recognises it and `STUCK_HARNESS_CRASH` carries that
-  remediation instead of the generic "check the CLI is installed, authenticated, and runnable",
-  which in that situation is three dead ends. The classification is unchanged: the run is still a
-  fail-closed `crashed`, still typed the same way. Only the guidance differs. Per-CLI string
-  matching lives in the codec, never in the reducer, so the stuck detectors still key purely on
-  facts goaly owns.
-
-**Streak relief on `--resume`.** The counted streaks are not stored — they are re-derived by the
-replay-fold — so a run that aborted at the crash threshold used to hit it again on the very first
-fold and terminate before the harness got a single turn, no matter what you had just fixed.
-Resuming is your explicit signal that something changed, so goaly now raises each tripped threshold
-by the length of the streak the log already banked: the resumed run must earn a fresh streak before
-aborting again. It applies to the three counted detectors (harness-crash, contract-unevaluable,
-repeat-failure), is measured off the run's original thresholds so repeated resumes re-measure rather
-than compound, is recorded as an ordinary `RUN_EXTENDED` marker (auditable in the log), and any
-explicit `--stuck-*` on the resume command line still wins. `no-diff` is a toggle rather than a
-counter, so it is not relieved — pass `--stuck-no-diff false` for that resume.
+the compiler model that authored the bar. Recovery from a condemned bar is a
+[`--recontract` successor run](#re-contracting-a-defective-bar---recontract), and the anti-pattern it
+learned is remembered across runs in the [defect corpus](#the-defect-corpus-cross-run-learning).
 
 ## Diff baselines (`--baseline` and `--delta-verify`)
 
@@ -1043,7 +1047,12 @@ kill an hours-long run. All defaults, no flags needed
   `--budget-tokens`. (The wall-clock budget restarts per process — the crash-to-resume gap is idle
   time, not spend.)
 - **Terminal outcomes tell you the next step.** A failed/aborted run prints a one-line `next:`
-  hint — what the reason means and the exact `--resume` / `runs show` command.
+  hint — what the reason means and the exact command: `--resume` with the flag that actually helps
+  (`--harness-timeout-ms` for a `STUCK_TIMEOUT_NO_DIFF`, `--harness-autonomy` for a harness that
+  *refused* rather than crashed), `goaly runs show`, or — for a
+  [`CONTRACT_DEFECTIVE`](#in-loop-contract-fault-adjudication-contract_defective) bar — the
+  [`--recontract`](#re-contracting-a-defective-bar---recontract) successor command that keeps your
+  tree.
 
 ## Operator control (watch, steer, extend)
 
@@ -1085,6 +1094,15 @@ goaly runs watch run-<id>        # follow a LIVE run from another terminal
 goaly runs resume-cmd run-<id>   # how to continue the run's CLI session interactively
 goaly runs list --workspace ./myrepo
 ```
+
+Beyond the contract and the verdicts, `runs show` reports the run's *provenance and labels* — the
+things a `DONE`/`ABORTED` line alone cannot tell you:
+
+| Line | Meaning |
+| --- | --- |
+| `degraded:` | a typed [degraded mode](#degraded-mode-self-judged) — today `SELF-JUDGED`, the two keys on one model |
+| `adjudicated:` | this run's [contract-fault verdict](#in-loop-contract-fault-adjudication-contract_defective) (SOUND or DEFECTIVE, with the generalized anti-pattern), and for a defective one the exact `--recontract` command that recovers without discarding the tree |
+| `successor of:` | this run's [re-contract provenance](#re-contracting-a-defective-bar---recontract): the predecessor run + its frozen `contractHash`, the verdict that justified the successor, and the depth in the chain |
 
 `resume-cmd` prints the command to continue the underlying CLI session in its own interactive mode
 (`claude --resume <id>`, `codex resume <id>`, `droid --resume <id>`, `pi --continue`), recovered

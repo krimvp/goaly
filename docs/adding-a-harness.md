@@ -540,6 +540,18 @@ That's it. The resolved per-step model is threaded in for you, and the cascade
 (`--judge-model`/`--approver-model`/`--compiler-model` → `--llm-model` → `--model` → tool default)
 applies automatically — your provider just receives a `model` string or `undefined`.
 
+**One exception your provider must be able to survive: the Sign-off approver does not inherit a bare
+`--model`** (issue #125 — `--model X` names the *coding agent's* model, and letting the second key
+inherit it collapses both keys onto one distribution). When the resolved provider has a default model
+of its own, `resolveModels` (`src/cli/models.ts`) hands the approver `undefined` instead of `X`, so
+the tool falls back to its own default and the swap is announced in the log. Concretely: a codec
+wired as a provider **must** work with `model === undefined` (omit the `--model` argv pair — the
+skeleton above already does). A provider with *no* default model of its own belongs in
+`PROVIDERS_WITHOUT_DEFAULT_MODEL` there, so the independence default is skipped rather than turning a
+working wiring into a refused run — `openai` is the current member. `--approver-model` /
+`--approver-models` always win, and a run whose agent, judge and approver still collapse onto one
+model is labelled `SELF-JUDGED` rather than gated.
+
 **Caveats to document.** Each `complete()` is a full (read-only) agent turn, and the judge calls it
 `quorum` times (default 3) per iteration — heavier than a one-shot completion API. The
 `--llm-provider` default **follows the harness** (`defaultLlmProvider` in `src/cli/args.ts`:

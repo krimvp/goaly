@@ -86,8 +86,8 @@
   const PIPE_DETAIL = {
     compile: {
       t: "COMPILE — author & freeze",
-      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. Vacuous or un-runnable bars are refused at compile. Before the freeze the bar also gets a <b>positive control</b>: a throwaway reference implementation is run against it in a scratch copy, and a bar even that cannot green is refused and re-authored (--contract-dry-run false opts out). With --adversarial a red-team panel attacks the authored bar as well.",
-      pills: ['<span class="pill pass">→ contractHash</span>', '<span class="pill violet">--contract-dry-run</span>', '<span class="pill fail">--adversarial red-team</span>'],
+      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. Vacuous or un-runnable bars are refused at compile. Two guards run before the freeze, both ON by default: a <b>satisfiability critic</b> asks whether a CORRECT implementation could still FAIL this bar (the mirror of red-teaming — findings make the bar satisfiable, never easier), and a <b>positive control</b> answers the same question by execution — a throwaway reference implementation is run against the bar in a scratch copy, and a bar even that cannot green is refused and re-authored (--no-satisfiability-critic / --contract-dry-run false opt out). With --adversarial a red-team panel attacks the authored bar as well.",
+      pills: ['<span class="pill pass">→ contractHash</span>', '<span class="pill violet">--contract-dry-run</span>', '<span class="pill violet">satisfiability critic</span>', '<span class="pill fail">--adversarial red-team</span>'],
     },
     seal: {
       t: "SEAL — lock the bar",
@@ -106,8 +106,8 @@
     },
     ladder: {
       t: "Verify — deterministic first",
-      d: "Checks run cheapest-and-hardest-to-game first (tests / exit codes before any LLM judge) and short-circuit on the first fail. Fail-closed: a malformed grader is never a green. With --adversarial a refute-first skeptic panel runs last and can only fail a candidate green.",
-      pills: ['<span class="pill pass">exit codes</span>', '<span class="pill violet">LLM judge</span>', '<span class="pill fail">--adversarial refuters</span>'],
+      d: "Checks run cheapest-and-hardest-to-game first (tests / exit codes before any LLM judge) and short-circuit on the first fail. Under --generate a built-in integrity guard is rung [0]: every file goaly authored must still match the hash frozen into the contract, so the ladder you approved at Seal is the ladder that runs. Fail-closed: a malformed grader is never a green. With --adversarial a refute-first skeptic panel runs last and can only fail a candidate green.",
+      pills: ['<span class="pill pass">[0] integrity guard</span>', '<span class="pill pass">exit codes</span>', '<span class="pill violet">LLM judge</span>', '<span class="pill fail">--adversarial refuters</span>'],
     },
     signoff: {
       t: "SIGN-OFF — veto-only",
