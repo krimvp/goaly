@@ -276,6 +276,19 @@ export const RunConfig = z.object({
        * contract through, and the Seal gate stands behind it.
        */
       satisfiabilityCritic: z.boolean().default(true),
+      /**
+       * COMPILE-TIME POSITIVE CONTROL (issue #115) — like {@link satisfiabilityCritic}, ON by
+       * default and INDEPENDENT of `enabled`. Before the freeze, the compiler also authors a
+       * THROWAWAY reference implementation, materializes it in a scratch copy of the workspace
+       * alongside the authored verification files, and runs the contract's DETERMINISTIC rungs
+       * there. Green ⇒ the bar is satisfiable, freeze as normal; red ⇒ refuse the freeze and feed
+       * the failure into the bounded re-author loop like a `COMPILE_FAILED`. It runs only under
+       * `--generate` and only once the contract actually authored files; `--contract-dry-run false`
+       * opts out. The reference implementation NEVER touches the real workspace, the run diff, or a
+       * worker prompt. Fail-OPEN on any infrastructure error (no LLM, scratch failure, timeout):
+       * the contract freezes exactly as it does today, so this can never block a legitimate run.
+       */
+      contractDryRun: z.boolean().default(true),
     })
     .default({}),
   /**
@@ -427,6 +440,12 @@ export const CliInput = z.object({
    * would read the string "false" as true.
    */
   satisfiabilityCritic: z.boolean().optional(),
+  /**
+   * Compile-time positive control (issue #115), default ON under `--generate`. Like
+   * `satisfiabilityCritic` a plain (never coerced) boolean, so `--contract-dry-run false` can turn
+   * it OFF — `z.coerce.boolean` would read the string "false" as true.
+   */
+  contractDryRun: z.boolean().optional(),
 });
 export type CliInput = z.infer<typeof CliInput>;
 
@@ -486,6 +505,7 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     contractCritics?: number;
     refuters?: number;
     satisfiabilityCritic?: boolean;
+    contractDryRun?: boolean;
   } = {};
   if (input.adversarial !== undefined) adversarial.enabled = input.adversarial;
   if (input.adversarialPlanCritics !== undefined)
@@ -496,6 +516,7 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
   // Default-ON and independent of `--adversarial`: only an explicit opt-out changes it.
   if (input.satisfiabilityCritic !== undefined)
     adversarial.satisfiabilityCritic = input.satisfiabilityCritic;
+  if (input.contractDryRun !== undefined) adversarial.contractDryRun = input.contractDryRun;
 
   return RunConfig.parse({
     goal: input.goal,

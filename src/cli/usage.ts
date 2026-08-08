@@ -296,6 +296,25 @@ Satisfiability critic (ON by default under --generate — the one review step th
                         (a broken critic ⇒ pass-through) and metered under the compile phase; uses
                         --critic-model like the other critics.
 
+Contract dry run — the compile-time POSITIVE control (ON by default under --generate):
+  --contract-dry-run true|false
+                        prove the frozen bar can actually go GREEN before freezing it. Pre-flight
+                        only gives the bar a NEGATIVE control (it must be red on the current tree);
+                        nothing proved it can EVER be met, so an unsatisfiable bar froze and the run
+                        was unwinnable. With this on, the compiler also authors a THROWAWAY
+                        reference implementation, materializes it in a SCRATCH COPY of the workspace
+                        next to the authored verification files, and runs the contract's
+                        DETERMINISTIC rungs there (judge rungs are out of scope). Green ⇒ the scratch
+                        copy is destroyed and the contract freezes unchanged. Red ⇒ the bar is
+                        defective: the freeze is REFUSED and the failure feeds the same bounded
+                        re-author loop as a compile failure (--max-compile-retries). The reference
+                        implementation is written ONLY to the scratch copy and destroyed — it never
+                        reaches your workspace, the run diff, or any worker prompt. FAIL-OPEN: no
+                        LLM, a scratch-copy failure, a setup that can't run, or a timed-out rung all
+                        log and freeze exactly as today. Costs one authoring call + one verification
+                        run per compile attempt (metered under the compile phase, --compiler-model);
+                        inert for a user-supplied --verify-cmd (your bar, your call).
+
 Harness selection:
   --harness <name>      the write-role coding agent: claude (default) | codex | droid | pi |
                         goaly-code.

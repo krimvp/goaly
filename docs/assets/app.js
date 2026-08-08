@@ -86,8 +86,8 @@
   const PIPE_DETAIL = {
     compile: {
       t: "COMPILE — author & freeze",
-      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. Vacuous or un-runnable bars are refused at compile, and with --adversarial a red-team panel attacks the authored bar before Seal.",
-      pills: ['<span class="pill pass">→ contractHash</span>', '<span class="pill fail">--adversarial red-team</span>'],
+      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. Vacuous or un-runnable bars are refused at compile. Before the freeze the bar also gets a <b>positive control</b>: a throwaway reference implementation is run against it in a scratch copy, and a bar even that cannot green is refused and re-authored (--contract-dry-run false opts out). With --adversarial a red-team panel attacks the authored bar as well.",
+      pills: ['<span class="pill pass">→ contractHash</span>', '<span class="pill violet">--contract-dry-run</span>', '<span class="pill fail">--adversarial red-team</span>'],
     },
     seal: {
       t: "SEAL — lock the bar",

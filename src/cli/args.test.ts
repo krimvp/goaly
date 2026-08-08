@@ -331,6 +331,8 @@ describe('parseArgs', () => {
         refuters: 3,
         // The one review step that is ON by default (issue #118): a false red costs the WHOLE run.
         satisfiabilityCritic: true,
+        // The compile-time positive control (issue #115) — also default-on, also --generate-only.
+        contractDryRun: true,
       });
     });
 
@@ -354,6 +356,26 @@ describe('parseArgs', () => {
       ]);
       expect(a.config.goal).toBe('build the widget');
       expect(a.config.adversarial.satisfiabilityCritic).toBe(false);
+    });
+
+    it('--contract-dry-run false opts out of the default-on positive control (issue #115)', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--contract-dry-run', 'false',
+      ]);
+      expect(a.config.adversarial.contractDryRun).toBe(false);
+      // Independent of --adversarial and of the satisfiability critic.
+      expect(a.config.adversarial.enabled).toBe(false);
+      expect(a.config.adversarial.satisfiabilityCritic).toBe(true);
+    });
+
+    it('--contract-dry-run true is accepted, and a non-boolean fails closed', async () => {
+      const a = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--contract-dry-run', 'true',
+      ]);
+      expect(a.config.adversarial.contractDryRun).toBe(true);
+      await expect(
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--contract-dry-run', 'maybe']),
+      ).rejects.toThrow(/--contract-dry-run: expected true or false/);
     });
 
     it('--adversarial enables the steps and widens the approver quorum to 3', async () => {

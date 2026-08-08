@@ -128,6 +128,7 @@ const ConfigFileSchema = z
     'adversarial-contract-critics': FlagValue.optional(),
     'adversarial-refuters': FlagValue.optional(),
     'no-satisfiability-critic': FlagValue.optional(),
+    'contract-dry-run': FlagValue.optional(),
     'critic-model': FlagValue.optional(),
     'budget-tokens': FlagValue.optional(),
     'budget-wall-ms': FlagValue.optional(),

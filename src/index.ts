@@ -81,6 +81,7 @@ export type { SealGate } from './compile/seal';
 export type { Planner } from './plan/planner';
 export type { PlanGate } from './plan/plan-gate';
 export type { Workspace, CommandResult, Worktree, WorktreeHost } from './workspace/workspace';
+export type { ScratchCopy, ScratchHost } from './workspace/scratch-copy';
 export type { RunLog } from './runlog/runlog';
 export { RunLogHeader, RunLogEntry } from './runlog/runlog';
 export {
@@ -196,6 +197,7 @@ export { summarizeUsage } from './runlog/usage';
 export { GitWorkspace } from './workspace/git-workspace';
 export { FileWorkspace } from './workspace/file-workspace';
 export { GitWorktreeHost } from './workspace/git-worktree-host';
+export { FsScratchHost } from './workspace/scratch-copy';
 export {
   WorktreeManager,
   WorktreeError,
@@ -234,6 +236,11 @@ export { Ladder } from './verify/ladder';
 export { JudgeVerifier } from './verify/judge';
 export { AgentApprover } from './verify/agent-approver';
 export { AgentCompiler } from './compile/agent-compiler';
+export {
+  ContractDryRunCompiler,
+  type ContractDryRunOpts,
+  type DryRunOutcome,
+} from './compile/contract-dry-run';
 export { AutoSealGate, HumanSealGate } from './compile/seal-gates';
 export { AgentPlanner } from './plan/agent-planner';
 export { StaticPlanner, type PlanFileReader } from './plan/static-planner';

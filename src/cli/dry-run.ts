@@ -63,6 +63,7 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
         ['max-compile-retries', String(config.maxCompileRetries)],
         ['adversarial', describeAdversarial(config)],
         ['satisfiability-critic', describeSatisfiabilityCritic(config)],
+        ['contract-dry-run', describeContractDryRun(config)],
       ],
     },
     {
@@ -167,6 +168,17 @@ function describeAdversarial(config: RunConfig): string {
 function describeSatisfiabilityCritic(config: RunConfig): string {
   if (!config.adversarial.satisfiabilityCritic) return 'off (--no-satisfiability-critic)';
   return config.verifier.kind === 'generate' ? 'on' : 'on (n/a: --verify-cmd authored no bar)';
+}
+
+/**
+ * The compile-time POSITIVE control (issue #115): also default-on, also `--generate`-only, and the
+ * one pre-Seal guard that answers by EXECUTION — so it earns its own row next to the critic's.
+ */
+function describeContractDryRun(config: RunConfig): string {
+  if (!config.adversarial.contractDryRun) return 'off (--contract-dry-run false)';
+  return config.verifier.kind === 'generate'
+    ? 'on (reference implementation vs. the deterministic rungs, in a scratch copy)'
+    : 'on (n/a: --verify-cmd authored no bar)';
 }
 
 function modelRows(parsed: ParsedArgs): Row[] {

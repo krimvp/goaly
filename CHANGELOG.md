@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cap.
 
 ### Added
+- Compile-time positive control (`--contract-dry-run`, on by default under `--generate`): before the
+  contract is frozen, the compiler also authors a throwaway reference implementation, materializes
+  it in a scratch copy of the workspace beside the authored verification files, and runs the
+  contract's deterministic rungs there. Green freezes the contract unchanged; red refuses the freeze
+  and feeds the failure into the existing bounded re-author loop (`--max-compile-retries`). The
+  reference implementation is written only to the scratch copy, which is destroyed on every exit
+  path — it never reaches the workspace, the run diff, or any worker prompt, and never appears in
+  the re-author feedback. Fail-open on any infrastructure error (no LLM, scratch failure, a setup
+  that cannot run there, a timed-out or unstartable rung), so it can only reject a defective bar or
+  step aside. Judge rungs are out of scope; a user-supplied `--verify-cmd` is never dry-run.
 - Named presets: a `"presets"` block in any config layer defines your own flag bundles, selected
   per run with `--preset <name>` or persistently via a top-level `"preset"` selection (announced
   on every run; `--preset none` disables it for one invocation). One language- and

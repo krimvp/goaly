@@ -17,12 +17,16 @@ import { GeneratedFilesGuard } from '../verify/generated-guard';
 import { JudgeVerifier } from '../verify/judge';
 import { AgentApprover } from '../verify/agent-approver';
 import { AgentCompiler } from '../compile/agent-compiler';
-import { CritiquedCompiler } from '../compile/critiqued-compiler';
 import { classifyUsageShape } from '../compile/usage-gate';
-import { SeededCompiler, SeededPlanner } from '../followup/seeded';
+import {
+  critiqueCompiler,
+  critiquePlanner,
+  dryRunCompiler,
+  seedCompiler,
+  seedPlanner,
+} from './compose-authoring';
 import { AutoSealGate, HumanSealGate } from '../compile/seal-gates';
 import { AgentPlanner } from '../plan/agent-planner';
-import { CritiquedPlanner } from '../plan/critiqued-planner';
 import { StaticPlanner } from '../plan/static-planner';
 import { AutoPlanGate, HumanPlanGate } from '../plan/plan-gates';
 import type { Planner } from '../plan/planner';
@@ -265,66 +269,6 @@ function defaultPolicy(): SandboxPolicy {
   return { mode: 'none', network: 'none' };
 }
 
-/** Wrap the compiler with the follow-up seed (Capability C) when present; identity otherwise. */
-function seedCompiler(inner: VerifierCompiler, seed: string | undefined): VerifierCompiler {
-  return seed !== undefined ? new SeededCompiler(inner, seed) : inner;
-}
-
-/**
- * Wrap the compiler with the pre-Seal contract critics; identity when none apply. Two INDEPENDENT
- * switches share this decorator and its one bounded re-author loop: the opt-in `--adversarial`
- * red-team panel, and the default-ON FALSE-RED satisfiability critic (issue #118; `--generate`
- * only). Wraps the INNER compiler so the seed still reaches attempt 1; critics meter as `'compile'`.
- */
-function critiqueCompiler(
-  inner: VerifierCompiler,
-  config: RunConfig,
-  makeLlm: () => LlmProvider,
-  workspaceRoot: string,
-  logger: Logger,
-  facts: WorkspaceFacts | undefined,
-): VerifierCompiler {
-  const adv = config.adversarial;
-  const critics = adv.enabled ? adv.contractCritics : 0;
-  const satisfiability = adv.satisfiabilityCritic && config.verifier.kind === 'generate';
-  if (adv.contractCritiqueRounds <= 0 || (critics <= 0 && !satisfiability)) return inner;
-  return new CritiquedCompiler({
-    inner,
-    llm: makeLlm(),
-    critics, satisfiability,
-    rounds: adv.contractCritiqueRounds,
-    readFile: (rel) => readFile(path.join(workspaceRoot, rel), 'utf8'),
-    logger, ...(facts !== undefined ? { facts: facts.summary } : {}),
-  });
-}
-
-/** Wrap the planner with the follow-up seed (Capability C) when present; identity otherwise. */
-function seedPlanner(inner: Planner, seed: string | undefined): Planner {
-  return seed !== undefined ? new SeededPlanner(inner, seed) : inner;
-}
-
-/**
- * Wrap the planner with the `--adversarial` plan critique when enabled; identity otherwise. Only
- * the LLM AgentPlanner is ever passed here — a `--plan-file` StaticPlanner is the user's explicit
- * plan and is never critiqued (the caller routes around this wrapper). Critic spend meters under
- * the `'plan'` phase — critique is part of authoring the plan, not a new spend category.
- */
-function critiquePlanner(
-  inner: Planner,
-  config: RunConfig,
-  makeLlm: () => LlmProvider,
-  logger: Logger,
-): Planner {
-  const adv = config.adversarial;
-  if (!adv.enabled || adv.planCritics <= 0 || adv.planCritiqueRounds <= 0) return inner;
-  return new CritiquedPlanner({
-    inner,
-    llm: makeLlm(),
-    critics: adv.planCritics,
-    rounds: adv.planCritiqueRounds,
-    logger,
-  });
-}
 
 /**
  * Build the sandbox launcher ONCE from the policy (issue #9). A directly-injected launcher (tests)
@@ -542,22 +486,33 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
 
   return {
     compiler: seedCompiler(
-      critiqueCompiler(
-        new AgentCompiler({
-          llm: llmFor(models.compiler, 'compile'),
-          writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
-          ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
-          ...(workspaceFacts !== undefined ? { facts: workspaceFacts } : {}),
-          // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered like
-          // the authoring call) arms the gate on a confident build-and-use goal so a bar that a parallel
-          // reimplementation could green is refused at compile (COMPILE_FAILED → re-authored with a usage
-          // assertion). Fail-open, so it never blocks a non-build-and-use run.
-          classifyShape: (goal, intent) =>
-            classifyUsageShape(llmFor(models.compiler, 'compile'), goal, intent),
-        }),
+      // The compile-time POSITIVE control (issue #115) wraps the critics: what it executes is the
+      // contract the critics already accepted, and a red there refuses the freeze (→ COMPILE_FAILED
+      // → the same bounded re-author loop). Fail-open, so it can only reject or step aside.
+      dryRunCompiler(
+        critiqueCompiler(
+          new AgentCompiler({
+            llm: llmFor(models.compiler, 'compile'),
+            writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
+            ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
+            ...(workspaceFacts !== undefined ? { facts: workspaceFacts } : {}),
+            // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered
+            // like the authoring call) arms the gate on a confident build-and-use goal so a bar that a
+            // parallel reimplementation could green is refused at compile (COMPILE_FAILED → re-authored
+            // with a usage assertion). Fail-open, so it never blocks a non-build-and-use run.
+            classifyShape: (goal, intent) =>
+              classifyUsageShape(llmFor(models.compiler, 'compile'), goal, intent),
+          }),
+          config,
+          () => llmFor(models.critic, 'compile'),
+          options.workspaceRoot,
+          logger,
+          workspaceFacts,
+        ),
         config,
-        () => llmFor(models.critic, 'compile'),
+        () => llmFor(models.compiler, 'compile'),
         options.workspaceRoot,
+        timeouts.verifyMs,
         logger,
         workspaceFacts,
       ),

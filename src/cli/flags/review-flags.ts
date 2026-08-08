@@ -44,6 +44,16 @@ export function parseSatisfiabilityCritic(flags: RawFlags): boolean | undefined 
 }
 
 /**
+ * Parse `--contract-dry-run true|false` (issue #115) — the compile-time POSITIVE control. Tri-state
+ * via {@link boolFlag} (a bare `--contract-dry-run` ⇒ on, `--contract-dry-run false` ⇒ off, absent ⇒
+ * undefined so the adversarial-block default `true` applies), fail-closed on any other value. It is
+ * inert on the `--verify-cmd` path regardless: a user-supplied bar is the user's own.
+ */
+export function parseContractDryRun(flags: RawFlags): boolean | undefined {
+  return boolFlag(flags, 'contract-dry-run');
+}
+
+/**
  * Validate `--approver-diversity-temp T` at the seam (issue #84): a sampling temperature in [0,2]
  * applied ONLY when the panel has `quorum > 1`, fail-closed on anything else. Absent ⇒ undefined so
  * the approver-block default (0.5) applies.

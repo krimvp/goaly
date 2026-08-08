@@ -31,6 +31,7 @@ import {
 import {
   parseAdversarialCount,
   parseApproverDiversityTemp,
+  parseContractDryRun,
   parseApproverLenses,
   parseApproverQuorum,
   parseSatisfiabilityCritic,
@@ -609,6 +610,9 @@ export async function parseArgs(
       : {}),
     ...(parseSatisfiabilityCritic(flags) !== undefined
       ? { satisfiabilityCritic: parseSatisfiabilityCritic(flags) }
+      : {}),
+    ...(parseContractDryRun(flags) !== undefined
+      ? { contractDryRun: parseContractDryRun(flags) }
       : {}),
   });
 

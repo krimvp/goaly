@@ -1,0 +1,149 @@
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { FsScratchHost } from './scratch-copy';
+
+type ExecResult = { stdout: string; stderr: string; code: number; timedOut?: boolean };
+
+/** Records every command it is asked to run, and answers from a scripted table. */
+function scriptedExec(table: Record<string, ExecResult>, seen: { cwd: string; cmd: string }[]) {
+  return async (
+    _cmd: string,
+    args: string[],
+    opts: { cwd: string; timeoutMs?: number },
+  ): Promise<ExecResult> => {
+    const command = args[1] ?? '';
+    seen.push({ cwd: opts.cwd, cmd: command });
+    return table[command] ?? { stdout: '', stderr: '', code: 0 };
+  };
+}
+
+describe('FsScratchHost', () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true });
+  });
+
+  async function makeWorkspace(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'goaly-scratch-src-'));
+    roots.push(root);
+    return root;
+  }
+
+  it('duplicates the workspace, skipping .git and .goaly', async () => {
+    const root = await makeWorkspace();
+    await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'src', 'a.txt'), 'alpha', 'utf-8');
+    await mkdir(join(root, '.git', 'objects'), { recursive: true });
+    await writeFile(join(root, '.git', 'objects', 'x'), 'gitdata', 'utf-8');
+    await mkdir(join(root, '.goaly'), { recursive: true });
+    await writeFile(join(root, '.goaly', 'log.jsonl'), 'runlog', 'utf-8');
+
+    const host = new FsScratchHost(root, { exec: scriptedExec({}, []) });
+    const copy = await host.create();
+    try {
+      expect(await readFile(join(copy.root, 'src', 'a.txt'), 'utf-8')).toBe('alpha');
+      await expect(stat(join(copy.root, '.git'))).rejects.toThrow();
+      await expect(stat(join(copy.root, '.goaly'))).rejects.toThrow();
+      expect(copy.root).not.toBe(root);
+    } finally {
+      await host.destroy(copy);
+    }
+  });
+
+  it('destroy removes the copy and never throws on a missing directory', async () => {
+    const root = await makeWorkspace();
+    await writeFile(join(root, 'f.txt'), 'x', 'utf-8');
+    const host = new FsScratchHost(root, { exec: scriptedExec({}, []) });
+    const copy = await host.create();
+    await host.destroy(copy);
+    await expect(stat(copy.root)).rejects.toThrow();
+    await expect(host.destroy(copy)).resolves.toBeUndefined();
+  });
+
+  it('writes files into the copy only — the real workspace is untouched', async () => {
+    const root = await makeWorkspace();
+    await writeFile(join(root, 'keep.txt'), 'keep', 'utf-8');
+    const host = new FsScratchHost(root, { exec: scriptedExec({}, []) });
+    const copy = await host.create();
+    try {
+      await copy.writeFile('nested/dir/impl.ts', 'export const x = 1;');
+      expect(await readFile(join(copy.root, 'nested', 'dir', 'impl.ts'), 'utf-8')).toBe(
+        'export const x = 1;',
+      );
+      await expect(stat(join(root, 'nested', 'dir', 'impl.ts'))).rejects.toThrow();
+    } finally {
+      await host.destroy(copy);
+    }
+  });
+
+  it('refuses a write that escapes the scratch root (fail-closed)', async () => {
+    const root = await makeWorkspace();
+    const host = new FsScratchHost(root, { exec: scriptedExec({}, []) });
+    const copy = await host.create();
+    try {
+      await expect(copy.writeFile('../escape.ts', 'nope')).rejects.toThrow(
+        /refusing to write outside the scratch copy/,
+      );
+      await expect(copy.writeFile('/tmp/escape.ts', 'nope')).rejects.toThrow(
+        /refusing to write outside the scratch copy/,
+      );
+    } finally {
+      await host.destroy(copy);
+    }
+  });
+
+  it('runs commands in the copy, and reports a timeout as timedOut', async () => {
+    const root = await makeWorkspace();
+    const seen: { cwd: string; cmd: string }[] = [];
+    const host = new FsScratchHost(root, {
+      exec: scriptedExec(
+        {
+          'npm test': { stdout: 'ok', stderr: '', code: 0 },
+          hang: { stdout: '', stderr: 'killed', code: 124, timedOut: true },
+        },
+        seen,
+      ),
+    });
+    const copy = await host.create();
+    try {
+      const green = await copy.run('npm test');
+      expect(green).toMatchObject({ exitCode: 0, stdout: 'ok' });
+      expect(green.timedOut).toBeUndefined();
+      const timedOut = await copy.run('hang', { timeoutMs: 10 });
+      expect(timedOut.timedOut).toBe(true);
+      expect(seen.every((s) => s.cwd === copy.root)).toBe(true);
+    } finally {
+      await host.destroy(copy);
+    }
+  });
+
+  it('reports a spawn failure as spawnFailed instead of throwing', async () => {
+    const root = await makeWorkspace();
+    const host = new FsScratchHost(root, {
+      exec: async () => {
+        throw new Error('spawn ENOENT');
+      },
+    });
+    const copy = await host.create();
+    try {
+      const r = await copy.run('anything');
+      expect(r.spawnFailed).toBe(true);
+      expect(r.exitCode).toBe(127);
+      expect(r.stderr).toContain('spawn ENOENT');
+    } finally {
+      await host.destroy(copy);
+    }
+  });
+
+  it('aborts (and cleans up) when the workspace exceeds the entry budget', async () => {
+    const root = await makeWorkspace();
+    for (let i = 0; i < 5; i += 1) {
+      await writeFile(join(root, `f${i}.txt`), 'x', 'utf-8');
+    }
+    const host = new FsScratchHost(root, { exec: scriptedExec({}, []), maxEntries: 2 });
+    await expect(host.create()).rejects.toThrow(/scratch-copy budget/);
+  });
+});

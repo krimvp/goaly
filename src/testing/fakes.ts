@@ -14,6 +14,7 @@ import type { SealGate } from '../compile/seal';
 import type { Planner } from '../plan/planner';
 import type { PlanGate } from '../plan/plan-gate';
 import type { Workspace, CommandResult, Worktree, WorktreeHost } from '../workspace/workspace';
+import type { ScratchCopy, ScratchHost } from '../workspace/scratch-copy';
 import type { Clock } from '../driver/clock';
 import type { BudgetMeter } from '../driver/budget';
 import type { RunLog, RunLogHeader, RunLogEntry } from '../runlog/runlog';
@@ -206,6 +207,50 @@ export class FakeSealGate implements SealGate {
     const next = this.#decisions[idx];
     if (next === undefined) throw new Error('FakeSealGate: no decision scripted');
     return next;
+  }
+}
+
+/**
+ * In-memory {@link ScratchHost} (issue #115): records every file the compile-time positive control
+ * writes and every command it runs, WITHOUT touching a filesystem. `create` can be scripted to
+ * throw (the scratch-failure fail-open path), and `destroyed` lets a test pin the safety invariant
+ * that the throwaway reference implementation is always torn down.
+ */
+export class FakeScratchHost implements ScratchHost {
+  /** Files written into each copy, in order: workspace-relative path → content. */
+  readonly written: { path: string; content: string }[] = [];
+  /** Commands run in the copy, in order. */
+  readonly ran: string[] = [];
+  /** How many copies were destroyed (one per `create`, on every exit path). */
+  destroyed = 0;
+  readonly #results: CommandResult[];
+  readonly #createError: Error | undefined;
+  #i = 0;
+
+  constructor(opts: { results?: CommandResult[]; createError?: Error } = {}) {
+    this.#results = opts.results ?? [];
+    this.#createError = opts.createError;
+  }
+
+  async create(): Promise<ScratchCopy> {
+    if (this.#createError !== undefined) throw this.#createError;
+    const host = this;
+    return {
+      root: '/fake/scratch',
+      async writeFile(path: string, content: string): Promise<void> {
+        host.written.push({ path, content });
+      },
+      async run(command: string): Promise<CommandResult> {
+        host.ran.push(command);
+        const next = host.#results[host.#i];
+        host.#i += 1;
+        return next ?? { exitCode: 0, stdout: '', stderr: '' };
+      },
+    };
+  }
+
+  async destroy(_copy: ScratchCopy): Promise<void> {
+    this.destroyed += 1;
   }
 }
 

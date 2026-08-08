@@ -1289,6 +1289,54 @@ Details that matter:
 Opt out with `--no-satisfiability-critic` (config-file key `no-satisfiability-critic`). With
 `--adversarial` on, the same lens is also cycled as the fifth member of the contract red-team panel.
 
+### The contract dry run (compile-time positive control)
+
+Flag: `--contract-dry-run true|false` (ON by default under `--generate`).
+
+Every guard above — the red-team lenses, the satisfiability critic, the soundness pre-flight — is an
+LLM **opinion** about the bar. This one is an **execution**.
+
+The frozen bar already gets a *negative* control: the pre-flight runs the deterministic rung(s) once
+and requires them to be **red** on the current tree, and a bar that is already green there is caught
+as `CONTRACT_UNSOUND`. That proves the bar discriminates against nothing. Nothing proved the other
+half — that the bar can **ever** go green. A bar no implementation can satisfy passes pre-flight (its
+red looks exactly like an honest "implementation missing" red) and the run is unwinnable from that
+moment on.
+
+So, strictly **before the freeze**:
+
+1. after the compiler authors the verification files, it also authors a **throwaway reference
+   implementation** of the goal;
+2. that reference is materialized in a **scratch copy** of the workspace, next to the authored
+   verification files;
+3. the contract's one-time `setup` (if any) and its **deterministic rungs** run there — judge rungs
+   are out of scope, since an LLM rubric cannot be positively controlled by execution;
+4. **green** ⇒ the bar is satisfiable: the scratch copy is destroyed and the contract freezes
+   unchanged. **red** ⇒ the bar is defective: the freeze is **refused** and the failure feeds the
+   same bounded re-author loop as a compile failure (`--max-compile-retries`).
+
+Details that matter:
+
+- **The reference implementation never leaves the scratch copy.** It is written only there, the copy
+  is destroyed on every exit path (green, red, or error), and it appears in neither your workspace,
+  the run diff, nor any worker prompt. It is not reused as a hint, a seed, or a fallback — handing
+  the worker the solution would defeat the run and recreate exactly the deadlock the vacuous-contract
+  check exists to catch. The refusal fed back to the author quotes only the failing rung's own
+  output, never the reference source. A reference file whose path collides with an authored
+  verification file is discarded, so the control can never rewrite the bar it measures.
+- **Fail-open on infrastructure.** No LLM, an unparseable reference, a scratch-copy failure (including
+  a workspace too large to copy cheaply), a `setup` that cannot run there, a rung that timed out or
+  could not be started — each logs and freezes exactly as it does today. The dry run can only *reject*
+  a contract or step aside; it can never turn a red bar green or relax a rung.
+- **`--generate` only**, and only once the contract actually authored verification files. A
+  user-supplied `--verify-cmd` is your own bar and is never dry-run.
+- **Cost:** one extra authoring call plus one verification run per compile attempt, metered under the
+  compile phase against `--budget-tokens`, using `--compiler-model`. Weigh it against the run it
+  prevents — the motivating incident burned ~39 min and ~2M tokens against a single unsatisfiable
+  assertion.
+
+Opt out with `--contract-dry-run false` (config-file key `contract-dry-run`).
+
 **The verify command runs with a credential-scrubbed environment.** Credential-looking variables
 (`*_TOKEN`, `*_KEY`, `*SECRET*`, `AWS_*`, `GITHUB_*`, …) are stripped so they can't be exfiltrated
 through a check; PATH/HOME and the toolchain env are kept. This narrows but does not eliminate the

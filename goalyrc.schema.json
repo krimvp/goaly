@@ -681,6 +681,20 @@
         }
       ]
     },
+    "contract-dry-run": {
+      "description": "Default for the --contract-dry-run flag. Explicit CLI flags always override.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
     "critic-model": {
       "description": "Default for the --critic-model flag. Explicit CLI flags always override.",
       "anyOf": [
@@ -1765,6 +1779,20 @@
           },
           "no-satisfiability-critic": {
             "description": "Default for the --no-satisfiability-critic flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "contract-dry-run": {
+            "description": "Default for the --contract-dry-run flag. Explicit CLI flags always override.",
             "anyOf": [
               {
                 "type": "string"
