@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   loadConfig,
   overlayFromConfig,
+  parseConfigDocument,
   defaultConfigFileReader,
   CONFIG_FILE_KEYS,
   IMPLICIT_CONFIG_FILENAME,
@@ -95,6 +96,52 @@ describe('overlayFromConfig', () => {
   });
 });
 
+describe('parseConfigDocument presets', () => {
+  it('normalizes each preset body exactly like the top level', () => {
+    const doc = parseConfigDocument(
+      {
+        harness: 'codex',
+        presets: {
+          quick: { mode: 'review', 'max-iterations': 3 },
+          ship: { autonomous: true, 'approver-lenses': ['A', 'B'] },
+        },
+      },
+      '.goalyrc',
+    );
+    expect(doc.overlay).toEqual({ harness: 'codex' });
+    expect(doc.presets['quick']).toEqual({ mode: 'review', 'max-iterations': '3' });
+    expect(doc.presets['ship']).toEqual({ autonomous: true, 'approver-lenses': 'A,B' });
+  });
+
+  it('rejects an unknown key inside a preset body, naming the full path', () => {
+    expect(() =>
+      parseConfigDocument({ presets: { quick: { bogus: 1 } } }, '.goalyrc'),
+    ).toThrow(/presets\.quick.*bogus/);
+  });
+
+  it("rejects 'preset' inside a preset body (no invisible chaining)", () => {
+    expect(() =>
+      parseConfigDocument({ presets: { quick: { preset: 'ship' } } }, '.goalyrc'),
+    ).toThrow(UsageError);
+  });
+
+  it("rejects the reserved preset name 'none'", () => {
+    expect(() => parseConfigDocument({ presets: { none: {} } }, '.goalyrc')).toThrow(/reserved/);
+  });
+
+  it('rejects a malformed preset name', () => {
+    expect(() => parseConfigDocument({ presets: { 'has space': {} } }, '.goalyrc')).toThrow(
+      /invalid preset name/,
+    );
+  });
+
+  it('a per-invocation flag is rejected inside a preset body too', () => {
+    expect(() =>
+      parseConfigDocument({ presets: { quick: { 'dry-run': true } } }, '.goalyrc'),
+    ).toThrow(UsageError);
+  });
+});
+
 describe('loadConfig', () => {
   it('returns an empty overlay when neither .goalyrc nor --config exists', async () => {
     const loaded = await loadConfig('/some/dir', undefined, fakeReader({}));
@@ -177,6 +224,42 @@ describe('loadConfig', () => {
     });
   });
 
+  describe('preset layering', () => {
+    const home = '/home/u';
+    const homeRc = path.join(home, IMPLICIT_CONFIG_FILENAME);
+
+    it('records each preset with the file that defined it', async () => {
+      const files = {
+        [homeRc]: '{ "presets": { "quick": { "mode": "review" } } }',
+        [path.join('/proj', IMPLICIT_CONFIG_FILENAME)]:
+          '{ "presets": { "ship": { "mode": "hands-off" } } }',
+      };
+      const loaded = await loadConfig('/proj', undefined, fakeReader(files), home);
+      expect(loaded.presets).toEqual({
+        quick: { overlay: { mode: 'review' }, source: HOME_CONFIG_LABEL },
+        ship: { overlay: { mode: 'hands-off' }, source: IMPLICIT_CONFIG_FILENAME },
+      });
+    });
+
+    it('a later layer redefining a name replaces it WHOLESALE (no body merging)', async () => {
+      const files = {
+        [homeRc]: '{ "presets": { "ship": { "mode": "hands-off", "candidates": 3 } } }',
+        [path.join('/proj', IMPLICIT_CONFIG_FILENAME)]:
+          '{ "presets": { "ship": { "mode": "review" } } }',
+      };
+      const loaded = await loadConfig('/proj', undefined, fakeReader(files), home);
+      // The home file's `candidates` must NOT leak into the workspace redefinition.
+      expect(loaded.presets).toEqual({
+        ship: { overlay: { mode: 'review' }, source: IMPLICIT_CONFIG_FILENAME },
+      });
+    });
+
+    it('no presets anywhere ⇒ the field is absent (hand-built fixtures stay valid)', async () => {
+      const loaded = await loadConfig('/proj', undefined, fakeReader({}));
+      expect(loaded.presets).toBeUndefined();
+    });
+  });
+
   it('turns invalid JSON into a UsageError', async () => {
     const files = { [path.join('/d', IMPLICIT_CONFIG_FILENAME)]: '{ not json' };
     await expect(loadConfig('/d', undefined, fakeReader(files))).rejects.toThrow(UsageError);
@@ -226,12 +309,13 @@ describe('config-file schema vs. the documented CLI flags (drift guard)', () => 
    * so a genuinely new flag can never hide behind a loose heuristic.
    */
   const NOT_A_RUN_FLAG = new Set([
-    // Subcommand flags: `goaly ui` / `goaly worktree` / `goaly init`.
+    // Subcommand flags: `goaly ui` / `goaly worktree` / `goaly init` / `goaly config presets`.
     'port',
     'base',
     'force',
     'delete-branch',
     'yes',
+    'names',
     // Another tool's flags, named in prose because a goaly flag maps onto them.
     'auto', // droid's autonomy tier, which --harness-autonomy sets
     'rm', // docker/podman `run --rm`, in the sandbox-runtime description

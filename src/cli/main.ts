@@ -73,6 +73,7 @@ export async function main(argv: string[]): Promise<number> {
   if (parsed.command === 'config' && parsed.configCmd !== undefined) {
     return runConfig(
       parsed.configCmd,
+      parsed.workspace,
       (s) => process.stdout.write(s),
       (s) => process.stderr.write(s),
     );

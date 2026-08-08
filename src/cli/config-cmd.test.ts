@@ -25,6 +25,19 @@ async function validate(content: string | undefined, name = '.goalyrc'): Promise
   const capture: Capture = { out: '', err: '' };
   const code = await runConfig(
     { kind: 'validate', path: file },
+    dir,
+    (s) => (capture.out += s),
+    (s) => (capture.err += s),
+  );
+  return { ...capture, code };
+}
+
+async function listPresets(content: string | undefined, names = false): Promise<Capture & { code: number }> {
+  if (content !== undefined) await writeFile(path.join(dir, '.goalyrc'), content, 'utf8');
+  const capture: Capture = { out: '', err: '' };
+  const code = await runConfig(
+    { kind: 'presets', names },
+    dir,
     (s) => (capture.out += s),
     (s) => (capture.err += s),
   );
@@ -61,5 +74,66 @@ describe('goaly config validate', () => {
     const res = await validate('{ "approver-models": ["a", "b"] }');
     expect(res.code).toBe(0);
     expect(res.out).toContain('approver-models');
+  });
+
+  it('reports presets alongside the settings', async () => {
+    const res = await validate(
+      '{ "harness": "codex", "presets": { "quick": { "mode": "review" }, "ship": { "autonomous": true } } }',
+    );
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('2 presets: quick, ship');
+  });
+
+  it('rejects an unknown key inside a preset body, naming the path (exit 1)', async () => {
+    const res = await validate('{ "presets": { "quick": { "no-such-flag": true } } }');
+    expect(res.code).toBe(1);
+    expect(res.err).toContain('presets.quick');
+  });
+
+  it("rejects the reserved preset name 'none' (exit 1)", async () => {
+    const res = await validate('{ "presets": { "none": { "autonomous": true } } }');
+    expect(res.code).toBe(1);
+    expect(res.err).toContain("'none' is reserved");
+  });
+});
+
+describe('goaly config presets', () => {
+  it('lists the built-in and each configured preset with its defining source and keys', async () => {
+    const res = await listPresets(
+      '{ "presets": { "ship": { "mode": "hands-off", "budget-tokens": 500000 }, "quick": { "mode": "review" } } }',
+    );
+    expect(res.code).toBe(0);
+    expect(res.out).toMatch(/default\s+\(built-in\)\s+mode/);
+    expect(res.out).toMatch(/quick\s+\(\.goalyrc\)\s+mode/);
+    expect(res.out).toMatch(/ship\s+\(\.goalyrc\)\s+mode, budget-tokens/);
+  });
+
+  it('--names prints bare names only (the completion wire format), built-in included', async () => {
+    const res = await listPresets(
+      '{ "presets": { "ship": { "mode": "hands-off" }, "quick": { "mode": "review" } } }',
+      true,
+    );
+    expect(res.code).toBe(0);
+    expect(res.out).toBe('default\nquick\nship\n');
+  });
+
+  it('with no config file the built-in is still listed, plus the how-to-define hint', async () => {
+    const res = await listPresets('{ "harness": "codex" }');
+    expect(res.code).toBe(0);
+    expect(res.out).toMatch(/default\s+\(built-in\)\s+mode/);
+    expect(res.out).toContain('define your own under "presets"');
+  });
+
+  it("a config redefinition of 'default' shadows the built-in in the listing", async () => {
+    const res = await listPresets('{ "presets": { "default": { "mode": "review" } } }');
+    expect(res.code).toBe(0);
+    expect(res.out).toMatch(/default\s+\(\.goalyrc\)\s+mode/);
+    expect(res.out).not.toContain('(built-in)');
+  });
+
+  it('an invalid config file fails the listing loudly (exit 1)', async () => {
+    const res = await listPresets('{ "bogus": true }');
+    expect(res.code).toBe(1);
+    expect(res.err).toContain("'bogus'");
   });
 });

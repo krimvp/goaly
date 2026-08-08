@@ -16,20 +16,46 @@ export const ARRAY_CONFIG_KEYS: readonly string[] = ['approver-models', 'approve
 
 const FLAG_VALUE = [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }] as const;
 
+/** The per-key property map, shared by the top level and each preset body. */
+function flagProperties(keys: readonly string[]): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  for (const key of keys) {
+    properties[key] =
+      key === 'preset'
+        ? {
+            description:
+              'Name of the preset (from "presets") applied by default on every run — announced ' +
+              'each run; --preset <name>|none on the command line overrides it.',
+            type: 'string',
+          }
+        : ARRAY_CONFIG_KEYS.includes(key)
+          ? {
+              description: `Default for the --${key} flag (JSON array of strings, or the comma-separated string the CLI accepts).`,
+              anyOf: [{ type: 'array', items: { type: 'string' } }, ...FLAG_VALUE],
+            }
+          : {
+              description: `Default for the --${key} flag. Explicit CLI flags always override.`,
+              anyOf: [...FLAG_VALUE],
+            };
+  }
+  return properties;
+}
+
 /** Build the `.goalyrc` JSON Schema object (deterministic key order: `CONFIG_FILE_KEYS` order). */
 export function buildConfigJsonSchema(): Record<string, unknown> {
-  const properties: Record<string, unknown> = {};
-  for (const key of CONFIG_FILE_KEYS) {
-    properties[key] = ARRAY_CONFIG_KEYS.includes(key)
-      ? {
-          description: `Default for the --${key} flag (JSON array of strings, or the comma-separated string the CLI accepts).`,
-          anyOf: [{ type: 'array', items: { type: 'string' } }, ...FLAG_VALUE],
-        }
-      : {
-          description: `Default for the --${key} flag. Explicit CLI flags always override.`,
-          anyOf: [...FLAG_VALUE],
-        };
-  }
+  const properties = flagProperties(CONFIG_FILE_KEYS);
+  properties['presets'] = {
+    description:
+      'Named presets: each value is the same flag-default object (minus "preset" itself), ' +
+      'selected per run with --preset <name> or persistently via the top-level "preset" key. ' +
+      'A later config layer that redefines a name replaces it wholesale.',
+    type: 'object',
+    additionalProperties: {
+      type: 'object',
+      properties: flagProperties(CONFIG_FILE_KEYS.filter((k) => k !== 'preset')),
+      additionalProperties: false,
+    },
+  };
   return {
     $schema: 'http://json-schema.org/draft-07/schema#',
     $id: 'https://github.com/krimvp/goaly/goalyrc.schema.json',

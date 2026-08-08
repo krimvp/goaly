@@ -23,6 +23,10 @@ import { UsageError, type RawFlags } from './flags/tokens';
  * no aliases. This is an external seam: it parses with Zod and fails closed (invalid JSON, an
  * unknown key, or a non-primitive value is a usage error, never a silent ignore).
  *
+ * A file may additionally carry a structural `presets` block — named bundles of the SAME flag
+ * keys, selected per run with `--preset <name>` (or persistently via a top-level `"preset"`
+ * default) — see {@link parseConfigDocument} and `presets.ts` for the expansion semantics.
+ *
  * "Mirror the CLI flags" is a promise the `.strict()` schema below makes literal: an unlisted key is
  * a HARD usage error, so a flag missing from the schema cannot be persisted at all. The exclusions
  * are therefore a deliberate, enumerated set ({@link PER_INVOCATION_FLAGS}) rather than an accident
@@ -80,6 +84,7 @@ const ConfigFileSchema = z
     rubric: FlagValue.optional(),
     autonomous: FlagValue.optional(),
     mode: FlagValue.optional(),
+    preset: FlagValue.optional(),
     'max-iterations': FlagValue.optional(),
     candidates: FlagValue.optional(),
     'best-of': FlagValue.optional(),
@@ -167,29 +172,39 @@ const ConfigFileSchema = z
 export const CONFIG_FILE_KEYS: readonly string[] = Object.keys(ConfigFileSchema.shape);
 
 /**
- * Validate a parsed JSON config and normalize it into a {@link RawFlags} overlay keyed by the
- * canonical (kebab-case) CLI flag names — so the same parsing/coercion path the CLI already uses
- * validates every value downstream. Fails closed (UsageError) on a bad shape.
- *
- * Booleans are presence-style, exactly like the CLI: `true` sets the flag, `false` is treated as
- * "not set" (the flag's absence is its default), so a config can't be the only place a boolean is
- * forced off. Numbers are stringified so they flow through the same `z.coerce` seam as `--flag N`.
+ * The `--preset none` sentinel: it disables a persisted default preset for one invocation, so no
+ * preset may claim the name (fail-closed at parse, not a surprise at selection time).
  */
-export function overlayFromConfig(raw: unknown, source: string): RawFlags {
-  let parsed: z.infer<typeof ConfigFileSchema>;
-  try {
-    parsed = ConfigFileSchema.parse(raw);
-  } catch (e) {
-    if (e instanceof z.ZodError) {
-      const issue = e.issues[0];
-      const at = issue?.path.length ? ` at key '${issue.path.join('.')}'` : '';
-      throw new UsageError(
-        `config file '${source}' is invalid${at}: ${issue?.message ?? 'expected a JSON object of flag values'}`,
-      );
-    }
-    throw e;
-  }
+export const NO_PRESET = 'none';
 
+/**
+ * Named presets (the "one word instead of N flags" layer over `--mode`): a preset body is the SAME
+ * flag-mirror object as the file's top level, minus `preset` itself (a preset selecting another
+ * preset would be invisible chaining — exactly what parse-time expansion exists to avoid). It may
+ * set `mode`, so a preset can bundle an autonomy profile with project wiring. Per-invocation flags
+ * are excluded the same way they are at the top level (they are absent from the base schema).
+ */
+const PresetBodySchema = ConfigFileSchema.omit({ preset: true });
+
+/** Preset names must survive `--preset <name>`, shell completion, and note text unquoted. */
+const PRESET_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
+
+/**
+ * The full config DOCUMENT: the flag-mirror top level plus the structural `presets` block. Still
+ * `.strict()` — an unknown key anywhere (top level or inside a preset body) is a hard usage error.
+ */
+const ConfigDocumentSchema = ConfigFileSchema.extend({
+  presets: z.record(z.string(), PresetBodySchema).optional(),
+});
+
+/** One parsed config document: the top-level flag overlay plus its named preset bodies. */
+export type ParsedConfigDocument = {
+  overlay: RawFlags;
+  presets: Record<string, RawFlags>;
+};
+
+/** Normalize one flag-mirror object (top level or a preset body) into a {@link RawFlags} overlay. */
+function normalizeOverlay(parsed: z.infer<typeof ConfigFileSchema>): RawFlags {
   const overlay: RawFlags = {};
   for (const [flag, value] of Object.entries(parsed)) {
     if (value === undefined) continue;
@@ -206,6 +221,55 @@ export function overlayFromConfig(raw: unknown, source: string): RawFlags {
     overlay[flag] = typeof value === 'number' ? String(value) : value;
   }
   return overlay;
+}
+
+/**
+ * Validate a parsed JSON config document and normalize it: the top level into a {@link RawFlags}
+ * overlay keyed by the canonical (kebab-case) CLI flag names — so the same parsing/coercion path
+ * the CLI already uses validates every value downstream — and each `presets` body into the same
+ * overlay shape. Fails closed (UsageError) on a bad shape anywhere, a malformed preset name, or a
+ * preset named `none` (reserved for `--preset none`).
+ *
+ * Booleans are presence-style, exactly like the CLI: `true` sets the flag, `false` is treated as
+ * "not set" (the flag's absence is its default), so a config can't be the only place a boolean is
+ * forced off. Numbers are stringified so they flow through the same `z.coerce` seam as `--flag N`.
+ */
+export function parseConfigDocument(raw: unknown, source: string): ParsedConfigDocument {
+  let parsed: z.infer<typeof ConfigDocumentSchema>;
+  try {
+    parsed = ConfigDocumentSchema.parse(raw);
+  } catch (e) {
+    if (e instanceof z.ZodError) {
+      const issue = e.issues[0];
+      const at = issue?.path.length ? ` at key '${issue.path.join('.')}'` : '';
+      throw new UsageError(
+        `config file '${source}' is invalid${at}: ${issue?.message ?? 'expected a JSON object of flag values'}`,
+      );
+    }
+    throw e;
+  }
+
+  const { presets: presetBodies, ...flagEntries } = parsed;
+  const presets: Record<string, RawFlags> = {};
+  for (const [name, body] of Object.entries(presetBodies ?? {})) {
+    if (name === NO_PRESET) {
+      throw new UsageError(
+        `config file '${source}': preset name '${NO_PRESET}' is reserved (--preset ${NO_PRESET} disables a persisted default)`,
+      );
+    }
+    if (!PRESET_NAME_RE.test(name)) {
+      throw new UsageError(
+        `config file '${source}': invalid preset name '${name}' (use letters, digits, '-', '_'; must start with a letter or digit)`,
+      );
+    }
+    presets[name] = normalizeOverlay(body);
+  }
+  return { overlay: normalizeOverlay(flagEntries), presets };
+}
+
+/** The top-level flag overlay of a config document (kept for callers that write no presets). */
+export function overlayFromConfig(raw: unknown, source: string): RawFlags {
+  return parseConfigDocument(raw, source).overlay;
 }
 
 /** Reads a config file's text, or `undefined` if it does not exist. Injectable for tests. */
@@ -227,22 +291,31 @@ function isNotFound(e: unknown): boolean {
   );
 }
 
+/** A named preset as loaded: its flag overlay plus the config file that defined it (for the loud note). */
+export type LoadedPreset = { overlay: RawFlags; source: string };
+
 export type LoadedConfig = {
   /** Normalized flag overlay (empty when no config file contributed). */
   overlay: RawFlags;
   /** Files that supplied defaults, lowest-precedence first (for logging). Empty when none. */
   sources: string[];
+  /**
+   * Named presets across all layers. A later layer that redefines a name replaces it WHOLESALE (no
+   * cross-file body merging — "the nearest definition wins" is one debuggable sentence). Optional
+   * so hand-built fixtures without presets stay valid; absent ⇒ none defined.
+   */
+  presets?: Record<string, LoadedPreset>;
 };
 
-/** Parse one config file's text into an overlay, failing closed on bad JSON or a bad shape. */
-function overlayFromText(text: string, source: string): RawFlags {
+/** Parse one config file's text into a document, failing closed on bad JSON or a bad shape. */
+function documentFromText(text: string, source: string): ParsedConfigDocument {
   let json: unknown;
   try {
     json = JSON.parse(text);
   } catch (e) {
     throw new UsageError(`config file '${source}' is not valid JSON: ${errorMessage(e)}`);
   }
-  return overlayFromConfig(json, source);
+  return parseConfigDocument(json, source);
 }
 
 /**
@@ -261,6 +334,16 @@ export async function loadConfig(
 ): Promise<LoadedConfig> {
   const overlay: RawFlags = {};
   const sources: string[] = [];
+  const presets: Record<string, LoadedPreset> = {};
+
+  const applyLayer = (text: string, label: string): void => {
+    const doc = documentFromText(text, label);
+    Object.assign(overlay, doc.overlay);
+    for (const [name, body] of Object.entries(doc.presets)) {
+      presets[name] = { overlay: body, source: label }; // wholesale replacement, never a body merge
+    }
+    sources.push(label);
+  };
 
   const homePath = path.join(homeDir, IMPLICIT_CONFIG_FILENAME);
   const workspacePath = path.join(dir, IMPLICIT_CONFIG_FILENAME);
@@ -271,18 +354,12 @@ export async function loadConfig(
   // 1. Home-level `~/.goalyrc` (optional, lowest precedence — personal cross-project defaults).
   if (!homeIsWorkspace) {
     const home = await read(homePath);
-    if (home !== undefined) {
-      Object.assign(overlay, overlayFromText(home, HOME_CONFIG_LABEL));
-      sources.push(HOME_CONFIG_LABEL);
-    }
+    if (home !== undefined) applyLayer(home, HOME_CONFIG_LABEL);
   }
 
   // 2. Implicit workspace/cwd `.goalyrc` (optional — overrides the home file on conflicts).
   const implicit = await read(workspacePath);
-  if (implicit !== undefined) {
-    Object.assign(overlay, overlayFromText(implicit, IMPLICIT_CONFIG_FILENAME));
-    sources.push(IMPLICIT_CONFIG_FILENAME);
-  }
+  if (implicit !== undefined) applyLayer(implicit, IMPLICIT_CONFIG_FILENAME);
 
   // 3. Explicit `--config <path>` (required to exist; overrides the implicit files on conflicts).
   if (explicitPath !== undefined) {
@@ -290,9 +367,8 @@ export async function loadConfig(
     if (text === undefined) {
       throw new UsageError(`config file '${explicitPath}' (from --config) does not exist`);
     }
-    Object.assign(overlay, overlayFromText(text, explicitPath));
-    sources.push(explicitPath);
+    applyLayer(text, explicitPath);
   }
 
-  return { overlay, sources };
+  return { overlay, sources, ...(Object.keys(presets).length > 0 ? { presets } : {}) };
 }

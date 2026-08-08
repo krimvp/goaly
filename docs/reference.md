@@ -9,6 +9,7 @@ rationale in [`DESIGN.md`](../DESIGN.md) and [`docs/adr/`](adr/), the terse cont
 
 - [CLI cookbook](#cli-cookbook)
 - [Autonomy profiles](#autonomy-profiles---mode)
+- [Named presets](#named-presets---preset)
 - [Onboarding](#onboarding-goaly-doctor--goaly-init)
 - [Dry run](#dry-run---dry-run)
 - [Config file](#config-file)
@@ -187,6 +188,66 @@ goaly "refactor the parser" --verify-cmd "npm test" --mode hands-off --harness-a
 `mode` is also a `.goalyrc` key, so a project can default to `review` while an operator opts a
 single run into `hands-off` from the command line.
 
+## Named presets (`--preset`)
+
+Where `--mode` bundles the fixed autonomy postures, a preset bundles **your** flags: a
+named block you define once under `"presets"` in any config layer, selected with
+`--preset <name>` — one word instead of retyping (or remembering) the whole configuration.
+A preset body takes the same kebab-case keys as the config file itself (minus `preset` — no
+chaining), including `mode`, so a preset can pair an autonomy posture with project wiring.
+
+**One preset ships built in**, so presets work before any config file exists: `default`,
+the most straightforward complete run — `{ "mode": "hands-off" }`, everything else left to the
+tool defaults. Built-in presets are deliberately **language- and toolchain-neutral**: no verify
+command, no setup command, no harness or model choice. Verification falls back to the
+`--generate` default (the LLM authors checks for whatever project it finds), so it works the
+same in a Rust crate, a Python package, or a Node repo. Redefine `default` in a config file to
+make it yours — a redefinition replaces the built-in wholesale, exactly like one config layer
+over another.
+
+**`default` is truly the default: it applies without being asked for.** A run that chooses
+neither a preset nor a mode gets the `default` preset implicitly — `goaly "<goal>"` and `goaly
+--preset default "<goal>"` are the same run. The implied application is deliberately the
+**weakest tier there is**: it fills gaps only, so any key a config file or an explicit flag sets
+wins, and choosing any `--mode` or `--preset` suppresses it entirely (a chosen posture is never
+mixed with an implied one). It is announced on every run with its off-switches; `--preset none`
+opts out for one invocation, a persisted `"preset": "none"` for a whole tree, and a config-file
+`"mode"` (e.g. `review`) pins a project to an explicit posture instead.
+
+```jsonc
+// .goalyrc — preset bodies stay toolchain-neutral; project wiring like a verify
+// command belongs in the base keys, where every preset inherits it
+{
+  "presets": {
+    "quick": { "mode": "review", "max-iterations": 3 },
+    "ship":  { "mode": "hands-off", "budget-tokens": 500000, "delta-verify": true },
+    "nightly": { "mode": "aggressive", "candidates": 3, "stream-transcript": true }
+  },
+  "preset": "quick"   // optional: applied on every run unless overridden
+}
+```
+
+```bash
+goaly "fix the flaky test"                   # the implied 'default' preset: hands-off, any repo
+goaly "fix the flaky test" --preset ship     # one word selects the whole way of running
+goaly "audit the parser"                     # a persisted "preset": "quick" applies instead
+goaly "hotfix" --preset none                 # bare tool defaults for one invocation
+goaly config presets                         # what is defined, from which source, with which keys
+```
+
+Like a mode, a chosen preset expands **at parse time** into the same explicit flag values you
+could type by hand — nothing invisible reaches the loop, and every expansion is logged with its
+defining file. Layering: **implied `default` < config base keys < chosen preset < `--mode` <
+explicit CLI flags**; any flag you also type beats the preset, and the override is reported
+loudly. A persisted `"preset"` selection is announced on every run together with its off-switch
+(`--preset none`), so it can never become silent state. An unknown name fails closed listing
+what *is* defined.
+
+Presets resolve across the built-ins plus the same three config layers; a later layer that
+redefines a name (built-in or not) replaces it **wholesale** (no body merging) — the nearest
+definition wins, debuggably. `goaly config presets` lists the resolved result; its `--names`
+form prints bare names and feeds the shell completion for `--preset`.
+
 ## Onboarding (`goaly doctor` / `goaly init`)
 
 Two subcommands cover first-time setup, so the common early failures (missing CLI, no git repo,
@@ -277,6 +338,10 @@ Keys mirror the CLI flags in kebab-case. Full precedence:
 Booleans take `true`/`false` (`false` = "not set"). An unknown key, non-primitive value, or invalid
 JSON is a usage error (the config seam parses with Zod and fails closed).
 
+A file may also carry a `"presets"` block (named bundles of the same keys, selected with
+`--preset <name>`) and a top-level `"preset"` default — see
+[Named presets](#named-presets---preset).
+
 **Every documented `goaly run` flag is settable from a file**, except the per-invocation ones, which
 are deliberately excluded and enumerated: `--resume`, `--from-run`, `--inherit-session`,
 `--workspace`, `--worktree`, `--config` itself, `--note`, `--dry-run`, the `--*-file` input-source
@@ -287,7 +352,9 @@ difference — and a test enforces it, so a newly added flag cannot quietly beco
 
 `goaly config validate <path>` parses a config file through the exact fail-closed path every run
 uses and reports the verdict (exit `0` valid / `1` invalid / `2` unreadable) — so "this file
-validates" and "a run accepts this file" are one fact.
+validates" and "a run accepts this file" are one fact. It reports the presets a file defines
+alongside its settings. `goaly config presets [--names] [--workspace <dir>]` lists the named
+presets exactly as a run would resolve them across all layers.
 
 For editor auto-completion and inline validation, a JSON Schema is generated from the same Zod
 shape (`npm run gen:schema`) and ships as `goalyrc.schema.json` at the package root and in
@@ -408,7 +475,9 @@ flag (re-issuing the same heavy call would just time out again).
 
 ## Seal: the contract gate
 
-At Seal (unless `--autonomous`) goaly prints the frozen contract and prompts:
+On a non-autonomous run (e.g. `--mode review`, or `--preset none` without other autonomy flags —
+the implied [`default` preset](#named-presets---preset) otherwise runs hands-off) goaly prints
+the frozen contract at Seal and prompts:
 
 ```
 Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject:

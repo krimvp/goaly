@@ -103,6 +103,10 @@
         }
       ]
     },
+    "preset": {
+      "description": "Name of the preset (from \"presets\") applied by default on every run — announced each run; --preset <name>|none on the command line overrides it.",
+      "type": "string"
+    },
     "max-iterations": {
       "description": "Default for the --max-iterations flag. Explicit CLI flags always override.",
       "anyOf": [
@@ -1066,6 +1070,1078 @@
           "type": "boolean"
         }
       ]
+    },
+    "presets": {
+      "description": "Named presets: each value is the same flag-default object (minus \"preset\" itself), selected per run with --preset <name> or persistently via the top-level \"preset\" key. A later config layer that redefines a name replaces it wholesale.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "goal": {
+            "description": "Default for the --goal flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "verify-cmd": {
+            "description": "Default for the --verify-cmd flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "generate": {
+            "description": "Default for the --generate flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "intent": {
+            "description": "Default for the --intent flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "rubric": {
+            "description": "Default for the --rubric flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "autonomous": {
+            "description": "Default for the --autonomous flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "mode": {
+            "description": "Default for the --mode flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "max-iterations": {
+            "description": "Default for the --max-iterations flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "candidates": {
+            "description": "Default for the --candidates flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "best-of": {
+            "description": "Default for the --best-of flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "resume-best-of-incomplete": {
+            "description": "Default for the --resume-best-of-incomplete flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "phased": {
+            "description": "Default for the --phased flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "max-phases": {
+            "description": "Default for the --max-phases flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "max-plan-revisions": {
+            "description": "Default for the --max-plan-revisions flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "max-plan-retries": {
+            "description": "Default for the --max-plan-retries flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "parallel-phases": {
+            "description": "Default for the --parallel-phases flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "plan-file": {
+            "description": "Default for the --plan-file flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "planner-model": {
+            "description": "Default for the --planner-model flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "max-seal-revisions": {
+            "description": "Default for the --max-seal-revisions flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "max-compile-retries": {
+            "description": "Default for the --max-compile-retries flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "verify-dir": {
+            "description": "Default for the --verify-dir flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "smoke": {
+            "description": "Default for the --smoke flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "setup-cmd": {
+            "description": "Default for the --setup-cmd flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "no-setup": {
+            "description": "Default for the --no-setup flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "setup-timeout-ms": {
+            "description": "Default for the --setup-timeout-ms flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "install-missing-tools": {
+            "description": "Default for the --install-missing-tools flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "stuck-no-diff": {
+            "description": "Default for the --stuck-no-diff flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "stuck-repeat-threshold": {
+            "description": "Default for the --stuck-repeat-threshold flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "stuck-oscillation": {
+            "description": "Default for the --stuck-oscillation flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "stuck-crash-threshold": {
+            "description": "Default for the --stuck-crash-threshold flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "stuck-unevaluable-threshold": {
+            "description": "Default for the --stuck-unevaluable-threshold flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "auto-remediate-stuck": {
+            "description": "Default for the --auto-remediate-stuck flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "diff-ignore": {
+            "description": "Default for the --diff-ignore flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "baseline": {
+            "description": "Default for the --baseline flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "workspace-mode": {
+            "description": "Default for the --workspace-mode flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "delta-verify": {
+            "description": "Default for the --delta-verify flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "cost-table": {
+            "description": "Default for the --cost-table flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "stream": {
+            "description": "Default for the --stream flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "stream-transcript": {
+            "description": "Default for the --stream-transcript flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "stream-file": {
+            "description": "Default for the --stream-file flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "explain": {
+            "description": "Default for the --explain flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "explain-model": {
+            "description": "Default for the --explain-model flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "adversarial": {
+            "description": "Default for the --adversarial flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "adversarial-plan-critics": {
+            "description": "Default for the --adversarial-plan-critics flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "adversarial-contract-critics": {
+            "description": "Default for the --adversarial-contract-critics flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "adversarial-refuters": {
+            "description": "Default for the --adversarial-refuters flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "critic-model": {
+            "description": "Default for the --critic-model flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "budget-tokens": {
+            "description": "Default for the --budget-tokens flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "budget-wall-ms": {
+            "description": "Default for the --budget-wall-ms flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "harness-timeout-ms": {
+            "description": "Default for the --harness-timeout-ms flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "harness-idle-timeout-ms": {
+            "description": "Default for the --harness-idle-timeout-ms flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "llm-timeout-ms": {
+            "description": "Default for the --llm-timeout-ms flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "verify-timeout-ms": {
+            "description": "Default for the --verify-timeout-ms flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "max-agent-turns": {
+            "description": "Default for the --max-agent-turns flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "harness": {
+            "description": "Default for the --harness flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "harness-autonomy": {
+            "description": "Default for the --harness-autonomy flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "base-url": {
+            "description": "Default for the --base-url flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "llm-api-key-env": {
+            "description": "Default for the --llm-api-key-env flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "model": {
+            "description": "Default for the --model flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "llm-model": {
+            "description": "Default for the --llm-model flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "judge-model": {
+            "description": "Default for the --judge-model flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "approver-model": {
+            "description": "Default for the --approver-model flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "approver-models": {
+            "description": "Default for the --approver-models flag (JSON array of strings, or the comma-separated string the CLI accepts).",
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "approver-quorum": {
+            "description": "Default for the --approver-quorum flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "approver-diversity-temp": {
+            "description": "Default for the --approver-diversity-temp flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "approver-lenses": {
+            "description": "Default for the --approver-lenses flag (JSON array of strings, or the comma-separated string the CLI accepts).",
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "compiler-model": {
+            "description": "Default for the --compiler-model flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "llm-provider": {
+            "description": "Default for the --llm-provider flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "log-level": {
+            "description": "Default for the --log-level flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "log-file": {
+            "description": "Default for the --log-file flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "no-log-file": {
+            "description": "Default for the --no-log-file flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "sandbox": {
+            "description": "Default for the --sandbox flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "sandbox-net": {
+            "description": "Default for the --sandbox-net flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "sandbox-image": {
+            "description": "Default for the --sandbox-image flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "sandbox-runtime": {
+            "description": "Default for the --sandbox-runtime flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": false

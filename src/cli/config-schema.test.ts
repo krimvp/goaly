@@ -21,13 +21,26 @@ describe('goalyrc.schema.json drift guard', () => {
   it('covers every config key, rejects unknown keys, and array-allows only the list keys', () => {
     const schema = buildConfigJsonSchema();
     const properties = schema['properties'] as Record<string, { anyOf: unknown[] }>;
-    expect(Object.keys(properties).sort()).toEqual([...CONFIG_FILE_KEYS].sort());
+    // The flag-mirror keys plus the one structural key (the named-preset block).
+    expect(Object.keys(properties).sort()).toEqual([...CONFIG_FILE_KEYS, 'presets'].sort());
     expect(schema['additionalProperties']).toBe(false);
     for (const key of CONFIG_FILE_KEYS) {
+      if (key === 'preset') continue; // a preset NAME (plain string), not a flag-value union
       const allowsArray = properties[key]!.anyOf.some(
         (v) => (v as { type?: string }).type === 'array',
       );
       expect(allowsArray, `${key} array-allowance`).toBe(ARRAY_CONFIG_KEYS.includes(key));
     }
+  });
+
+  it('the presets block accepts every flag key except "preset", and rejects unknown keys', () => {
+    const schema = buildConfigJsonSchema();
+    const presets = (schema['properties'] as Record<string, unknown>)['presets'] as {
+      additionalProperties: { properties: Record<string, unknown>; additionalProperties: boolean };
+    };
+    expect(Object.keys(presets.additionalProperties.properties).sort()).toEqual(
+      CONFIG_FILE_KEYS.filter((k) => k !== 'preset').sort(),
+    );
+    expect(presets.additionalProperties.additionalProperties).toBe(false);
   });
 });
