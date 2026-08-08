@@ -19,6 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cap.
 
 ### Added
+- In-loop contract-fault adjudication (`CONTRACT_DEFECTIVE`, issue #116). Contract soundness was
+  otherwise classified exactly once, at t=0, on a tree with no implementation in it — the moment of
+  least evidence, where an unsatisfiable frozen assertion and an honest "not written yet" red are
+  indistinguishable. Now, when a `repeat-failure` streak is about to abort AND the repeated
+  signature names one of the contract's frozen authored files AND the worker has demonstrably
+  changed the tree, the run makes ONE read-only LLM call asking whether any correct implementation
+  could pass that check. A confident "no" relabels the abort as `CONTRACT_DEFECTIVE` — naming the
+  frozen file and stating that the implementation may be correct and the tree is worth keeping —
+  instead of pointing at `--stuck-repeat-threshold`, which cannot help. Everything else (no
+  adjudicator, an LLM error, an unparseable verdict, any uncertainty) keeps today's repeat-failure
+  abort byte-for-byte. Bounded to once per run, write-ahead logged as a Zod-parsed
+  `CONTRACT_ADJUDICATED` event so `--resume` reuses the verdict and never re-calls the model, and
+  metered against `--budget-tokens`. Diagnosis only: the path can never reach DONE, never produces
+  a green, and never re-authors the frozen contract. The reducer stays pure — DECIDE emits an
+  `ADJUDICATE_CONTRACT` command and the Driver performs the call.
 - Compile-time positive control (`--contract-dry-run`, on by default under `--generate`): before the
   contract is frozen, the compiler also authors a throwaway reference implementation, materializes
   it in a scratch copy of the workspace beside the authored verification files, and runs the

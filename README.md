@@ -75,7 +75,11 @@ COMPILE ──► SEAL ──► setup + pre-flight ──► ┌─────
 
 Under `--generate` (the default), the compiler also authors a one-time **setup** command and a
 **pre-flight** proves the frozen verification can actually run — an unsound contract aborts before
-any worker token is spent.
+any worker token is spent. And because that pre-flight happens at t=0, on a tree with no
+implementation in it, goaly asks once more when the evidence finally exists: a repeat-failure
+streak that keeps tripping a frozen authored check is re-adjudicated read-only, and an
+unsatisfiable bar aborts as **`CONTRACT_DEFECTIVE`** — "the contract is broken, keep your tree" —
+instead of blaming the worker.
 
 ## Features
 
@@ -108,6 +112,7 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Reliability](docs/reference.md#reliability) | *(defaults)* | Preflight, bounded retries (contract *and* plan), safe Ctrl-C, fsync'd write-ahead log. |
 | [Stuck detection](docs/reference.md#stuck-detection) | `--stuck-*` | Typed early aborts — no-diff, repeat-failure, oscillation, harness crash, unevaluable contract, and repeated timeout-with-no-diff — each naming the flag that fixes it. |
 | [Stuck self-recovery](docs/reference.md#automatic-remediation---auto-remediate-stuck) | `--auto-remediate-stuck` | Opt-in: up to 3 bounded self-recoveries (no-diff hint, one extra repeat/crash attempt) before stopping for the operator. |
+| [Contract-fault adjudication](docs/reference.md#in-loop-contract-fault-adjudication-contract_defective) | *(defaults)* | A repeat-failure streak on a frozen authored file is re-adjudicated once, read-only, against the tree that now HAS an implementation: a `CONTRACT_DEFECTIVE` abort says the bar is broken and your tree is worth keeping. Fail-closed to today's abort. |
 
 ## Usage
 

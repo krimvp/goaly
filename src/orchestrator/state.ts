@@ -103,6 +103,13 @@ export type LoopCtx = {
    * `CONTINUE` decision carrying a remediation, so replaying the log reproduces it exactly.
    */
   readonly remediations: RemediationLedger;
+  /**
+   * Whether this run has already spent its ONE in-loop contract adjudication (issue #116). The
+   * structural "bounded once per run": it is pure, folded from the log by the ADJUDICATE transition
+   * exactly as `remediations` rides a CONTINUE, so a `--resume` that re-trips the repeat detector
+   * can never buy a second LLM call.
+   */
+  readonly adjudicated: boolean;
 };
 
 /** Per-kind remediation spend (each kind is remediated at most once; see `planRemediation`). */
@@ -194,6 +201,21 @@ export type OrchestratorState =
   | { readonly tag: 'RUNNING_AGENT'; readonly ctx: LoopCtx }
   | { readonly tag: 'VERIFYING'; readonly ctx: LoopCtx }
   | { readonly tag: 'AWAIT_SIGNOFF'; readonly ctx: LoopCtx }
+  | {
+      /**
+       * In-loop contract-fault adjudication (issue #116): a repeat-failure streak whose signature
+       * names a frozen `generatedFiles` path, on a tree the worker demonstrably populated. The Driver
+       * is making ONE read-only classification call; resolved by exactly one `CONTRACT_ADJUDICATED`.
+       *
+       * The run is ALREADY terminating when this state is entered — it exists only to choose the
+       * abort's LABEL. `fallbackReason` carries TODAY's byte-identical repeat-failure abort text,
+       * computed at trip time, so a `defective: false` verdict (and every failure mode that
+       * fail-closes to it) is a pure relabel-nothing passthrough.
+       */
+      readonly tag: 'ADJUDICATING';
+      readonly ctx: LoopCtx;
+      readonly fallbackReason: string;
+    }
   | { readonly tag: 'DONE'; readonly iterations: number; readonly contractHash: ContractHash }
   | {
       readonly tag: 'FAILED';
@@ -226,6 +248,7 @@ export function iterationCount(state: OrchestratorState): number {
     case 'RUNNING_AGENT':
     case 'VERIFYING':
     case 'AWAIT_SIGNOFF':
+    case 'ADJUDICATING':
       return state.ctx.iteration;
     case 'DONE':
     case 'FAILED':
@@ -276,5 +299,6 @@ export function initialCtx(
     feedbackSource: undefined,
     phase,
     remediations: NO_REMEDIATIONS,
+    adjudicated: false,
   };
 }

@@ -56,6 +56,11 @@ export function feedLine(entry: RunLogEntry, iteration: number): FeedLine | null
       return e.verdict.pass
         ? { at, text: `iter ${iteration}: verify PASS ✓`, tone: 'pass' }
         : { at, text: `iter ${iteration}: verify FAIL ✗ — ${truncate(e.verdict.detail, 160)}`, tone: 'fail' };
+    case 'CONTRACT_ADJUDICATED':
+      // Issue #116: the in-loop re-adjudication of the frozen bar (at most once per run).
+      return e.defective
+        ? { at, text: `contract adjudicated DEFECTIVE — ${truncate(e.reason, 160)}`, tone: 'fail' }
+        : plain('contract adjudicated sound (the repeat-failure abort stands)');
     case 'SIGNOFF_DECIDED':
       return e.approval.veto
         ? { at, text: `iter ${iteration}: sign-off VETO — ${truncate(e.approval.reason ?? '', 160)}`, tone: 'fail' }

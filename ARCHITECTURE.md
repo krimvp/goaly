@@ -152,9 +152,18 @@ if !ladderPass                      → continue (feed verifier detail back)
 if ladderPass && signoff.veto         → continue (feed veto reason back)
 if ladderPass && signoff.approve      → DONE          (two keys turned)
 if iteration >= maxIterations       → FAILED
-if detectStuck(ctx) !== null        → ABORTED (no-diff | timeout-no-diff | repeat-failure | oscillation | harness-crash | budget)
+if detectStuck(ctx) !== null        → ABORTED (no-diff | timeout-no-diff | repeat-failure | oscillation | harness-crash | unevaluable | budget)
+   └ repeat-failure naming a FROZEN authored file, on a populated tree, once per run
+                                    → ADJUDICATE (emit ADJUDICATE_CONTRACT; the Driver's ONE
+                                      read-only call comes back as CONTRACT_ADJUDICATED, which
+                                      relabels the SAME abort as CONTRACT_DEFECTIVE — or, on any
+                                      uncertainty/failure, leaves it byte-identical)
 else                                → continue
 ```
+
+The adjudication branch is why the state union also carries `{ tag: 'ADJUDICATING'; ctx;
+fallbackReason }`: the run is already terminating, and that state exists only to choose the abort's
+LABEL. It has no edge to DONE, to a green, or back into the loop — the freeze is untouched.
 
 **Zero-LLM is structural, not disciplinary:** `step` returns no `Promise` and is handed no
 adapters — only data. It *cannot* call an LLM. All fuzziness already happened in the Driver

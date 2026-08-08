@@ -48,12 +48,30 @@ export function resumeStreakRelief(
   const base = config.stuckPolicy;
   const crash = trailingCrashStreak(entries);
   const uneval = trailingUnevaluableStreak(entries);
-  const repeat = trailingRepeatStreak(entries);
+  const repeat = adjudicated(entries) ? 0 : trailingRepeatStreak(entries);
   return {
     ...(crash > 0 ? { harnessCrashThreshold: base.harnessCrashThreshold + crash } : {}),
     ...(uneval > 0 ? { unevaluableThreshold: base.unevaluableThreshold + uneval } : {}),
     ...(repeat > 1 ? { repeatFailureThreshold: base.repeatFailureThreshold + repeat } : {}),
   };
+}
+
+/**
+ * Did this run already adjudicate its contract in-loop (issue #116)? If so the repeat-failure relief
+ * above is SUPPRESSED, for two independent reasons:
+ *
+ *  - Correctness of the fold (the load-bearing one). Relief may only change whether a detector trips
+ *    at the TAIL of the log. Here a downstream event was already RECORDED off that trip
+ *    (`… VERIFIED → CONTRACT_ADJUDICATED → ABORTED`), so raising the threshold would make the fold
+ *    not enter ADJUDICATING at that VERIFIED — and the next entry would hit `invalidTransition`,
+ *    turning the whole resume into `driver error`. A logged transition is a fact; relief must not
+ *    desynchronize the fold from it.
+ *  - On the merits. If the bar was adjudicated DEFECTIVE, more iterations against an unsatisfiable
+ *    assertion are still unsatisfiable — a fresh contract is the only real relief, which is exactly
+ *    what the CONTRACT_DEFECTIVE next-step hint says.
+ */
+function adjudicated(entries: readonly RunLogEntry[]): boolean {
+  return entries.some((e) => e.event.tag === 'CONTRACT_ADJUDICATED');
 }
 
 /** How many of the most recent harness turns crashed, back-to-back. Mirrors `isCrashStreak`. */

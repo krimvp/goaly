@@ -1,6 +1,6 @@
 import type { LoopCtx, RemediationLedger } from './state';
 import type { Verdict, ApprovalVerdict } from '../domain';
-import { detectStuck } from './stuck';
+import { detectStuck, type StuckReason } from './stuck';
 import { planRemediation } from './remediate';
 
 /**
@@ -13,6 +13,14 @@ export type Decision =
   | { kind: 'CONTINUE'; feedback: string; source: 'verifier' | 'veto'; remediation?: RemediationLedger }
   | { kind: 'DONE' }
   | { kind: 'FAILED'; reason: string }
+  /**
+   * In-loop contract-fault adjudication (issue #116): the run IS terminating on a repeat-failure
+   * streak, but the evidence for "the frozen bar itself is defective" now exists, so spend ONE
+   * read-only classification before choosing the abort's label. `fallbackReason` is exactly the
+   * `ABORTED.reason` this same ctx would otherwise carry, so every failure mode downstream lands on
+   * today's output byte-for-byte.
+   */
+  | { kind: 'ADJUDICATE'; signature: string; repeatCount: number; fallbackReason: string }
   | { kind: 'ABORTED'; reason: string };
 
 /**
@@ -58,13 +66,19 @@ export function decide(
         remediation: remediation.ledger,
       };
     }
-    return {
-      kind: 'ABORTED',
-      reason:
-        ctx.remediations.total > 0
-          ? `${stuck.message} (auto-remediation: ${ctx.remediations.total} self-recovery attempt(s) already spent)`
-          : stuck.message,
-    };
+    // In-loop contract-fault adjudication (issue #116). Placed AFTER remediation (a spent
+    // `--auto-remediate-stuck` retry is cheaper than an LLM call and may still green) and BEFORE the
+    // abort (which it can only relabel, never avert). Pure: it emits a Decision the reducer turns
+    // into ONE Command; the Driver performs the read-only call.
+    if (suspectsContractFault(ctx, stuck)) {
+      return {
+        kind: 'ADJUDICATE',
+        signature: lastSignature(ctx),
+        repeatCount: ctx.config.stuckPolicy.repeatFailureThreshold + ctx.remediations.repeat,
+        fallbackReason: abortReason(ctx, stuck),
+      };
+    }
+    return { kind: 'ABORTED', reason: abortReason(ctx, stuck) };
   }
 
   // A spent no-diff remediation refunds the iteration its unchanged turn burned (plan 4.2) —
@@ -86,6 +100,75 @@ export function decide(
     feedback: approval?.reason ?? 'rejected by the approval gate',
     source: 'veto',
   };
+}
+
+/**
+ * The abort text a stuck condition produces — the ONE place it is built, so the adjudication
+ * passthrough (issue #116) can carry it verbatim and a `defective: false` verdict is provably
+ * byte-identical to the pre-#116 behavior.
+ */
+function abortReason(ctx: LoopCtx, stuck: StuckReason): string {
+  return ctx.remediations.total > 0
+    ? `${stuck.message} (auto-remediation: ${ctx.remediations.total} self-recovery attempt(s) already spent)`
+    : stuck.message;
+}
+
+/**
+ * Is this repeat-failure streak plausibly the FROZEN BAR's fault rather than the worker's (issue
+ * #116)? Contract soundness is otherwise classified exactly once, at t=0, on a tree with no
+ * implementation in it — the moment of least evidence, where an unsatisfiable frozen assertion and
+ * an honest "not written yet" red are indistinguishable. This gate names the moment the evidence
+ * finally exists, using ONLY facts the reducer already holds (invariant #1):
+ *
+ *  - `repeat` and nothing else: it is the one detector keyed on the verifier SIGNATURE, so it says
+ *    "the same check keeps saying the same thing" rather than "the worker looks idle".
+ *  - once per run (`ctx.adjudicated`): bounded, replayable, and immune to a re-tripping resume.
+ *  - an authored bar exists AND the signature names one of its frozen paths: there is something
+ *    concrete to accuse, and the accusation is attributable.
+ *  - the tree is populated: the evidence ("a real implementation exists and this still reds").
+ */
+function suspectsContractFault(ctx: LoopCtx, stuck: StuckReason): boolean {
+  if (stuck.kind !== 'repeat') return false;
+  if (ctx.adjudicated) return false;
+  if (ctx.contract.generatedFiles.length === 0) return false;
+  if (!treePopulated(ctx)) return false;
+  return matchedGeneratedFiles(ctx).length > 0;
+}
+
+/** The most recent normalized verifier-failure signature (empty when there is no failure history). */
+export function lastSignature(ctx: LoopCtx): string {
+  return ctx.verifierDetailHistory[ctx.verifierDetailHistory.length - 1] ?? '';
+}
+
+/**
+ * The frozen `generatedFiles` paths the repeated signature points at — by full path OR by basename,
+ * since runners frequently print only the file name. Exported so the ABORTED reason can name the
+ * same files the gate matched on. Pure string work over data the reducer already holds; per
+ * invariant #8 this deliberately does NOT live in `detectStuck`, which stays purely history-driven.
+ */
+export function matchedGeneratedFiles(ctx: LoopCtx): readonly string[] {
+  const signature = lastSignature(ctx);
+  if (signature.length === 0) return [];
+  return ctx.contract.generatedFiles
+    .map((f) => f.path)
+    .filter((path) => signature.includes(path) || signature.includes(basename(path)));
+}
+
+/** Last path segment (a pure, separator-only split — no `node:path` in the reducer). */
+function basename(path: string): string {
+  const parts = path.split(/[/\\]/);
+  return parts[parts.length - 1] ?? path;
+}
+
+/**
+ * The pure, replayable proxy for "the tree is non-trivially populated": the worker changed the tree
+ * at least once during this run, so ≥2 DISTINCT post-run hashes were recorded. APPROXIMATION, by
+ * necessity — the reducer cannot look at the tree (invariant #1) and a real emptiness probe would be
+ * IO. It errs conservative in the safe direction: a worker that never edited anything falls through
+ * to today's abort, so the feature can only fire when there is genuinely an implementation to weigh.
+ */
+function treePopulated(ctx: LoopCtx): boolean {
+  return new Set(ctx.diffHashHistory).size >= 2;
 }
 
 /**

@@ -116,8 +116,8 @@
     },
     decide: {
       t: "DECIDE — pure truth table",
-      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop with a typed reason on STUCK / budget / iteration cap. A no-diff turn is excused when the run was cut short — but only once: repeated timeout-with-no-diff turns stop the run as STUCK_TIMEOUT_NO_DIFF instead of burning the iteration budget. A checker that itself can't run is a CONTRACT_UNEVALUABLE — correct-but-unverified, never blamed on the tree, never a green.",
-      pills: ['<span class="pill pass">two keys → DONE</span>'],
+      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop with a typed reason on STUCK / budget / iteration cap. A no-diff turn is excused when the run was cut short — but only once: repeated timeout-with-no-diff turns stop the run as STUCK_TIMEOUT_NO_DIFF instead of burning the iteration budget. A checker that itself can't run is a CONTRACT_UNEVALUABLE — correct-but-unverified, never blamed on the tree, never a green. And a repeat-failure streak that keeps tripping a FROZEN authored check takes one detour first: DECIDE emits ADJUDICATE_CONTRACT, the Driver makes ONE read-only call (the reducer stays pure), and an unsatisfiable bar aborts as CONTRACT_DEFECTIVE — your tree may be correct, so keep it. Anything less than a confident verdict keeps today's abort, byte for byte.",
+      pills: ['<span class="pill pass">two keys → DONE</span>', '<span class="pill fail">CONTRACT_DEFECTIVE</span>'],
     },
   };
 

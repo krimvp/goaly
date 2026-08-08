@@ -6,8 +6,8 @@ import type { PhasePlan } from '../domain/plan';
 import { waveIndicesAt } from '../domain/plan';
 import type { OrchestratorState, LoopCtx, PhaseCtx } from './state';
 import { initialCtx } from './state';
-import { decide, type Decision } from './decide';
-import { normalizeDetail } from './stuck';
+import { decide, matchedGeneratedFiles, type Decision } from './decide';
+import { normalizeDetail, contractDefectiveReason } from './stuck';
 import { buildInitialPrompt, buildLoopPrompt } from './prompts';
 
 /**
@@ -58,6 +58,8 @@ export function step(state: OrchestratorState, event: OrchestratorEvent): StepRe
       return stepVerifying(state.ctx, event);
     case 'AWAIT_SIGNOFF':
       return stepAwaitSignoff(state.ctx, event);
+    case 'ADJUDICATING':
+      return stepAdjudicating(state.ctx, state.fallbackReason, event);
     case 'DONE':
     case 'FAILED':
     case 'ABORTED':
@@ -632,6 +634,34 @@ function stepAwaitSignoff(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
   return applyDecision(ctx, decide(ctx, verdict, event.approval));
 }
 
+/**
+ * The adjudication resolved (issue #116). The run was ALREADY terminating when this state was
+ * entered, so both branches end at the SAME ABORTED — only the reason differs:
+ *  - `defective: false` (including every fail-closed path: no adjudicator, an LLM throw, an
+ *    unparseable verdict) → `fallbackReason`, byte-identical to the pre-#116 repeat-failure abort.
+ *  - `defective: true`    → the typed CONTRACT_DEFECTIVE relabel, naming the frozen file(s).
+ * There is no branch to DONE, to a green, or back into the loop — diagnosis only (invariants #3/#4).
+ */
+function stepAdjudicating(
+  ctx: LoopCtx,
+  fallbackReason: string,
+  event: OrchestratorEvent,
+): StepResult {
+  if (event.tag !== 'CONTRACT_ADJUDICATED') throw invalidTransition('ADJUDICATING', event);
+  const reason = event.defective
+    ? contractDefectiveReason(matchedGeneratedFiles(ctx), event.reason, fallbackReason)
+    : fallbackReason;
+  return [
+    {
+      tag: 'ABORTED',
+      reason: phaseReason(ctx.phase, reason),
+      iterations: ctx.iteration,
+      contractHash: ctx.contract.contractHash,
+    },
+    [],
+  ];
+}
+
 /** Turn a pure Decision into the next state + commands. */
 function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
   switch (decision.kind) {
@@ -648,6 +678,25 @@ function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
     }
     case 'DONE':
       return phaseDone(ctx);
+    case 'ADJUDICATE':
+      // Exactly ONE command (the Driver's `commands.length === 1` invariant). The once-per-run
+      // ledger advance rides the transition exactly as `remediations` rides a CONTINUE, so the
+      // replay fold reproduces it and a resumed run cannot buy a second adjudication.
+      return [
+        {
+          tag: 'ADJUDICATING',
+          ctx: { ...ctx, adjudicated: true },
+          fallbackReason: decision.fallbackReason,
+        },
+        [
+          {
+            tag: 'ADJUDICATE_CONTRACT',
+            contract: ctx.contract,
+            signature: decision.signature,
+            repeatCount: decision.repeatCount,
+          },
+        ],
+      ];
     case 'FAILED':
       // A phase's failure fails the WHOLE run (decomposition can't skip a phase), named by phase.
       return [

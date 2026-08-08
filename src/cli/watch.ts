@@ -120,6 +120,12 @@ export function renderWatchEvent(entry: RunLogEntry, iteration: number): string 
       const mark = e.verdict.pass ? 'PASS ✓' : 'FAIL ✗';
       return `${at}  iter ${iteration}: verify ${mark}${e.verdict.pass ? '' : ` — ${truncate(e.verdict.detail, 120)}`}`;
     }
+    case 'CONTRACT_ADJUDICATED':
+      // Issue #116: the one-shot in-loop re-adjudication of the FROZEN bar. A `defective` verdict is
+      // the headline of the run's abort, so it is never silently plumbing.
+      return e.defective
+        ? `${at}  contract adjudicated DEFECTIVE — ${truncate(e.reason, 120)}`
+        : `${at}  contract adjudicated sound (the repeat-failure abort stands)`;
     case 'SIGNOFF_DECIDED':
       return e.approval.veto
         ? `${at}  iter ${iteration}: sign-off VETO — ${truncate(e.approval.reason ?? '', 120)}`

@@ -220,3 +220,119 @@ export async function classifyVacuousContract(
 
   return { broken: parsed.data.unsound, reason: parsed.data.reason ?? '' };
 }
+
+/**
+ * IN-LOOP contract-fault adjudication (issue #116) — the third sibling, and the only one that runs
+ * with evidence instead of without it.
+ *
+ * Both classifiers above are asked at t=0, against a tree with no implementation in it. For one
+ * defect class that timing is not unlucky but UNDECIDABLE: when a frozen assertion is impossible to
+ * satisfy, its t=0 failure is byte-identical to an honest "not written yet" red — nothing exists
+ * either way. The evidence that settles it ("a real implementation now exists and the same assertion
+ * still reds") only comes into being several iterations later, exactly when the repeat-failure
+ * detector fires. This asks the question THEN.
+ *
+ * Fail-CLOSED to `defective: false`, the INVERSE of its two pre-flight siblings — and for the same
+ * underlying reason (never let a classifier make things worse). There, a wrong verdict would ABORT a
+ * legitimate run at zero iterations, so uncertainty must proceed. Here the run is ALREADY aborting on
+ * the repeat streak, so the conservative answer is today's abort: an LLM error, an unparseable reply,
+ * a schema miss, or any uncertainty all leave the pre-#116 output untouched. Only a confident
+ * `defective: true` relabels it. Read-only in every sense — nothing here can produce a green.
+ */
+const FAULT_SYSTEM_PROMPT = [
+  'You are adjudicating a FROZEN, auto-authored success contract in an automated coding loop.',
+  'A coding agent has been working for several iterations. The working tree now contains a real,',
+  'substantially complete implementation — the agent has repeatedly changed it. Yet the SAME frozen',
+  'check has produced the SAME failure every iteration. The check files are FROZEN: the agent cannot',
+  'edit them. Decide, choosing exactly one:',
+  ' - defective=true: the frozen assertion is IMPOSSIBLE to satisfy — NO correct implementation of',
+  '   the stated goal could make it pass. For example it asserts on a function/parameter/message the',
+  '   goal never implies, requires a side effect the goal forbids, contradicts another rung, or',
+  '   depends on something outside any implementation\'s control.',
+  ' - defective=false: the assertion IS satisfiable by some correct implementation — the agent simply',
+  '   has not written that implementation yet, or is failing for an ordinary reason (a bug, a missing',
+  '   case, an environment problem). This is the normal meaning of a repeated failure.',
+  'When in doubt, answer FALSE. A repeated failure is USUALLY the implementation\'s fault; reserve',
+  'true for a defect you can point to IN THE FROZEN CHECK and justify as unsatisfiable in principle.',
+  'When (and only when) you answer true, also give "pattern": a ONE-SENTENCE GENERALIZED description',
+  'of the authoring anti-pattern — no file contents, no identifiers from this repo, no mention of how',
+  'hard the agent found the work.',
+  'Respond with ONLY a single JSON object {"defective": boolean, "reason": string, "pattern": string}.',
+  'No prose, no markdown, no code fences — JSON only.',
+  UNTRUSTED_SYSTEM_CLAUSE,
+].join(' ');
+
+const FaultClassification = z.object({
+  defective: z.boolean(),
+  reason: z.string().optional(),
+  pattern: z.string().optional(),
+});
+
+/** The adjudicator's verdict. `defective: true` relabels the abort as CONTRACT_DEFECTIVE. */
+export type ContractFaultVerdict = { defective: boolean; reason: string; pattern?: string };
+
+function buildFaultPrompt(
+  contract: CompiledContract,
+  signature: string,
+  diffSummary: string,
+  repeatCount: number,
+): string {
+  const authored = contract.generatedFiles.map((f) => `  - ${f.path}`).join('\n');
+  return [
+    `GOAL:\n${contract.goal}`,
+    `FROZEN VERIFICATION FILES (the agent cannot change these):\n${authored}`,
+    `THE FAILURE, REPEATED IDENTICALLY ${repeatCount} ITERATIONS IN A ROW:\n` +
+      wrapUntrusted(signature, { label: 'FAILURE' }),
+    `THE IMPLEMENTATION THE AGENT HAS WRITTEN SO FAR:\n${wrapUntrusted(diffSummary, { label: 'DIFF' })}`,
+    'Given this implementation: could ANY correct implementation of the goal make that frozen check ' +
+      'pass, or is the frozen check itself defective (unsatisfiable in principle)?',
+    'Reply with ONLY the JSON {"defective": boolean, "reason": string, "pattern": string}.',
+  ].join('\n\n');
+}
+
+/**
+ * Ask the model whether the frozen bar a repeat-failure streak keeps tripping is itself defective.
+ * Fail-closed to `{ defective: false }` on EVERY failure mode (see the doc above), so the caller's
+ * behavior is unchanged unless a confident positive comes back. `signature` and `diffSummary` are
+ * model/tool text, so both are wrapped as untrusted input.
+ */
+export async function classifyContractFault(
+  deps: ClassifyDeps,
+  contract: CompiledContract,
+  signature: string,
+  diffSummary: string,
+  repeatCount: number,
+): Promise<ContractFaultVerdict> {
+  const log = deps.logger ?? noopLogger;
+  let raw: string;
+  try {
+    raw = (
+      await deps.llm.complete({
+        system: FAULT_SYSTEM_PROMPT,
+        prompt: buildFaultPrompt(contract, signature, diffSummary, repeatCount),
+        temperature: 0,
+      })
+    ).text;
+  } catch (e) {
+    log.warn('contract-fault adjudication: LLM call failed — keeping the repeat-failure abort', {
+      reason: errorMessage(e),
+    });
+    return { defective: false, reason: `adjudication could not run: ${errorMessage(e)}` };
+  }
+
+  const extracted = extractJson(raw);
+  const parsed = extracted === null ? null : FaultClassification.safeParse(extracted);
+  if (parsed === null || !parsed.success) {
+    log.warn('contract-fault adjudication: unparseable response — keeping the repeat-failure abort', {});
+    return { defective: false, reason: 'adjudication produced no parseable verdict' };
+  }
+
+  const { defective, reason, pattern } = parsed.data;
+  return {
+    defective,
+    reason: reason ?? '',
+    // The generalized anti-pattern is only meaningful for a positive verdict; never carry it out of
+    // a "sound" answer, where it would be a stray description of a bar that is fine.
+    ...(defective && pattern !== undefined && pattern.length > 0 ? { pattern } : {}),
+  };
+}

@@ -42,6 +42,7 @@ import type { Observer } from '../observe/observer';
 import { errorMessage } from '../util/errors';
 import { noopTelemetry, type Telemetry, type TelemetryEvent } from '../telemetry/telemetry';
 import { prepareWorkspace, type PrepareTimeouts } from './prepare';
+import { classifyContractFault } from './preflight-soundness';
 import { Baseline, recordCheckpoint, type CheckpointDeps } from './baseline';
 import { logEvent } from './log-event';
 
@@ -803,6 +804,51 @@ async function perform(
           },
         };
       }
+    }
+
+    case 'ADJUDICATE_CONTRACT': {
+      // In-loop contract-fault adjudication (issue #116): ONE read-only LLM call, at most once per
+      // run, asking whether the frozen bar the worker keeps failing is itself unsatisfiable. The run
+      // is already terminating, so EVERY failure mode here fail-closes to `defective: false` — which
+      // the reducer folds into today's byte-identical repeat-failure abort.
+      //
+      // Provider: the already-wired `prepareLlm` — the JUDGE model, deliberately not the compiler
+      // model that authored the (possibly defective) bar, so the review is not purely self-review.
+      if (deps.prepareLlm === undefined) {
+        return {
+          event: {
+            tag: 'CONTRACT_ADJUDICATED',
+            defective: false,
+            reason: 'no adjudicator configured',
+          },
+        };
+      }
+      let diff = '';
+      try {
+        diff = await baseline.approverDiff();
+      } catch (e) {
+        // Advisory input only: a diff we cannot read weakens the prompt, it must never fail the run.
+        log.debug('contract adjudication: could not read the diff (proceeding without it)', {
+          reason: errorMessage(e),
+        });
+      }
+      const verdict = await classifyContractFault(
+        { llm: deps.prepareLlm, ...(deps.logger !== undefined ? { logger: deps.logger } : {}) },
+        command.contract,
+        command.signature,
+        diff,
+        command.repeatCount,
+      );
+      const llm = meterStep('adjudicate');
+      return {
+        event: {
+          tag: 'CONTRACT_ADJUDICATED',
+          defective: verdict.defective,
+          reason: verdict.reason,
+          ...(verdict.pattern !== undefined ? { pattern: verdict.pattern } : {}),
+          ...(llm !== undefined ? { llm } : {}),
+        },
+      };
     }
 
     case 'RUN_AGENT_BEST_OF':

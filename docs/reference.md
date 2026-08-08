@@ -612,8 +612,10 @@ mirror** is caught too: an authored verifier that *already passes* on a from-scr
 compiler authored the solution itself into the frozen set, or the bar is vacuous — a second
 read-only call classifies a confident `CONTRACT_UNSOUND` before any worker token. Both directions
 **fail open** on any uncertainty (no LLM / an error / a "sound" verdict all proceed) — a genuinely
-broken frozen verifier is also caught at runtime by repeat-failure stuck detection. A plain
-`--verify-cmd` run with no authored files skips the soundness check.
+broken frozen verifier is also caught at runtime by repeat-failure stuck detection, which can
+itself re-adjudicate the contract in-loop (`CONTRACT_DEFECTIVE`, see
+[below](#in-loop-contract-fault-adjudication-contract_defective)). A plain `--verify-cmd` run with
+no authored files skips the soundness check.
 
 ## The verifier ladder
 
@@ -690,6 +692,50 @@ Details that make these accurate rather than trigger-happy:
   out / couldn't start, judge errored) from a real red: the tree may be correct-but-unverified, so
   it's never blamed on the code — still fail-closed, never a green. It keys only on facts goaly
   owns, never exit-code/error-string guessing.
+- **A repeat-failure streak may be re-adjudicated as a *contract* fault** — see below.
+
+### In-loop contract-fault adjudication (`CONTRACT_DEFECTIVE`)
+
+Contract soundness is otherwise classified exactly once, at t=0, on a tree with no implementation
+in it (the pre-flight soundness check above) — the moment of *least* evidence. For
+one defect class that timing isn't unlucky, it's undecidable: when a frozen assertion is impossible
+for any implementation to satisfy, its t=0 failure is byte-identical to an honest "not written
+yet" red, because nothing exists either way. The evidence that settles it — *a real implementation
+now exists and the same assertion still reds* — only appears several iterations later, exactly when
+the repeat-failure detector fires.
+
+So goaly asks again, then. When a `repeat-failure` streak is about to abort **and** the repeated
+signature names one of the contract's frozen authored files (by path or basename) **and** the
+worker has demonstrably changed the tree during the run, the run makes **one read-only LLM call**
+asking: *given this implementation, could any correct implementation pass this frozen check, or is
+the check itself unsatisfiable?*
+
+- `defective: false` → the run aborts with **today's repeat-failure reason, byte-identical**.
+- `defective: true` → the run aborts with a typed **`CONTRACT_DEFECTIVE`** reason that names the
+  frozen file, says plainly that your implementation may be correct and the **tree is worth
+  keeping**, and points at a corrected bar rather than at `--stuck-repeat-threshold` (which cannot
+  help against an unsatisfiable assertion).
+
+Guarantees, all of them structural:
+
+- **Diagnosis only.** This path can only reach `ABORTED`. It can never produce a `DONE`, a green,
+  another iteration, or a re-authored contract — the freeze (invariant #2) is untouched, and
+  recovery is a *new run*.
+- **Fail-closed to today's behavior.** No adjudicator wired, an LLM error, a timeout, an
+  unparseable reply, a schema miss, or any uncertainty all land on the unchanged repeat-failure
+  abort. Only a confident positive relabels it.
+- **Bounded to once per run**, as replayable reducer state — so a `--resume` that re-trips the
+  streak can't buy a second call.
+- **Replay-safe.** The verdict is a Zod-parsed, write-ahead-logged `CONTRACT_ADJUDICATED` event, so
+  `--resume` and `goaly runs show` reuse the recorded answer and never re-call the model. (Resume's
+  automatic streak relief is suppressed for a run that adjudicated: more iterations against an
+  unsatisfiable bar are still unsatisfiable.)
+- **The reducer stays pure.** DECIDE only emits an `ADJUDICATE_CONTRACT` command; the driver
+  performs the read-only call and feeds the event back (invariant #1). Its spend is metered against
+  `--budget-tokens` under the verifier layer.
+
+The adjudicator runs on the **judge** model (the same read-only provider the pre-flight uses), not
+the compiler model that authored the bar.
 - **Ephemeral verifier artifacts don't count as progress.** A conservative default set is excluded
   from the tree hash (Python bytecode/`__pycache__`, pytest/mypy/ruff caches, JS
   `.nyc_output`/`htmlcov`) so a verify command that regenerates them can't disguise a no-op turn.
@@ -1472,11 +1518,17 @@ contributor *"one term, one meaning"* reference, see [`CONTEXT.md`](../CONTEXT.m
   itself defective: it can't run, or it already passes vacuously on a from-scratch tree.
 - **From-scratch** — a tree with no implementation source yet; the bar is red by definition, so
   soundness biases toward "honest red, proceed".
+- **`CONTRACT_DEFECTIVE`** — the in-loop sibling of `CONTRACT_UNSOUND`: a repeat-failure streak
+  re-adjudicated (once per run, read-only) against a tree that now HAS an implementation, and found
+  to be failing an assertion no implementation could satisfy. Relabels an abort that was already
+  happening; the tree is worth keeping. See
+  [In-loop contract-fault adjudication](#in-loop-contract-fault-adjudication-contract_defective).
 
 ### Failure & stuck
 
 - <a id="g-stuck"></a>**Stuck detection** — bailing before `--max-iterations` with a typed reason:
-  no-diff, repeat-failure, oscillation, harness-crash, contract-unevaluable, or budget. See
+  no-diff, repeat-failure, oscillation, harness-crash, contract-unevaluable, timeout-no-diff, or
+  budget — one of which (repeat-failure) may be re-adjudicated as `CONTRACT_DEFECTIVE`. See
   [Stuck detection](#stuck-detection).
 - **Terminal statuses** — DONE (both keys), FAILED (typed failure), ABORTED (Seal-reject / stuck /
   driver error), INCOMPLETE (never finished — shown in `runs list`).

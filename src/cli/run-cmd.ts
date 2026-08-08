@@ -678,6 +678,11 @@ export function nextStepHint(o: RunOutcome): string | undefined {
     [/reached maxIterations/, `continue with more room: ${resume} --max-iterations <N> --note "<guidance>", or ${inspect}`],
     [/no-diff/, `the agent stopped changing the tree — steer it: ${resume} --stuck-no-diff false --note "<hint>", or refine the goal in a follow-up: --from-run ${o.runId}`],
     [/oscillation/, `the agent is flip-flopping between two states — ${inspect}; steer it: ${resume} --stuck-oscillation false --note "<which way to go>"`],
+    // Matched BEFORE the generic repeat-failure row (issue #116): a CONTRACT_DEFECTIVE reason
+    // CONTAINS the repeat-failure text as context, and raising --stuck-repeat-threshold cannot help
+    // against a bar no implementation can satisfy. The tree is worth keeping, so point at a fresh
+    // contract over the SAME workspace, not at more iterations.
+    [/CONTRACT_DEFECTIVE/, `the frozen bar itself was adjudicated defective — your tree may be correct, so KEEP it and re-run with a corrected bar: goaly "<goal>" --from-run ${o.runId} --verify-cmd "<a check that is actually satisfiable>", or ${inspect}`],
     [/STUCK_REPEATED_FAILURE|identical .*failures/, `the same verifier failure repeated — steer it: ${resume} --stuck-repeat-threshold 6 --note "<hint>", or ${inspect}`],
     [/compile failed|PLAN_FAILED|plan failed/i, `the contract/plan could not be authored — check the --llm-provider CLI runs & is authenticated, then retry`],
   ];

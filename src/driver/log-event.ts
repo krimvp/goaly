@@ -75,6 +75,16 @@ export function logEvent(log: Logger, command: Command, event: OrchestratorEvent
       });
       log.debug('verdict detail', { detail: event.verdict.detail });
       return;
+    case 'CONTRACT_ADJUDICATED':
+      // Issue #116: the one-shot in-loop re-adjudication of the FROZEN bar. The boolean verdict is
+      // content-free, so it is `info`; the reason may quote repo text, so it stays at `debug` like
+      // every other content-bearing field.
+      log.info('contract adjudicated', {
+        defective: event.defective,
+        ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
+      });
+      log.debug('adjudication reason', { reason: event.reason });
+      return;
     case 'SIGNOFF_DECIDED':
       log.info('sign-off decided', {
         veto: event.approval.veto,

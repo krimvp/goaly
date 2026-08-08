@@ -40,6 +40,12 @@ export function summarizeUsage(events: OrchestratorEvent[], budget: BudgetConfig
         // verifier layer so the per-run report stays coherent (it has no separate column).
         addLlmStep(verifier, event.llm);
         break;
+      case 'CONTRACT_ADJUDICATED':
+        // The in-loop contract-fault adjudication (issue #116) is a verification judgment, like the
+        // pre-flight soundness classification above — bucket its spend with the verifier layer so it
+        // is attributed to the budget rather than silently vanishing from the report.
+        addLlmStep(verifier, event.llm);
+        break;
       case 'SIGNOFF_DECIDED':
         addLlmStep(approver, event.llm);
         break;

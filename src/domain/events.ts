@@ -200,6 +200,31 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     llm: TokenUsage.optional(),
   }),
   /**
+   * The in-loop contract-fault adjudication resolved (issue #116). A repeat-failure streak whose
+   * signature names a FROZEN authored verification file is the first moment the question "can any
+   * implementation satisfy this assertion?" is answerable — at t=0 (the pre-flight soundness check)
+   * the tree was empty, so an unsatisfiable frozen assertion and an honest implementation-missing red
+   * look identical. The Driver performs ONE read-only classification and feeds the verdict back here.
+   *
+   * A real reducer transition (unlike CHECKPOINTED / CANDIDATE_* / RUN_EXTENDED): replay folds it, so
+   * a resumed run reuses the recorded verdict and never re-calls the LLM. It can only ever relabel an
+   * ABORT that was already happening — never a DONE, never a green (invariants #3/#4).
+   */
+  z.object({
+    tag: z.literal('CONTRACT_ADJUDICATED'),
+    /** True ⇒ no implementation can satisfy the frozen bar (→ a typed CONTRACT_DEFECTIVE abort). */
+    defective: z.boolean(),
+    /** The adjudicator's own justification (or why it could not run — then `defective` is false). */
+    reason: z.string(),
+    /**
+     * The GENERALIZED anti-pattern the adjudicator named, when it named one. Carried for future
+     * corpus/reporting use; it never influences this run's outcome.
+     */
+    pattern: z.string().optional(),
+    /** LLM spend of the adjudication (absent when no adjudicator ran). */
+    llm: TokenUsage.optional(),
+  }),
+  /**
    * An internal workspace checkpoint (issue #47): the Driver snapshotted the working tree into a git
    * TREE object (no user-visible commit, no HEAD/branch move) and adopted it as the new diff baseline.
    * It is a baseline MARKER, not a reducer transition — it is NEVER fed to `step()` (replay skips it);
@@ -353,6 +378,22 @@ export type Command =
    */
   | { tag: 'RUN_AGENT_BEST_OF'; prompt: string; sessionId: SessionId | undefined; candidates: number }
   | { tag: 'RUN_VERIFIER'; contract: CompiledContract }
+  /**
+   * In-loop contract-fault adjudication (issue #116): ask, ONCE per run, whether the frozen bar the
+   * worker keeps failing is itself defective. Emitted by DECIDE when a repeat-failure streak's
+   * signature names one of the contract's frozen `generatedFiles` and the worker has demonstrably
+   * populated the tree — i.e. the moment the evidence finally exists. The Driver performs a READ-ONLY
+   * LLM call and feeds back `CONTRACT_ADJUDICATED`. The reducer holds no LLM and performs nothing
+   * (invariant #1); the contract is passed by reference and never rewritten (invariant #2).
+   */
+  | {
+      tag: 'ADJUDICATE_CONTRACT';
+      contract: CompiledContract;
+      /** The already-normalized repeated signature from `ctx.verifierDetailHistory`. */
+      signature: string;
+      /** The threshold that tripped — context for the prompt, never a policy input. */
+      repeatCount: number;
+    }
   | { tag: 'REQUEST_SIGNOFF'; goal: string; rubric: string; verdicts: Verdict[] }
   /**
    * EXPERIMENTAL — run a cooperative parallel WAVE (`--parallel-phases`): the consecutive grouped

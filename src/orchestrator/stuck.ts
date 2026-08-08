@@ -321,6 +321,48 @@ function repeatFailureReason(threshold: number, signature: string): string {
 }
 
 /**
+ * The typed marker opening a contract-defective abort (issue #116). Exported so the CLI's next-step
+ * hint, the docs' outcome tables, and tests all key off ONE string rather than re-typing it.
+ */
+export const CONTRACT_DEFECTIVE_MARKER = 'CONTRACT_DEFECTIVE';
+
+/**
+ * The contract-defective abort reason (issue #116) — the sibling of {@link contractUnevaluableReason}.
+ * That one means "the checker could not RUN"; this one means "the checker ran fine and is WRONG": an
+ * adjudicator, given a tree that now contains a real implementation, judged that NO implementation
+ * could satisfy the frozen assertion the worker keeps failing.
+ *
+ * The run was already terminating on a repeat-failure streak, so this only changes the LABEL — but
+ * the label is the whole point: today's text tells the operator to raise `--stuck-repeat-threshold`,
+ * which cannot possibly help against an unsatisfiable bar, and implies the (possibly correct) tree is
+ * worthless. So the message names the frozen file(s) the signature pointed at, states plainly that
+ * the implementation may be correct and the tree is worth keeping, and carries the original
+ * repeat-failure text as context. It deliberately does NOT name a successor command: the reducer has
+ * no `runId` (that is Driver identity, not loop state) — the CLI's next-step hint owns that.
+ */
+export function contractDefectiveReason(
+  paths: readonly string[],
+  verdictReason: string,
+  fallbackReason: string,
+): string {
+  const named = paths.length > 0 ? paths.join(', ') : 'the frozen authored verification';
+  const trimmed = verdictReason.trim();
+  const why =
+    trimmed.length > SIGNATURE_REASON_LIMIT
+      ? `${trimmed.slice(0, SIGNATURE_REASON_LIMIT)}…`
+      : trimmed;
+  return (
+    `${CONTRACT_DEFECTIVE_MARKER}: the frozen verification is DEFECTIVE — re-adjudicated in-loop ` +
+    'against a tree that now contains a real implementation, the same assertion still reds, and no ' +
+    `implementation could satisfy it. The defect is in ${named}, which is frozen, so the worker can ` +
+    'never fix it. Your implementation may well be correct: KEEP the working tree — it was not ' +
+    'rejected on its merits. Re-run with a corrected bar (an explicit --verify-cmd, or a refined ' +
+    `goal) rather than more iterations against this one.${why.length > 0 ? ` Adjudicator: ${why}` : ''}` +
+    ` Original stuck condition: ${fallbackReason}`
+  );
+}
+
+/**
  * The largest period worth chasing. A real loop that oscillates does so over a SMALL cycle
  * (the agent keeps undoing then redoing the same handful of states); a long apparent cycle is
  * better left to `maxIterations`. We require two full back-to-back cycles before calling it.
