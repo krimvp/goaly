@@ -102,7 +102,12 @@ describe('planRecontract — only a CONTRACT_DEFECTIVE adjudication opens the do
       predecessorContractHash: contract.contractHash,
       verdict: expect.stringContaining('never implies') as unknown as string,
       recontracts: 1,
+      // The bar being repaired travels with the provenance so the successor's pre-flight negative
+      // control can compare old bar vs new bar instead of judging a bar it has never been shown.
+      predecessorBar: expect.stringContaining('a database is created on first boot') as unknown as string,
     });
+    expect(decision.plan.provenance.predecessorBar).toContain(contract.contractHash);
+    expect(decision.plan.provenance.predecessorBar).toContain('verify/db.test.ts');
     // The goal is INHERITED from the frozen contract — a repair changes the bar, not the goal.
     expect(decision.plan.goal).toBe(contract.goal);
   });
@@ -250,6 +255,18 @@ describe('the successor run wires its provenance into the pre-flight negative co
   it('the SAME wiring without provenance is an ordinary run — the control never fires', async () => {
     const outcome = await drive(wireSuccessor(true), config, RunId.parse('run-ordinary'));
     expect(outcome.status).toBe('DONE');
+  });
+
+  it('hands the control the defect and the predecessor bar it must judge the new bar against', async () => {
+    const deps = wireSuccessor(false);
+    const predecessorBar = 'Previous frozen contract (hash abc) — DEFECTIVE:\n  bar:\n    1. [deterministic] node old-and-strict.js';
+    await drive(deps, config, RunId.parse('run-evidence'), {
+      provenance: { ...provenance, predecessorBar },
+    });
+    const prompt = (deps.prepareLlm as FakeLlm).requests[0]?.prompt ?? '';
+    expect(prompt).toContain('the previous bar was unsatisfiable'); // the adjudicated defect
+    expect(prompt).toContain('node old-and-strict.js'); // the bar being repaired
+    expect(prompt).toContain('node verify/db.test.js'); // …and the re-authored bar, side by side
   });
 
   it('a legitimate re-contract (the implementation really was correct) reaches DONE on the new bar', async () => {

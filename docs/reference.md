@@ -1174,11 +1174,18 @@ Five guards keep this from becoming a weakening channel:
 - **No worker-supplied text feeds the re-authoring.** The seed is built only from the frozen
   contract (compiler-authored), the goal (yours), and the adjudicator's verdict — which is itself
   fenced as untrusted data, since it was written after reading worker-influenced output.
-- **The new bar still faces the negative control.** A re-authored bar that already *passes* on the
-  inherited tree is put to a fail-open pre-flight classifier before a worker token is spent: either
-  the implementation really was correct (proceed — the expected happy ending of a re-contract) or
-  the repair softened the bar into vacuity (`CONTRACT_UNSOUND`, abort). No LLM, an LLM error, an
-  unparseable reply, or any uncertainty all proceed.
+- **The new bar still faces the negative control — with the evidence to judge it.** A re-authored
+  bar that already *passes* on the inherited tree is put to a fail-open pre-flight classifier before
+  a worker token is spent: either the implementation really was correct (proceed — the expected
+  happy ending of a re-contract) or the repair softened the bar into vacuity (`CONTRACT_UNSOUND`,
+  abort). Because that question is unanswerable from filenames and a "3 passed" summary, the
+  classifier is shown the material a human would need: the **re-authored rungs and rubric**, the
+  **contents of the re-authored verification files** (read off the inherited tree), the
+  **predecessor's bar** (carried in the successor's run header), and the **adjudicated defect** —
+  the one thing the repair was licensed to change. Everything supplied is wrapped in an untrusted
+  fence, and every failure of that channel degrades gracefully: an unreadable file drops from the
+  prompt only, and no LLM, an LLM error, an unparseable reply, missing evidence, or any uncertainty
+  all proceed.
 - **The chain is bounded.** `--max-recontracts` (default 1) caps how many re-contracts a chain may
   contain. The depth lives in the run log header, so the cap holds **across the chain, not per
   process** — a second `--recontract` off a successor is refused even from a fresh shell.

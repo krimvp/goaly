@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { CompiledContract } from '../domain/contract';
 import type { LlmProvider } from '../llm/provider';
+import { describeRungs } from '../orchestrator/prompts';
 import { extractJson } from '../util/json-extract';
 import { UNTRUSTED_SYSTEM_CLAUSE, wrapUntrusted } from '../verify/prompt-safety';
 import { errorMessage } from '../util/errors';
@@ -232,7 +233,15 @@ export async function classifyVacuousContract(
  * A bar that already passes there is either (a) legitimate — the implementation really was correct
  * and only the bar was wrong, which is the whole reason this recovery exists — or (b) a bar softened
  * into vacuity / shaped around whatever the tree happens to do. Only the model can tell those apart,
- * so it is asked BEFORE a worker token is spent, with the predecessor's defect report as context.
+ * so it is asked BEFORE a worker token is spent.
+ *
+ * A negative control is worthless if it cannot see what it is judging, so it is shown the EVIDENCE a
+ * human would need to answer "was this softened?": the re-authored rungs/rubric, the CONTENTS of the
+ * re-authored verification files ({@link RecontractEvidence.files}), the PREDECESSOR's bar, and the
+ * adjudicated defect the repair was authored against. Everything supplied is fenced with
+ * {@link wrapUntrusted} — file contents are model-authored text and the verdict was written after
+ * reading worker-influenced output. Missing evidence only weakens the control (the prompt says so
+ * explicitly); it never aborts.
  *
  * Fail-OPEN like both pre-flight siblings, and for the same reason: case (a) is common and a wrong
  * "unsound" would abort the legitimate recovery at zero iterations. No LLM, an LLM error, an
@@ -252,36 +261,109 @@ const RECONTRACT_SYSTEM_PROMPT = [
   ' - unsound=false: the bar genuinely exercises the goal and passes because the implementation',
   '   already on disk is CORRECT — the previous run\'s bar was the broken part. This is the expected,',
   '   successful outcome of a re-contract.',
+  'You are given the EVIDENCE to answer this by comparison rather than by guesswork: the re-authored',
+  'rungs/rubric, the CONTENTS of the re-authored verification files, the PREDECESSOR\'s bar (the one',
+  'being repaired), and the adjudicated defect — the ONLY thing the repair was licensed to change.',
+  'Read the re-authored assertions. A repair that drops, relaxes or hollows out a check the defect',
+  'report never named (an assertion replaced by a tautology, a case deleted, a comparison loosened,',
+  'coverage narrowed to what the tree already does) is a WEAKENING even though the bar still passes.',
+  'A repair that changes ONLY what the defect names, and still asserts the goal\'s observable',
+  'behavior, is sound.',
+  'Evidence that is missing or unreadable is NOT evidence of weakening: judge only what you can see,',
+  'and if you cannot see enough to point at a specific softened check, answer false.',
   'When in doubt, answer false: a correct implementation meeting a corrected bar is exactly what this',
   'recovery is for. Reserve true for a bar you can point at and call weaker than the goal.',
   'Respond with ONLY a single JSON object {"unsound": boolean, "reason": string}. No prose, no markdown.',
   UNTRUSTED_SYSTEM_CLAUSE,
 ].join(' ');
 
+/** One re-authored verification file, read off the inherited tree for the negative control. */
+export type RecontractFile = { readonly path: string; readonly content: string };
+
+/**
+ * What the re-contract negative control needs to actually COMPARE the new bar with the old one.
+ * Every field is optional and every one of them is fenced as untrusted data in the prompt: the
+ * control is fail-open, so missing evidence must degrade its confidence, never abort a run.
+ */
+export type RecontractEvidence = {
+  /** Contents of the RE-AUTHORED verification files. An unreadable file is simply absent. */
+  readonly files?: readonly RecontractFile[];
+  /** Rendering of the PREDECESSOR's frozen rubric + rungs — the bar the repair must not soften. */
+  readonly predecessorBar?: string;
+  /** The adjudicated defect the repair was authored against (the one licensed change). */
+  readonly defect?: string;
+};
+
+/** Cap one authored file folded into the control's prompt, so a huge test file cannot blow the call. */
+const MAX_EVIDENCE_FILE_CHARS = 8000;
+
+/** The evidence sections of the re-contract prompt — each fenced, each omitted when absent. */
+function recontractEvidenceSections(evidence: RecontractEvidence): string[] {
+  const parts: string[] = [];
+  if (evidence.predecessorBar !== undefined && evidence.predecessorBar.trim().length > 0) {
+    parts.push(
+      'THE PREDECESSOR\'S BAR — the bar being repaired. The new bar must not be weaker than this ' +
+        `except where the defect below required a change:\n${wrapUntrusted(evidence.predecessorBar, {
+          label: 'PREDECESSOR BAR',
+        })}`,
+    );
+  }
+  if (evidence.defect !== undefined && evidence.defect.trim().length > 0) {
+    parts.push(
+      'THE ADJUDICATED DEFECT the repair was authored against — the ONLY thing that was licensed to ' +
+        `change:\n${wrapUntrusted(evidence.defect, { label: 'ADJUDICATION' })}`,
+    );
+  }
+  for (const file of evidence.files ?? []) {
+    parts.push(
+      `RE-AUTHORED VERIFICATION FILE ${file.path} (frozen; its assertions ARE the new bar):\n` +
+        wrapUntrusted(file.content.slice(0, MAX_EVIDENCE_FILE_CHARS), { label: 'AUTHORED FILE' }),
+    );
+  }
+  return parts;
+}
+
+function buildRecontractPrompt(
+  contract: CompiledContract,
+  detail: string,
+  evidence: RecontractEvidence,
+): string {
+  const paths = contract.generatedFiles.map((f) => `  - ${f.path}`).join('\n');
+  return [
+    `GOAL:\n${contract.goal}`,
+    `RE-AUTHORED VERIFIER LADDER (frozen, in execution order):\n${describeRungs(contract.rungs)}`,
+    `RE-AUTHORED RUBRIC (frozen):\n${contract.rubric.trim().length > 0 ? contract.rubric : '(empty)'}`,
+    `RE-AUTHORED VERIFICATION FILES (frozen — the worker cannot change these):\n${
+      paths.length > 0 ? paths : '  (none)'
+    }`,
+    'CONTEXT: this is a RE-CONTRACT. The predecessor run\'s bar was adjudicated defective and its ' +
+      'implementation is still on disk, so the new bar passing may be legitimate — or may mean the ' +
+      'repair weakened it.',
+    ...recontractEvidenceSections(evidence),
+    `VERIFICATION OUTPUT ON THE INHERITED TREE (it PASSED):\n${wrapUntrusted(detail, { label: 'OUTPUT' })}`,
+    'Compare the re-authored bar above with the predecessor\'s bar and the adjudicated defect. Was ' +
+      'the re-authored bar weakened (vacuous / hollowed out / shaped around the existing tree), or ' +
+      'does it genuinely exercise the goal that the existing implementation already meets?',
+    'Reply with ONLY the JSON {"unsound": boolean, "reason": string}.',
+  ].join('\n\n');
+}
+
 /**
  * Ask the model whether a RE-AUTHORED bar that already passes on the inherited tree is a weakened
  * bar (→ CONTRACT_UNSOUND) or the legitimate success of a re-contract. Reuses {@link SoundnessVerdict}
- * (`broken` = unsound) and fails OPEN on every failure mode — see the doc above.
+ * (`broken` = unsound) and fails OPEN on every failure mode — see the doc above. `evidence` carries
+ * the re-authored assertions, the predecessor's bar and the adjudicated defect; it defaults to empty
+ * (the control then judges from the ladder/rubric alone) so a caller that cannot read the tree still
+ * gets today's behavior rather than an abort.
  */
 export async function classifyRecontractedBar(
   deps: ClassifyDeps,
   contract: CompiledContract,
   detail: string,
+  evidence: RecontractEvidence = {},
 ): Promise<SoundnessVerdict> {
   const log = deps.logger ?? noopLogger;
-  const prompt = [
-    `GOAL:\n${contract.goal}`,
-    `RE-AUTHORED VERIFICATION FILES (frozen — the worker cannot change these):\n${contract.generatedFiles
-      .map((f) => `  - ${f.path}`)
-      .join('\n')}`,
-    'CONTEXT: this is a RE-CONTRACT. The predecessor run\'s bar was adjudicated defective and its ' +
-      'implementation is still on disk, so the new bar passing may be legitimate — or may mean the ' +
-      'repair weakened it.',
-    `VERIFICATION OUTPUT ON THE INHERITED TREE (it PASSED):\n${wrapUntrusted(detail, { label: 'OUTPUT' })}`,
-    'Was the re-authored bar weakened (vacuous / shaped around the existing tree), or does it ' +
-      'genuinely exercise the goal that the existing implementation already meets?',
-    'Reply with ONLY the JSON {"unsound": boolean, "reason": string}.',
-  ].join('\n\n');
+  const prompt = buildRecontractPrompt(contract, detail, evidence);
   let raw: string;
   try {
     raw = (await deps.llm.complete({ system: RECONTRACT_SYSTEM_PROMPT, prompt, temperature: 0 })).text;

@@ -26,6 +26,15 @@ export const RunProvenance = z.object({
   verdict: z.string().min(1),
   /** 1 for the first successor in a chain; N for the N-th. Bounded by `--max-recontracts`. */
   recontracts: z.number().int().positive(),
+  /**
+   * The PREDECESSOR's frozen bar, rendered once at plan time (rubric + rungs + authored file paths)
+   * and clipped. Recorded so the successor's pre-flight NEGATIVE CONTROL can compare the re-authored
+   * bar against the bar it is repairing instead of guessing from filenames — the whole question it is
+   * asked is "was this softened?", which is unanswerable without the old bar. Compiler-authored text
+   * only (it comes from a frozen contract), never worker output. OPTIONAL: logs written before this
+   * field existed still parse (invariant #6), and the control stays fail-open without it.
+   */
+  predecessorBar: z.string().min(1).optional(),
 });
 export type RunProvenance = z.infer<typeof RunProvenance>;
 

@@ -3,11 +3,14 @@ import type { PreparedOutcome } from '../domain/events';
 import type { Verdict } from '../domain/verdict';
 import type { Workspace } from '../workspace/workspace';
 import type { LlmProvider } from '../llm/provider';
+import type { RunProvenance } from '../runlog/runlog';
 import { DeterministicVerifier } from '../verify/deterministic';
 import {
   classifyPreflightSoundness,
   classifyRecontractedBar,
   classifyVacuousContract,
+  type RecontractEvidence,
+  type RecontractFile,
 } from './preflight-soundness';
 import { isProbeSafe } from '../compile/required-tools';
 import { noopLogger, type Logger } from '../log/logger';
@@ -58,9 +61,47 @@ export type PrepareDeps = {
    * (fail-open) before any worker token is spent.
    */
   recontract?: boolean;
+  /**
+   * The PREDECESSOR-side half of the evidence that control needs: the bar being repaired and the
+   * adjudicated defect the repair was authored against (both from the successor's run header, both
+   * fenced as untrusted data downstream). The re-authored files are read here, off the tree. Absent
+   * ⇒ the control still runs, just with less to compare — it is fail-open, never fail-closed.
+   */
+  recontractEvidence?: Omit<RecontractEvidence, 'files'>;
+  /**
+   * Reads an authored verification file (workspace-relative path) so the re-contract negative
+   * control can attack its actual CONTENT, not just its name — the same dependency
+   * `CritiquedCompiler`/`ContractDryRunCompiler` take for the same reason. Defaults to the
+   * workspace's own path-guarded reader; a read failure (or `null`) drops that file from the prompt
+   * only, never the run.
+   */
+  readFile?: (rel: string) => Promise<string | null>;
 };
 
 export type PrepareResult = { prepared: PreparedOutcome; setupRan: boolean };
+
+/**
+ * Project a successor run's header provenance onto the prepare-phase wiring the RE-CONTRACT negative
+ * control needs (issue #117): the widening flag PLUS the predecessor-side evidence — the bar being
+ * repaired and the adjudicated defect the repair was authored against. Without those the control is
+ * asked "was this bar softened?" while being shown neither bar.
+ *
+ * Pure and total: `undefined` provenance ⇒ `{}` (an ordinary run, unchanged in every respect).
+ */
+export function recontractPrepareDeps(
+  provenance: RunProvenance | undefined,
+): Pick<PrepareDeps, 'recontract' | 'recontractEvidence'> {
+  if (provenance === undefined) return {};
+  return {
+    recontract: true,
+    recontractEvidence: {
+      defect: provenance.verdict,
+      ...(provenance.predecessorBar !== undefined
+        ? { predecessorBar: provenance.predecessorBar }
+        : {}),
+    },
+  };
+}
 
 /**
  * The one-time prepare phase the Driver performs between SEAL approval and the first agent turn
@@ -306,7 +347,11 @@ async function preflightDeterministic(
  *    no-diff → a spurious abort), or the bar is vacuous.
  *  - A `--recontract` successor (issue #117) — not from-scratch (the predecessor's implementation is on
  *    disk), but the bar was just RE-AUTHORED off a defect report, so "the repair softened it" is a live
- *    risk. This is the negative control that keeps a re-contract from becoming a weakening channel.
+ *    risk. This is the negative control that keeps a re-contract from becoming a weakening channel, so
+ *    it is given the EVIDENCE to answer that by comparison: the re-authored files are read off the
+ *    inherited tree here and combined with the predecessor's bar + the adjudicated defect carried in
+ *    the run header ({@link gatherRecontractEvidence}). A control shown only filenames and a pass count
+ *    cannot detect softening at all — and, failing open, would wave it through.
  *
  * FAIL-OPEN by construction — it must NEVER abort a legitimate run (a file that is simply not created
  * yet stays an honest red, handled by the caller; it can never reach here). It fires ONLY on the
@@ -329,7 +374,12 @@ async function greenNegativeControl(
   if (!emptyOfSource && !recontract) return null;
   const classifyDeps = { llm: deps.llm, ...(deps.logger !== undefined ? { logger: deps.logger } : {}) };
   const green = recontract
-    ? await classifyRecontractedBar(classifyDeps, contract, lastPassDetail)
+    ? await classifyRecontractedBar(
+        classifyDeps,
+        contract,
+        lastPassDetail,
+        await gatherRecontractEvidence(deps, contract, log),
+      )
     : await classifyVacuousContract(classifyDeps, contract, lastPassDetail);
   if (!green.broken) {
     log.info(
@@ -349,6 +399,47 @@ async function greenNegativeControl(
     status: 'contract-unsound',
     detail: `${reason}${recontract ? RECONTRACT_REMEDY : VACUOUS_REMEDY}`.slice(0, DETAIL_LIMIT),
   };
+}
+
+/** Per-file / total caps on the re-authored verification content folded into the control's prompt. */
+const MAX_EVIDENCE_FILE_CHARS = 8000;
+const MAX_EVIDENCE_TOTAL_CHARS = 32_000;
+
+/**
+ * Read the RE-AUTHORED verification files off the inherited tree and combine them with the
+ * predecessor-side evidence from the run header, so the negative control can compare old bar vs new
+ * bar instead of guessing from filenames and a pass count.
+ *
+ * FAIL-OPEN at the finest grain the finding allows: a file that is missing, unreadable, empty, or
+ * whose read throws is dropped from the prompt ONLY — never an error, never an abort. Bounded per
+ * file and in total so a huge authored test cannot blow up the one classifier call.
+ */
+async function gatherRecontractEvidence(
+  deps: PrepareDeps,
+  contract: CompiledContract,
+  log: Logger,
+): Promise<RecontractEvidence> {
+  const read = deps.readFile ?? ((rel: string) => deps.workspace.readFile(rel));
+  const files: RecontractFile[] = [];
+  let budget = MAX_EVIDENCE_TOTAL_CHARS;
+  for (const file of contract.generatedFiles) {
+    if (budget <= 0) break;
+    let content: string | null;
+    try {
+      content = await read(file.path);
+    } catch (e) {
+      log.warn('re-contract control: could not read a re-authored verification file — omitting it', {
+        path: file.path,
+        reason: errorMessage(e),
+      });
+      continue;
+    }
+    if (content === null || content.length === 0) continue;
+    const clipped = content.slice(0, Math.min(MAX_EVIDENCE_FILE_CHARS, budget));
+    budget -= clipped.length;
+    files.push({ path: file.path, content: clipped });
+  }
+  return { ...(deps.recontractEvidence ?? {}), files };
 }
 
 /** Remedy for a bar that passes on a from-scratch tree (the compiler likely authored the solution). */

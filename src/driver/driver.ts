@@ -41,7 +41,7 @@ import type { PhasedStreamSink } from '../agent-cli/stream';
 import type { Observer } from '../observe/observer';
 import { errorMessage } from '../util/errors';
 import { noopTelemetry, type Telemetry, type TelemetryEvent } from '../telemetry/telemetry';
-import { prepareWorkspace, type PrepareTimeouts } from './prepare';
+import { prepareWorkspace, recontractPrepareDeps, type PrepareTimeouts } from './prepare';
 import { classifyContractFault } from './preflight-soundness';
 import { appendAdjudicatedDefect, type DefectCorpus } from '../defects/corpus';
 import { Baseline, recordCheckpoint, type CheckpointDeps } from './baseline';
@@ -375,7 +375,7 @@ export async function drive(
               seq,
               config.resumeBestOfIncomplete,
             )
-          : await perform(command, deps, ladder, llmMeter, baseline, runId, options.provenance !== undefined);
+          : await perform(command, deps, ladder, llmMeter, baseline, runId, options.provenance);
       if (performed.seq !== undefined) seq = performed.seq;
       const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge
       if (performed.ladder !== undefined) ladder = performed.ladder;
@@ -536,8 +536,8 @@ async function perform(
   baseline: Baseline,
   /** Provenance for a defect-corpus record (issue #122); never used for control flow. */
   runId: RunId,
-  /** True on a `--recontract` successor run (issue #117): widens the pre-flight negative control. */
-  recontract = false,
+  /** Successor provenance (`--recontract`, issue #117): widens AND FEEDS the pre-flight control. */
+  provenance?: RunProvenance,
 ): Promise<Performed> {
   const log = deps.logger ?? noopLogger;
 
@@ -699,7 +699,7 @@ async function perform(
           ...(deps.logger !== undefined ? { logger: deps.logger } : {}),
           ...(deps.prepareTimeouts !== undefined ? { timeouts: deps.prepareTimeouts } : {}),
           ...(deps.prepareLlm !== undefined ? { llm: deps.prepareLlm } : {}),
-          ...(recontract ? { recontract: true } : {}),
+          ...recontractPrepareDeps(provenance),
         },
         command.contract,
       );

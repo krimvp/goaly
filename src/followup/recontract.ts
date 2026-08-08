@@ -42,6 +42,8 @@ const MAX_VERDICT = 800;
 const MAX_HEADER_VERDICT = 400;
 const MAX_RUBRIC = 800;
 const MAX_RUNG = 240;
+/** Cap the rendered predecessor bar carried in the header (and thence into the negative control). */
+const MAX_HEADER_BAR = 1600;
 
 /** The exact successor command a `CONTRACT_DEFECTIVE` abort must print. */
 export function recontractCommand(runId: string): string {
@@ -111,6 +113,9 @@ export function planRecontract(
         predecessorContractHash: contract.contractHash,
         verdict: clip(verdict, MAX_HEADER_VERDICT),
         recontracts: depth,
+        // The bar being repaired, carried forward so the successor's pre-flight negative control can
+        // compare old bar vs new bar rather than judge a re-authored bar it has never been shown.
+        predecessorBar: renderPredecessorBar(contract),
       },
     },
   };
@@ -189,6 +194,15 @@ export function recontractSeed(
   ].join('\n');
 }
 
+/**
+ * The predecessor's frozen bar as one block of text — the same rendering the repair brief shows the
+ * compiler, reused as EVIDENCE for the successor's pre-flight negative control (issue #117). Pure and
+ * bounded; contains only compiler-authored contract text, never worker output.
+ */
+export function renderPredecessorBar(contract: CompiledContract): string {
+  return clipBlock(describePredecessorBar(contract).join('\n'), MAX_HEADER_BAR);
+}
+
 /** The predecessor's frozen bar, one line per rung — the thing to preserve minus the defect. */
 function describePredecessorBar(contract: CompiledContract): string[] {
   const lines = [`Previous frozen contract (hash ${contract.contractHash}) — DEFECTIVE, never reused:`];
@@ -216,4 +230,10 @@ function describeRung(rung: Rung): string {
 function clip(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/** Like {@link clip} but PRESERVES line structure — for multi-line blocks that stay readable. */
+function clipBlock(text: string, max: number): string {
+  const trimmed = text.trim();
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
 }
