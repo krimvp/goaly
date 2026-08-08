@@ -3,7 +3,7 @@ import type { CompiledContract } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
 import type { Command, OrchestratorEvent, RunExtension } from '../domain/events';
 import type { ContractHash, DiffHash } from '../domain/ids';
-import type { OrchestratorState } from '../orchestrator/state';
+import type { LoopCtx, OrchestratorState } from '../orchestrator/state';
 import { initial, step } from '../orchestrator/step';
 import { normalizeDetail } from '../orchestrator/stuck';
 import { isUnevaluable } from '../domain/verdict';
@@ -33,7 +33,9 @@ import type { RunLogEntry } from './runlog';
  *    would buy more ten-minute no-op turns at the same cap, which is the very waste that detector
  *    exists to stop. The real relief for it is a bigger `--harness-timeout-ms` /
  *    `--harness-idle-timeout-ms` — compose-time flags a resume already applies fresh — which is what
- *    the abort message names.
+ *    the abort message names. Its own fold-desynchronization hazard (a log predating the detector
+ *    can trip it MID-log, which relief here — tail-only by construction — could not cover anyway)
+ *    is handled where it belongs, in the fold itself: see {@link withTimeoutNoDiffThreshold}.
  *
  * It is not a weakening of stuck detection: the returned overlay is persisted as an ordinary
  * RUN_EXTENDED marker (ADR 0012 — operational knobs only, the frozen contract is unreachable
@@ -220,6 +222,76 @@ export type ReplayResult = {
 };
 
 /**
+ * Driver-side marker events: recorded in the log for replay fidelity but NEVER fed to `step()`
+ * (invariant #1 — the reducer never learns they existed). Shared by the fold below and by
+ * {@link lastFoldedIndex}, so "which entry is the last one the reducer sees" cannot drift from
+ * "which entries the reducer sees".
+ */
+const DRIVER_ONLY_TAGS: ReadonlySet<string> = new Set([
+  'CHECKPOINTED',
+  'CANDIDATE_RAN',
+  'CANDIDATE_SELECTED',
+  'RUN_EXTENDED',
+]);
+
+/** Index of the last entry the reducer actually folds, or -1 when there is none. */
+function lastFoldedIndex(entries: readonly RunLogEntry[]): number {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const tag = entries[i]?.event.tag;
+    if (tag !== undefined && !DRIVER_ONLY_TAGS.has(tag)) return i;
+  }
+  return -1;
+}
+
+/**
+ * An effectively unreachable timeout-no-diff threshold — the streak is bounded by the iteration
+ * count, so this DISABLES the detector for the fold it is applied to.
+ */
+const TIMEOUT_NO_DIFF_UNREACHABLE = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Back-compat for the timeout-no-diff detector (issue #119) — the ONE detector that turned a
+ * decision which previously returned `CONTINUE` into a terminal `ABORTED`. A run log written
+ * BEFORE it existed can therefore contain a mid-log timeout+no-diff streak that the run simply
+ * continued past; folding such a log under the new binary would go terminal in the MIDDLE, and the
+ * next entry would hit `step() called on terminal state ABORTED` — permanently bricking `--resume`
+ * and `runs show/list` for a run whose tree may be perfectly fine.
+ *
+ * So the trip is made TAIL-SENSITIVE: every fold except the LAST one the reducer sees runs with the
+ * detector disabled, which is exactly the pre-#119 semantics (`noDiffExcusedByRun` reads the same
+ * threshold, so an unreachable value restores the unbounded timeout excuse too). Nothing is
+ * weakened for a log written after #119: the trip is terminal, so its VERIFIED entry IS the last
+ * folded entry, and the tail fold uses the real (possibly RUN_EXTENDED-overlaid) threshold.
+ *
+ * This is a REPLAY-side concern, not a reducer one (invariant #1/#8): `detectStuck` stays pure and
+ * purely history-driven — it is only ever handed a config, and here replay chooses which one.
+ */
+function withTimeoutNoDiffThreshold(
+  state: OrchestratorState,
+  threshold: number,
+): OrchestratorState {
+  switch (state.tag) {
+    case 'RUNNING_AGENT':
+    case 'VERIFYING':
+    case 'AWAIT_SIGNOFF':
+    case 'ADJUDICATING': {
+      const { config } = state.ctx;
+      if (config.stuckPolicy.timeoutNoDiffThreshold === threshold) return state;
+      const ctx: LoopCtx = {
+        ...state.ctx,
+        config: {
+          ...config,
+          stuckPolicy: { ...config.stuckPolicy, timeoutNoDiffThreshold: threshold },
+        },
+      };
+      return { ...state, ctx };
+    }
+    default:
+      return state;
+  }
+}
+
+/**
  * Replay = a pure fold of `step` over the event stream. This is the SINGLE source of truth for
  * "what state did this run reach": the Driver's `--resume` path and the read-only `runs`
  * inspection both call it, so an inspected run's status/iterations match exactly what the Driver
@@ -243,8 +315,14 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
   let phaseBaseline: DiffHash | null = null;
   let plan: PhasePlan | null = null;
   let pendingNotes: string[] = [];
+  // The last entry the reducer will fold — every earlier fold is a HISTORICAL decision the log has
+  // already recorded the outcome of, so the timeout-no-diff trip is suppressed there (see
+  // `withTimeoutNoDiffThreshold`) and only the tail can go terminal on it.
+  const tailIndex = lastFoldedIndex(entries);
 
-  for (const entry of entries) {
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (entry === undefined) continue;
     // A CHECKPOINTED entry is a diff-baseline marker, NOT a reducer transition: it is never fed to
     // `step()` (the reducer stays unaffected, invariant #1). We only remember the latest tree so the
     // Driver can re-point the baseline on resume.
@@ -290,8 +368,20 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
     }
     // With extended budget caps, the persisted `exceeded` flags are re-judged against the new caps
     // (raw spent numbers stay the persisted facts) — else the fold would re-abort at the old cap.
-    [state, commands] = step(state, budgetExtended ? rejudgeBudget(entry.event, effective) : entry.event);
+    const folded = withTimeoutNoDiffThreshold(
+      state,
+      index === tailIndex
+        ? effective.stuckPolicy.timeoutNoDiffThreshold
+        : TIMEOUT_NO_DIFF_UNREACHABLE,
+    );
+    [state, commands] = step(
+      folded,
+      budgetExtended ? rejudgeBudget(entry.event, effective) : entry.event,
+    );
   }
+  // Hand the caller a state whose ctx carries the run's REAL threshold: the suppression above is
+  // fold-local scaffolding, and the Driver continues the live run from this very state.
+  state = withTimeoutNoDiffThreshold(state, effective.stuckPolicy.timeoutNoDiffThreshold);
 
   return {
     state,

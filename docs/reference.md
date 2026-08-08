@@ -737,6 +737,17 @@ repeat-failure), is measured off the run's original thresholds so repeated resum
 than compound, is recorded as an ordinary `RUN_EXTENDED` marker (auditable in the log), and any
 explicit `--stuck-*` on the resume command line still wins. `no-diff` is a toggle rather than a
 counter, so it is not relieved — pass `--stuck-no-diff false` for that resume.
+`timeout-no-diff` is not relieved either: more room per turn (`--harness-timeout-ms` /
+`--harness-idle-timeout-ms`, applied fresh by any resume) is the real fix, and relief would just buy
+more full-length no-ops.
+
+**Old run logs stay replayable.** `timeout-no-diff` is the one detector that turned a decision which
+previously continued into a terminal abort, so a log written *before* it existed can contain a
+timeout+no-diff streak that the run simply kept going past. Replaying such a log is
+**tail-sensitive**: only the *last* folded decision can trip that detector, so a mid-log streak
+folds with the old semantics and `--resume` / `goaly runs show` keep working on the run instead of
+reporting it corrupt. Nothing is weakened for a log written since — the trip is terminal, so it is
+always the last entry, and that fold uses the run's real (or `RUN_EXTENDED`-overlaid) threshold.
 
 ### In-loop contract-fault adjudication (`CONTRACT_DEFECTIVE`)
 
