@@ -1534,15 +1534,31 @@ Details that matter:
   is destroyed on every exit path (green, red, or error), and it appears in neither your workspace,
   the run diff, nor any worker prompt. It is not reused as a hint, a seed, or a fallback — handing
   the worker the solution would defeat the run and recreate exactly the deadlock the vacuous-contract
-  check exists to catch. The refusal fed back to the author quotes only the failing rung's own
-  output, never the reference source. A reference file whose path collides with an authored
-  verification file is discarded, so the control can never rewrite the bar it measures.
+  check exists to catch. A reference file whose path collides with an authored verification file is
+  discarded, so the control can never rewrite the bar it measures.
+- **The refusal is sanitized before it reaches the author.** A test runner reds by printing the
+  *source* of the code under test — and on a red, the code under test is the reference. So the
+  failing rung's output is never passed through raw: the exit code, the assertion message, and stack
+  frames naming the **frozen** verification files are kept; source-frame gutter blocks (`  4| …`)
+  and every frame naming any other file are dropped. Otherwise the author would receive a working
+  solution and could fold it into the frozen files — a green bar at t=0, i.e. a wrong green.
+- **The scratch copy is isolated from your tree.** Symlinks are never duplicated into it (a linked
+  `node_modules`, a linked `src` — the pnpm/monorepo/`npm link` shapes — would be a path straight
+  back into your real workspace, so a scratch `npm ci` would mutate it), and every write is checked
+  against the copy's *real* path, not just its path string. A `setup` that relied on a linked
+  `node_modules` simply fails there, and the dry run fails open.
 - **Fail-open on infrastructure.** No LLM, an unparseable reference, a scratch-copy failure (including
   a workspace too large to copy cheaply), a `setup` that cannot run there, a rung that timed out or
   could not be started — each logs and freezes exactly as it does today. The dry run can only *reject*
   a contract or step aside; it can never turn a red bar green or relax a rung.
 - **`--generate` only**, and only once the contract actually authored verification files. A
   user-supplied `--verify-cmd` is your own bar and is never dry-run.
+- **It obeys `--sandbox`.** The scratch runs the contract's `setup` and its deterministic rungs —
+  the same untrusted commands as the verifier seam, over a tree that also holds LLM-authored code —
+  so they run under the **same jail and network policy** as the verifier (see
+  [Sandboxing](#sandboxing)), never bare on the host. Under `--sandbox-net none` a `setup` that
+  needs the network fails there and the dry run fails open, exactly like a verify command that needs
+  egress.
 - **Cost:** one extra authoring call plus one verification run per compile attempt, metered under the
   compile phase against `--budget-tokens`, using `--compiler-model`. Weigh it against the run it
   prevents — the motivating incident burned ~39 min and ~2M tokens against a single unsatisfiable
@@ -1559,7 +1575,9 @@ host trust boundary — only run `--autonomous` against repositories you trust, 
 
 `--sandbox` (opt-in OS isolation, [ADR 0007](adr/0007-sandboxing-model.md)) jails the two
 untrusted-code execs — the coding agent and the verify command. Off by default: without the flag,
-behavior is byte-for-byte unchanged and the caller owns isolation (CI/container).
+behavior is byte-for-byte unchanged and the caller owns isolation (CI/container). The verifier
+profile also covers the [contract dry run](#the-contract-dry-run-compile-time-positive-control)'s
+scratch commands, which are the same untrusted `setup`/rung commands run one compile step earlier.
 
 | Flag | Meaning |
 | --- | --- |

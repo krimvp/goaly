@@ -1,4 +1,5 @@
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { lstatSync } from 'node:fs';
+import { cp, lstat, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { errorMessage } from '../util/errors';
@@ -24,9 +25,10 @@ export type ScratchCopy = {
   readonly root: string;
   /**
    * Write a file at a workspace-RELATIVE path inside the copy, creating parent directories.
-   * Path-guarded fail-closed: a path that escapes {@link root} (absolute, or `../`) throws rather
-   * than writing outside the scratch — the one guarantee that keeps the reference implementation
-   * out of the real workspace.
+   * Path-guarded fail-closed: a path that escapes {@link root} — lexically (absolute, or `../`) OR
+   * through a symlink (a linked directory on the way down, or a linked target file) — throws rather
+   * than writing outside the scratch. That is the one guarantee that keeps the reference
+   * implementation out of the real workspace, so the check resolves REAL paths, not just strings.
    */
   writeFile(relPath: string, content: string): Promise<void>;
   /** Run a shell command in {@link root}, with the same timeout/spawn-failure reporting as a Workspace. */
@@ -74,6 +76,47 @@ function isSkipped(rel: string): boolean {
   return rel.split(sep).some((segment) => SKIP_SEGMENTS.has(segment));
 }
 
+/** True when `p` is `root` itself or lives underneath it. Both must already be real paths. */
+function isInside(p: string, root: string): boolean {
+  return p === root || p.startsWith(root + sep);
+}
+
+/** The one fail-closed refusal — a write that would land outside the scratch copy. */
+function escape(relPath: string): Error {
+  return new Error(`ScratchCopy: refusing to write outside the scratch copy: '${relPath}'`);
+}
+
+/**
+ * The real path of the deepest EXISTING ancestor of `dir` (`dir` itself when it exists). Resolving
+ * that (rather than `dir`, which may not exist yet) is what turns the lexical escape guard into a
+ * real one: any symlink on the way down shows up here as a path outside the scratch root.
+ */
+async function realExistingAncestor(dir: string): Promise<string> {
+  let current = dir;
+  for (;;) {
+    const real = await realpath(current).catch(() => undefined);
+    if (real !== undefined) return real;
+    const parent = dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
+}
+
+/**
+ * True when `src` is a symlink — such an entry is NEVER copied into a scratch. `fs.cp` with
+ * `dereference: false` recreates links verbatim-ish (a RELATIVE target is resolved against the
+ * SOURCE tree and rewritten as an ABSOLUTE link), so a copied `node_modules -> ../shared/node_modules`
+ * would point straight back into the user's real workspace: a scratch `npm ci` would mutate it, and
+ * a write "into the copy" would land in the real tree. Fail-closed: an unreadable entry is skipped.
+ */
+function isSymlink(src: string): boolean {
+  try {
+    return lstatSync(src).isSymbolicLink();
+  } catch {
+    return true;
+  }
+}
+
 class FsScratchCopy implements ScratchCopy {
   readonly root: string;
   readonly #exec: ExecFn;
@@ -84,13 +127,19 @@ class FsScratchCopy implements ScratchCopy {
   }
 
   async writeFile(relPath: string, content: string): Promise<void> {
-    const root = resolve(this.root);
+    const root = await realpath(resolve(this.root));
     const full = resolve(root, normalizeRel(relPath));
     // Fail-closed escape guard: the scratch copy is the ONLY place a reference implementation may
     // land, so a `../` or absolute path is refused outright rather than silently redirected.
-    if (full !== root && !full.startsWith(root + sep)) {
-      throw new Error(`ScratchCopy: refusing to write outside the scratch copy: '${relPath}'`);
-    }
+    if (!isInside(full, root)) throw escape(relPath);
+    // …and LEXICAL containment is not enough: a symlink inside the copy (a `node_modules` or `src`
+    // link, or the file itself) resolves OUTSIDE it while every path string still looks contained.
+    // So resolve real paths too — the deepest existing ancestor (the parents that would be walked)
+    // and the target itself when it already exists — before a single byte is written.
+    const anchor = await realExistingAncestor(dirname(full));
+    if (!isInside(anchor, root)) throw escape(relPath);
+    const link = await lstat(full).catch(() => undefined);
+    if (link?.isSymbolicLink() === true) throw escape(relPath);
     await mkdir(dirname(full), { recursive: true });
     await writeFile(full, content, 'utf-8');
   }
@@ -151,6 +200,10 @@ export class FsScratchHost implements ScratchHost {
           const rel = relative(source, src);
           if (rel.length === 0) return true;
           if (isSkipped(rel)) return false;
+          // A symlink is never duplicated — see `isSymlink`. Dropping the ENTRY (rather than
+          // dereferencing it) also keeps the entry budget honest: a linked `node_modules` is not
+          // silently expanded into the copy.
+          if (isSymlink(src)) return false;
           entries += 1;
           if (entries > this.#maxEntries) {
             overflowed = true;

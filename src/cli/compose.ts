@@ -531,6 +531,9 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
         timeouts.verifyMs,
         logger,
         workspaceFacts,
+        // The scratch executes the contract's setup + rungs, so it goes through the SAME jail as
+        // the verifier seam — never bare on the host under an active `--sandbox` policy.
+        runLauncher,
       ),
       seed,
     ),

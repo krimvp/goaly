@@ -14,6 +14,23 @@ import { SATISFIABILITY_GUARDRAIL } from './critiqued-compiler';
 /** Max chars of a failing rung's output folded into the refusal reason, so the run log stays bounded. */
 const DETAIL_LIMIT = 2000;
 
+/** A test runner's source-frame gutter (`      4|   const x = 1;`) — verbatim source, always dropped. */
+const GUTTER_LINE = /^\s*\d+\s*\|/;
+
+/** The caret line that closes a frame block (`        |          ^` or `  ^`). */
+const CARET_LINE = /^\s*\|?\s*\^+\s*$/;
+
+/** A path-ish token containing a separator (`src/impl.ts`, `/tmp/x/impl.ts:5:9`, `node:internal/x`). */
+const SLASH_REF = /[\w.@~+-]*(?:\/[\w.@~+-]+)+(?::\d+(?::\d+)?)?/g;
+
+/** A bare `file.ext:LINE[:COL]` reference (a runner frame printed without a directory). */
+const FILE_LINE_REF = /[\w.@+-]+\.[A-Za-z]\w{0,6}:\d+(?::\d+)?/g;
+
+/** Stands in for a failing rung whose whole output spoke only about files outside the frozen bar. */
+const WITHHELD =
+  '(the rung printed nothing that names the frozen verification files — its output was withheld ' +
+  'because on this run it quotes the throwaway reference implementation, which you must not see)';
+
 /** Default kill-timeout for each scratch command (setup + each rung) — the 10 min the ladder uses. */
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -101,11 +118,17 @@ export type ContractDryRunOpts = {
  * its opinion.
  *
  * CRITICAL SAFETY — the reference implementation is written ONLY to the {@link ScratchCopy}, which
- * is destroyed on every exit path. It never touches the workspace, never enters the run diff, never
- * reaches a worker prompt, and never appears in the refusal reason (only the failing rung's own
- * output does). Leaking it would hand the worker the solution and recreate exactly the deadlock
+ * is destroyed on every exit path. It never touches the workspace and never enters the run diff.
+ * Leaking it would hand the worker the solution and recreate exactly the deadlock
  * `classifyVacuousContract` exists to catch. A file whose path collides with a frozen
  * `generatedFiles` entry is DISCARDED, so the control can never quietly rewrite the bar it measures.
+ *
+ * The one channel OUT of the scratch is the refusal reason: it becomes `COMPILE_FAILED.reason` and
+ * IS fed back to the contract author (and, through the author, into the frozen files a worker then
+ * reads). A test runner reds by printing the source of the implementation under test — which on a
+ * red is precisely the reference — so the failing rung's output is never passed through raw: it goes
+ * through {@link sanitizeRungOutput}, which keeps the exit code, the assertion message and frames
+ * naming the frozen files, and drops every gutter block and every frame naming anything else.
  *
  * FAIL-OPEN on infrastructure: no LLM, an unparseable reference, a scratch-copy failure, a setup
  * that cannot run, a timed-out or unstartable rung — all log and freeze as today. Like every other
@@ -226,10 +249,14 @@ export class ContractDryRunCompiler implements VerifierCompiler {
         return { status: 'skipped', reason: `\`${rung.command}\`: ${unevaluable}` };
       }
       if (r.exitCode !== 0) {
+        // The tree that just failed CONTAINS the reference implementation, so the runner's own
+        // output quotes it (code frames, stack frames). Sanitize before it can reach the author.
+        const clean = sanitizeRungOutput(r.stderr || r.stdout, contract.generatedFiles.map((f) => f.path));
+        const detail = clean.length > 0 ? clean : WITHHELD;
         return {
           status: 'red',
           rung: rung.label ?? rung.command,
-          detail: `exit ${r.exitCode}\n${(r.stderr || r.stdout).slice(0, DETAIL_LIMIT)}`,
+          detail: `exit ${r.exitCode}\n${detail.slice(0, DETAIL_LIMIT)}`,
         };
       }
     }
@@ -293,11 +320,67 @@ function normalizeRel(p: string): string {
 }
 
 /**
- * The refusal fed to the bounded re-author loop. It names the failing rung and quotes ITS OWN
- * output — never the reference implementation, which must stay invisible: the author receiving a
- * working solution would fold it into the frozen verification files, which is precisely the
- * deadlock this whole guard exists to prevent. Closes with the anti-softening rail so "make it
- * satisfiable" can never be read as "make it easier".
+ * Every file-ish token on one output line, with any `:LINE[:COL]` suffix stripped. Directory-bearing
+ * tokens are matched first and BLANKED OUT before the bare `file.ext:LINE` pass, so one frame never
+ * yields both `verify/check.test.mjs` and a truncated `check.test.mjs` (which would look unfrozen).
+ */
+function fileRefs(line: string): string[] {
+  const slashed = line.match(SLASH_REF) ?? [];
+  const bare = line.replace(SLASH_REF, ' ').match(FILE_LINE_REF) ?? [];
+  return [...slashed, ...bare].map((t) => t.replace(/(?::\d+)+$/, ''));
+}
+
+/** True when `ref` names one of the frozen verification files (path suffix match, any prefix). */
+function namesFrozenFile(ref: string, frozen: readonly string[]): boolean {
+  const token = normalizeRel(ref);
+  return frozen.some((f) => token === f || token.endsWith(`/${f}`));
+}
+
+/** A bare location header (`/tmp/x/src/impl.ts:2`) — node prints the offending SOURCE right after it. */
+function isLocationHeader(line: string): boolean {
+  return /^\s*\S+:\d+(?::\d+)?\s*$/.test(line);
+}
+
+/**
+ * Strip everything that could quote the REFERENCE IMPLEMENTATION out of a failing rung's output.
+ *
+ * The rung failed inside a tree that contains the reference, and every real test runner reports a
+ * failure by printing the implementation's source: code-frame gutters (`  4|  …`) and stack frames
+ * naming its files. That output becomes `COMPILE_FAILED.reason` and is fed verbatim back to the
+ * contract author — so the author would receive a working solution and could fold it into the frozen
+ * verification files (a wrong-GREEN at t=0, with `classifyVacuousContract` failing open).
+ *
+ * Whitelist, never blacklist: a line is kept only when it names NO file at all (the assertion
+ * message) or names ONLY frozen `generatedFiles` (the bar's own frames). Gutter/caret blocks go
+ * unconditionally, and a dropped location header takes its trailing source block with it.
+ */
+export function sanitizeRungOutput(raw: string, frozen: readonly string[]): string {
+  const paths = frozen.map(normalizeRel);
+  const kept: string[] = [];
+  let suppressing = false;
+  for (const line of raw.split('\n')) {
+    if (suppressing) {
+      if (line.trim().length === 0) suppressing = false;
+      continue;
+    }
+    if (GUTTER_LINE.test(line) || CARET_LINE.test(line)) continue;
+    const refs = fileRefs(line);
+    if (refs.length > 0 && !refs.every((r) => namesFrozenFile(r, paths))) {
+      suppressing = isLocationHeader(line);
+      continue;
+    }
+    kept.push(line);
+  }
+  return kept.join('\n').trim();
+}
+
+/**
+ * The refusal fed to the bounded re-author loop. It names the failing rung and quotes its output —
+ * already SANITIZED by {@link sanitizeRungOutput}, so what reaches the author is the assertion and
+ * the frozen files' own frames, never the reference implementation: an author receiving a working
+ * solution would fold it into the frozen verification files, which is precisely the deadlock this
+ * whole guard exists to prevent. Closes with the anti-softening rail so "make it satisfiable" can
+ * never be read as "make it easier".
  */
 export function unsatisfiableReason(rung: string, detail: string): string {
   return (

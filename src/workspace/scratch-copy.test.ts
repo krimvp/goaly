@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, lstat, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { FsScratchHost } from './scratch-copy';
 
 type ExecResult = { stdout: string; stderr: string; code: number; timedOut?: boolean };
@@ -90,6 +90,55 @@ describe('FsScratchHost', () => {
       await expect(copy.writeFile('/tmp/escape.ts', 'nope')).rejects.toThrow(
         /refusing to write outside the scratch copy/,
       );
+    } finally {
+      await host.destroy(copy);
+    }
+  });
+
+  it('never copies a symlink — no entry in the scratch points back into the real tree', async () => {
+    const root = await makeWorkspace();
+    const outside = await makeWorkspace();
+    await mkdir(join(outside, 'node_modules'), { recursive: true });
+    await writeFile(join(outside, 'node_modules', 'dep.js'), 'real dep', 'utf-8');
+    await writeFile(join(root, 'keep.txt'), 'keep', 'utf-8');
+    // Both dialects a real workspace produces: a RELATIVE link (pnpm / npm link / monorepo) and an
+    // absolute one. `fs.cp` resolves a relative target against the SOURCE and recreates it absolute,
+    // so either way the copy would gain a path straight back into the user's tree.
+    await symlink(relative(root, join(outside, 'node_modules')), join(root, 'node_modules'));
+    await symlink(join(outside, 'node_modules', 'dep.js'), join(root, 'linked.js'));
+
+    const host = new FsScratchHost(root, { exec: scriptedExec({}, []) });
+    const copy = await host.create();
+    try {
+      expect(await readFile(join(copy.root, 'keep.txt'), 'utf-8')).toBe('keep');
+      await expect(lstat(join(copy.root, 'node_modules'))).rejects.toThrow();
+      await expect(lstat(join(copy.root, 'linked.js'))).rejects.toThrow();
+    } finally {
+      await host.destroy(copy);
+    }
+  });
+
+  it('refuses a write that traverses a symlink out of the scratch (realpath guard)', async () => {
+    const root = await makeWorkspace();
+    const outside = await makeWorkspace();
+    await mkdir(join(outside, 'src'), { recursive: true });
+    await writeFile(join(outside, 'src', 'impl.ts'), 'original', 'utf-8');
+    const host = new FsScratchHost(root, { exec: scriptedExec({}, []) });
+    const copy = await host.create();
+    try {
+      // A symlinked DIRECTORY inside the copy: the lexical guard sees `<root>/src/impl.ts`.
+      await symlink(join(outside, 'src'), join(copy.root, 'src'));
+      await expect(copy.writeFile('src/impl.ts', 'THE-SOLUTION')).rejects.toThrow(
+        /refusing to write outside the scratch copy/,
+      );
+      expect(await readFile(join(outside, 'src', 'impl.ts'), 'utf-8')).toBe('original');
+
+      // A symlinked FILE inside the copy: writing it would follow the link into the real tree.
+      await symlink(join(outside, 'src', 'impl.ts'), join(copy.root, 'linked.ts'));
+      await expect(copy.writeFile('linked.ts', 'THE-SOLUTION')).rejects.toThrow(
+        /refusing to write outside the scratch copy/,
+      );
+      expect(await readFile(join(outside, 'src', 'impl.ts'), 'utf-8')).toBe('original');
     } finally {
       await host.destroy(copy);
     }

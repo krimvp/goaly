@@ -9,6 +9,7 @@ import { ContractDryRunCompiler } from '../compile/contract-dry-run';
 import { CritiquedCompiler } from '../compile/critiqued-compiler';
 import { CritiquedPlanner } from '../plan/critiqued-planner';
 import { SeededCompiler, SeededPlanner } from '../followup/seeded';
+import { realExec, type ExecFn } from '../workspace/git-workspace';
 import { FsScratchHost } from '../workspace/scratch-copy';
 import type { WorkspaceFacts } from '../workspace/workspace-facts';
 
@@ -61,6 +62,13 @@ export function critiqueCompiler(
  * first attempt is still controlled. The reference implementation it authors runs only in a
  * throwaway {@link FsScratchHost} copy rooted at the workspace, never in the workspace itself.
  * Spend meters as `'compile'` — it is part of authoring the bar.
+ *
+ * SANDBOX (invariant #4): the scratch runs the contract's `setup` and every deterministic rung —
+ * the SAME untrusted commands as the verifier seam, over a tree that now also holds LLM-authored
+ * code. So it takes the composed `runLauncher` and runs them under the same jail and network policy
+ * (`--sandbox`/`--sandbox-net`). The parameter is REQUIRED (pass `undefined` only for the identity
+ * `--sandbox none` launcher) so this wiring cannot be dropped by omission: a run that refuses to
+ * start rather than go unsandboxed must not execute anything bare on the host here either.
  */
 export function dryRunCompiler(
   inner: VerifierCompiler,
@@ -70,12 +78,16 @@ export function dryRunCompiler(
   verifyTimeoutMs: number | undefined,
   logger: Logger,
   facts: WorkspaceFacts | undefined,
+  runLauncher: ((exec: ExecFn) => ExecFn) | undefined,
 ): VerifierCompiler {
   if (!config.adversarial.contractDryRun || config.verifier.kind !== 'generate') return inner;
   return new ContractDryRunCompiler({
     inner,
     llm: makeLlm(),
-    scratch: new FsScratchHost(workspaceRoot),
+    scratch: new FsScratchHost(
+      workspaceRoot,
+      runLauncher !== undefined ? { exec: runLauncher(realExec) } : {},
+    ),
     ...(verifyTimeoutMs !== undefined ? { timeoutMs: verifyTimeoutMs } : {}),
     readFile: (rel) => readFile(path.join(workspaceRoot, rel), 'utf8'),
     logger, ...(facts !== undefined ? { facts: facts.summary } : {}),

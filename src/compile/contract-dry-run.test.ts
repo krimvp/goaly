@@ -91,6 +91,81 @@ describe('ContractDryRunCompiler (compile-time positive control, issue #115)', (
     expect((error as Error).message).not.toContain(secret);
   });
 
+  it('strips the reference implementation out of the FAILING RUNG OUTPUT folded into the refusal', async () => {
+    // A test runner reds by printing code frames and stack frames OF THE IMPLEMENTATION under test —
+    // and on a red, the implementation under test IS the reference. That output becomes
+    // COMPILE_FAILED.reason and is fed verbatim to the contract author, so it must be sanitized down
+    // to frames naming the FROZEN files plus the assertion message.
+    const runnerOutput = [
+      ' FAIL  verify/check.test.mjs > solve',
+      'AssertionError: expected 3 to be 4',
+      ' ❯ verify/check.test.mjs:5:3',
+      '      4|   expect(solve(1)).toBe(4)',
+      '        |                   ^',
+      ' ❯ solve src/widget.mjs:5:9',
+      '      5|   return MAGIC_ANSWER * 2;',
+    ].join('\n');
+    const compiler = new ContractDryRunCompiler({
+      inner: new FakeCompiler(authoredContract()),
+      llm: new FakeLlm([REFERENCE]),
+      scratch: new FakeScratchHost({ results: [{ exitCode: 1, stdout: '', stderr: runnerOutput }] }),
+    });
+
+    const error = (await compiler.compile(generateConfig).catch((e: unknown) => e)) as Error;
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).not.toContain('MAGIC_ANSWER');
+    expect(error.message).not.toContain('src/widget.mjs');
+    expect(error.message).not.toContain('expect(solve(1))');
+    // …while everything the author actually needs survives.
+    expect(error.message).toContain('exit 1');
+    expect(error.message).toContain('AssertionError: expected 3 to be 4');
+    expect(error.message).toContain('verify/check.test.mjs:5:3');
+  });
+
+  it('strips a node-style location header block naming a non-frozen file', async () => {
+    const runnerOutput = [
+      '/tmp/goaly-dry-run-abc/src/widget.mjs:2',
+      '  const KEY = "LEAKED-SOLUTION";',
+      '        ^',
+      '',
+      'Error: boom',
+    ].join('\n');
+    const compiler = new ContractDryRunCompiler({
+      inner: new FakeCompiler(authoredContract()),
+      llm: new FakeLlm([REFERENCE]),
+      scratch: new FakeScratchHost({ results: [{ exitCode: 1, stdout: runnerOutput, stderr: '' }] }),
+    });
+
+    const error = (await compiler.compile(generateConfig).catch((e: unknown) => e)) as Error;
+
+    expect((error as Error).message).not.toContain('LEAKED-SOLUTION');
+    expect((error as Error).message).not.toContain('src/widget.mjs');
+    expect((error as Error).message).toContain('Error: boom');
+  });
+
+  it('withholds the output entirely when every line of it speaks about non-frozen files', async () => {
+    const compiler = new ContractDryRunCompiler({
+      inner: new FakeCompiler(authoredContract()),
+      llm: new FakeLlm([REFERENCE]),
+      scratch: new FakeScratchHost({
+        results: [
+          {
+            exitCode: 1,
+            stdout: '',
+            stderr: ' ❯ solve src/widget.mjs:5:9\n      5|   return MAGIC_ANSWER * 2;',
+          },
+        ],
+      }),
+    });
+
+    const error = (await compiler.compile(generateConfig).catch((e: unknown) => e)) as Error;
+
+    expect(error.message).not.toContain('MAGIC_ANSWER');
+    expect(error.message).toContain('exit 1');
+    expect(error.message).toContain('its output was withheld');
+  });
+
   it('writes the reference ONLY into the scratch copy and destroys it on every exit path', async () => {
     const scratchGreen = new FakeScratchHost({ results: [{ exitCode: 0, stdout: '', stderr: '' }] });
     const green = await new ContractDryRunCompiler({
@@ -262,6 +337,62 @@ describe('ContractDryRunCompiler (compile-time positive control, issue #115)', (
       expect(result.contractHash).toBe(contract.contractHash);
       expect(scratch.written).toEqual([]);
     });
+  });
+});
+
+/**
+ * The leak, executed for real: a runner reports a red by printing the SOURCE of the code under test,
+ * and on a red the code under test is the reference implementation. The refusal becomes
+ * `COMPILE_FAILED.reason` and is fed to the contract author, so the real subprocess output must come
+ * back carrying the assertion and the frozen file's frames — and nothing of the reference.
+ */
+describe('ContractDryRunCompiler — the refusal never carries the reference implementation source', () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true });
+  });
+
+  it('drops the code frame a real `node` run prints for the reference implementation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'goaly-dryrun-leak-'));
+    roots.push(root);
+    await mkdir(join(root, 'verify'), { recursive: true });
+    const bar = [
+      "import assert from 'node:assert/strict';",
+      "import { solve } from '../src/widget.mjs';",
+      "assert.equal(solve(), 4, 'solve must answer 4');",
+    ].join('\n');
+    await writeFile(join(root, 'verify', 'check.mjs'), bar, 'utf-8');
+
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: `"${process.execPath}" verify/check.mjs` }],
+      generatedFiles: [{ path: 'verify/check.mjs', sha256: sha256Hex(bar) }],
+    });
+    const reference = JSON.stringify({
+      files: [
+        {
+          path: 'src/widget.mjs',
+          content: [
+            'const LOOKUP_TABLE = { magic: "REFERENCE-ONLY-SECRET" };',
+            'export function solve() { throw new Error(`boom ${Object.keys(LOOKUP_TABLE).length}`); }',
+          ].join('\n'),
+        },
+      ],
+    });
+    const error = (await new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: new FakeLlm([reference]),
+      scratch: new FsScratchHost(root),
+      timeoutMs: 60_000,
+    })
+      .compile(generateConfig)
+      .catch((e: unknown) => e)) as Error;
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).not.toContain('REFERENCE-ONLY-SECRET');
+    expect(error.message).not.toContain('LOOKUP_TABLE');
+    expect(error.message).not.toContain('src/widget.mjs');
+    expect(error.message).toMatch(/boom/); // the failure itself still reaches the author
   });
 });
 
