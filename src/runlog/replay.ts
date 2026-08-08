@@ -29,6 +29,11 @@ import type { RunLogEntry } from './runlog';
  *  - Only the counted detectors. `noDiff` is a TOGGLE, not a counter, so "relief" could only mean
  *    disabling it for the rest of the run — too blunt to do implicitly (it is also already excused
  *    when the previous turn crashed/timed out/was truncated). Pass `--stuck-no-diff false` for that.
+ *  - NOT `timeoutNoDiffThreshold` (issue #119) either, even though it IS a counter: relief there
+ *    would buy more ten-minute no-op turns at the same cap, which is the very waste that detector
+ *    exists to stop. The real relief for it is a bigger `--harness-timeout-ms` /
+ *    `--harness-idle-timeout-ms` — compose-time flags a resume already applies fresh — which is what
+ *    the abort message names.
  *
  * It is not a weakening of stuck detection: the returned overlay is persisted as an ordinary
  * RUN_EXTENDED marker (ADR 0012 — operational knobs only, the frozen contract is unreachable
@@ -136,6 +141,9 @@ export function applyRunExtension(cfg: RunConfig, x: RunExtension): RunConfig {
         : {}),
       ...(s.unevaluableThreshold !== undefined
         ? { unevaluableThreshold: s.unevaluableThreshold }
+        : {}),
+      ...(s.timeoutNoDiffThreshold !== undefined
+        ? { timeoutNoDiffThreshold: s.timeoutNoDiffThreshold }
         : {}),
     },
   };

@@ -89,6 +89,7 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
         ['repeat-failure threshold', String(config.stuckPolicy.repeatFailureThreshold)],
         ['crash threshold', String(config.stuckPolicy.harnessCrashThreshold)],
         ['unevaluable threshold', String(config.stuckPolicy.unevaluableThreshold)],
+        ['timeout-no-diff threshold', String(config.stuckPolicy.timeoutNoDiffThreshold)],
         ['diff-ignore', config.diffIgnore.length > 0 ? config.diffIgnore.join(', ') : '(defaults only)'],
       ],
     },

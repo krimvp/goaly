@@ -60,7 +60,8 @@ COMPILE ──► SEAL ──► setup + pre-flight ──► ┌─────
   replayable, `--resume`-able, and inspectable (`goaly runs list` / `show` / `watch`, or
   `goaly ui` in the browser).
 - **Stuck detection bails early with a typed reason** (no-diff, repeated failure, oscillation,
-  harness crash, unevaluable contract, budget) instead of burning iterations.
+  harness crash, unevaluable contract, repeated timeout-with-no-diff, budget) instead of burning
+  iterations.
 
 Under `--generate` (the default), the compiler also authors a one-time **setup** command and a
 **pre-flight** proves the frozen verification can actually run — an unsound contract aborts before
@@ -92,6 +93,7 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Observability](docs/reference.md#observability) | `--stream`, `--explain`, `--log-level` | Live agent turns, durable transcripts, plain-language narration. |
 | [Onboarding](docs/reference.md#onboarding-goaly-doctor--goaly-init) | `goaly doctor`, `goaly init` | A read-only environment report (Node, git, harness CLIs, config validity), and a starter `.goalyrc` written interactively or headless. |
 | [Reliability](docs/reference.md#reliability) | *(defaults)* | Preflight, bounded retries (contract *and* plan), safe Ctrl-C, fsync'd write-ahead log. |
+| [Stuck detection](docs/reference.md#stuck-detection) | `--stuck-*` | Typed early aborts — no-diff, repeat-failure, oscillation, harness crash, unevaluable contract, and repeated timeout-with-no-diff — each naming the flag that fixes it. |
 | [Stuck self-recovery](docs/reference.md#automatic-remediation---auto-remediate-stuck) | `--auto-remediate-stuck` | Opt-in: up to 3 bounded self-recoveries (no-diff hint, one extra repeat/crash attempt) before stopping for the operator. |
 
 ## Usage

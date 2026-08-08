@@ -290,6 +290,9 @@ function collectResumeExtension(
     ...(has('stuck-unevaluable-threshold')
       ? { unevaluableThreshold: config.stuckPolicy.unevaluableThreshold }
       : {}),
+    ...(has('stuck-timeout-no-diff-threshold')
+      ? { timeoutNoDiffThreshold: config.stuckPolicy.timeoutNoDiffThreshold }
+      : {}),
   };
   const extension: RunExtension = {
     ...(has('max-iterations') ? { maxIterations: config.maxIterations } : {}),
@@ -569,6 +572,9 @@ export async function parseArgs(
       : {}),
     ...(str(flags, 'stuck-unevaluable-threshold') !== undefined
       ? { stuckUnevaluableThreshold: str(flags, 'stuck-unevaluable-threshold') }
+      : {}),
+    ...(str(flags, 'stuck-timeout-no-diff-threshold') !== undefined
+      ? { stuckTimeoutNoDiffThreshold: str(flags, 'stuck-timeout-no-diff-threshold') }
       : {}),
     ...(boolFlag(flags, 'auto-remediate-stuck') !== undefined
       ? { autoRemediateStuck: boolFlag(flags, 'auto-remediate-stuck') }

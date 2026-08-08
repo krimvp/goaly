@@ -152,7 +152,7 @@ if !ladderPass                      → continue (feed verifier detail back)
 if ladderPass && signoff.veto         → continue (feed veto reason back)
 if ladderPass && signoff.approve      → DONE          (two keys turned)
 if iteration >= maxIterations       → FAILED
-if detectStuck(ctx) !== null        → ABORTED (no-diff | repeat-failure | oscillation | harness-crash | budget)
+if detectStuck(ctx) !== null        → ABORTED (no-diff | timeout-no-diff | repeat-failure | oscillation | harness-crash | budget)
 else                                → continue
 ```
 
@@ -315,7 +315,8 @@ These ADRs are recorded in [`docs/adr/`](docs/adr) (each hard-to-reverse, surpri
 ## Verification (how we'll know it works)
 
 - **Unit/table tests** (`vitest`): DECIDE truth table and each stuck detector (no-diff,
-  repeat-failure, oscillation, harness-crash, budget) over hand-built `LoopCtx` — pure, instant.
+  timeout-no-diff, repeat-failure, oscillation, harness-crash, budget) over hand-built `LoopCtx` —
+  pure, instant.
 - **End-to-end loop tests with fakes, zero IO**: scripted harness/verifier/approver drive
   the Driver through full runs — assert DONE/FAILED/ABORTED, iteration counts, and that the
   run log shows the `contractHash` unchanged every iteration (proves the bar never moved).

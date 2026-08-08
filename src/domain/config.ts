@@ -53,6 +53,16 @@ export const StuckPolicy = z.object({
    */
   unevaluableThreshold: z.number().int().min(2).default(2),
   /**
+   * Abort after this many consecutive iterations that BOTH were killed by the harness wall-clock
+   * timeout AND left the working tree unchanged (issue #119). Such a turn is excused as "ran out of
+   * time, not out of ideas" (issue #54) — but the excuse used to be unbounded, so a worker that
+   * timed out every iteration burned the whole `maxIterations` budget in ten-minute no-ops with
+   * nothing flagged. This threshold is BOTH the abort point (a typed `STUCK_TIMEOUT_NO_DIFF`) and
+   * the cap on the excuse: at most `threshold - 1` consecutive timeout-driven no-diffs are forgiven,
+   * so the default (2) is exactly issue #54's single excused turn. Mirrors `harnessCrashThreshold`.
+   */
+  timeoutNoDiffThreshold: z.number().int().min(2).default(2),
+  /**
    * Opt-in bounded self-recovery (`--auto-remediate-stuck`, improvement plan 4.2). When true, the
    * pure reducer remediates each REMEDIABLE stuck condition ONCE per run (a no-diff turn gets a
    * canned try-something-different hint and its burned iteration back; a repeat-failure /
@@ -382,6 +392,7 @@ export const CliInput = z.object({
   stuckOscillation: z.boolean().optional(),
   stuckCrashThreshold: z.coerce.number().int().min(2).optional(),
   stuckUnevaluableThreshold: z.coerce.number().int().min(2).optional(),
+  stuckTimeoutNoDiffThreshold: z.coerce.number().int().min(2).optional(),
   /** Opt-in bounded stuck self-recovery (`--auto-remediate-stuck`); the CLI pre-parses the boolean. */
   autoRemediateStuck: z.boolean().optional(),
   /** Sign-off approver panel (issue #84): a positive-int reviewer quorum (default 1). */
@@ -433,6 +444,8 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     stuckPolicy.harnessCrashThreshold = input.stuckCrashThreshold;
   if (input.stuckUnevaluableThreshold !== undefined)
     stuckPolicy.unevaluableThreshold = input.stuckUnevaluableThreshold;
+  if (input.stuckTimeoutNoDiffThreshold !== undefined)
+    stuckPolicy.timeoutNoDiffThreshold = input.stuckTimeoutNoDiffThreshold;
   if (input.autoRemediateStuck !== undefined) stuckPolicy.autoRemediate = input.autoRemediateStuck;
 
   // Sign-off approver panel (issue #84): override only the fields the user set; the rest keep their

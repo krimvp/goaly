@@ -111,6 +111,7 @@ const ConfigFileSchema = z
     // so being unable to persist it meant retyping it on every single resume.
     'stuck-crash-threshold': FlagValue.optional(),
     'stuck-unevaluable-threshold': FlagValue.optional(),
+    'stuck-timeout-no-diff-threshold': FlagValue.optional(),
     'auto-remediate-stuck': FlagValue.optional(),
     'diff-ignore': FlagValue.optional(),
     baseline: FlagValue.optional(),

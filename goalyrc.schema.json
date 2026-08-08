@@ -443,6 +443,20 @@
         }
       ]
     },
+    "stuck-timeout-no-diff-threshold": {
+      "description": "Default for the --stuck-timeout-no-diff-threshold flag. Explicit CLI flags always override.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
     "auto-remediate-stuck": {
       "description": "Default for the --auto-remediate-stuck flag. Explicit CLI flags always override.",
       "anyOf": [
@@ -1499,6 +1513,20 @@
           },
           "stuck-unevaluable-threshold": {
             "description": "Default for the --stuck-unevaluable-threshold flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "stuck-timeout-no-diff-threshold": {
+            "description": "Default for the --stuck-timeout-no-diff-threshold flag. Explicit CLI flags always override.",
             "anyOf": [
               {
                 "type": "string"

@@ -29,7 +29,8 @@ Usage:
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
                [--stuck-oscillation true|false] [--stuck-crash-threshold N]
-               [--stuck-unevaluable-threshold N] [--auto-remediate-stuck]
+               [--stuck-unevaluable-threshold N] [--stuck-timeout-no-diff-threshold N]
+               [--auto-remediate-stuck]
                [--harness claude|codex|droid|pi|goaly-code] [--harness-autonomy low|medium|high]
                [--max-agent-turns N] [--model <m>]
                [--llm-model <m>] [--approver-quorum N] [--approver-diversity-temp T]
@@ -142,6 +143,9 @@ Stuck-detection tuning:
                                   iteration is NOT terminal if the previous turn timed out, or if the
                                   ladder is green and a FRESH veto is the only blocker — the agent
                                   gets one real turn to act on a correct critique first (issue #54).
+                                  The timeout excuse is bounded (see
+                                  --stuck-timeout-no-diff-threshold), which this toggle does not
+                                  disable.
   --stuck-repeat-threshold N      abort after N identical normalized verifier failures (default 3).
   --stuck-oscillation <bool>      toggle diff-hash oscillation detection (default true).
   --stuck-crash-threshold N       abort after N consecutive harness crashes (default 2) — a typed
@@ -155,6 +159,15 @@ Stuck-detection tuning:
                                   ENVIRONMENT is broken and your tree may be correct-but-unverified,
                                   instead of a misleading no-diff/repeat abort that blames (and
                                   discards) possibly-correct work. Still fail-closed (never DONE).
+  --stuck-timeout-no-diff-threshold N
+                                  abort after N consecutive iterations that BOTH hit the harness
+                                  wall-clock timeout AND left the tree unchanged (default 2) — a
+                                  typed STUCK_TIMEOUT_NO_DIFF. Such a turn is excused as "ran out of
+                                  time, not out of ideas", but only N-1 times in a row, so a worker
+                                  that times out every iteration no longer burns the whole
+                                  --max-iterations budget in silent ten-minute no-ops. The fix it
+                                  names is more room per turn: --harness-timeout-ms and/or
+                                  --harness-idle-timeout-ms. Not silenced by --stuck-no-diff false.
   --auto-remediate-stuck <bool>   opt-in BOUNDED self-recovery (default false): instead of aborting,
                                   remediate each remediable stuck condition ONCE per run (max 3
                                   total) — a no-diff turn gets a canned try-a-different-approach

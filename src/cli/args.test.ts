@@ -526,6 +526,7 @@ describe('parseArgs', () => {
       '--stuck-oscillation', 'false',
       '--stuck-crash-threshold', '4',
       '--stuck-unevaluable-threshold', '3',
+      '--stuck-timeout-no-diff-threshold', '4',
     ]);
     expect(a.config.stuckPolicy).toEqual({
       noDiff: false,
@@ -533,8 +534,14 @@ describe('parseArgs', () => {
       oscillation: false,
       harnessCrashThreshold: 4,
       unevaluableThreshold: 3,
+      timeoutNoDiffThreshold: 4,
       autoRemediate: false,
     });
+  });
+
+  it('defaults the timeout-no-diff threshold to 2 when the flag is omitted (issue #119)', async () => {
+    const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
+    expect(a.config.stuckPolicy.timeoutNoDiffThreshold).toBe(2);
   });
 
   it('defaults the harness-crash threshold to 2 when the flag is omitted', async () => {

@@ -618,6 +618,9 @@ export function nextStepHint(o: RunOutcome): string | undefined {
     [/STUCK_HARNESS_CRASH[\s\S]*autonomy level/, `the harness refused an action at its autonomy level — raise it and continue: ${resume} --harness-autonomy medium`],
     [/STUCK_HARNESS_CRASH/, `the agent CLI kept crashing — run it once by hand to check install/auth, then continue: ${resume} --stuck-crash-threshold 4`],
     [/CONTRACT_UNEVALUABLE/, `the verification could not RUN (environment problem, not a code red) — fix the tool/network it names, then continue: ${resume} --stuck-unevaluable-threshold 4`],
+    // Matched BEFORE the generic /no-diff/ row: the tree stopped changing because the turn kept
+    // being killed, so the fix is more room per turn, not `--stuck-no-diff false`.
+    [/STUCK_TIMEOUT_NO_DIFF/, `the agent kept being killed by the harness timeout with nothing to show — give a turn more room and continue: ${resume} --harness-timeout-ms 1800000 --harness-idle-timeout-ms 300000`],
     [/TOOLS_MISSING/, `install the tools named above (or rerun with --install-missing-tools true)`],
     [/SETUP_FAILED/, `fix the setup command, or override it with --setup-cmd / disable it with --no-setup`],
     [/CONTRACT_UNSOUND/, `the frozen verification itself is broken on this tree — start a fresh run with a corrected goal or an explicit --verify-cmd`],

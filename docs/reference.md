@@ -467,7 +467,9 @@ fail-closed could-not-evaluate — never a green.
 actively-editing turn keeps resetting the heartbeat; a stalled one is still reaped. When both are
 set, the wall-clock cap remains the absolute backstop. Setting an idle timeout auto-enables the
 CLI's per-turn streaming so the heartbeat actually sees progress (displaying it is still opt-in via
-`--stream`).
+`--stream`). If you leave it off and turns keep getting cut short with nothing to show, the
+[`timeout-no-diff`](#stuck-detection) detector stops the run and points you back here instead of
+letting it burn the iteration budget.
 
 **Heavy `--generate` authoring may need a larger `--llm-timeout-ms`.** The compiler authors the
 whole contract in one call; a timeout there surfaces as a `COMPILE_FAILED` with a hint naming this
@@ -606,6 +608,7 @@ The loop bails before `--max-iterations` with a typed reason when it's making no
 | oscillation | period-N cycling between tree states | `--stuck-oscillation` |
 | harness-crash | the agent CLI exited abnormally N times in a row (`STUCK_HARNESS_CRASH`) | `--stuck-crash-threshold` |
 | contract-unevaluable | the frozen ladder could not be *evaluated* N times in a row (`CONTRACT_UNEVALUABLE`) | `--stuck-unevaluable-threshold` |
+| timeout-no-diff | N iterations in a row both hit the harness wall-clock timeout **and** changed nothing (`STUCK_TIMEOUT_NO_DIFF`) | `--stuck-timeout-no-diff-threshold`, `--harness-timeout-ms`, `--harness-idle-timeout-ms` |
 | budget | `--budget-tokens` / `--budget-wall-ms` exhausted | the budget flags |
 
 ### Automatic remediation (`--auto-remediate-stuck`)
@@ -646,6 +649,17 @@ Details that make these accurate rather than trigger-happy:
 - **A no-diff iteration is excused** when the agent never had a fair chance to act: the previous
   turn timed out, crashed, or was truncated, or the ladder is green and a fresh Sign-off veto is
   the only blocker. A perpetually truncated run still terminates at `--max-iterations` / budget.
+- **…but the timeout excuse is bounded** (`timeout-no-diff`). A worker that is killed by the
+  wall-clock cap *every* iteration used to be excused every iteration, so it burned the whole
+  `--max-iterations` budget in silent ten-minute no-ops. The excuse now lasts
+  `--stuck-timeout-no-diff-threshold - 1` consecutive turns (default 2 ⇒ exactly one excused turn,
+  the original intent), and the threshold-th one aborts with a typed `STUCK_TIMEOUT_NO_DIFF` that
+  names the real fix: more room per turn via `--harness-timeout-ms` and/or
+  `--harness-idle-timeout-ms`. A timed-out turn that *did* change the tree was progressing and does
+  not count toward the streak. This detector is deliberately **not** silenced by
+  `--stuck-no-diff false` — that toggle is about a worker that stops editing, not about one that
+  keeps being guillotined — and it is never auto-remediated, since another attempt at the same cap
+  just buys another full-length no-op.
 - **A harness that REFUSED is not a harness that crashed.** When the agent CLI names an actionable
   fix in its own failure output — droid's "insufficient permission to proceed / re-run with `--auto`
   medium" being the canonical case — the codec recognises it and `STUCK_HARNESS_CRASH` carries that

@@ -116,7 +116,7 @@
     },
     decide: {
       t: "DECIDE — pure truth table",
-      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop with a typed reason on STUCK / budget / iteration cap. A no-diff turn is excused when the run was cut short, and a checker that itself can't run is a CONTRACT_UNEVALUABLE — correct-but-unverified, never blamed on the tree, never a green.",
+      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop with a typed reason on STUCK / budget / iteration cap. A no-diff turn is excused when the run was cut short — but only once: repeated timeout-with-no-diff turns stop the run as STUCK_TIMEOUT_NO_DIFF instead of burning the iteration budget. A checker that itself can't run is a CONTRACT_UNEVALUABLE — correct-but-unverified, never blamed on the tree, never a green.",
       pills: ['<span class="pill pass">two keys → DONE</span>'],
     },
   };

@@ -1,3 +1,4 @@
+import type { DiffHash } from '../domain/ids';
 import type { LoopCtx } from './state';
 
 /**
@@ -7,7 +8,14 @@ import type { LoopCtx } from './state';
  */
 
 /** The kind of stuck condition, so DECIDE can apply reason-specific policy (e.g. excuse a no-diff). */
-export type StuckKind = 'budget' | 'crash' | 'unevaluable' | 'no-diff' | 'oscillation' | 'repeat';
+export type StuckKind =
+  | 'budget'
+  | 'crash'
+  | 'unevaluable'
+  | 'no-diff'
+  | 'timeout-no-diff'
+  | 'oscillation'
+  | 'repeat';
 
 /**
  * A detected stuck condition: a typed `kind` + the human-readable `message` (the audit / feedback
@@ -66,13 +74,49 @@ export function normalizeDetail(detail: string): string {
  * `LoopCtx`. The OTHER half of the excuse — a green ladder blocked only by a FRESH Sign-off veto —
  * needs the in-flight verdict/approval and so lives in DECIDE (`decide.ts`), which holds them; this
  * keeps `detectStuck` purely history-driven.
+ *
+ * Issue #119 — the excuse is now BOUNDED for the timeout case. `crashed` (already governed by the
+ * harness-crash streak) and `truncated` (a per-run turn cap, not a wall-clock kill — follow-on F's
+ * documented maxIterations/budget backstop still applies) keep the unbounded excuse; a `timeout` is
+ * excused only while the timeout-no-diff streak is still SHORT of its threshold, so the typed
+ * `timeout-no-diff` abort below takes over exactly where the excuse ends. At the default threshold
+ * (2) that is issue #54's single excused turn.
  */
 function noDiffExcusedByRun(ctx: LoopCtx): boolean {
-  return (
-    ctx.lastRunStatus === 'timeout' ||
-    ctx.lastRunStatus === 'crashed' ||
-    ctx.lastRunStatus === 'truncated'
-  );
+  if (ctx.lastRunStatus === 'crashed' || ctx.lastRunStatus === 'truncated') return true;
+  if (ctx.lastRunStatus !== 'timeout') return false;
+  return timeoutNoDiffStreak(ctx) < ctx.config.stuckPolicy.timeoutNoDiffThreshold;
+}
+
+/**
+ * How many of the most recent iterations BOTH timed out and left the working tree unchanged
+ * (issue #119) — the single fact behind both the capped no-diff excuse and the typed
+ * `timeout-no-diff` abort, so the excuse ends exactly where the abort begins.
+ *
+ * Pure over `LoopCtx`. The CURRENT iteration is read from `lastRunStatus`/`lastNoDiff` (the
+ * authoritative pair the reducer just recorded); earlier iterations are folded off the parallel
+ * `runStatusHistory` + `diffHashHistory` (an iteration changed nothing iff its post-run hash equals
+ * the previous iteration's). The walk stops at index 0 because iteration 1's no-diff is unknowable
+ * from the histories — the pre-run baseline hash is not in them — which is the conservative
+ * direction: it can only DELAY the abort by one iteration, never fire it early.
+ */
+function timeoutNoDiffStreak(ctx: LoopCtx): number {
+  if (ctx.lastRunStatus !== 'timeout' || !ctx.lastNoDiff) return 0;
+  const statuses = ctx.runStatusHistory;
+  const hashes = ctx.diffHashHistory;
+  let streak = 1;
+  for (let i = statuses.length - 2; i >= 1; i -= 1) {
+    if (statuses[i] !== 'timeout') break;
+    if (!unchangedAt(hashes, i)) break;
+    streak += 1;
+  }
+  return streak;
+}
+
+/** True when the iteration at `idx` left the tree exactly as the previous iteration did. */
+function unchangedAt(hashes: readonly DiffHash[], idx: number): boolean {
+  const hash = hashes[idx];
+  return hash !== undefined && hash === hashes[idx - 1];
 }
 
 export function detectStuck(ctx: LoopCtx): StuckReason | null {
@@ -109,6 +153,18 @@ export function detectStuck(ctx: LoopCtx): StuckReason | null {
       kind: 'unevaluable',
       message: contractUnevaluableReason(unevalThreshold, ctx.lastVerdict?.detail ?? ''),
     };
+  }
+
+  // Timeout + no-diff streak (issue #119) — the last `timeoutNoDiffThreshold` iterations were ALL
+  // killed by the harness wall-clock cap AND all left the tree unchanged. Checked BEFORE the generic
+  // no-diff (which the capped excuse would otherwise trip with a message blaming the agent) because
+  // this is a harness/budget-shape failure like the crash streak: the turn is running out of TIME,
+  // not out of ideas, so the abort names the two timeout flags instead of "the agent stopped editing".
+  // Deliberately NOT gated on `stuckPolicy.noDiff` — that toggle exists to let a worker keep going
+  // when it makes no edits, and must not silently re-open the unbounded ten-minute burn.
+  const timeoutThreshold = ctx.config.stuckPolicy.timeoutNoDiffThreshold;
+  if (timeoutNoDiffStreak(ctx) >= timeoutThreshold) {
+    return { kind: 'timeout-no-diff', message: timeoutNoDiffReason(timeoutThreshold) };
   }
 
   // No-diff — the most recent iteration left the working tree unchanged. Excused once (issue #54) by
@@ -218,6 +274,27 @@ function contractUnevaluableReason(threshold: number, detail: string): string {
     'may in fact satisfy the goal but is UNVERIFIED. Fix the verification environment (install the ' +
     'missing tool, allow network for the verify command, raise --verify-timeout-ms, or shrink the ' +
     `judge input with --delta-verify) and re-run, or run the frozen verify command yourself.${tail}`
+  );
+}
+
+/**
+ * The timeout-no-diff abort reason (issue #119): `threshold` consecutive iterations were killed by
+ * the harness wall-clock cap and each left the working tree untouched. That is a RESOURCE-shape
+ * failure, not evidence the code or the contract is wrong — the worker keeps being guillotined
+ * mid-turn, so every further iteration costs a full timeout for nothing. The message therefore names
+ * the two flags that actually fix it: the hard cap (`--harness-timeout-ms`) and the idle/heartbeat
+ * cap (`--harness-idle-timeout-ms`), which only kills a turn once it has gone QUIET, so a
+ * still-progressing agent is not cut off. Still fail-closed: a cut-off turn is a `timeout` run and
+ * the run aborts — never a green.
+ */
+function timeoutNoDiffReason(threshold: number): string {
+  return (
+    `STUCK_TIMEOUT_NO_DIFF: the harness was killed by its wall-clock timeout ${threshold} times in ` +
+    'a row and every one of those iterations left the working tree UNCHANGED — the agent is running ' +
+    'out of TIME, not out of ideas, so more iterations at the same cap would burn the budget for ' +
+    'nothing. Give a turn more room: raise --harness-timeout-ms (the hard cap), and/or set ' +
+    '--harness-idle-timeout-ms so a still-progressing turn is only killed after it goes quiet. To ' +
+    'tolerate a longer run of cut-off turns instead, raise --stuck-timeout-no-diff-threshold.'
   );
 }
 
