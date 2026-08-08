@@ -43,6 +43,28 @@ describe('renderResolvedConfig', () => {
     expect(raised).toMatch(/harness-autonomy\s+medium/);
   });
 
+  it('shows what the SECOND KEY runs on, and labels a collapsed one (issue #125)', async () => {
+    // Only one model available: agent = judge = approver, so the dry run says so before any spend.
+    const collapsed = await render(['run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'claude']);
+    expect(collapsed).toMatch(/sign-off model \(2nd key\)\s+\(the provider's own default\)/);
+    expect(collapsed).toMatch(/degraded mode\s+SELF-JUDGED/);
+    expect(collapsed).toContain('--approver-model <other>');
+
+    // --model names the AGENT's model; the approver declines to inherit it, so no degraded mode.
+    const independent = await render([
+      'run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'claude', '--model', 'big-model',
+    ]);
+    expect(independent).toContain("kept INDEPENDENT of the agent's --model big-model");
+    expect(independent).not.toContain('degraded mode');
+
+    // An explicit second-key model is shown as-is.
+    const explicit = await render([
+      'run', '--goal', 'g', '--verify-cmd', 'true', '--approver-model', 'other-model',
+    ]);
+    expect(explicit).toMatch(/sign-off model \(2nd key\)\s+other-model/);
+    expect(explicit).not.toContain('degraded mode');
+  });
+
   it('shows the stuck thresholds a run would actually use', async () => {
     const out = await render([
       'run', '--goal', 'g', '--verify-cmd', 'true', '--stuck-crash-threshold', '4',

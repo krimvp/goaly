@@ -23,6 +23,12 @@ import { detectWorkspaceMode, preflightRun } from './preflight';
 import { compactRun } from '../followup/compaction';
 import { resumeHint, renderResumeHint, type ResumeHint } from './resume-cmd';
 import { resolveModels } from './models';
+import { degradedMode } from './independence';
+import {
+  degradedModeDetail,
+  degradedModeTag,
+  type DegradedMode,
+} from '../domain/degraded';
 import { parsePriceTable, computeCost, type CostView, type PriceTable } from './cost';
 import { formatUsage } from './usage-format';
 
@@ -444,6 +450,25 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       throw e;
     }
 
+    // The per-seam models this run actually uses (issue #125): resolved ONCE here — with the LLM
+    // provider, so the approver-independence default is applied — and reused for the loud notice
+    // below, the degraded-mode label recorded in the run header, and the cost overlay at the end.
+    // One resolution means the log, the header and the price report can never disagree.
+    const resolvedModels = resolveModels(parsed.models, { llmProvider: parsed.llmProvider });
+    const degraded: DegradedMode | undefined = degradedMode(
+      resolvedModels,
+      parsed.harness,
+      parsed.llmProvider,
+      {
+        generate: runConfig.verifier.kind === 'generate',
+        autonomous: runConfig.autonomous,
+        approverQuorum: runConfig.approver.quorum,
+        ...(resolvedModels.approverModels !== undefined
+          ? { approverModels: resolvedModels.approverModels }
+          : {}),
+      },
+    );
+
     // Human-facing startup banner, routed through the logger so it respects --log-level and lands
     // in the diagnostics file too. The run outcome below stays on stdout (the machine-facing result).
     // The runId + resume command are printed UP FRONT so a crash/Ctrl-C at any point leaves the
@@ -464,6 +489,30 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
     // surfaced, never swallowed. `parseArgs` collects them because it has no output channel.
     for (const warning of parsed.warnings) {
       deps.logger?.warn(warning, {});
+    }
+
+    // Issue #125, part 1: the Sign-off approver declined to inherit the agent's `--model` and runs
+    // on the LLM provider's own model instead, so the second key isn't the model that wrote the
+    // code. A silent model swap would be indistinguishable from a bug — announce it every time.
+    if (resolvedModels.approverIndependentFrom !== undefined) {
+      deps.logger?.info(
+        `Sign-off approver kept INDEPENDENT of the coding agent: --model ` +
+          `${resolvedModels.approverIndependentFrom} selects the agent (and the judge rung), so the ` +
+          `approver defaults to the ${parsed.llmProvider} provider's own model rather than ` +
+          'inheriting it — the second key is a different model than the one that wrote the code. ' +
+          `Pass --approver-model ${resolvedModels.approverIndependentFrom} to collapse them again, ` +
+          'or --approver-model <other> / --approver-models to choose the skeptic yourself.',
+        { runId, approverModel: 'provider default', agentModel: resolvedModels.approverIndependentFrom },
+      );
+    }
+    // Issue #125, part 2: a FULLY collapsed model configuration (agent = judge = approver) is a
+    // typed degraded mode, recorded in the run header — a WARN alone cannot reach an operator who
+    // ran with --autonomous precisely so nobody had to watch.
+    if (degraded !== undefined) {
+      deps.logger?.warn(`degraded mode: ${degradedModeTag(degraded)}`, {
+        runId,
+        detail: degradedModeDetail(degraded),
+      });
     }
 
     // Raising harness autonomy buys installs/builds at the cost of the orchestrator's HEAD-relative
@@ -544,6 +593,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
         {
           resume: resuming,
           harness: parsed.harness,
+          ...(degraded !== undefined ? { degraded } : {}),
           ...(parsed.resumeExtend !== undefined ? { extend: parsed.resumeExtend } : {}),
         },
       );
@@ -564,12 +614,12 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
 
     const cost =
       priceTable !== undefined && outcome.usage !== undefined
-        ? computeCost(outcome.usage, resolveModels(parsed.models), priceTable)
+        ? computeCost(outcome.usage, resolvedModels, priceTable)
         : undefined;
     // Capability A: append "Continue this session:" with the harness-correct interactive-resume
     // command (or the goaly-code → --from-run route). Stays quiet when there is no real session.
     const hint = resumeHint(parsed.harness, outcome.sessionId, runId);
-    io.out(`${formatOutcome(outcome, cost, hint)}\n`);
+    io.out(`${formatOutcome(outcome, cost, hint, degraded)}\n`);
     if (outcome.status === 'DONE') return { code: 0, runId, outcome };
     return { code: interrupt.interrupted() ? EXIT_INTERRUPTED : 1, runId, outcome };
   } finally {
@@ -635,7 +685,12 @@ export function nextStepHint(o: RunOutcome): string | undefined {
   return undefined;
 }
 
-export function formatOutcome(o: RunOutcome, cost?: CostView, resume?: ResumeHint): string {
+export function formatOutcome(
+  o: RunOutcome,
+  cost?: CostView,
+  resume?: ResumeHint,
+  degraded?: DegradedMode,
+): string {
   const lines = [
     '',
     `── goaly run ${o.runId} ──`,
@@ -643,6 +698,11 @@ export function formatOutcome(o: RunOutcome, cost?: CostView, resume?: ResumeHin
     `iterations:  ${o.iterations}`,
     `contract:    ${o.contractHash ?? '(none — failed before compile)'}`,
   ];
+  // Issue #125: the typed degraded-mode label rides WITH the status, so a DONE whose two keys were
+  // one model is never reported as an independently reviewed one. A label, never a gate.
+  if (degraded !== undefined) {
+    lines.push(`degraded:    ${degradedModeTag(degraded)} — ${degradedModeDetail(degraded)}`);
+  }
   if (o.reason !== undefined) lines.push(`reason:      ${o.reason}`);
   const hint = nextStepHint(o);
   if (hint !== undefined) lines.push(`next:        ${hint}`);

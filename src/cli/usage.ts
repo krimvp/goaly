@@ -299,7 +299,14 @@ Model selection (all optional; default = each tool's own default):
   --model <m>           model for the harness AND the LLM steps (the global default)
   --llm-model <m>       model for all LLM steps (judge / approver / compiler)
   --judge-model <m>     model for the LLM-judge rung only
-  --approver-model <m>  model for the Sign-off approver only
+  --approver-model <m>  model for the Sign-off approver only. UNSET, the approver does NOT inherit a
+                        bare --model (that names the CODING AGENT's model): where the provider has a
+                        default model of its own the approver falls back to THAT, so the second key
+                        is a different model than the one that wrote the code (announced in the log).
+                        Pass the agent's model here to collapse them again on purpose. When only one
+                        model is available (no --model at all), the run is recorded as SELF-JUDGED —
+                        a typed degraded mode in the run header, the end-of-run summary and
+                        'goaly runs show'. A label, never a gate: DONE still needs both keys.
   --approver-quorum N   run Sign-off as an N-reviewer PANEL behind the unchanged approver seam
                         (default 1 = the single call, byte-for-byte unchanged). The panel greens
                         ONLY on a strict supermajority of no-veto votes (noVetoCount*2 > N) AND only

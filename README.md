@@ -27,6 +27,11 @@ goaly "add a /health endpoint returning 200"
 # Keep a human at the gates instead — approve the frozen contract once at Seal:
 goaly --mode review "add a /health endpoint returning 200"
 
+# With one model available, the agent, the judge rung and the Sign-off approver are the same
+# model — that run is labelled SELF-JUDGED (degraded) in its summary and `goaly runs show`.
+# Give the second key its own model to make the two keys independent in fact:
+goaly "add a /health endpoint returning 200" --approver-model <a-different-model>
+
 # Or point at a check you already have:
 goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
 ```
@@ -54,6 +59,11 @@ COMPILE ──► SEAL ──► setup + pre-flight ──► ┌─────
   **fail-closed** — a malformed grader is never a green.
 - **Two keys for DONE**: the frozen ladder passes *and* the independent Sign-off approver — which
   runs only on a green and is **veto-only** — doesn't veto. "Tests pass" is not "done".
+- **The second key is kept independent, and labelled when it can't be.** `--model X` picks the
+  *agent's* model; the approver defaults to a **different** one wherever the provider offers it. If
+  the agent, the judge rung and the approver still collapse onto one model, the run is recorded as
+  a typed `SELF-JUDGED` degraded mode in the run header, the terminal summary and `goaly runs show`
+  — so a DONE nobody independently reviewed is labelled everywhere it is reported.
 - **The control flow has zero LLM calls.** A pure reducer owns all policy; everything stochastic
   hides behind narrow interfaces at four seams.
 - **Every run is crash-safe and resumable.** A write-ahead log under `.goaly/<runId>/` makes runs
@@ -85,6 +95,7 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Dry run](docs/reference.md#dry-run---dry-run) | `--dry-run` | Validate the flags + `.goalyrc` and print the resolved config. Writes nothing, spends nothing. |
 | [Adversarial review](docs/reference.md#hardening-against-reward-hacking) | `--adversarial` | Critics attack the contract before Seal; refuters attack every green before Sign-off. |
 | [Approver panels](docs/reference.md#hardening-against-reward-hacking) | `--approver-quorum`, `--approver-models` | Sign-off as a refute-first multi-vote panel, optionally across distinct models. |
+| [Key independence](docs/reference.md#the-sign-off-approver-does-not-inherit---model) | `--approver-model` | The approver never inherits the agent's `--model` where a distinct one exists; an irreducible collapse is labelled `SELF-JUDGED` in the header, summary and `runs show`. |
 | [Sandboxing](docs/reference.md#sandboxing) | `--sandbox`, `--sandbox-net` | OS-jail the agent and verifier (bwrap / firejail / container), with egress allowlists. |
 | [Operator control](docs/reference.md#operator-control-watch-steer-extend) | `--resume`, `--note` | Watch live, steer with notes, raise caps mid-run — never the frozen bar. |
 | [Follow-ups](docs/reference.md#following-up-after-a-run-ends---from-run) | `--from-run` | A new re-verified goal that knows what the last run did. |

@@ -1,5 +1,8 @@
 import type { RunConfig } from '../domain/config';
 import type { ParsedArgs } from './args';
+import { degradedModeTag } from '../domain/degraded';
+import { degradedMode } from './independence';
+import { resolveModels } from './models';
 
 /**
  * `--dry-run`: resolve everything, run nothing.
@@ -38,6 +41,7 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
         ['llm-provider', parsed.llmProvider],
         ...opt('base-url', parsed.baseUrl),
         ...modelRows(parsed),
+        ...keyIndependenceRows(parsed, config),
       ],
     },
     {
@@ -167,6 +171,40 @@ function modelRows(parsed: ParsedArgs): Row[] {
     ...opt('planner-model', m.plannerModel),
     ...opt('critic-model', m.criticModel),
     ...opt('explain-model', m.explainModel),
+  ];
+}
+
+/**
+ * What the SECOND KEY actually runs on (issue #125) — the thing a dry run should surface before a
+ * token is spent. Shows the resolved Sign-off model, says so when the approver declined to inherit
+ * the agent's `--model`, and names the degraded mode when all three roles still collapse onto one.
+ */
+function keyIndependenceRows(parsed: ParsedArgs, config: RunConfig): Row[] {
+  const models = resolveModels(parsed.models, { llmProvider: parsed.llmProvider });
+  const degraded = degradedMode(models, parsed.harness, parsed.llmProvider, {
+    generate: config.verifier.kind === 'generate',
+    autonomous: config.autonomous,
+    approverQuorum: config.approver.quorum,
+    ...(models.approverModels !== undefined ? { approverModels: models.approverModels } : {}),
+  });
+  const approver =
+    models.approverModels !== undefined
+      ? `panel: ${models.approverModels.join(', ')}`
+      : (models.approver ?? "(the provider's own default)") +
+        (models.approverIndependentFrom !== undefined
+          ? ` — kept INDEPENDENT of the agent's --model ${models.approverIndependentFrom}`
+          : '');
+  return [
+    ['sign-off model (2nd key)', approver],
+    ...(degraded === undefined
+      ? []
+      : ([
+          [
+            'degraded mode',
+            `${degradedModeTag(degraded)} — agent, judge rung and approver share one model; ` +
+              'pass --approver-model <other> for an independent second key',
+          ],
+        ] as Row[])),
   ];
 }
 

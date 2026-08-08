@@ -295,7 +295,10 @@ goaly run --goal "..." --generate --phased --dry-run
 
 It prints the fully-merged, fully-validated configuration — resolved verifier intent, harness and
 autonomy, provider and every model, budgets, per-step timeouts, stuck thresholds, baseline, sandbox,
-and which config files contributed — then exits `0`.
+and which config files contributed — then exits `0`. That includes what the **second key** will run
+on (`sign-off model (2nd key)`) and a `degraded mode` row when the agent, the judge rung and the
+approver all collapse onto one model — see
+[degraded mode](#degraded-mode-self-judged).
 
 It runs **after** every read-only check a real run performs (config merge, `--cost-table`,
 `--baseline` resolution, `--resume` / `--from-run` log reads, the preflight) and **before** the first
@@ -390,6 +393,52 @@ Precedence per LLM step: per-step flag → `--llm-model` → `--model` → the t
 `--llm-provider` **follows `--harness`** by default (`codex` → `codex`, `goaly-code` → `openai`),
 so the compiler that authors a `--generate` bar runs on the tool you picked; pass the flag to split
 the LLM steps onto a different provider than the worker.
+
+### The Sign-off approver does not inherit `--model`
+
+One deliberate exception to the cascade: `--model X` picks the **coding agent's** model, so letting
+the second key inherit it would collapse the agent, the judge rung and the approver onto one
+distribution — invariant 3 satisfied mechanically while defeated statistically. Where the
+environment permits it, goaly therefore defaults the approver to a model **distinct** from the
+agent's:
+
+| Wiring | Approver model |
+| --- | --- |
+| `--model X` (provider has its own default model) | the provider's own default — **not** `X`; announced in the log |
+| `--model X --llm-provider openai` | `X` (that provider has no default model of its own; changing it would refuse to start) |
+| `--llm-model L` | `L` — an explicit choice for the LLM steps is always obeyed |
+| `--approver-model A` / `--approver-models …` | `A` / the panel — always wins |
+| no `--model` at all | the tool default (only one model is available — see the degraded-mode label below) |
+
+It is **non-blocking and best-effort**: goaly compares the models it was *asked* for and cannot
+resolve a CLI's own default model id, so a `--model` that happens to name that same default is not
+detectable. To restore the old inheriting behavior explicitly, pass `--approver-model <the same
+model>`; to choose the skeptic yourself, pass a different one.
+
+### Degraded mode: `SELF-JUDGED`
+
+When the coding agent, the LLM judge rung **and** the Sign-off approver all still resolve to one
+model — the zero-config default run, where only one model is available — the run is recorded as a
+typed **degraded mode** (`kind: "self-judged"`) in the run-log header, alongside whether the bar was
+`--generate`-authored and whether Seal was `--autonomous`. It is surfaced wherever the run is
+reported:
+
+```
+── goaly run run-… ──
+status:      DONE
+degraded:    SELF-JUDGED — the coding agent, the LLM judge rung and the Sign-off approver all ran on
+             one model (the tool default) (--generate --autonomous) — the two keys are not
+             independent, so treat this run with the corresponding suspicion. Pass
+             --approver-model <other-model> (or --approver-models) for an independent second key.
+```
+
+The same line appears in `goaly runs show <id>` (and the header field is readable by any downstream
+consumer — CI, the UI), so a DONE that nobody independently reviewed is *labelled* as such rather
+than only warned about at startup — a warning nobody is present to read is a record, not a control.
+
+The label is exactly that: a **label**. It never weakens or strengthens a gate — the frozen ladder
+and the veto-only approver still both have to turn for DONE — and it never enters the frozen
+contract. Setting `--approver-model` (or `--approver-models` with ≥2 distinct models) removes it.
 
 Approver-panel flags (`--approver-quorum`, `--approver-models`, `--approver-lenses`,
 `--approver-diversity-temp`) are covered under
@@ -947,7 +996,8 @@ re-run nothing:
 
 ```bash
 goaly runs list                  # one row per run: id, status, iterations, tokens, goal
-goaly runs show run-<id>         # frozen contract + hash, Seal outcome, every verdict, totals
+goaly runs show run-<id>         # frozen contract + hash, Seal outcome, every verdict, totals,
+                                 # and any degraded-mode label (e.g. SELF-JUDGED)
 goaly runs watch run-<id>        # follow a LIVE run from another terminal
 goaly runs resume-cmd run-<id>   # how to continue the run's CLI session interactively
 goaly runs list --workspace ./myrepo
@@ -1144,7 +1194,11 @@ so it never blocks a legitimate run.
 model (e.g. a bare `--model X`). Under `--generate --autonomous` the warning escalates when the
 agent, judge, and approver all resolve to one model — the self-author + self-judge case. Prefer
 `--approver-model` (and/or `--judge-model`) on a different model/provider so the second key is a
-genuinely independent skeptic.
+genuinely independent skeptic. Beyond the warning, goaly acts on it: the approver
+[does not inherit `--model`](#the-sign-off-approver-does-not-inherit---model) where a distinct model
+is available, and an irreducible collapse is recorded as the typed
+[`SELF-JUDGED` degraded mode](#degraded-mode-self-judged) in the run header, the terminal summary
+and `goaly runs show`.
 
 **The second key can be a multi-vote panel.**
 

@@ -122,6 +122,23 @@ describe('formatOutcome', () => {
     const text = formatOutcome(outcome({ usage: undefined }));
     expect(text).not.toContain('spend:');
   });
+
+  it('labels a self-judged DONE in the terminal summary (issue #125)', () => {
+    const text = formatOutcome(outcome(), undefined, undefined, {
+      kind: 'self-judged',
+      model: 'one-model',
+      generate: true,
+      autonomous: true,
+    });
+    expect(text).toContain('status:      DONE');
+    expect(text).toContain('degraded:    SELF-JUDGED');
+    expect(text).toContain('one-model');
+    expect(text).toContain('--approver-model');
+  });
+
+  it('prints no degraded line when the two keys were independent', () => {
+    expect(formatOutcome(outcome())).not.toContain('degraded:');
+  });
 });
 
 describe('nextStepHint — always-on next-step guidance for terminal outcomes', () => {

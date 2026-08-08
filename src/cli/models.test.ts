@@ -73,6 +73,74 @@ describe('resolveModels (cascade)', () => {
   });
 });
 
+describe('approver independence by default (issue #125)', () => {
+  it('--model does NOT cascade into the approver when the provider has its own default model', () => {
+    const r = resolveModels(ModelSelection.parse({ model: 'm' }), { llmProvider: 'claude' });
+    // The agent (and the judge rung, which is not the second key) still run on `m`; the Sign-off
+    // approver falls back to the provider's own model, so the second key is a DIFFERENT model.
+    expect(r.harness).toBe('m');
+    expect(r.judge).toBe('m');
+    expect(r.approver).toBeUndefined();
+    expect(r.approverIndependentFrom).toBe('m');
+  });
+
+  it('every other LLM step still follows --model (only the approver is kept independent)', () => {
+    const r = resolveModels(ModelSelection.parse({ model: 'm' }), { llmProvider: 'codex' });
+    expect([r.compiler, r.planner, r.critic, r.explain]).toEqual(['m', 'm', 'm', 'm']);
+  });
+
+  it('an explicit --approver-model always wins (and is not announced as an auto-swap)', () => {
+    const r = resolveModels(ModelSelection.parse({ model: 'm', approverModel: 'A' }), {
+      llmProvider: 'claude',
+    });
+    expect(r.approver).toBe('A');
+    expect(r.approverIndependentFrom).toBeUndefined();
+  });
+
+  it('passing the agent model as --approver-model re-collapses them explicitly (the opt-out)', () => {
+    const r = resolveModels(ModelSelection.parse({ model: 'm', approverModel: 'm' }), {
+      llmProvider: 'claude',
+    });
+    expect(r.approver).toBe('m');
+    expect(r.approverIndependentFrom).toBeUndefined();
+  });
+
+  it('an explicit --approver-models panel is left alone', () => {
+    const r = resolveModels(ModelSelection.parse({ model: 'm', approverModels: ['a', 'b'] }), {
+      llmProvider: 'claude',
+    });
+    expect(r.approver).toBe('m');
+    expect(r.approverModels).toEqual(['a', 'b']);
+    expect(r.approverIndependentFrom).toBeUndefined();
+  });
+
+  it('--llm-model is a deliberate choice for the LLM steps and is obeyed', () => {
+    const r = resolveModels(ModelSelection.parse({ model: 'm', llmModel: 'L' }), {
+      llmProvider: 'claude',
+    });
+    expect(r.approver).toBe('L');
+    expect(r.approverIndependentFrom).toBeUndefined();
+  });
+
+  it('is NON-BLOCKING when only one model is available: no --model ⇒ nothing changes', () => {
+    const r = resolveModels(ModelSelection.parse({}), { llmProvider: 'claude' });
+    expect(r.approver).toBeUndefined();
+    expect(r.approverIndependentFrom).toBeUndefined();
+  });
+
+  it('is skipped for a provider with no default model of its own (openai would refuse to start)', () => {
+    const r = resolveModels(ModelSelection.parse({ model: 'm' }), { llmProvider: 'openai' });
+    expect(r.approver).toBe('m');
+    expect(r.approverIndependentFrom).toBeUndefined();
+  });
+
+  it('keeps the pure cascade when no provider is given (embedders calling resolveModels directly)', () => {
+    const r = resolveModels(ModelSelection.parse({ model: 'm' }));
+    expect(r.approver).toBe('m');
+    expect(r.approverIndependentFrom).toBeUndefined();
+  });
+});
+
 describe('ModelSelection validation (fail closed at the seam)', () => {
   it('rejects an empty or whitespace-only value', () => {
     expect(ModelSelection.safeParse({ model: '' }).success).toBe(false);

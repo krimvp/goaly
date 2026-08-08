@@ -35,6 +35,7 @@ function detail(over: Partial<RunDetail> = {}): RunDetail {
     stateTag: 'DONE',
     reason: undefined,
     harness: 'claude',
+    degraded: undefined,
     sessionId: SessionId.parse('sess-prior'),
     startedAt: 1,
     endedAt: 2,

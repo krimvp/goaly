@@ -351,11 +351,11 @@ function refuseIfUnavailable(launcher: SandboxLauncher): void {
 /**
  * The composition root: assemble a fully-wired {@link DriverDeps} from validated config. This
  * is the only place that knows which concrete adapter/verifier/gate backs each seam, and the
- * only place that turns the frozen contract's rungs into a runnable Ladder.
+ * only place that turns the frozen contract's rungs into a runnable Ladder. Models resolve WITH the provider, so the approver can stay independent of the agent's `--model` (issue #125).
  */
 export function composeDeps(config: RunConfig, options: ComposeOptions): DriverDeps {
-  const models = resolveModels(options.models ?? {});
   const provider = options.llmProvider ?? defaultLlmProvider(options.harness);
+  const models = resolveModels(options.models ?? {}, { llmProvider: provider });
   // The verify command gets a DEFAULT kill-timeout (matching the harness/LLM 10-min default): a
   // verify command that hangs (a test awaiting the network, a server that never exits) must never
   // hang the whole run unboundedly. A hit is a fail-closed could-not-evaluate — the unevaluable

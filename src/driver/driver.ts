@@ -1,7 +1,8 @@
 import type { Command, OrchestratorEvent, RunExtension, RunOutcome } from '../domain/events';
 import { OrchestratorEvent as OrchestratorEventSchema } from '../domain/events';
-import type { RunLogEntry } from '../runlog/runlog';
+import { freshRunHeader, type RunLogEntry } from '../runlog/runlog';
 import type { RunConfig } from '../domain/config';
+import type { DegradedMode } from '../domain/degraded';
 import type { CompiledContract } from '../domain/contract';
 import type { ContractHash, RunId, SessionId } from '../domain/ids';
 import { DiffHash, coerceSessionId } from '../domain/ids';
@@ -178,6 +179,11 @@ export type DriveOptions = {
    * wiring, never the frozen contract; absent ⇒ the header omits it (old behavior unchanged).
    */
   harness?: string;
+  /**
+   * Typed degraded-mode label for the header (issue #125) — e.g. a fully self-judged model wiring,
+   * so that DONE is labelled wherever reported. Wiring like {@link harness}: never contract/gate.
+   */
+  degraded?: DegradedMode;
   /**
    * Operator extension/steering for THIS resume (ADR 0012). Ignored on a fresh run and on a log
    * that doesn't exist yet. Appended as a RUN_EXTENDED marker BEFORE the resume fold, so a raised
@@ -931,18 +937,12 @@ async function bootstrap(
 ): Promise<Bootstrapped> {
   if (options.resume !== true) {
     const [state, commands] = initial(config);
-    // Record the run-start review baseline (an explicit `--baseline` or the raised-autonomy
-    // auto-pin, applied by compose before drive()) so `--resume` can re-adopt the pin. The `HEAD`
-    // default is deliberately NOT recorded: re-adopting a symbolic HEAD is a no-op, and omitting it
-    // keeps old-log parity.
+    // The run-start review baseline (an explicit `--baseline` or the raised-autonomy auto-pin,
+    // applied by compose before drive()) and the compose-time wiring labels (harness, degraded
+    // mode) ride into the header — `freshRunHeader` owns which of them are recorded.
+    const startedAt = deps.clock.now();
     const runStartBaseline = deps.workspace.currentBaseline();
-    await deps.runlog.writeHeader({
-      runId,
-      startedAt: deps.clock.now(),
-      config,
-      ...(options.harness !== undefined ? { harness: options.harness } : {}),
-      ...(runStartBaseline !== 'HEAD' ? { baseline: runStartBaseline } : {}),
-    });
+    await deps.runlog.writeHeader(freshRunHeader(runId, startedAt, config, runStartBaseline, options));
     return { state, commands, seq: 0, contractHash: null, ladder: null, pendingNote: null };
   }
 

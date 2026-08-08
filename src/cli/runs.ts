@@ -2,6 +2,7 @@ import type { RunsCommand } from './args';
 import type { CompiledContract, Rung } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
 import type { SealDecision } from '../domain/verdict';
+import { degradedModeDetail, degradedModeTag } from '../domain/degraded';
 import {
   listRuns,
   readRun,
@@ -142,6 +143,7 @@ export function renderRunDetail(d: RunDetail): string {
     `tokens:      ${d.tokensSpent === undefined ? '-' : d.tokensSpent}`,
   ];
   if (d.reason !== undefined) lines.push(`reason:      ${d.reason}`);
+  lines.push(...renderDegraded(d.degraded));
   lines.push(...renderPlan(d.plan, d.planSeal, d.planFailures));
   lines.push(...renderContract(d.contract));
   lines.push(...renderSeal(d.seal, d.compileFailures));
@@ -151,6 +153,16 @@ export function renderRunDetail(d: RunDetail): string {
   // cost pricing is a volatile print-time overlay applied only to a live run's `--cost-table`.
   lines.push('', ...formatUsage(d.usage));
   return lines.join('\n');
+}
+
+/**
+ * Render the run's typed degraded-mode label (issue #125) directly under the status, so a `DONE`
+ * whose two keys were one model is labelled here — not only in a startup WARN in a log nobody kept.
+ * Nothing for a run with no degraded mode (including logs written before the field existed).
+ */
+function renderDegraded(degraded: RunDetail['degraded']): string[] {
+  if (degraded === undefined) return [];
+  return [`degraded:    ${degradedModeTag(degraded)} — ${degradedModeDetail(degraded)}`];
 }
 
 /** Render the frozen decomposition plan (issue #48) when the run was phased; nothing otherwise. */

@@ -18,6 +18,7 @@ import {
   PIPELINE_STAGES,
   type FeedLine,
 } from './format';
+import { degradedModeDetail, degradedModeTag } from '../../domain/degraded';
 import { SealModal, ResumePanel } from './views-interactive';
 import { SessionView } from './session';
 
@@ -331,6 +332,11 @@ export function RunDetailPage({ runId, tab }: { runId: string; tab: RunTab }): V
         <div class="mission-goal">${d.goal}</div>
         <div class="mission-badges">
           <span class=${statusBadgeClass(d.status)}>${d.status}</span>
+          ${d.degraded !== undefined
+            ? html`<span class="badge incomplete" title=${degradedModeDetail(d.degraded)}>
+                ${degradedModeTag(d.degraded)}
+              </span>`
+            : ''}
           ${isLive ? html`<span class="badge live">LIVE</span>` : ''}
           ${gate !== null ? html`<span class="badge incomplete">AWAITING SEAL</span>` : ''}
           <span class="muted where">${rootLabel(detail.root)}</span>

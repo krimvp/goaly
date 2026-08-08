@@ -1,6 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CompiledContract } from '../domain/contract';
+import type { DegradedMode } from '../domain/degraded';
 import type { PhasePlan } from '../domain/plan';
 import type { ContractHash, RunId, SessionId } from '../domain/ids';
 import type { HarnessRunResult } from '../domain/events';
@@ -76,6 +77,13 @@ export type RunDetail = {
    */
   readonly harness: string | undefined;
   /**
+   * The run's typed degraded-mode label from the log header (issue #125), or undefined for a run
+   * with none (including logs written before the field existed). Today only `self-judged`: agent,
+   * judge rung and Sign-off approver on one model, so the two keys were not independent. Reported
+   * next to the status so a DONE from such a run is never read as an independently reviewed one.
+   */
+  readonly degraded: DegradedMode | undefined;
+  /**
    * The last REAL (non-sentinel) harness session id the run produced, or undefined when none was
    * ever recovered. The handle a follow-up resumes — `claude --resume <id>` (A) or
    * `--from-run --inherit-session` (C). Walks `AGENT_RAN` backwards past synthesized sentinels.
@@ -149,6 +157,7 @@ export function runDetail(header: RunLogHeader, entries: readonly RunLogEntry[])
     stateTag: state.tag,
     reason: terminalReason(state),
     harness: header.harness,
+    degraded: header.degraded,
     sessionId: lastRealSessionId(entries),
     startedAt: header.startedAt,
     endedAt: last?.ts,

@@ -1,5 +1,6 @@
 import type { HarnessChoice, LlmProviderChoice } from './args';
 import type { ResolvedModels } from './models';
+import type { DegradedMode } from '../domain/degraded';
 
 /**
  * "Two independent keys" (invariant #3) is only real if the verifier's judge rung and the Sign-off
@@ -68,6 +69,58 @@ function panelIsModelIndependent(models: string[] | undefined): boolean {
 }
 
 /**
+ * Which of the two collapses the resolved wiring has. Shared by the advisory warnings and the typed
+ * degraded-mode label so the WARN on screen and the flag in the run header can never disagree.
+ *
+ * A `--approver-models` panel with ≥2 DISTINCT models is the genuinely independent second key: the
+ * approver no longer collapses onto the judge's or the worker's model, so both collapses are false.
+ * (A one-model panel — a single entry or all-identical entries — falls back to the single-model
+ * approver and the collapses still apply.)
+ */
+function collapses(
+  resolved: ResolvedModels,
+  harness: HarnessChoice,
+  llmProvider: LlmProviderChoice,
+  context: IndependenceContext,
+): { judgeApprover: boolean; workerApprover: boolean } {
+  const panelIndependent = panelIsModelIndependent(context.approverModels);
+  return {
+    judgeApprover: !panelIndependent && sameModel(resolved.judge, resolved.approver),
+    workerApprover:
+      !panelIndependent &&
+      harnessFamily(harness) === llmProvider &&
+      sameModel(resolved.harness, resolved.approver),
+  };
+}
+
+/**
+ * The typed degraded-mode label (issue #125) for a resolved wiring: present ONLY on a FULL collapse —
+ * the coding agent, the LLM judge rung and the Sign-off approver all on one model. That is the
+ * configuration where the two keys are drawn from a single distribution, so a DONE it produces is
+ * labelled `self-judged` in the run header, the terminal summary and `goaly runs show` instead of
+ * only in a startup WARN nobody is present to read. A partial collapse (judge↔approver only, say)
+ * still gets its advisory warning below but is NOT recorded as a degraded run — the second key is
+ * still a different model than the one that wrote the code.
+ *
+ * Pure: it labels, it never gates. Nothing here can promote or block a DONE.
+ */
+export function degradedMode(
+  resolved: ResolvedModels,
+  harness: HarnessChoice,
+  llmProvider: LlmProviderChoice,
+  context: IndependenceContext = {},
+): DegradedMode | undefined {
+  const c = collapses(resolved, harness, llmProvider, context);
+  if (!c.judgeApprover || !c.workerApprover) return undefined;
+  return {
+    kind: 'self-judged',
+    ...(resolved.approver !== undefined ? { model: resolved.approver } : {}),
+    generate: context.generate === true,
+    autonomous: context.autonomous === true,
+  };
+}
+
+/**
  * Compute the model-independence warnings for a resolved wiring. Pure and order-stable so it is
  * unit-testable without building the whole driver.
  */
@@ -79,17 +132,12 @@ export function independenceWarnings(
 ): string[] {
   const warnings: string[] = [];
 
-  // A `--approver-models` panel with ≥2 DISTINCT models is the genuinely independent second key: the
-  // approver no longer collapses onto the judge's or the worker's model, so EVERY approver-collapse
-  // warning below (judge↔approver, worker↔approver, the self-judge escalation, and the
-  // variance-reduction note) is suppressed. (A one-model panel — a single entry or all-identical
-  // entries — falls back to the single-model approver and the warnings still apply.)
-  const panelIndependent = panelIsModelIndependent(context.approverModels);
-  const judgeApproverCollapse = !panelIndependent && sameModel(resolved.judge, resolved.approver);
-  const workerApproverCollapse =
-    !panelIndependent &&
-    harnessFamily(harness) === llmProvider &&
-    sameModel(resolved.harness, resolved.approver);
+  const { judgeApprover: judgeApproverCollapse, workerApprover: workerApproverCollapse } = collapses(
+    resolved,
+    harness,
+    llmProvider,
+    context,
+  );
 
   // Follow-on H: in `--generate --autonomous` the model self-authors its bar AND self-judges it. When
   // the coding agent, the judge rung, AND the Sign-off approver all collapse onto ONE model, that is

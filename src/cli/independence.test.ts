@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { independenceWarnings } from './independence';
+import { degradedMode, independenceWarnings } from './independence';
 import { resolveModels } from './models';
+import { DegradedMode, degradedModeDetail, degradedModeTag } from '../domain/degraded';
 
 describe('independenceWarnings', () => {
   it('warns on the default cascade: --model X collapses judge, approver, and worker', () => {
@@ -147,5 +148,74 @@ describe('independenceWarnings', () => {
       });
       expect(w.some((s) => s.includes('VARIANCE REDUCTION'))).toBe(true);
     });
+  });
+});
+
+describe('degradedMode (issue #125): the typed self-judged label', () => {
+  it('labels the zero-config default run (agent = judge = approver = the tool default)', () => {
+    const d = degradedMode(resolveModels({}), 'claude', 'claude', {
+      generate: true,
+      autonomous: true,
+    });
+    expect(d).toEqual({ kind: 'self-judged', generate: true, autonomous: true });
+    // No `model` key at all: absent means "the tool's own default model", never a guessed id.
+    expect(d !== undefined && 'model' in d).toBe(false);
+    expect(DegradedMode.safeParse(d).success).toBe(true);
+  });
+
+  it('names the shared model when one was selected', () => {
+    const d = degradedMode(resolveModels({ model: 'claude-x' }), 'claude', 'claude', {});
+    expect(d?.model).toBe('claude-x');
+    // Recorded even without --generate/--autonomous: the collapse is what degrades the second key.
+    expect(d).toMatchObject({ kind: 'self-judged', generate: false, autonomous: false });
+  });
+
+  it('is ABSENT once the approver runs on its own model (the second key is independent)', () => {
+    const resolved = resolveModels({ model: 'claude-x', approverModel: 'other' });
+    expect(degradedMode(resolved, 'claude', 'claude')).toBeUndefined();
+  });
+
+  it('is ABSENT when the approver auto-declines to inherit --model (issue #125 part 1)', () => {
+    const resolved = resolveModels({ model: 'claude-x' }, { llmProvider: 'claude' });
+    expect(degradedMode(resolved, 'claude', 'claude', { generate: true, autonomous: true })).toBeUndefined();
+  });
+
+  it('is ABSENT on a PARTIAL collapse (judge↔approver only — the worker is a different vendor)', () => {
+    // codex harness + claude llm-provider: the approver is not the model that wrote the code.
+    const resolved = resolveModels({ model: 'm' });
+    expect(independenceWarnings(resolved, 'codex', 'claude').length).toBeGreaterThan(0);
+    expect(degradedMode(resolved, 'codex', 'claude')).toBeUndefined();
+  });
+
+  it('is ABSENT for a genuinely perspective-independent --approver-models panel', () => {
+    const resolved = resolveModels({ model: 'm', approverModels: ['a', 'b'] });
+    expect(degradedMode(resolved, 'claude', 'claude', { approverModels: ['a', 'b'] })).toBeUndefined();
+  });
+
+  it('is PRESENT for a one-model panel (variance reduction is not independence)', () => {
+    const resolved = resolveModels({ model: 'm', approverModels: ['m'] });
+    expect(
+      degradedMode(resolved, 'claude', 'claude', { approverQuorum: 3, approverModels: ['m'] }),
+    ).toMatchObject({ kind: 'self-judged', model: 'm' });
+  });
+
+  it('agrees with the startup WARN: whenever the run is degraded, the escalation fired too', () => {
+    const resolved = resolveModels({ model: 'm' });
+    const ctx = { generate: true, autonomous: true };
+    expect(degradedMode(resolved, 'claude', 'claude', ctx)).toBeDefined();
+    expect(independenceWarnings(resolved, 'claude', 'claude', ctx)[0]).toContain('SELF-JUDGE RISK');
+  });
+
+  it('renders a label that names the remedy', () => {
+    const d = degradedMode(resolveModels({ model: 'm' }), 'claude', 'claude', {
+      generate: true,
+      autonomous: true,
+    });
+    expect(d).toBeDefined();
+    expect(degradedModeTag(d!)).toBe('SELF-JUDGED');
+    const detail = degradedModeDetail(d!);
+    expect(detail).toContain('m');
+    expect(detail).toContain('--generate --autonomous');
+    expect(detail).toContain('--approver-model');
   });
 });

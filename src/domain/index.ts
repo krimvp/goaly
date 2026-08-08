@@ -5,3 +5,4 @@ export * from './contract';
 export * from './plan';
 export * from './usage';
 export * from './events';
+export * from './degraded';
