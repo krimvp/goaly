@@ -1,6 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { makeFakeContract } from '../testing/fakes';
+import { FakeWorkspace, makeFakeContract } from '../testing/fakes';
 import { AutoSealGate, HumanSealGate } from './seal-gates';
+import { buildLadder } from '../cli/compose';
+import { FakeLlm } from '../llm/provider';
+import { sha256Hex } from '../util/hash';
+import type { CompiledContract } from '../domain/contract';
+
+/** The banner's rung lines (`  [n] …`), in order — what the operator counts at SEAL. */
+function rungLines(banner: string): string[] {
+  return banner.split('\n').filter((line) => /^ {2}\[\d+] /.test(line));
+}
+
+/** Render the banner an autonomous Seal would print for `contract`. */
+async function banner(contract: CompiledContract): Promise<string> {
+  const logs: string[] = [];
+  await new AutoSealGate({ log: (msg) => logs.push(msg) }).approveContract(contract);
+  return logs.join('\n');
+}
 
 /** A scripted `ask` that returns the queued answers in order. */
 function scriptedAsk(answers: string[]): {
@@ -146,5 +162,116 @@ describe('HumanSealGate', () => {
 
     // Assert
     expect(out.join('\n')).toContain(contract.contractHash);
+  });
+});
+
+describe('the SEAL contract banner', () => {
+  const RUBRIC = 'the parser must reject malformed input';
+  const AUTHORED = 'parser.test.ts';
+  const AUTHORED_SHA = sha256Hex('expect(parse("x")).toThrow()');
+
+  /** A contract with authored verification files — the shape that gets a guard rung (issue #120). */
+  function authoredContract(): CompiledContract {
+    return makeFakeContract({
+      rungs: [
+        { kind: 'deterministic', command: 'npm test' },
+        { kind: 'judge', rubric: RUBRIC, quorum: 3, confidenceFloor: 0.66 },
+      ],
+      rubric: RUBRIC,
+      generatedFiles: [{ path: AUTHORED, sha256: AUTHORED_SHA }],
+    });
+  }
+
+  it('prints as many rungs as the ladder reports in rungsTotal when files are authored', async () => {
+    // Arrange — the guard the ladder prepends must be visible, or the banner undercounts.
+    const contract = authoredContract();
+    const workspace = new FakeWorkspace();
+    workspace.setFileHash(AUTHORED, AUTHORED_SHA);
+
+    // Act
+    const printed = rungLines(await banner(contract));
+    const verdict = await buildLadder(contract, new FakeLlm([])).verify(
+      workspace,
+      contract.goal,
+      contract.rubric,
+    );
+
+    // Assert
+    expect(verdict.rungsTotal).toBe(printed.length);
+    expect(printed).toHaveLength(3);
+    expect(printed[0]).toContain('[0]');
+    expect(printed[0]).toContain('generated-files');
+    expect(printed[1]).toContain('[1] deterministic: npm test');
+    expect(printed[2]).toContain('[2] judge');
+  });
+
+  it('reconciles for a plain --verify-cmd contract (no authored files ⇒ no guard rung)', async () => {
+    // Arrange
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: 'npm test' }],
+      rubric: '',
+      generatedFiles: [],
+    });
+
+    // Act
+    const printed = rungLines(await banner(contract));
+    const verdict = await buildLadder(contract, new FakeLlm([])).verify(
+      new FakeWorkspace('0000000', '', [{ exitCode: 0, stdout: '', stderr: '' }]),
+      contract.goal,
+      contract.rubric,
+    );
+
+    // Assert
+    expect(printed).toHaveLength(1);
+    expect(verdict.rungsTotal).toBe(1);
+    expect(printed[0]).toContain('[0] deterministic: npm test');
+  });
+
+  it('still reconciles when the guard reds the ladder (guard runs and fails closed)', async () => {
+    // Arrange — the authored file was tampered with since the freeze.
+    const contract = authoredContract();
+    const workspace = new FakeWorkspace();
+    workspace.setFileHash(AUTHORED, sha256Hex('assert(true)'));
+
+    // Act
+    const printed = rungLines(await banner(contract));
+    const verdict = await buildLadder(contract, new FakeLlm([])).verify(
+      workspace,
+      contract.goal,
+      contract.rubric,
+    );
+
+    // Assert — a red at the FIRST printed rung, not at an invisible one.
+    expect(verdict.pass).toBe(false);
+    expect(verdict.rungsPassed).toBe(0);
+    expect(verdict.rungsTotal).toBe(printed.length);
+  });
+
+  it('prints the rubric exactly once', async () => {
+    // Arrange
+    const contract = authoredContract();
+
+    // Act
+    const text = await banner(contract);
+
+    // Assert
+    expect(text.split(RUBRIC)).toHaveLength(2);
+    expect(text).toContain('rubric:');
+  });
+
+  it('spells out a judge rung whose rubric differs from the contract rubric', async () => {
+    // Arrange — the schema allows a rung-specific rubric; it must not be silently collapsed.
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'judge', rubric: 'rung-specific bar', quorum: 1, confidenceFloor: 0.5 }],
+      rubric: RUBRIC,
+      generatedFiles: [],
+    });
+
+    // Act
+    const text = await banner(contract);
+
+    // Assert
+    expect(text).toContain('rung-specific bar');
+    expect(text).toContain(RUBRIC);
   });
 });

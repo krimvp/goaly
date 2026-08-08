@@ -497,6 +497,14 @@ Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject:
 Piping the goal via stdin (`--goal -`) consumes stdin, so there's nothing left for the prompt —
 use `--autonomous` or `--goal-file`.
 
+**What the banner shows.** The goal, the `contractHash`, any frozen `setup` and `requiredTools`, the
+rubric **once**, then the ladder *as it will actually run* — including the built-in
+[generated-files integrity guard](#the-verifier-ladder) as rung `[0]` whenever the
+compiler authored verification files (it is part of the ladder, never part of the `contractHash`).
+A judge rung whose rubric is identical to the contract rubric points back at it instead of repeating
+it. So the rung numbers you read at Seal line up with the `rungsPassed`/`rungsTotal` reported in
+every verdict.
+
 **Authoring is resilient, not one-shot.** A `COMPILE_FAILED` (a correctable authoring mistake)
 re-authors the verification with the error fed back, up to `--max-compile-retries` (default 2;
 `0` disables). A `PLAN_FAILED` under `--phased` does the same one step earlier, up to
@@ -564,7 +572,9 @@ is fail-closed — a malformed grader is never a green.
 
 - **Guard rung (built-in, `--generate`).** Files goaly authors are pinned by content hash inside
   the frozen contract; an integrity guard runs first every iteration and fails closed if any
-  authored file changed since the contract froze.
+  authored file changed since the contract froze. It is printed as rung `[0]` in the
+  [Seal banner](#seal-the-contract-gate) and counted in each verdict's `rungsTotal`, so the ladder
+  you approve is the ladder that runs.
 - **Deterministic rungs.** Your `--verify-cmd` (or the authored command): `pass = exit 0`.
 - **Smoke rung (`--smoke "<cmd>"`).** An extra deterministic rung that *executes* the built
   artifact — a headless-browser script, a server probe, a CLI smoke — for goals whose correctness
