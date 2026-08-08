@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cap.
 
 ### Added
+- Named presets: a `"presets"` block in any config layer defines your own flag bundles, selected
+  per run with `--preset <name>` or persistently via a top-level `"preset"` default (announced on
+  every run; `--preset none` disables it for one invocation). One language- and toolchain-neutral
+  preset ships built in — `default` (`{ "mode": "hands-off" }`, verification via the `--generate`
+  fallback, so it works in any repo) — and a config layer may redefine it wholesale. Presets
+  expand at parse time like `--mode` — config base keys < preset < `--mode` < explicit CLI flags,
+  every expansion and override logged — and may themselves set `mode`. `goaly config presets
+  [--names]` lists the resolved set (built-in included); shell completion completes `--preset`
+  values live; `goalyrc.schema.json` covers the new keys; `goaly config validate` reports presets
+  alongside settings.
 - Non-git workspace support via `--workspace-mode git|file|auto` (default `auto`). File mode uses a
   content-addressed manifest and stores baseline snapshots under `.goaly/baselines/`, so goaly can
   run in a plain directory without `git init`. See ADR 0018.

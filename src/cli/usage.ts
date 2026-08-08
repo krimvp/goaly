@@ -18,7 +18,7 @@ Usage:
                [--smoke "<cmd>"] [--setup-cmd "<cmd>" | --no-setup] [--setup-timeout-ms N]
                [--install-missing-tools true|false]
                [--rubric "<rubric>"] [--autonomous] [--mode review|hands-off|aggressive]
-               [--max-iterations N]
+               [--preset <name>|none] [--max-iterations N]
                [--candidates N] [--resume-best-of-incomplete rerun|collapse]
                [--phased [--max-phases N] [--max-plan-revisions N] [--max-plan-retries N]
                          [--plan-file <p>] [--planner-model <m>] [--parallel-phases]]
@@ -370,6 +370,20 @@ Seal (contract approval — the review point before any execution):
                                 aggressive: --autonomous --harness-autonomy high --adversarial
                                             --candidates 3.
                               Also settable as "mode" in .goalyrc; a --mode you type overrides it.
+  --preset <name>|none        apply a NAMED preset — a flag bundle defined under "presets" in a
+                              config file (see the Config file section below) — so one word selects
+                              a whole way of running. One built-in ships so this works with no
+                              config at all: 'default' ({ "mode": "hands-off" }), deliberately
+                              language- and toolchain-neutral (no verify command, no harness or
+                              model choice — verification falls back to the --generate default,
+                              which fits any project); redefine "default" in a config file to make
+                              it yours. Expands at parse time exactly like --mode (nothing
+                              invisible reaches the loop; every expansion is logged), and may
+                              itself set "mode". Layering: config base keys < preset < --mode <
+                              explicit CLI flags. Also settable as a top-level "preset" in .goalyrc
+                              to make it the default for every run — announced on each run, and
+                              --preset none disables it for one invocation. Unknown names fail
+                              closed listing what is defined (goaly config presets shows the same).
 
   Note: piping the goal via stdin (--goal -) leaves no stdin for the interactive prompt, so a
   non-autonomous run refuses to start (fail-closed): pair it with --autonomous, or read the goal
@@ -423,6 +437,13 @@ Config file (so the same wiring need not be repeated every run):
     { "harness": "codex", "max-iterations": 8, "verify-cmd": "npm test" }
   Precedence: CLI flag > --config file > <workspace>/.goalyrc > ~/.goalyrc > tool default.
   Per-invocation flags (--workspace, --resume, --config) are never read from a file.
+  Named presets: a "presets" block maps a name to the same flag keys; select one with
+  --preset <name>, or persist "preset": "<name>" to apply it by default. Example:
+    { "presets": { "quick": { "mode": "review", "max-iterations": 3 },
+                   "ship":  { "mode": "hands-off", "budget-tokens": 500000 } },
+      "preset": "quick" }
+  A built-in 'default' preset ({ "mode": "hands-off" }) always exists; a config layer that
+  redefines a preset name (built-in or not) replaces it wholesale (no body merging).
 
 Per-run spend report (printed at the end of every run; stored in the run log):
   Tokens are summarized by layer — harness vs. the LLM steps (compiler / judge / approver) —
@@ -584,6 +605,11 @@ Onboarding (first-time setup):
                             and report the verdict (exit 0 valid / 1 invalid). For editor
                             auto-completion, register the shipped goalyrc.schema.json (see the
                             reference's Config file section).
+  goaly config presets [--names] [--workspace <dir>]
+                            list the named presets — built-in plus every config layer's (name,
+                            defining source, keys) — exactly as a run in <dir> would resolve
+                            them. --names prints bare names only (used by shell completion for
+                            --preset).
   goaly completion bash|zsh|fish
                             print a tab-completion script for every subcommand and documented flag.
                             Install: source <(goaly completion bash)   (zsh alike;

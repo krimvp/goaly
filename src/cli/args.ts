@@ -50,6 +50,7 @@ import {
 import type { ConfigCommand } from './config-cmd';
 import { parseCompletionShell, type CompletionCommand } from './completion';
 import { applyMode, parseMode } from './modes';
+import { applyPreset, mergedPresets } from './presets';
 
 /**
  * The CLI argument coordinator (Phase 3.1 of the improvement plan): tokenizing, per-group flag
@@ -396,8 +397,29 @@ export async function parseArgs(
   // --goal-file vs "goal"), so a config default for such a field is dropped whenever the CLI
   // provides ANY source for it — otherwise the two would look like a conflicting double-source.
   const workspaceDir = str(cliFlags, 'workspace') ?? process.cwd();
-  const { overlay, sources: configSources } = await load(workspaceDir, str(cliFlags, 'config'));
-  let overlayFlags: RawFlags = { ...overlay };
+  const loaded = await load(workspaceDir, str(cliFlags, 'config'));
+  const configSources = loaded.sources;
+  let overlayFlags: RawFlags = { ...loaded.overlay };
+
+  // Named preset (presets.ts): `--preset <name>` (or a persisted `"preset"` default) expands a
+  // user-defined flag bundle from the config files' `presets` block into the config layer. It runs
+  // BEFORE the multi-source drop below (so a preset-supplied goal/intent/rubric obeys the same
+  // CLI-source override rule) and BEFORE the mode expansion (so a preset's `mode` value is picked
+  // up exactly as if typed). Layering: config base < preset < mode < explicit CLI flags.
+  const presetNotes: string[] = [];
+  const requestedPreset = str({ ...overlayFlags, ...cliFlags }, 'preset');
+  if (requestedPreset !== undefined) {
+    const expanded = applyPreset(
+      requestedPreset,
+      str(cliFlags, 'preset') !== undefined,
+      mergedPresets(loaded.presets),
+      overlayFlags,
+      cliFlags,
+    );
+    overlayFlags = expanded.overlay;
+    presetNotes.push(...expanded.notes);
+  }
+
   for (const field of MULTI_SOURCE_FIELDS) {
     if (cliFlags[field] !== undefined || cliFlags[`${field}-file`] !== undefined) {
       delete overlayFlags[field];
@@ -423,7 +445,7 @@ export async function parseArgs(
   //   - both typed on the COMMAND LINE ⇒ a genuine contradiction the user must resolve (fail closed);
   //   - `verify-cmd` from a .goalyrc layer + --generate typed now ⇒ an ordinary, useful one-off
   //     override — keep --generate, but never silently: name the source that lost.
-  const warnings: string[] = [...modeNotes];
+  const warnings: string[] = [...presetNotes, ...modeNotes];
   if (cliFlags['generate'] !== undefined && cliFlags['verify-cmd'] !== undefined) {
     throw new UsageError(
       '--verify-cmd and --generate are mutually exclusive: --verify-cmd points at an EXISTING ' +

@@ -78,6 +78,7 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Worktrees](docs/reference.md#worktrees---worktree) | `--worktree <name>` | The whole run in an isolated checkout; merge back with plain git. |
 | [Harness autonomy](docs/reference.md#harness-autonomy---harness-autonomy) | `--harness-autonomy` | Let the agent install & build for a from-scratch goal; a refusal names the fix, and the reviewed diff auto-pins to the run-start commit so agent commits stay visible. |
 | [Autonomy profiles](docs/reference.md#autonomy-profiles---mode) | `--mode` | `review` / `hands-off` / `aggressive` bundle the right flag combinations; explicit flags override, loudly. |
+| [Named presets](docs/reference.md#named-presets---preset) | `--preset` | Flag bundles selected by name — a language-neutral `default` ships built in, and `.goalyrc` (`"presets"`) defines or redefines your own; `"preset"` applies one on every run. One word instead of N flags. |
 | [Dry run](docs/reference.md#dry-run---dry-run) | `--dry-run` | Validate the flags + `.goalyrc` and print the resolved config. Writes nothing, spends nothing. |
 | [Adversarial review](docs/reference.md#hardening-against-reward-hacking) | `--adversarial` | Critics attack the contract before Seal; refuters attack every green before Sign-off. |
 | [Approver panels](docs/reference.md#hardening-against-reward-hacking) | `--approver-quorum`, `--approver-models` | Sign-off as a refute-first multi-vote panel, optionally across distinct models. |
@@ -108,6 +109,11 @@ goaly run --goal "..." --verify-cmd "npm test" --harness goaly-code \
 
 # One flag for a whole autonomy posture (review | hands-off | aggressive):
 goaly "..." --verify-cmd "npm test" --mode hands-off
+
+# Or a named preset: the built-in 'default' works in any repo with zero config,
+# and "presets" in .goalyrc defines (or redefines) your own:
+goaly "..." --preset default
+goaly "..." --preset ship          # goaly config presets lists what's defined
 
 # Check what a run WOULD do — flags, .goalyrc, models, budgets — without starting one:
 goaly run --goal "..." --generate --dry-run

@@ -161,7 +161,10 @@ export function parseInitCommand(rest: string[]): { init: InitCommand; workspace
   };
 }
 
-/** Parse `goaly config validate <path>` — fail-closed on a missing/unknown subcommand or path. */
+/**
+ * Parse `goaly config validate <path>` / `goaly config presets [--names]` — fail-closed on a
+ * missing/unknown subcommand or path.
+ */
 export function parseConfigCommand(rest: string[]): { config: ConfigCommand; workspace: string } {
   const [sub, ...subRest] = rest;
   if (sub === 'validate') {
@@ -176,7 +179,14 @@ export function parseConfigCommand(rest: string[]): { config: ConfigCommand; wor
       workspace: str(parseFlags(subRest.slice(1)).flags, 'workspace') ?? process.cwd(),
     };
   }
-  throw new UsageError(`unknown config subcommand: ${sub ?? '(none)'} (expected validate)`);
+  if (sub === 'presets') {
+    const flags = parseFlags(subRest).flags;
+    return {
+      config: { kind: 'presets', names: flags['names'] !== undefined },
+      workspace: str(flags, 'workspace') ?? process.cwd(),
+    };
+  }
+  throw new UsageError(`unknown config subcommand: ${sub ?? '(none)'} (expected validate | presets)`);
 }
 
 /** Parse `goaly ui [--port N] [--workspace <dir>]`, each validated fail-closed at the seam. */

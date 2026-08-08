@@ -50,9 +50,12 @@ function bashScript(flags: string[]): string {
   return `# goaly bash completion — install with: source <(goaly completion bash)
 _goaly_completions() {
   local cur="\${COMP_WORDS[COMP_CWORD]}"
+  local prev="\${COMP_WORDS[COMP_CWORD-1]}"
   local subcommands="${SUBCOMMANDS.join(' ')}"
   local flags="${flags.join(' ')}"
-  if [[ \$COMP_CWORD -eq 1 && \$cur != -* ]]; then
+  if [[ \$prev == --preset ]]; then
+    COMPREPLY=( \$(compgen -W "none \$(goaly config presets --names 2>/dev/null)" -- "\$cur") )
+  elif [[ \$COMP_CWORD -eq 1 && \$cur != -* ]]; then
     COMPREPLY=( \$(compgen -W "\$subcommands" -- "\$cur") )
   else
     COMPREPLY=( \$(compgen -W "\$flags" -- "\$cur") )
@@ -68,7 +71,9 @@ _goaly() {
   local -a subcommands flags
   subcommands=(${SUBCOMMANDS.join(' ')})
   flags=(${flags.join(' ')})
-  if (( CURRENT == 2 )) && [[ \$words[CURRENT] != -* ]]; then
+  if [[ \$words[CURRENT-1] == --preset ]]; then
+    compadd -- none \${(f)"\$(goaly config presets --names 2>/dev/null)"}
+  elif (( CURRENT == 2 )) && [[ \$words[CURRENT] != -* ]]; then
     _describe 'goaly command' subcommands
   else
     compadd -- \$flags
@@ -85,7 +90,9 @@ function fishScript(flags: string[]): string {
     '# goaly fish completion — install with: goaly completion fish | source',
     'complete -c goaly -f',
     `complete -c goaly -n '__fish_use_subcommand' -a '${SUBCOMMANDS.join(' ')}'`,
-    ...flags.map((f) => `complete -c goaly -l ${f.slice(2)}`),
+    // --preset completes the user's preset names (asked live, so they track the config files).
+    "complete -c goaly -l preset -x -a '(goaly config presets --names 2>/dev/null; echo none)'",
+    ...flags.filter((f) => f !== '--preset').map((f) => `complete -c goaly -l ${f.slice(2)}`),
   ];
   return `${lines.join('\n')}\n`;
 }
