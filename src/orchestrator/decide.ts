@@ -1,13 +1,16 @@
-import type { LoopCtx } from './state';
+import type { LoopCtx, RemediationLedger } from './state';
 import type { Verdict, ApprovalVerdict } from '../domain';
 import { detectStuck } from './stuck';
+import { planRemediation } from './remediate';
 
 /**
  * The outcome of one DECIDE evaluation — pure data the reducer turns into a state +
- * commands. No LLM, no IO, no clock.
+ * commands. No LLM, no IO, no clock. A `CONTINUE` may carry a `remediation` ledger
+ * (improvement plan 4.2): the reducer folds it into the next `LoopCtx` so the spent
+ * self-recovery is part of the replayable state.
  */
 export type Decision =
-  | { kind: 'CONTINUE'; feedback: string; source: 'verifier' | 'veto' }
+  | { kind: 'CONTINUE'; feedback: string; source: 'verifier' | 'veto'; remediation?: RemediationLedger }
   | { kind: 'DONE' }
   | { kind: 'FAILED'; reason: string }
   | { kind: 'ABORTED'; reason: string };
@@ -43,10 +46,30 @@ export function decide(
   // Only `no-diff` is excusable — budget / crash / unevaluable / oscillation / repeat always abort.
   const stuck = detectStuck(ctx);
   if (stuck !== null && !(stuck.kind === 'no-diff' && freshVeto(ctx, ladder, approval))) {
-    return { kind: 'ABORTED', reason: stuck.message };
+    // Opt-in bounded self-recovery (improvement plan 4.2): a remediable stuck condition may be
+    // converted into ONE more guided attempt instead of an abort. Pure policy; the returned ledger
+    // rides the CONTINUE so replay reproduces the spend exactly.
+    const remediation = planRemediation(ctx, stuck);
+    if (remediation !== null) {
+      return {
+        kind: 'CONTINUE',
+        feedback: remediation.feedback,
+        source: 'verifier',
+        remediation: remediation.ledger,
+      };
+    }
+    return {
+      kind: 'ABORTED',
+      reason:
+        ctx.remediations.total > 0
+          ? `${stuck.message} (auto-remediation: ${ctx.remediations.total} self-recovery attempt(s) already spent)`
+          : stuck.message,
+    };
   }
 
-  if (ctx.iteration >= ctx.config.maxIterations) {
+  // A spent no-diff remediation refunds the iteration its unchanged turn burned (plan 4.2) —
+  // `remediations.noDiff` is 0 or 1, so the cap moves by at most one.
+  if (ctx.iteration >= ctx.config.maxIterations + ctx.remediations.noDiff) {
     return {
       kind: 'FAILED',
       reason: `reached maxIterations (${ctx.config.maxIterations}) without satisfying the contract`,

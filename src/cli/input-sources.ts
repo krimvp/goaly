@@ -1,6 +1,6 @@
 import { readFile as fsReadFile } from 'node:fs/promises';
-import type { RawFlags } from './args';
-import { UsageError } from './args';
+import type { RawFlags } from './flags/tokens';
+import { UsageError } from './flags/tokens';
 
 /**
  * The IO seam for goal/intent/rubric input. Kept injectable so `parseArgs` stays testable

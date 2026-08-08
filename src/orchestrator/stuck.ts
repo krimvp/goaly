@@ -85,7 +85,8 @@ export function detectStuck(ctx: LoopCtx): StuckReason | null {
   // Checked BEFORE no-diff / repeat-failure because both of those are downstream symptoms of a crash
   // (the verifier runs on a tree the agent never finished editing) and would otherwise disguise an
   // environment/harness failure as "your code is wrong". Names the actual harness error, not the red.
-  const crashThreshold = ctx.config.stuckPolicy.harnessCrashThreshold;
+  // A spent crash remediation (improvement plan 4.2) raises the effective threshold by one attempt.
+  const crashThreshold = ctx.config.stuckPolicy.harnessCrashThreshold + ctx.remediations.crash;
   if (isCrashStreak(ctx.runStatusHistory, crashThreshold)) {
     return {
       kind: 'crash',
@@ -133,8 +134,9 @@ export function detectStuck(ctx: LoopCtx): StuckReason | null {
   // the verifier-failure signature (`verifierDetailHistory`), independent of the working-tree diff
   // hash: a worker that churns unrelated files every turn (so the diff hash keeps moving) but never
   // changes the verifier outcome is still caught here. The abort names the repeated signature so the
-  // failure is diagnosable and points at where the fix really is.
-  const threshold = ctx.config.stuckPolicy.repeatFailureThreshold;
+  // failure is diagnosable and points at where the fix really is. A spent repeat remediation
+  // (improvement plan 4.2) raises the effective threshold by one attempt.
+  const threshold = ctx.config.stuckPolicy.repeatFailureThreshold + ctx.remediations.repeat;
   if (isRepeating(ctx.verifierDetailHistory, threshold)) {
     const signature = ctx.verifierDetailHistory[ctx.verifierDetailHistory.length - 1] ?? '';
     return { kind: 'repeat', message: repeatFailureReason(threshold, signature) };

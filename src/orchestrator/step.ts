@@ -562,9 +562,13 @@ function stepPreparing(
 function stepRunningAgent(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
   if (event.tag !== 'AGENT_RAN') throw invalidTransition('RUNNING_AGENT', event);
 
+  // A crashed harness turn never completed any work, so it must not advance the iteration counter
+  // (it would otherwise consume a turn under a tight --max-iterations cap). The crash streak and
+  // no-diff state are still recorded, so stuck detection governs repeated crashes as before.
+  const completed = event.run.status !== 'crashed';
   const next: LoopCtx = {
     ...ctx,
-    iteration: ctx.iteration + 1,
+    iteration: completed ? ctx.iteration + 1 : ctx.iteration,
     sessionId: event.run.sessionId,
     diffHashHistory: [...ctx.diffHashHistory, event.diffHash],
     lastNoDiff: event.prevDiffHash === event.diffHash,
@@ -631,7 +635,13 @@ function stepAwaitSignoff(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
 function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
   switch (decision.kind) {
     case 'CONTINUE': {
-      const next: LoopCtx = { ...ctx, feedback: decision.feedback, feedbackSource: decision.source };
+      const next: LoopCtx = {
+        ...ctx,
+        feedback: decision.feedback,
+        feedbackSource: decision.source,
+        // A remediated CONTINUE (plan 4.2) banks its ledger here, so the spend is replayable state.
+        remediations: decision.remediation ?? ctx.remediations,
+      };
       const prompt = buildLoopPrompt(ctx.contract, decision.feedback, ctx.lastRunStatus);
       return startIteration(next, prompt, ctx.sessionId);
     }

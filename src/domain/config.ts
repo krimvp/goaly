@@ -52,6 +52,17 @@ export const StuckPolicy = z.object({
    * (one retry); this many in a row is a typed `CONTRACT_UNEVALUABLE`. Mirrors `harnessCrashThreshold`.
    */
   unevaluableThreshold: z.number().int().min(2).default(2),
+  /**
+   * Opt-in bounded self-recovery (`--auto-remediate-stuck`, improvement plan 4.2). When true, the
+   * pure reducer remediates each REMEDIABLE stuck condition ONCE per run (a no-diff turn gets a
+   * canned try-something-different hint and its burned iteration back; a repeat-failure /
+   * harness-crash streak gets its threshold raised by one more attempt), capped at
+   * {@link MAX_STUCK_REMEDIATIONS} total. `CONTRACT_UNEVALUABLE`, budget, and oscillation are
+   * NEVER remediated — those need an operator. Every remediation is visible in the next agent
+   * prompt (the canned feedback) and the driver logs it loudly. Default false: byte-for-byte the
+   * historical behavior.
+   */
+  autoRemediate: z.boolean().default(false),
 });
 export type StuckPolicy = z.infer<typeof StuckPolicy>;
 export type StuckPolicyInput = z.input<typeof StuckPolicy>;
@@ -371,6 +382,8 @@ export const CliInput = z.object({
   stuckOscillation: z.boolean().optional(),
   stuckCrashThreshold: z.coerce.number().int().min(2).optional(),
   stuckUnevaluableThreshold: z.coerce.number().int().min(2).optional(),
+  /** Opt-in bounded stuck self-recovery (`--auto-remediate-stuck`); the CLI pre-parses the boolean. */
+  autoRemediateStuck: z.boolean().optional(),
   /** Sign-off approver panel (issue #84): a positive-int reviewer quorum (default 1). */
   approverQuorum: z.coerce.number().int().positive().optional(),
   /** Diversity temperature for a `> 1` approver panel (issue #84); ignored at quorum 1. */
@@ -420,6 +433,7 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     stuckPolicy.harnessCrashThreshold = input.stuckCrashThreshold;
   if (input.stuckUnevaluableThreshold !== undefined)
     stuckPolicy.unevaluableThreshold = input.stuckUnevaluableThreshold;
+  if (input.autoRemediateStuck !== undefined) stuckPolicy.autoRemediate = input.autoRemediateStuck;
 
   // Sign-off approver panel (issue #84): override only the fields the user set; the rest keep their
   // schema defaults (quorum 1 ⇒ byte-for-byte the single-call approver). Omitted entirely when no

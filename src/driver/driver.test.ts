@@ -308,6 +308,40 @@ describe('drive() — full loop with zero IO', () => {
     expect(approver.inputs).toHaveLength(0);
   });
 
+  it('--auto-remediate-stuck: a no-diff turn gets the canned hint and the run recovers (plan 4.2)', async () => {
+    const { deps, harness } = wire({
+      // iter1 changes the tree; iter2 changes nothing (would abort); the remediated iter3 passes.
+      scripts: [{ postHash: '0000001' }, {}, { postHash: '0000002' }],
+      verdicts: [failVerdict('red'), failVerdict('red'), passVerdict()],
+      approvals: [approve()],
+    });
+    const outcome = await drive(
+      deps,
+      makeConfig({ maxIterations: 10, stuckPolicy: { autoRemediate: true } }),
+      runId,
+    );
+    expect(outcome.status).toBe('DONE');
+    expect(harness.prompts).toHaveLength(3);
+    expect(harness.prompts[2]).toContain('AUTO-REMEDIATION 1/3 (no-diff)');
+  });
+
+  it('--auto-remediate-stuck is capped: a second no-diff still aborts, counting the spend', async () => {
+    const { deps, harness } = wire({
+      // no-diff on iter2 (remediated) and again on iter3 → abort; the ledger shows the spend.
+      scripts: [{ postHash: '0000001' }, {}, {}],
+      verdicts: [failVerdict('red'), failVerdict('red'), failVerdict('red')],
+    });
+    const outcome = await drive(
+      deps,
+      makeConfig({ maxIterations: 10, stuckPolicy: { autoRemediate: true } }),
+      runId,
+    );
+    expect(outcome.status).toBe('ABORTED');
+    expect(outcome.reason).toContain('no-diff');
+    expect(outcome.reason).toContain('auto-remediation: 1 self-recovery attempt(s) already spent');
+    expect(harness.prompts).toHaveLength(3); // exactly one extra turn, never a loop
+  });
+
   it('ABORTED (STUCK_HARNESS_CRASH) after two consecutive harness crashes — fast and named, not a 6-iteration repeat-failure', async () => {
     // The real incident: the agent CLI crashed every turn (status=crashed), leaving a stale verifier
     // red that repeated. The loop must stop after the crash streak (2) with a harness-focused reason,
@@ -326,10 +360,28 @@ describe('drive() — full loop with zero IO', () => {
     });
     const outcome = await drive(deps, makeConfig({ maxIterations: 10 }), runId);
     expect(outcome.status).toBe('ABORTED');
-    expect(outcome.iterations).toBe(2); // bailed after the 2nd crash, not the 6th
+    // Crashes do not count as completed iterations; the abort is driven by the crash streak.
+    expect(outcome.iterations).toBe(0);
     expect(outcome.reason).toContain('STUCK_HARNESS_CRASH');
     expect(outcome.reason).toContain('claude: command not found');
     expect(outcome.reason).not.toContain('STUCK_REPEATED_FAILURE');
+  });
+
+  it('a crashed visible turn does not consume the only allowed iteration, leaving room to recover', async () => {
+    const { deps } = wire({
+      scripts: [
+        // First visible turn: crash + retried crash (both attempts fail; the Driver's one retry is used).
+        { status: 'crashed', output: 'transient blip', postHash: '0000001' },
+        { status: 'crashed', output: 'transient blip', postHash: '0000002' },
+        // Second visible turn: recovered attempt completes the single allowed iteration.
+        { postHash: '0000003' },
+      ],
+      verdicts: [failVerdict('red'), passVerdict()],
+      approvals: [approve()],
+    });
+    const outcome = await drive(deps, makeConfig({ maxIterations: 1 }), runId);
+    expect(outcome.status).toBe('DONE');
+    expect(outcome.iterations).toBe(1);
   });
 
   it('absorbs a single transient harness crash by retrying the turn (never reaches the reducer)', async () => {

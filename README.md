@@ -30,7 +30,7 @@ goaly -d "add a /health endpoint returning 200"
 goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
 ```
 
-Requires Node ≥ 20 and `git`. Exit codes: `0` DONE · `1` FAILED/ABORTED · `2` usage error ·
+Requires Node ≥ 20. Git is recommended (used by default); pass `--workspace-mode file` to run in a plain directory without `git init`. Exit codes: `0` DONE · `1` FAILED/ABORTED · `2` usage error ·
 `130` interrupted (Ctrl-C — the run stays resumable).
 
 ## How it works
@@ -77,6 +77,7 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Parallel waves](docs/reference.md#cooperative-parallel-waves---parallel-phases-experimental) | `--parallel-phases` | Independent phases run concurrently, merge with git plumbing, re-verify. Experimental. |
 | [Worktrees](docs/reference.md#worktrees---worktree) | `--worktree <name>` | The whole run in an isolated checkout; merge back with plain git. |
 | [Harness autonomy](docs/reference.md#harness-autonomy---harness-autonomy) | `--harness-autonomy` | Let the agent install & build for a from-scratch goal; a refusal names the fix, and the reviewed diff auto-pins to the run-start commit so agent commits stay visible. |
+| [Autonomy profiles](docs/reference.md#autonomy-profiles---mode) | `--mode` | `review` / `hands-off` / `aggressive` bundle the right flag combinations; explicit flags override, loudly. |
 | [Dry run](docs/reference.md#dry-run---dry-run) | `--dry-run` | Validate the flags + `.goalyrc` and print the resolved config. Writes nothing, spends nothing. |
 | [Adversarial review](docs/reference.md#hardening-against-reward-hacking) | `--adversarial` | Critics attack the contract before Seal; refuters attack every green before Sign-off. |
 | [Approver panels](docs/reference.md#hardening-against-reward-hacking) | `--approver-quorum`, `--approver-models` | Sign-off as a refute-first multi-vote panel, optionally across distinct models. |
@@ -86,7 +87,9 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Web UI](docs/reference.md#web-ui-goaly-ui) | `goaly ui` | A local control center: mission dashboard, live pipeline + session inspector, worktrees, and a browser Seal review station. Localhost-only. |
 | [Spend & budgets](docs/reference.md#spend-report--budgets) | `--budget-tokens`, `--cost-table` | Per-layer token report (cache included); budgets survive resume. |
 | [Observability](docs/reference.md#observability) | `--stream`, `--explain`, `--log-level` | Live agent turns, durable transcripts, plain-language narration. |
+| [Onboarding](docs/reference.md#onboarding-goaly-doctor--goaly-init) | `goaly doctor`, `goaly init` | A read-only environment report (Node, git, harness CLIs, config validity), and a starter `.goalyrc` written interactively or headless. |
 | [Reliability](docs/reference.md#reliability) | *(defaults)* | Preflight, bounded retries (contract *and* plan), safe Ctrl-C, fsync'd write-ahead log. |
+| [Stuck self-recovery](docs/reference.md#automatic-remediation---auto-remediate-stuck) | `--auto-remediate-stuck` | Opt-in: up to 3 bounded self-recoveries (no-diff hint, one extra repeat/crash attempt) before stopping for the operator. |
 
 ## Usage
 
@@ -103,6 +106,9 @@ goaly run --goal "..." --verify-cmd "npm test" --model claude-opus-4-8 --llm-mod
 goaly run --goal "..." --verify-cmd "npm test" --harness goaly-code \
           --base-url http://localhost:11434/v1 --model qwen2.5-coder
 
+# One flag for a whole autonomy posture (review | hands-off | aggressive):
+goaly "..." --verify-cmd "npm test" --mode hands-off
+
 # Check what a run WOULD do — flags, .goalyrc, models, budgets — without starting one:
 goaly run --goal "..." --generate --dry-run
 
@@ -110,11 +116,20 @@ goaly run --goal "..." --generate --dry-run
 goaly runs list
 goaly runs show run-<id>
 goaly ui
+
+# First-time setup: environment report, then a starter .goalyrc:
+goaly doctor
+goaly init
+
+# Tab completion for every subcommand and flag (zsh alike; fish: goaly completion fish | source):
+source <(goaly completion bash)
 ```
 
 `goaly help` lists every flag. The **[CLI cookbook](docs/reference.md#cli-cookbook)** has a worked
 example for every mode; a **[config file](docs/reference.md#config-file)** (`.goalyrc` /
-`~/.goalyrc`) keeps repeated wiring out of your invocations.
+`~/.goalyrc`) keeps repeated wiring out of your invocations — with a shipped JSON Schema
+(`goalyrc.schema.json`) for editor auto-completion and `goaly config validate <path>` for the
+run-path verdict.
 
 The LLM steps (compiler/judge/approver) **follow the harness** by default — `--harness codex`
 authors and judges on codex too, so one installed CLI is enough; `--llm-provider` splits them.

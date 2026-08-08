@@ -387,6 +387,38 @@ describe('step() transitions', () => {
     }
   });
 
+  it('a crashed AGENT_RAN does not consume an iteration', () => {
+    const ra = runningAgent();
+    expect(ra.tag).toBe('RUNNING_AGENT');
+    if (ra.tag !== 'RUNNING_AGENT') return;
+
+    const [next] = step(ra, agentCrashed('0000000', '0000001', 'boom'));
+    expect(next.tag).toBe('VERIFYING');
+    if (next.tag === 'VERIFYING') {
+      expect(next.ctx.iteration).toBe(ra.ctx.iteration);
+    }
+  });
+
+  it('a crashed AGENT_RAN followed by a completed one consumes only one iteration', () => {
+    const ra = runningAgent();
+    expect(ra.tag).toBe('RUNNING_AGENT');
+    if (ra.tag !== 'RUNNING_AGENT') return;
+
+    const [v1] = step(ra, agentCrashed('0000000', '0000001', 'boom'));
+    expect(v1.tag).toBe('VERIFYING');
+    if (v1.tag !== 'VERIFYING') return;
+
+    const [cont] = step(v1, { tag: 'VERIFIED', verdict: failVerdict('red') });
+    expect(cont.tag).toBe('RUNNING_AGENT');
+    if (cont.tag !== 'RUNNING_AGENT') return;
+
+    const [v2] = step(cont, agentRan('0000001', '0000002'));
+    expect(v2.tag).toBe('VERIFYING');
+    if (v2.tag === 'VERIFYING') {
+      expect(v2.ctx.iteration).toBe(ra.ctx.iteration + 1);
+    }
+  });
+
   it('two consecutive harness crashes → ABORTED (STUCK_HARNESS_CRASH), not the downstream verifier red', () => {
     // First crash: a red ladder CONTINUEs (one crash may be transient). The crash output is surfaced.
     const v1 = step(runningAgent(), agentCrashed('0000000', '0000001', 'segfault'))[0];

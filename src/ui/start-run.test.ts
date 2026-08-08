@@ -41,6 +41,19 @@ describe('argv builders (the UI request → the SAME CLI parse path)', () => {
     ]);
   });
 
+  it('startArgv maps a phased request onto --phased (plan 4.3 — the phased path from the UI)', () => {
+    const argv = startArgv(
+      { goal: 'big goal', generate: true, harness: 'fake', autonomous: true, phased: true },
+      '/ws',
+    );
+    expect(argv).toContain('--phased');
+    expect(argv).toContain('--generate');
+    expect(argv).toContain('--autonomous');
+    // parallel-phases is deliberately NOT startable from the UI yet: it needs a --plan-file with
+    // group-tagged waves, which the browser form cannot author. The reference documents the CLI path.
+    expect(argv.some((a) => a.includes('parallel'))).toBe(false);
+  });
+
   it('resumeArgv carries only the extension flags the request names (ADR 0012)', () => {
     const argv = resumeArgv('run-x', { note: 'hint', maxIterations: 9 }, '/ws', 'fake');
     expect(argv).toContain('--resume=run-x');

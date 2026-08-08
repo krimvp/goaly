@@ -34,8 +34,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit dependencies
+        run: npm audit --audit-level moderate
+
       - name: Typecheck
         run: npm run typecheck
+
+      - name: File-size gate (800-line limit, AGENTS.md)
+        run: node scripts/check-file-sizes.mjs
+
+      - name: Docs-sync gate (every USAGE flag documented in the reference)
+        run: npm run check:docs
 
       - name: Test (with coverage thresholds)
         run: npm run coverage

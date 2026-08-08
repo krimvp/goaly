@@ -33,13 +33,15 @@ async function defaultIsGitWorkTree(dir: string): Promise<boolean> {
  * external tools); the git check always applies — every harness diffs the working tree through git.
  */
 export async function preflightRun(
-  opts: { harness: string; llmProvider: string; workspace: string },
+  opts: { harness: string; llmProvider: string; workspace: string; workspaceMode?: 'git' | 'file' | 'auto' },
   probes: PreflightProbes = {},
 ): Promise<string | null> {
   const hasBinary = probes.which ?? which;
   const isGitWorkTree = probes.isGitWorkTree ?? defaultIsGitWorkTree;
 
-  if (!(await isGitWorkTree(opts.workspace))) {
+  // File-mode runs do not need git plumbing. Auto-mode falls back to file-mode when not inside
+  // a git work tree, so only explicit git-mode is rejected here.
+  if (opts.workspaceMode === 'git' && !(await isGitWorkTree(opts.workspace))) {
     return (
       `${opts.workspace} is not a git repository. goaly diffs the working tree to track ` +
       `progress, detect stalls, and show the approver what changed — it needs git. ` +
@@ -68,4 +70,13 @@ export async function preflightRun(
   }
 
   return null;
+}
+
+/**
+ * Detect whether `dir` is inside a git work tree. Used by `--workspace-mode auto` to pick the
+ * concrete workspace implementation before the run starts.
+ */
+export async function detectWorkspaceMode(dir: string): Promise<'git' | 'file'> {
+  const r = await runProcess('git', ['rev-parse', '--is-inside-work-tree'], { cwd: dir });
+  return r.code === 0 && r.stdout.trim() === 'true' ? 'git' : 'file';
 }

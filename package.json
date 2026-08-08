@@ -29,17 +29,21 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "goalyrc.schema.json"
   ],
   "scripts": {
-    "dev": "tsx src/cli/bin.ts",
-    "build": "node scripts/build.mjs && tsc -p tsconfig.build.json",
+    "dev": "env -u NO_COLOR tsx src/cli/bin.ts",
+    "build": "npm run gen:schema && node scripts/build.mjs && tsc -p tsconfig.build.json",
     "start": "node dist/goaly.js",
     "clean": "rm -rf dist coverage *.tgz",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "coverage": "vitest run --coverage",
+    "check:sizes": "node scripts/check-file-sizes.mjs",
+    "check:docs": "tsx scripts/check-docs-sync.ts",
+    "gen:schema": "tsx scripts/gen-config-schema.ts",
+    "test": "env -u NO_COLOR vitest run",
+    "test:watch": "env -u NO_COLOR vitest",
+    "coverage": "env -u NO_COLOR vitest run --coverage",
     "prepare": "npm run build"
   },
   "dependencies": {
@@ -47,12 +51,13 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
-    "@vitest/coverage-v8": "^2.1.8",
-    "esbuild": "^0.24.2",
+    "@vitest/coverage-v8": "^3.2.7",
+    "esbuild": "^0.28.1",
+    "happy-dom": "^20.11.2",
     "htm": "^3.1.1",
     "preact": "^10.29.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8"
+    "vitest": "^3.2.7"
   }
 }

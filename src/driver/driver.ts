@@ -7,8 +7,15 @@ import type { ContractHash, RunId, SessionId } from '../domain/ids';
 import { DiffHash, coerceSessionId } from '../domain/ids';
 import type { Verdict } from '../domain/verdict';
 import type { TokenUsage, UsageReport } from '../domain/usage';
-import { isTerminal, iterationCount, type OrchestratorState } from '../orchestrator/state';
+import { isTerminal, iterationCount, type LoopCtx, type OrchestratorState } from '../orchestrator/state';
+import { MAX_STUCK_REMEDIATIONS } from '../orchestrator/remediate';
 import { initial, step } from '../orchestrator/step';
+
+/** The remediation spend banked in a state's loop context, when the state carries one (plan 4.2). */
+function remediationsTotal(state: OrchestratorState): number | undefined {
+  const ctx = (state as { ctx?: LoopCtx }).ctx;
+  return ctx?.remediations.total;
+}
 import { performRefreeze } from './refreeze';
 import { replay } from '../runlog/replay';
 import type { VerifierCompiler } from '../compile/compiler';
@@ -369,6 +376,17 @@ export async function drive(
       });
 
       log.debug('transition', { from: state.tag, to: next.tag, seq });
+
+      // Bounded stuck self-recovery (improvement plan 4.2) is a pure reducer policy — surface each
+      // spend LOUDLY here so an unattended operator can see the run saved itself (and how often).
+      const remediatedTo = remediationsTotal(next);
+      if (remediatedTo !== undefined && remediatedTo > (remediationsTotal(state) ?? remediatedTo)) {
+        log.warn('stuck auto-remediation applied — retrying instead of aborting', {
+          used: remediatedTo,
+          cap: MAX_STUCK_REMEDIATIONS,
+        });
+      }
+
       state = next;
       commands = nextCommands;
 

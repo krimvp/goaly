@@ -522,6 +522,7 @@ describe('parseArgs', () => {
       oscillation: false,
       harnessCrashThreshold: 4,
       unevaluableThreshold: 3,
+      autoRemediate: false,
     });
   });
 

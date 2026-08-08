@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { errorMessage } from '../util/errors';
-import { UsageError, type RawFlags } from './args';
+import { UsageError, type RawFlags } from './flags/tokens';
 
 /**
  * Config-file support (issue #15): the SAME run wiring (harness, verifier, autonomous, budgets,
@@ -79,6 +79,7 @@ const ConfigFileSchema = z
     intent: FlagValue.optional(),
     rubric: FlagValue.optional(),
     autonomous: FlagValue.optional(),
+    mode: FlagValue.optional(),
     'max-iterations': FlagValue.optional(),
     candidates: FlagValue.optional(),
     'best-of': FlagValue.optional(),
@@ -105,8 +106,10 @@ const ConfigFileSchema = z
     // so being unable to persist it meant retyping it on every single resume.
     'stuck-crash-threshold': FlagValue.optional(),
     'stuck-unevaluable-threshold': FlagValue.optional(),
+    'auto-remediate-stuck': FlagValue.optional(),
     'diff-ignore': FlagValue.optional(),
     baseline: FlagValue.optional(),
+    'workspace-mode': FlagValue.optional(),
     'delta-verify': FlagValue.optional(),
     'cost-table': FlagValue.optional(),
     stream: FlagValue.optional(),

@@ -226,11 +226,12 @@ describe('config-file schema vs. the documented CLI flags (drift guard)', () => 
    * so a genuinely new flag can never hide behind a loose heuristic.
    */
   const NOT_A_RUN_FLAG = new Set([
-    // Subcommand flags: `goaly ui` / `goaly worktree`.
+    // Subcommand flags: `goaly ui` / `goaly worktree` / `goaly init`.
     'port',
     'base',
     'force',
     'delete-branch',
+    'yes',
     // Another tool's flags, named in prose because a goaly flag maps onto them.
     'auto', // droid's autonomy tier, which --harness-autonomy sets
     'rm', // docker/podman `run --rm`, in the sandbox-runtime description
