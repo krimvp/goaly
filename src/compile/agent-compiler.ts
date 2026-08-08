@@ -7,6 +7,7 @@ import type { VerifierCompiler } from './compiler';
 import { extractRequiredTools } from './required-tools';
 import { extractBalancedJson } from '../util/json-extract';
 import { findModuleFormatMismatch, type WorkspaceFacts } from '../workspace/workspace-facts';
+import { UNTRUSTED_SYSTEM_CLAUSE } from '../verify/prompt-safety';
 import { UsageAssertion, enforceUsageAssertion, type UsageShape } from './usage-gate';
 
 /** Schema for the JSON the authoring LLM must emit (validated fail-closed). */
@@ -105,7 +106,13 @@ const SYSTEM_PROMPT =
   'on that local. (2) Do not assert on wall-clock timing, collection/iteration ordering, generated ' +
   'ids, or exact floating-point equality — assert tolerances/sets/shapes instead. (3) Do not pin one ' +
   'internal file layout or import graph when the goal names observable BEHAVIOR. (4) Do not depend on ' +
-  'locale, timezone, CPU count, or absolute paths. Strictness is good; unsatisfiability is a bug.';
+  'locale, timezone, CPU count, or absolute paths. Strictness is good; unsatisfiability is a bug.\n' +
+  // The authoring prompt can carry model-authored text (the cross-run defect corpus's "known
+  // false-red patterns", fenced by formatDefectSection). Like every other seam that splices model
+  // or worker text into a prompt (judge, approver, adversarial rung, pre-flight, dry run), the
+  // system prompt restates the fence rule so the fenced block reads as data, never as authoring
+  // instructions.
+  UNTRUSTED_SYSTEM_CLAUSE;
 
 /**
  * Reject a verification command that trivially exits 0 without measuring anything.

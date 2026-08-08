@@ -1,8 +1,13 @@
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { DEFECT_RECORD_VERSION, type DefectRecord } from './corpus';
+import {
+  DEFECT_RECORD_VERSION,
+  FileDefectCorpus,
+  type AdjudicatedDefect,
+  type DefectRecord,
+} from './corpus';
 import { contractDefectContext, workspaceDefectContext } from './context';
 import { DEFAULT_DEFECT_HINT_CAP, formatDefectSection, selectDefectHints } from './select';
 import { resolveDefectCorpus } from './wiring';
@@ -89,7 +94,9 @@ describe('selectDefectHints — relevant, deduped, and BOUNDED', () => {
     expect(selectDefectHints(many, jsCtx, 2)).toHaveLength(2);
     expect(selectDefectHints(many, jsCtx, 0)).toEqual([]);
     const section = formatDefectSection(selectDefectHints(many, jsCtx));
-    expect(section.split('\n')).toHaveLength(DEFAULT_DEFECT_HINT_CAP + 1);
+    expect(section.split('\n').filter((l) => l.startsWith('- '))).toHaveLength(
+      DEFAULT_DEFECT_HINT_CAP,
+    );
     expect(section.length).toBeLessThan(4000);
   });
 
@@ -135,13 +142,22 @@ describe('formatDefectSection — impossibility, never "make it easier"', () => 
   });
 
   it('frames the list as unsatisfiability and explicitly forbids weakening the bar', () => {
-    const section = formatDefectSection([{ text: 'p', occurrences: 3 }]);
+    // A fixed nonce so the (random) fence markers cannot collide with the digit assertion below.
+    const section = formatDefectSection([{ text: 'p', occurrences: 3 }], { nonce: 'nonce' });
     expect(section).toMatch(/DO NOT AUTHOR THESE/);
     expect(section).toMatch(/impossible to satisfy/);
     expect(section).toMatch(/never a reason to make the bar easier/);
     expect(section).toMatch(/just as strict, but satisfiable/);
     // The frequency count is ranking input only — it must not become "this was hard" in the prompt.
     expect(section).not.toContain('3');
+  });
+
+  it('fences the hint lines as UNTRUSTED data (they are model-authored text)', () => {
+    const section = formatDefectSection([{ text: 'p', occurrences: 1 }], { nonce: 'abc' });
+    expect(section).toContain('<<UNTRUSTED DEFECT PATTERNS abc>>');
+    expect(section).toContain('<</UNTRUSTED DEFECT PATTERNS abc>>');
+    // goaly's own framing stays OUTSIDE the fence; only the model text is inside it.
+    expect(section.indexOf('DO NOT AUTHOR THESE')).toBeLessThan(section.indexOf('<<UNTRUSTED'));
   });
 });
 
@@ -152,17 +168,17 @@ describe('resolveDefectCorpus — the compose-time resolution', () => {
     return dir;
   }
 
-  it('reads, filters, injects, and LOGS which patterns shaped the bar', () => {
+  it('reads, filters, injects, and LOGS which patterns shaped the bar', async () => {
     const dir = workspace();
     const corpusPath = path.join(dir, 'defects.jsonl');
-    writeFileSync(
-      corpusPath,
-      [
-        JSON.stringify(rec({ pattern: 'no post-restore call counts' })),
-        JSON.stringify(rec({ pattern: 'python only', language: 'python', runner: 'pytest' })),
-        'garbage',
-      ].join('\n'),
+    // Seeded through the corpus itself: a corpus line only counts when it carries the HMAC of the
+    // local key, so a hand-written JSONL line would (correctly) be dropped — see corpus-integrity.
+    const seed = new FileDefectCorpus(corpusPath);
+    await seed.append(rec({ pattern: 'no post-restore call counts' }) as AdjudicatedDefect);
+    await seed.append(
+      rec({ pattern: 'python only', language: 'python', runner: 'pytest' }) as AdjudicatedDefect,
     );
+    appendFileSync(corpusPath, 'garbage\n', 'utf8');
     const { logger, records } = recordingLogger();
     const resolved = resolveDefectCorpus({ enabled: true, path: corpusPath }, dir, logger);
 

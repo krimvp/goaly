@@ -1204,11 +1204,13 @@ The **defect corpus** closes that loop, and it is the only cross-run state goaly
    **one compact record** to `~/.goaly/defects.jsonl` — the adjudicator's *generalized* anti-pattern,
    the *generalized* shape of the offending assertion, the language/test-runner derived from the
    frozen contract, and the `contractHash` + `runId` for provenance. Never the source, never the
-   diff, never the failure text.
-2. Later `--generate` runs read it, keep the entries relevant to **this** workspace's
-   language/runner, cap them, and inject them into the contract-authoring prompt as a
-   **"known false-red patterns — do not author these"** section. Every injected pattern is logged,
-   so a run says out loud which local state shaped its bar.
+   diff, never the failure text. Each record is **HMAC-signed** with a key minted on first use next
+   to the corpus (`~/.goaly/defects.key`, owner-only permissions).
+2. Later `--generate` runs read it, **drop every line whose signature does not verify**, keep the
+   entries relevant to **this** workspace's language/runner, cap them, and inject them into the
+   contract-authoring prompt as a **"known false-red patterns — do not author these"** section —
+   fenced as untrusted data, like the diff at every other model-text seam. Every injected pattern is
+   logged, so a run says out loud which local state shaped its bar.
 
 ```bash
 goaly config defects list                    # what has been learned, with provenance
@@ -1228,14 +1230,32 @@ flags; passing both is a usage error.
   that only the adjudication path can mint, so no other code path even compiles against it; a
   `defective: false` verdict, an unparseable one, or a positive one with no generalized pattern
   writes nothing.
+- **…and the read side does not trust the file either.** The corpus lives outside your workspace, so
+  a hand-added line would sit outside the run diff, the frozen-file integrity guard, and everything
+  Seal shows you — and the default sandbox policy is `none`, so the coding agent can reach the file
+  with an ordinary shell. Every record is therefore signed (HMAC-SHA256) with `~/.goaly/defects.key`,
+  minted on first use with owner-only permissions, and **any line whose signature is missing, wrong,
+  or made with another key is dropped on read**. No key ⇒ nothing is verifiable ⇒ no hints. This is
+  fail-closed on *provenance* and still fail-open for the *run*: "no hints" is exactly the pre-corpus
+  behavior, and nothing about a run is ever blocked by the corpus. (A corpus written before signing
+  existed verifies as empty — `goaly config defects clear` resets it; it re-learns from the next
+  adjudication.)
 - **No worker-supplied text can reach a record.** The record builder has no parameter for the
   failure signature, the diff, harness output, or file contents; everything but the adjudicator's
   own two generalized sentences is derived from the frozen contract, and the language/runner fields
   are closed enums.
 - **"This was hard" is inexpressible.** The schema is strict and has no iteration count, repeat
   count, duration, token spend, or severity field — difficulty can never turn into "author an easier
-  bar". The prompt section is phrased as *impossibility* ("do not author bars that are impossible to
-  satisfy… never a reason to make the bar easier").
+  bar". The free text cannot smuggle it back in: a `pattern` or assertion shape that argues from
+  **effort** (hard, difficult, effort, iterations, attempts, time, expensive, tokens, complex, "too
+  many") is refused by the schema — on mint *and* on read — rather than by an instruction the
+  adjudicator is trusted to obey. The prompt section is phrased as *impossibility* ("do not author
+  bars that are impossible to satisfy… never a reason to make the bar easier").
+- **The injected lines are data, not instructions.** A pattern is model-authored text crossing into
+  another model's prompt, so the section is wrapped in a random-nonce UNTRUSTED fence and the
+  compiler's system prompt restates the rule — the same treatment the diff gets at the judge,
+  approver, adversarial rung, pre-flight, and dry-run seams. goaly's own framing stays outside the
+  fence and is the only authoritative part.
 - **Bounded prompt.** Filtering + a cap mean a corpus of any size produces the same small section.
 - **Fail-open, never a gate.** A missing, unreadable, corrupt, or partly unparseable corpus degrades
   to exactly the pre-corpus behavior (bad lines are dropped on read, Zod-parsed); a failed write is

@@ -134,8 +134,9 @@ src/
   llm/         provider, agent-cli-provider, openai-provider, critic-panel — INTERNAL seam (judge/approver/compiler/critics)
   training/    trajectory, dataset, bench               — Slices 2–3: labeled-trajectory export + SFT dataset + eval bench
   defects/     corpus, context, select, wiring          — the CROSS-RUN defect corpus (issue #122):
-               written ONLY by an adjudicated CONTRACT_DEFECTIVE verdict, read into the compiler's
-               authoring prompt (bounded + filtered), fail-open everywhere
+               written ONLY by an adjudicated CONTRACT_DEFECTIVE verdict, HMAC-signed on write and
+               verified on read (unsigned/tampered/foreign lines dropped), read into the compiler's
+               authoring prompt (bounded + filtered + untrusted-fenced), fail-open everywhere
   cli/         args, compose, compose-authoring, main    — composition root + CLI
   testing/     fakes                                    — fakes for every seam
 ```
