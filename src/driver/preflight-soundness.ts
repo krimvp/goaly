@@ -222,6 +222,85 @@ export async function classifyVacuousContract(
 }
 
 /**
+ * The NEGATIVE CONTROL for a `--recontract` successor run (issue #117) — the same question
+ * {@link classifyVacuousContract} asks, asked on the one other tree where a green at t=0 is
+ * suspicious rather than impossible to interpret.
+ *
+ * A successor run inherits the predecessor's tree, so it is NOT from-scratch and the green mirror
+ * above deliberately never fires. But a re-contract is precisely the moment a bar can get weakened:
+ * it was just re-authored with a defect report in hand, on a tree whose implementation is visible.
+ * A bar that already passes there is either (a) legitimate — the implementation really was correct
+ * and only the bar was wrong, which is the whole reason this recovery exists — or (b) a bar softened
+ * into vacuity / shaped around whatever the tree happens to do. Only the model can tell those apart,
+ * so it is asked BEFORE a worker token is spent, with the predecessor's defect report as context.
+ *
+ * Fail-OPEN like both pre-flight siblings, and for the same reason: case (a) is common and a wrong
+ * "unsound" would abort the legitimate recovery at zero iterations. No LLM, an LLM error, an
+ * unparseable reply, or any uncertainty all PROCEED; only a confident `unsound: true` aborts
+ * (CONTRACT_UNSOUND). It can never produce a green — the frozen ladder + veto-only approver still
+ * gate DONE every iteration.
+ */
+const RECONTRACT_SYSTEM_PROMPT = [
+  'You are a pre-flight soundness checker in an automated goal-orchestration loop.',
+  'A previous run\'s frozen contract was judged DEFECTIVE (no correct implementation could satisfy',
+  'it), so a SUCCESSOR run has just RE-AUTHORED the bar for the SAME goal, over the same working',
+  'tree — the previous run\'s implementation is still on disk. The new frozen verification was run',
+  'ONCE, before the worker took a turn, and it PASSED. Decide, choosing exactly one:',
+  ' - unsound=true: the re-authored bar was WEAKENED — it is vacuous, trivially true, asserts far',
+  '   less than the goal requires, or was shaped around whatever the tree already does rather than',
+  '   around the goal. Repairing a defective bar must not soften it.',
+  ' - unsound=false: the bar genuinely exercises the goal and passes because the implementation',
+  '   already on disk is CORRECT — the previous run\'s bar was the broken part. This is the expected,',
+  '   successful outcome of a re-contract.',
+  'When in doubt, answer false: a correct implementation meeting a corrected bar is exactly what this',
+  'recovery is for. Reserve true for a bar you can point at and call weaker than the goal.',
+  'Respond with ONLY a single JSON object {"unsound": boolean, "reason": string}. No prose, no markdown.',
+  UNTRUSTED_SYSTEM_CLAUSE,
+].join(' ');
+
+/**
+ * Ask the model whether a RE-AUTHORED bar that already passes on the inherited tree is a weakened
+ * bar (→ CONTRACT_UNSOUND) or the legitimate success of a re-contract. Reuses {@link SoundnessVerdict}
+ * (`broken` = unsound) and fails OPEN on every failure mode — see the doc above.
+ */
+export async function classifyRecontractedBar(
+  deps: ClassifyDeps,
+  contract: CompiledContract,
+  detail: string,
+): Promise<SoundnessVerdict> {
+  const log = deps.logger ?? noopLogger;
+  const prompt = [
+    `GOAL:\n${contract.goal}`,
+    `RE-AUTHORED VERIFICATION FILES (frozen — the worker cannot change these):\n${contract.generatedFiles
+      .map((f) => `  - ${f.path}`)
+      .join('\n')}`,
+    'CONTEXT: this is a RE-CONTRACT. The predecessor run\'s bar was adjudicated defective and its ' +
+      'implementation is still on disk, so the new bar passing may be legitimate — or may mean the ' +
+      'repair weakened it.',
+    `VERIFICATION OUTPUT ON THE INHERITED TREE (it PASSED):\n${wrapUntrusted(detail, { label: 'OUTPUT' })}`,
+    'Was the re-authored bar weakened (vacuous / shaped around the existing tree), or does it ' +
+      'genuinely exercise the goal that the existing implementation already meets?',
+    'Reply with ONLY the JSON {"unsound": boolean, "reason": string}.',
+  ].join('\n\n');
+  let raw: string;
+  try {
+    raw = (await deps.llm.complete({ system: RECONTRACT_SYSTEM_PROMPT, prompt, temperature: 0 })).text;
+  } catch (e) {
+    log.warn('pre-flight re-contract control: LLM call failed — proceeding (assumed sound)', {
+      reason: errorMessage(e),
+    });
+    return { broken: false, reason: `re-contract control could not run: ${errorMessage(e)}` };
+  }
+  const extracted = extractJson(raw);
+  const parsed = extracted === null ? null : GreenClassification.safeParse(extracted);
+  if (parsed === null || !parsed.success) {
+    log.warn('pre-flight re-contract control: unparseable response — proceeding (assumed sound)', {});
+    return { broken: false, reason: 're-contract control produced no parseable verdict' };
+  }
+  return { broken: parsed.data.unsound, reason: parsed.data.reason ?? '' };
+}
+
+/**
  * IN-LOOP contract-fault adjudication (issue #116) — the third sibling, and the only one that runs
  * with evidence instead of without it.
  *

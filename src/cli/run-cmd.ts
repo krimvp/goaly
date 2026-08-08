@@ -1,7 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { USAGE, defaultLlmProvider, isHarnessChoice, type ParsedArgs } from './args';
+import {
+  USAGE,
+  RESUMED_GOAL_PLACEHOLDER,
+  defaultLlmProvider,
+  isHarnessChoice,
+  type ParsedArgs,
+} from './args';
+import { planRecontract, recontractCommand } from '../followup/recontract';
+import type { RunProvenance } from '../runlog/runlog';
 import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
 import { drive } from '../driver/driver';
@@ -92,7 +100,13 @@ function startupFields(parsed: ParsedArgs): Record<string, string> {
  * code after writing a clear message. A normal run (no `--from-run`) passes through unchanged.
  */
 type FollowupResolution =
-  | { readonly ok: true; readonly config: RunConfig; readonly followupSeed: string | undefined }
+  | {
+      readonly ok: true;
+      readonly config: RunConfig;
+      readonly followupSeed: string | undefined;
+      /** Set only for a `--recontract` successor (issue #117): recorded in the new run's header. */
+      readonly provenance?: RunProvenance;
+    }
   | { readonly ok: false; readonly code: number };
 
 async function resolveFollowup(
@@ -100,9 +114,14 @@ async function resolveFollowup(
   warn: (s: string) => void,
 ): Promise<FollowupResolution> {
   if (parsed.fromRunId === undefined) {
-    // --inherit-session is meaningless without --from-run; fail closed rather than silently ignore.
+    // --inherit-session / --recontract are meaningless without --from-run; fail closed rather than
+    // silently ignore. A re-contract in particular MUST name the run whose defect it repairs.
     if (parsed.inheritSession) {
       warn('goaly: --inherit-session requires --from-run <runId>\n');
+      return { ok: false, code: 2 };
+    }
+    if (parsed.recontract !== undefined) {
+      warn('goaly: --recontract requires --from-run <runId> (the run whose contract was adjudicated defective)\n');
       return { ok: false, code: 2 };
     }
     return { ok: true, config: parsed.config, followupSeed: undefined };
@@ -145,6 +164,29 @@ async function resolveFollowup(
     } else {
       config = { ...parsed.config, seedSessionId: prior.detail.sessionId };
     }
+  }
+
+  // `--recontract` (issue #117): a SUCCESSOR run for a bar goaly's OWN adjudicator condemned. The
+  // generic follow-up compaction is replaced by the defect-report repair brief, the goal is inherited
+  // from the predecessor's FROZEN contract (a repair changes the bar, not the goal), and the chain is
+  // bounded by the depth carried in the predecessor's header. Everything else — Seal, the freeze, the
+  // two keys, the pre-flight negative control — is an ordinary run.
+  if (parsed.recontract !== undefined) {
+    const decision = planRecontract(prior.detail, {
+      maxRecontracts: parsed.recontract.maxRecontracts,
+    });
+    if (!decision.ok) {
+      warn(`goaly: --recontract: ${decision.reason}\n`);
+      return { ok: false, code: 2 };
+    }
+    const { goal, seed, provenance } = decision.plan;
+    if (config.goal !== RESUMED_GOAL_PLACEHOLDER && config.goal !== goal) {
+      warn(
+        `goaly: --recontract re-authors the bar for the PREDECESSOR's frozen goal; the goal passed on ` +
+          `this command line is ignored (use --from-run without --recontract to change the goal)\n`,
+      );
+    }
+    return { ok: true, config: { ...config, goal }, followupSeed: seed, provenance };
   }
   return { ok: true, config, followupSeed };
 }
@@ -595,6 +637,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
           harness: parsed.harness,
           ...(degraded !== undefined ? { degraded } : {}),
           ...(parsed.resumeExtend !== undefined ? { extend: parsed.resumeExtend } : {}),
+          ...(followup.provenance !== undefined ? { provenance: followup.provenance } : {}),
         },
       );
     } finally {
@@ -682,7 +725,7 @@ export function nextStepHint(o: RunOutcome): string | undefined {
     // CONTAINS the repeat-failure text as context, and raising --stuck-repeat-threshold cannot help
     // against a bar no implementation can satisfy. The tree is worth keeping, so point at a fresh
     // contract over the SAME workspace, not at more iterations.
-    [/CONTRACT_DEFECTIVE/, `the frozen bar itself was adjudicated defective — your tree may be correct, so KEEP it and re-run with a corrected bar: goaly "<goal>" --from-run ${o.runId} --verify-cmd "<a check that is actually satisfiable>", or ${inspect}`],
+    [/CONTRACT_DEFECTIVE/, `the frozen bar itself was adjudicated defective — your tree may be correct, so KEEP it and re-contract: ${recontractCommand(o.runId)} (re-authors the bar from the defect report, keeps the tree, freezes a NEW contract under a NEW run id). Or own the bar yourself: goaly "<goal>" --from-run ${o.runId} --verify-cmd "<a check that is actually satisfiable>", or ${inspect}`],
     [/STUCK_REPEATED_FAILURE|identical .*failures/, `the same verifier failure repeated — steer it: ${resume} --stuck-repeat-threshold 6 --note "<hint>", or ${inspect}`],
     [/compile failed|PLAN_FAILED|plan failed/i, `the contract/plan could not be authored — check the --llm-provider CLI runs & is authenticated, then retry`],
   ];

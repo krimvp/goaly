@@ -48,6 +48,8 @@ const detail = (runId: string): RunDetail => ({
   compileFailures: [],
   seal: [],
   prepare: undefined,
+  adjudication: undefined,
+  provenance: undefined,
   iterationsDetail: [],
 });
 

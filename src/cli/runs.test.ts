@@ -103,6 +103,8 @@ describe('renderRunDetail', () => {
       compileFailures: [],
       seal: [{ kind: 'approve' }],
       prepare: undefined,
+      adjudication: undefined,
+      provenance: undefined,
       iterationsDetail: [
         { index: 1, runStatus: 'completed', changed: true, tokensSpent: 10, sessionId: SessionId.parse('s1'), verdict: failVerdict('red'), signoff: undefined, phase: undefined },
         { index: 2, runStatus: 'completed', changed: true, tokensSpent: 25, sessionId: SessionId.parse('s1'), verdict: passVerdict('green'), signoff: approve(), phase: undefined },

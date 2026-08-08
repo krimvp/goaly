@@ -10,7 +10,7 @@ import type { Verdict, ApprovalVerdict, SealDecision } from '../domain/verdict';
 import { iterationCount, type OrchestratorState } from '../orchestrator/state';
 import { errorMessage } from '../util/errors';
 import { FileRunLog } from './file-runlog';
-import type { RunLogHeader, RunLogEntry } from './runlog';
+import type { RunLogHeader, RunLogEntry, RunProvenance } from './runlog';
 import { replay } from './replay';
 import { summarizeUsage } from './usage';
 import { lastRealSessionId } from './session-id';
@@ -110,7 +110,29 @@ export type RunDetail = {
   readonly seal: readonly SealDecision[];
   /** The one-time prepare phase outcome (Fix #1 setup + Fix #2 pre-flight), if it ran; else undefined. */
   readonly prepare: PrepareDetail | undefined;
+  /**
+   * The in-loop contract-fault verdict (issue #116), when the run adjudicated its frozen bar.
+   * `defective: true` is the ONLY thing that makes this run eligible for a `--recontract` successor.
+   */
+  readonly adjudication: AdjudicationDetail | undefined;
+  /**
+   * Successor provenance from the log header (issue #117): the predecessor run + contract this run
+   * was re-contracted from, and its depth in the chain. Undefined for an ordinary run.
+   */
+  readonly provenance: RunProvenance | undefined;
   readonly iterationsDetail: readonly IterationDetail[];
+};
+
+/**
+ * The in-loop contract-fault verdict (issue #116) a run recorded, if it adjudicated at all. Read
+ * from the write-ahead `CONTRACT_ADJUDICATED` event — goaly's OWN read-only adjudicator, never
+ * worker text — so `--recontract` (issue #117) can key its eligibility off a persisted, Zod-parsed
+ * verdict rather than off a reason STRING the worker's own output could have spelled.
+ */
+export type AdjudicationDetail = {
+  readonly defective: boolean;
+  readonly reason: string;
+  readonly pattern?: string;
 };
 
 /** The prepare-phase projection for `runs show` (Fix #1 / #2). */
@@ -175,8 +197,24 @@ export function runDetail(header: RunLogHeader, entries: readonly RunLogEntry[])
     compileFailures: collectCompileFailures(entries),
     seal: collectSeal(entries),
     prepare: collectPrepare(entries),
+    adjudication: collectAdjudication(entries),
+    provenance: header.provenance,
     iterationsDetail: collectIterations(entries),
   };
+}
+
+/**
+ * The run's contract-fault verdict (issue #116), or undefined when it never adjudicated. Bounded to
+ * one per run by the reducer; the last one wins if a log somehow carries more.
+ */
+function collectAdjudication(entries: readonly RunLogEntry[]): AdjudicationDetail | undefined {
+  let found: AdjudicationDetail | undefined;
+  for (const e of entries) {
+    if (e.event.tag !== 'CONTRACT_ADJUDICATED') continue;
+    const { defective, reason, pattern } = e.event;
+    found = { defective, reason, ...(pattern !== undefined ? { pattern } : {}) };
+  }
+  return found;
 }
 
 function collectPlanSeal(entries: readonly RunLogEntry[]): SealDecision[] {

@@ -163,7 +163,10 @@ else                                → continue
 
 The adjudication branch is why the state union also carries `{ tag: 'ADJUDICATING'; ctx;
 fallbackReason }`: the run is already terminating, and that state exists only to choose the abort's
-LABEL. It has no edge to DONE, to a green, or back into the loop — the freeze is untouched.
+LABEL. It has no edge to DONE, to a green, or back into the loop — the freeze is untouched. Recovery
+is a **successor run** (`--from-run <id> --recontract`, issue #117), composed at the CLI edge: it
+keeps the tree, re-authors the bar from the defect report, and freezes a NEW contract under a NEW
+runId with the predecessor recorded in the log header. The reducer never learns it happened.
 
 **Zero-LLM is structural, not disciplinary:** `step` returns no `Promise` and is handed no
 adapters — only data. It *cannot* call an LLM. All fuzziness already happened in the Driver

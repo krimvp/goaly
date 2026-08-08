@@ -4,7 +4,11 @@ import type { Verdict } from '../domain/verdict';
 import type { Workspace } from '../workspace/workspace';
 import type { LlmProvider } from '../llm/provider';
 import { DeterministicVerifier } from '../verify/deterministic';
-import { classifyPreflightSoundness, classifyVacuousContract } from './preflight-soundness';
+import {
+  classifyPreflightSoundness,
+  classifyRecontractedBar,
+  classifyVacuousContract,
+} from './preflight-soundness';
 import { isProbeSafe } from '../compile/required-tools';
 import { noopLogger, type Logger } from '../log/logger';
 import { errorMessage } from '../util/errors';
@@ -46,6 +50,14 @@ export type PrepareDeps = {
    * real configuration error and must fail closed.
    */
   setupAuthored?: boolean;
+  /**
+   * True on a `--recontract` successor run (issue #117). Pure wiring from the run header's
+   * provenance — never the contract. It widens the GREEN negative control below: on an inherited
+   * tree the bar was just RE-AUTHORED with a defect report in hand, so a bar that already passes is
+   * as suspicious as one passing on a from-scratch tree, and is put to {@link classifyRecontractedBar}
+   * (fail-open) before any worker token is spent.
+   */
+  recontract?: boolean;
 };
 
 export type PrepareResult = { prepared: PreparedOutcome; setupRan: boolean };
@@ -278,49 +290,78 @@ async function preflightDeterministic(
     return { status: 'proceed' };
   }
 
-  // Every deterministic rung already PASSED before the first agent turn. On a FROM-SCRATCH tree with an
-  // AUTHORED verifier (generatedFiles) that is the compiler-authored-the-solution deadlock: the bar can
-  // only be green because the implementation was authored INTO the frozen verification set (the
-  // anti-tamper guard then pins it, and the worker's real edits register as no-diff → a spurious abort),
-  // or the bar is vacuous. Catch it here, before any worker token is spent, as a typed CONTRACT_UNSOUND.
-  //
-  // FAIL-OPEN by construction — it must NEVER abort a legitimate run (a file that is simply not created
-  // yet stays an honest red, handled above; it can never reach this branch). It fires ONLY on the
-  // high-confidence positive signal AND an LLM confirmation: an authored verifier + a confidently
-  // from-scratch tree (`isEmptyOfSource` fail-safes to FALSE on any git error, so an existing or
-  // undetectable tree proceeds) + a model that, asked to rule in "the goal is genuinely already
-  // satisfied", confidently judges the contract unsound instead. No LLM, an LLM error, an unparseable
-  // verdict, or any "sound"/uncertain answer all PROCEED. So neither a not-yet-created nor an
-  // undetected file can ever become a failure here — only an authored bar that passes off nothing.
-  if (contract.generatedFiles.length > 0 && emptyOfSource && deps.llm !== undefined) {
-    const green = await classifyVacuousContract(
-      { llm: deps.llm, ...(deps.logger !== undefined ? { logger: deps.logger } : {}) },
-      contract,
-      lastPassDetail,
-    );
-    if (green.broken) {
-      log.error(
-        'pre-flight: an authored verifier already passes on a from-scratch tree before the first agent ' +
-          'turn (→ CONTRACT_UNSOUND) — the compiler likely authored the implementation into the frozen ' +
-          'verification set, or the bar is vacuous',
-        {},
-      );
-      const reason = green.reason.length > 0 ? `${green.reason}\n\n` : '';
-      const remedy =
-        'The frozen verifier passes on a from-scratch tree before the worker wrote anything, so it is not ' +
-        'actually testing the goal — the compiler likely authored the implementation into the frozen ' +
-        'verification set (the anti-tamper guard then pins it, deadlocking the worker), or the bar is ' +
-        'vacuous. Re-author with a stronger --compiler-model, review/revise the contract at Seal (avoid ' +
-        '--autonomous with a weak authoring model), or supply your own --verify-cmd so you own the bar.';
-      return { status: 'contract-unsound', detail: `${reason}${remedy}`.slice(0, DETAIL_LIMIT) };
-    }
-    log.info(
-      'pre-flight: bar passes on a from-scratch tree but the classifier judged the goal already ' +
-        'satisfied — proceeding',
-      {},
-    );
-  }
-
+  const green = await greenNegativeControl(deps, contract, lastPassDetail, emptyOfSource, log);
+  if (green !== null) return green;
   log.info('pre-flight: deterministic checks already pass before the first agent turn — proceeding', {});
   return { status: 'proceed' };
 }
+
+/**
+ * The GREEN-case negative control, run when every deterministic rung ALREADY PASSED before the first
+ * agent turn. Two trees make that suspicious, each with its own classifier and the same fail-open shape:
+ *
+ *  - FROM-SCRATCH with an AUTHORED verifier (`generatedFiles`) — the compiler-authored-the-solution
+ *    deadlock: the bar can only be green because the implementation was authored INTO the frozen
+ *    verification set (the anti-tamper guard then pins it, and the worker's real edits register as
+ *    no-diff → a spurious abort), or the bar is vacuous.
+ *  - A `--recontract` successor (issue #117) — not from-scratch (the predecessor's implementation is on
+ *    disk), but the bar was just RE-AUTHORED off a defect report, so "the repair softened it" is a live
+ *    risk. This is the negative control that keeps a re-contract from becoming a weakening channel.
+ *
+ * FAIL-OPEN by construction — it must NEVER abort a legitimate run (a file that is simply not created
+ * yet stays an honest red, handled by the caller; it can never reach here). It fires ONLY on the
+ * high-confidence positive signal AND an LLM confirmation: an authored verifier + one of the two trees
+ * above (`isEmptyOfSource` fail-safes to FALSE on any git error) + a model that, asked to rule IN the
+ * legitimate case, confidently judges the contract unsound instead. No LLM, an LLM error, an
+ * unparseable verdict, or any "sound"/uncertain answer all PROCEED.
+ *
+ * Returns a typed abort, or `null` to proceed (including whenever the control does not apply).
+ */
+async function greenNegativeControl(
+  deps: PrepareDeps,
+  contract: CompiledContract,
+  lastPassDetail: string,
+  emptyOfSource: boolean,
+  log: Logger,
+): Promise<PreparedOutcome | null> {
+  if (contract.generatedFiles.length === 0 || deps.llm === undefined) return null;
+  const recontract = deps.recontract === true && !emptyOfSource;
+  if (!emptyOfSource && !recontract) return null;
+  const classifyDeps = { llm: deps.llm, ...(deps.logger !== undefined ? { logger: deps.logger } : {}) };
+  const green = recontract
+    ? await classifyRecontractedBar(classifyDeps, contract, lastPassDetail)
+    : await classifyVacuousContract(classifyDeps, contract, lastPassDetail);
+  if (!green.broken) {
+    log.info(
+      'pre-flight: the bar already passes before the first agent turn, but the negative control judged ' +
+        'it legitimate — proceeding',
+      { recontract },
+    );
+    return null;
+  }
+  log.error(
+    'pre-flight: the frozen bar passes before the first agent turn and the negative control judged it ' +
+      'unsound (→ CONTRACT_UNSOUND)',
+    { recontract },
+  );
+  const reason = green.reason.length > 0 ? `${green.reason}\n\n` : '';
+  return {
+    status: 'contract-unsound',
+    detail: `${reason}${recontract ? RECONTRACT_REMEDY : VACUOUS_REMEDY}`.slice(0, DETAIL_LIMIT),
+  };
+}
+
+/** Remedy for a bar that passes on a from-scratch tree (the compiler likely authored the solution). */
+const VACUOUS_REMEDY =
+  'The frozen verifier passes on a from-scratch tree before the worker wrote anything, so it is not ' +
+  'actually testing the goal — the compiler likely authored the implementation into the frozen ' +
+  'verification set (the anti-tamper guard then pins it, deadlocking the worker), or the bar is ' +
+  'vacuous. Re-author with a stronger --compiler-model, review/revise the contract at Seal (avoid ' +
+  '--autonomous with a weak authoring model), or supply your own --verify-cmd so you own the bar.';
+
+/** Remedy for a RE-CONTRACTED bar (issue #117) the negative control judged weakened. */
+const RECONTRACT_REMEDY =
+  'The re-contracted bar passes on the inherited tree before the worker did anything, and the negative ' +
+  'control judged it WEAKER than the goal — repairing a defective bar must not soften it. Re-run the ' +
+  're-contract with a stronger --compiler-model, review it at Seal (--mode review), or supply your own ' +
+  '--verify-cmd so you own the bar.';

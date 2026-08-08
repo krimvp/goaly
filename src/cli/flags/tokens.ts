@@ -35,6 +35,7 @@ const VALUELESS_FLAGS = new Set([
   'inherit-session',
   'dry-run',
   'no-satisfiability-critic',
+  'recontract',
 ]);
 
 /**

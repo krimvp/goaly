@@ -48,6 +48,7 @@ Usage:
                [--worktree [<name>]] [--dry-run]
                [--resume <runId> [--note "<text>"]]
                [--from-run <runId> [--inherit-session]]
+               [--from-run <runId> --recontract [--max-recontracts <N>]]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
                [--stream] [--stream-transcript] [--stream-file <path>] [--explain] [--explain-model <m>]
 
@@ -592,6 +593,21 @@ Follow-up after a run ends (build on a finished run — keeps every invariant by
                       governs DONE — inheritance only seeds the agent's memory, never the bar. Only
                       valid with the same --harness as the prior run (session ids are harness-specific);
                       ignored under --phased. Default off (fresh session + the compaction).
+  --recontract        with --from-run, start a SUCCESSOR run for a bar goaly itself adjudicated
+                      CONTRACT_DEFECTIVE (see the outcome's "next:" line, which prints this command
+                      verbatim). It KEEPS the predecessor's working tree — the implementation is the
+                      valuable artifact — inherits its FROZEN goal, and re-runs COMPILE with the defect
+                      report as authoring feedback, then freezes a NEW contract with a NEW contractHash
+                      under a NEW runId. No contract is EVER mutated: the successor's header records
+                      predecessorRunId / predecessorContractHash / the verdict (shown by 'goaly runs show'),
+                      so "the bar was wrong" is an auditable chain, not an in-place softening. Only a
+                      CONTRACT_DEFECTIVE adjudication can reach it (the worker can never trigger it, and
+                      no worker text feeds the re-authoring), and the new bar still faces the pre-flight
+                      negative control before a worker token is spent.
+  --max-recontracts <N>
+                      bound the re-contract CHAIN (default 1). The depth is carried in the run log, so
+                      the cap holds across the whole chain, not per process — a pathological loop cannot
+                      ratchet a bar downward across generations.
 
 Run history & inspection (read-only — pure replay of the write-ahead run log, no re-running):
   goaly runs list           a table of past runs under <workspace>/.goaly: id, status, iterations,

@@ -29,6 +29,7 @@ rationale in [`DESIGN.md`](../DESIGN.md) and [`docs/adr/`](adr/), the terse cont
 - [Operator control](#operator-control-watch-steer-extend)
 - [Inspecting past runs](#inspecting-past-runs)
 - [Following up](#following-up-after-a-run-ends---from-run)
+- [Re-contracting a defective bar](#re-contracting-a-defective-bar---recontract)
 - [Web UI](#web-ui-goaly-ui)
 - [Observability](#observability)
 - [Spend report & budgets](#spend-report--budgets)
@@ -347,8 +348,8 @@ A file may also carry a `"presets"` block (named bundles of the same keys, selec
 
 **Every documented `goaly run` flag is settable from a file**, except the per-invocation ones, which
 are deliberately excluded and enumerated: `--resume`, `--from-run`, `--inherit-session`,
-`--workspace`, `--worktree`, `--config` itself, `--note`, `--dry-run`, the `--*-file` input-source
-selectors, and the `--defaults` alias. Because the schema is strict, that list is the whole
+`--recontract`, `--max-recontracts`, `--workspace`, `--worktree`, `--config` itself, `--note`,
+`--dry-run`, the `--*-file` input-source selectors, and the `--defaults` alias. Because the schema is strict, that list is the whole
 difference — and a test enforces it, so a newly added flag cannot quietly become unpersistable.
 
 ### Validating and editing configs
@@ -720,7 +721,8 @@ Guarantees, all of them structural:
 
 - **Diagnosis only.** This path can only reach `ABORTED`. It can never produce a `DONE`, a green,
   another iteration, or a re-authored contract — the freeze (invariant #2) is untouched, and
-  recovery is a *new run*.
+  recovery is a *new run*: the abort prints the exact successor command
+  ([`--recontract`](#re-contracting-a-defective-bar---recontract)), which keeps your tree.
 - **Fail-closed to today's behavior.** No adjudicator wired, an LLM error, a timeout, an
   unparseable reply, a schema miss, or any uncertainty all land on the unchanged repeat-failure
   abort. Only a confident positive relabels it.
@@ -1076,6 +1078,64 @@ additionally resumes the prior harness session on the first turn so the agent ke
 memory — the new frozen contract still solely governs DONE. Valid only with the same `--harness` as
 the prior run; ignored under `--phased`. The end-of-run banner prints a "Continue this session:"
 hint with the same mapping as `runs resume-cmd`.
+
+## Re-contracting a defective bar (`--recontract`)
+
+When goaly's own adjudicator condemns a frozen bar
+([`CONTRACT_DEFECTIVE`](#in-loop-contract-fault-adjudication-contract_defective)), the implementation
+in your tree may be perfectly correct — only the bar was wrong. Recovery used to mean one of three
+bad options: hand-edit a frozen file the anti-tamper machinery deliberately git-excluded and pinned,
+throw away a correct tree and start from zero, or `--resume` with a raised
+`--stuck-repeat-threshold` (more iterations against an unsatisfiable bar are still unsatisfiable).
+
+A **successor run** is the fourth option, and the abort prints it verbatim:
+
+```bash
+goaly --from-run run-<id> --recontract          # keep the tree, repair the bar
+goaly --from-run run-<id> --recontract --max-recontracts 2
+```
+
+It **keeps the predecessor's working tree**, inherits its **frozen goal** (a repair changes the bar,
+not the goal — a goal passed on the command line is ignored, loudly), and re-runs COMPILE with the
+**defect report as authoring feedback** — the same free-text channel a Seal "revise" round uses. The
+result is a **new** contract with a **new** `contractHash` under a **new** `runId`.
+
+**No contract is ever mutated.** Invariant #2 is *strengthened*: one run owns exactly one frozen
+contract for its whole life, and evolution happens *between* runs, in the open, with provenance. The
+successor's log header records `predecessorRunId`, `predecessorContractHash`, the adjudication
+verdict, and the chain depth; `goaly runs show` prints them:
+
+```
+successor of: run-a1b2  (re-contract #1 in this chain)
+  predecessor contract: 9f3c…  — adjudicated DEFECTIVE, never reused
+  verdict:   the frozen assertion requires a call the goal never implies
+```
+
+Five guards keep this from becoming a weakening channel:
+
+- **Only a `CONTRACT_DEFECTIVE` adjudication can reach it.** Eligibility keys off the write-ahead,
+  Zod-parsed `CONTRACT_ADJUDICATED` **event** — goaly's own read-only adjudicator — not off the
+  abort reason string (which carries the repeated verifier failure as context). A worker that prints
+  `CONTRACT_DEFECTIVE:` into its own output can never open the door; any other outcome is refused
+  with exit 2 before anything is written.
+- **No worker-supplied text feeds the re-authoring.** The seed is built only from the frozen
+  contract (compiler-authored), the goal (yours), and the adjudicator's verdict — which is itself
+  fenced as untrusted data, since it was written after reading worker-influenced output.
+- **The new bar still faces the negative control.** A re-authored bar that already *passes* on the
+  inherited tree is put to a fail-open pre-flight classifier before a worker token is spent: either
+  the implementation really was correct (proceed — the expected happy ending of a re-contract) or
+  the repair softened the bar into vacuity (`CONTRACT_UNSOUND`, abort). No LLM, an LLM error, an
+  unparseable reply, or any uncertainty all proceed.
+- **The chain is bounded.** `--max-recontracts` (default 1) caps how many re-contracts a chain may
+  contain. The depth lives in the run log header, so the cap holds **across the chain, not per
+  process** — a second `--recontract` off a successor is refused even from a fresh shell.
+- **It is an ordinary run in every other respect.** It Seals (auto-accepted under `--autonomous`,
+  still frozen and logged loudly; reviewable with `--mode review`), freezes, and needs both keys for
+  DONE. A failed re-compile is a normal `COMPILE_FAILED`.
+
+`--recontract` requires `--from-run`; `--max-recontracts` requires `--recontract`. Both are
+per-invocation only (never settable from a config file) — a persisted re-contract would re-point
+every run in the tree at one predecessor's defective contract.
 
 ## Web UI (`goaly ui`)
 
@@ -1523,6 +1583,12 @@ contributor *"one term, one meaning"* reference, see [`CONTEXT.md`](../CONTEXT.m
   to be failing an assertion no implementation could satisfy. Relabels an abort that was already
   happening; the tree is worth keeping. See
   [In-loop contract-fault adjudication](#in-loop-contract-fault-adjudication-contract_defective).
+- <a id="g-recontract"></a>**Re-contract / successor run** — the recovery from a `CONTRACT_DEFECTIVE`
+  verdict: `goaly --from-run <id> --recontract` keeps the tree, re-authors the bar from the defect
+  report, and freezes a NEW contract under a NEW run id, recording `predecessorRunId` /
+  `predecessorContractHash` / the verdict in its header. No contract is ever mutated — "the bar was
+  wrong" becomes an auditable chain of frozen contracts. See
+  [Re-contracting a defective bar](#re-contracting-a-defective-bar---recontract).
 
 ### Failure & stuck
 

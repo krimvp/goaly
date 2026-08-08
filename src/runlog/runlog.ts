@@ -5,6 +5,31 @@ import { OrchestratorEvent } from '../domain/events';
 import { DegradedMode } from '../domain/degraded';
 
 /**
+ * SUCCESSOR-RUN provenance (issue #117): where a `--recontract` run came from.
+ *
+ * A frozen contract is NEVER mutated — invariant #2 in its strictest form: one run owns exactly one
+ * contract for its whole life. When a contract is adjudicated DEFECTIVE (`CONTRACT_DEFECTIVE`, issue
+ * #116), recovery is therefore a NEW run with a NEW `contractHash` over the SAME (kept) tree, and
+ * the link between the two is recorded HERE — compose-time wiring like `harness`/`degraded`, written
+ * once at run start, never fed to the reducer and never part of any contract. "The bar was wrong"
+ * becomes an auditable chain of frozen contracts instead of an in-place softening.
+ *
+ * `recontracts` is the run's depth in that chain (1 = the first successor), carried forward from the
+ * predecessor's own header so `--max-recontracts` bounds the CHAIN rather than one process.
+ */
+export const RunProvenance = z.object({
+  /** The run this one succeeds — its tree was kept, its contract was not. */
+  predecessorRunId: RunId,
+  /** The frozen contract that was adjudicated defective (never reused, only recorded). */
+  predecessorContractHash: ContractHash,
+  /** The adjudication verdict that justified the re-contract (goaly's own read-only adjudicator). */
+  verdict: z.string().min(1),
+  /** 1 for the first successor in a chain; N for the N-th. Bounded by `--max-recontracts`. */
+  recontracts: z.number().int().positive(),
+});
+export type RunProvenance = z.infer<typeof RunProvenance>;
+
+/**
  * One-time header: the full RunConfig for the run. The frozen contract is captured in the
  * CONTRACT_COMPILED event (logged loudly), so resume reconstructs it by replay.
  *
@@ -36,6 +61,7 @@ export const RunLogHeader = z.object({
   harness: z.string().min(1).optional(),
   baseline: z.string().min(1).optional(),
   degraded: DegradedMode.optional(),
+  provenance: RunProvenance.optional(),
 });
 export type RunLogHeader = z.infer<typeof RunLogHeader>;
 
@@ -51,7 +77,7 @@ export function freshRunHeader(
   startedAt: number,
   config: RunConfig,
   baseline: string,
-  wiring: { harness?: string; degraded?: DegradedMode },
+  wiring: { harness?: string; degraded?: DegradedMode; provenance?: RunProvenance },
 ): RunLogHeader {
   return {
     runId,
@@ -60,6 +86,7 @@ export function freshRunHeader(
     ...(wiring.harness !== undefined ? { harness: wiring.harness } : {}),
     ...(baseline !== 'HEAD' ? { baseline } : {}),
     ...(wiring.degraded !== undefined ? { degraded: wiring.degraded } : {}),
+    ...(wiring.provenance !== undefined ? { provenance: wiring.provenance } : {}),
   };
 }
 

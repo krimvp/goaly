@@ -37,7 +37,7 @@ import {
   parseSatisfiabilityCritic,
 } from './flags/review-flags';
 import { parseSandbox } from './flags/sandbox-flags';
-import { parseLogLevel, parseWorkspaceMode } from './flags/misc-flags';
+import { parseLogLevel, parseRecontract, parseWorkspaceMode, type RecontractRequest } from './flags/misc-flags';
 import {
   parseConfigCommand,
   parseDoctorCommand,
@@ -165,6 +165,12 @@ export type ParsedArgs = {
    * with the same harness; ignored under `--phased`. Default false.
    */
   inheritSession: boolean;
+  /**
+   * `--recontract` (issue #117): with `--from-run`, a SUCCESSOR run over the predecessor's KEPT tree —
+   * re-author the bar its CONTRACT_DEFECTIVE adjudication condemned, freeze a NEW contract under a NEW
+   * run id, record provenance. Carries the chain cap (`--max-recontracts`). Absent ⇒ an ordinary run.
+   */
+  recontract: RecontractRequest | undefined;
   /** Minimum diagnostic log level (default `info`). Pure wiring — never enters the contract. */
   logLevel: LogLevel;
   /** Override the diagnostics file path (default `<workspace>/.goaly/<runId>/goaly.log`). */
@@ -326,7 +332,7 @@ const MULTI_SOURCE_FIELDS = ['goal', 'intent', 'rubric'] as const;
  * discarded — main.ts continues from the frozen run log's config — so the goal is never read; this only
  * satisfies `CliInput`'s non-empty-goal schema. It must never surface (a real resume overwrites it).
  */
-const RESUMED_GOAL_PLACEHOLDER = '(resumed run — goal is read from the frozen run log)';
+export const RESUMED_GOAL_PLACEHOLDER = '(resumed run — goal is read from the frozen run log)';
 
 export async function parseArgs(
   argv: string[],
@@ -481,8 +487,10 @@ export async function parseArgs(
   // So a goal is NOT required when resuming — synthesize a placeholder that will be overwritten. A
   // genuinely missing goal on a FRESH run is a clean usage error, not the raw ZodError that
   // `CliInput.parse({ goal: undefined })` would otherwise throw (which escapes as an ugly stack).
+  // A --recontract successor likewise INHERITS the predecessor's frozen goal (a repair changes the
+  // BAR, not the goal), so it needs none either; run-cmd substitutes the real one.
   const resuming = str(flags, 'resume') !== undefined;
-  if (resolved.goal === undefined && !resuming) {
+  if (resolved.goal === undefined && !resuming && flags['recontract'] === undefined) {
     throw new UsageError(
       'a goal is required — pass it positionally (goaly "<goal>"), or with --goal / --goal-file / ' +
         '--goal - (stdin)',
@@ -685,6 +693,7 @@ export async function parseArgs(
     delegation: delegation ?? resumed.delegation,
     fromRunId: str(flags, 'from-run'),
     inheritSession: flags['inherit-session'] !== undefined,
+    recontract: parseRecontract(flags),
     logLevel: parseLogLevel(str(flags, 'log-level')),
     logFile: str(flags, 'log-file'),
     noLogFile: flags['no-log-file'] !== undefined,
@@ -768,6 +777,7 @@ function baseArgs(
     resumeRunId: undefined,
     fromRunId: undefined,
     inheritSession: false,
+    recontract: undefined,
     logLevel: 'info',
     logFile: undefined,
     noLogFile: false,

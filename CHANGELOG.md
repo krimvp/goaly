@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cap.
 
 ### Added
+- `--recontract` successor runs (issue #117): recovery from a `CONTRACT_DEFECTIVE` bar that keeps the
+  tree. `goaly --from-run <runId> --recontract` — printed verbatim by the abort — starts a NEW run
+  over the predecessor's working tree, inherits its FROZEN goal, and re-runs COMPILE with the defect
+  report as authoring feedback (the same free-text channel a Seal "revise" uses), then freezes a NEW
+  contract with a NEW `contractHash` under a NEW `runId`. No contract is ever mutated: invariant #2
+  is strengthened — one run owns exactly one bar for its whole life and evolution happens BETWEEN
+  runs, with provenance (`predecessorRunId`, `predecessorContractHash`, the adjudication verdict and
+  the chain depth) recorded in the successor's log header and rendered by `goaly runs show`.
+  Guarded: only a write-ahead, Zod-parsed `CONTRACT_ADJUDICATED { defective: true }` event can reach
+  it (so the worker can never trigger it, and no worker-supplied text feeds the re-authoring — the
+  adjudicator's report is itself fenced as untrusted data); a re-authored bar that ALREADY passes on
+  the inherited tree faces a new fail-open pre-flight negative control before a worker token is spent
+  (a weakened bar aborts `CONTRACT_UNSOUND`); and `--max-recontracts` (default 1) bounds the chain
+  from the run log, so the cap holds across the chain rather than per process.
 - In-loop contract-fault adjudication (`CONTRACT_DEFECTIVE`, issue #116). Contract soundness was
   otherwise classified exactly once, at t=0, on a tree with no implementation in it — the moment of
   least evidence, where an unsatisfiable frozen assertion and an honest "not written yet" red are

@@ -58,6 +58,8 @@ function detail(over: Partial<RunDetail> = {}): RunDetail {
     compileFailures: [],
     seal: [{ kind: 'approve' }],
     prepare: undefined,
+    adjudication: undefined,
+    provenance: undefined,
     iterationsDetail: [iteration()],
     ...over,
   };

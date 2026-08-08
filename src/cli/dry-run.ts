@@ -112,6 +112,12 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
         ],
         ...opt('resume', parsed.resumeRunId),
         ...opt('from-run', parsed.fromRunId),
+        ...opt(
+          'recontract',
+          parsed.recontract === undefined
+            ? undefined
+            : `successor run (max-recontracts ${parsed.recontract.maxRecontracts})`,
+        ),
       ],
     },
   ];

@@ -1,6 +1,6 @@
 import type { Command, OrchestratorEvent, RunExtension, RunOutcome } from '../domain/events';
 import { OrchestratorEvent as OrchestratorEventSchema } from '../domain/events';
-import { freshRunHeader, type RunLogEntry } from '../runlog/runlog';
+import { freshRunHeader, type RunLogEntry, type RunProvenance } from '../runlog/runlog';
 import type { RunConfig } from '../domain/config';
 import type { DegradedMode } from '../domain/degraded';
 import type { CompiledContract } from '../domain/contract';
@@ -192,6 +192,14 @@ export type DriveOptions = {
    * cap un-terminates a FAILED-at-cap / budget-ABORTED run and a `note` reaches the next prompt.
    */
   extend?: RunExtension;
+  /**
+   * Successor provenance (`--recontract`, issue #117): this run re-authors the bar of a predecessor
+   * whose contract was adjudicated DEFECTIVE, over the tree that run left behind. Recorded once in
+   * the log header (never in the contract, never fed to the reducer) and used to widen the pre-flight
+   * NEGATIVE CONTROL — a re-authored bar that already passes is exactly as suspicious as one that
+   * passes on a from-scratch tree. Absent ⇒ an ordinary run, unchanged in every respect.
+   */
+  provenance?: RunProvenance;
 };
 
 /**
@@ -360,7 +368,7 @@ export async function drive(
               seq,
               config.resumeBestOfIncomplete,
             )
-          : await perform(command, deps, ladder, llmMeter, baseline);
+          : await perform(command, deps, ladder, llmMeter, baseline, options.provenance !== undefined);
       if (performed.seq !== undefined) seq = performed.seq;
       const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge
       if (performed.ladder !== undefined) ladder = performed.ladder;
@@ -519,6 +527,8 @@ async function perform(
    * diff — so the choice of what the approver reviews lives in one place, not threaded by hand here.
    */
   baseline: Baseline,
+  /** True on a `--recontract` successor run (issue #117): widens the pre-flight negative control. */
+  recontract = false,
 ): Promise<Performed> {
   const log = deps.logger ?? noopLogger;
 
@@ -680,6 +690,7 @@ async function perform(
           ...(deps.logger !== undefined ? { logger: deps.logger } : {}),
           ...(deps.prepareTimeouts !== undefined ? { timeouts: deps.prepareTimeouts } : {}),
           ...(deps.prepareLlm !== undefined ? { llm: deps.prepareLlm } : {}),
+          ...(recontract ? { recontract: true } : {}),
         },
         command.contract,
       );

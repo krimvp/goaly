@@ -79,7 +79,10 @@ any worker token is spent. And because that pre-flight happens at t=0, on a tree
 implementation in it, goaly asks once more when the evidence finally exists: a repeat-failure
 streak that keeps tripping a frozen authored check is re-adjudicated read-only, and an
 unsatisfiable bar aborts as **`CONTRACT_DEFECTIVE`** — "the contract is broken, keep your tree" —
-instead of blaming the worker.
+instead of blaming the worker. And that abort prints the way out:
+`goaly --from-run <id> --recontract` keeps the tree, re-authors the bar from the defect report, and
+freezes a **new** contract under a **new** run id with the predecessor recorded in its header. No
+contract is ever mutated — "the bar was wrong" becomes an auditable chain, not an in-place softening.
 
 ## Features
 
@@ -113,6 +116,7 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Stuck detection](docs/reference.md#stuck-detection) | `--stuck-*` | Typed early aborts — no-diff, repeat-failure, oscillation, harness crash, unevaluable contract, and repeated timeout-with-no-diff — each naming the flag that fixes it. |
 | [Stuck self-recovery](docs/reference.md#automatic-remediation---auto-remediate-stuck) | `--auto-remediate-stuck` | Opt-in: up to 3 bounded self-recoveries (no-diff hint, one extra repeat/crash attempt) before stopping for the operator. |
 | [Contract-fault adjudication](docs/reference.md#in-loop-contract-fault-adjudication-contract_defective) | *(defaults)* | A repeat-failure streak on a frozen authored file is re-adjudicated once, read-only, against the tree that now HAS an implementation: a `CONTRACT_DEFECTIVE` abort says the bar is broken and your tree is worth keeping. Fail-closed to today's abort. |
+| [Re-contract successor run](docs/reference.md#re-contracting-a-defective-bar---recontract) | `--recontract`, `--max-recontracts` | Recover from a `CONTRACT_DEFECTIVE` bar without discarding a correct tree: a NEW run, NEW contractHash, defect report as authoring feedback, predecessor recorded in the header. No contract is ever mutated. |
 
 ## Usage
 
