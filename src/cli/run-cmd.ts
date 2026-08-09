@@ -35,7 +35,7 @@ import { killActiveChildren } from '../util/spawn';
 import { detectWorkspaceMode, preflightRun } from './preflight';
 import { resumeHint, renderResumeHint, type ResumeHint } from './resume-cmd';
 import { resolveModels } from './models';
-import { degradedMode } from './independence';
+import { approverSwapNotice, degradedMode } from './independence';
 import {
   degradedModeDetail,
   degradedModeTag,
@@ -468,18 +468,25 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
     }
 
     // Issue #125, part 1: the Sign-off approver declined to inherit the agent's `--model` and runs
-    // on the LLM provider's own model instead, so the second key isn't the model that wrote the
-    // code. A silent model swap would be indistinguishable from a bug — announce it every time.
-    if (resolvedModels.approverIndependentFrom !== undefined) {
-      deps.logger?.info(
-        `Sign-off approver kept INDEPENDENT of the coding agent: --model ` +
-          `${resolvedModels.approverIndependentFrom} selects the agent (and the judge rung), so the ` +
-          `approver defaults to the ${parsed.llmProvider} provider's own model rather than ` +
-          'inheriting it — the second key is a different model than the one that wrote the code. ' +
-          `Pass --approver-model ${resolvedModels.approverIndependentFrom} to collapse them again, ` +
-          'or --approver-model <other> / --approver-models to choose the skeptic yourself.',
-        { runId, approverModel: 'provider default', agentModel: resolvedModels.approverIndependentFrom },
-      );
+    // on the LLM provider's own model instead. A silent model swap would be indistinguishable from
+    // a bug — announce it every time, but ONLY claim independence where it is established. The
+    // wording comes from `approverSwapNotice`, which branches on the same Independence value the
+    // warnings below and the header's degraded label use, so the four diagnostics this run emits
+    // about its second key can never contradict each other (they did: this line used to report
+    // "the second key is a different model" between two INDEPENDENCE-UNVERIFIED warnings).
+    const swapNotice = approverSwapNotice(resolvedModels, parsed.harness, parsed.llmProvider, {
+      generate: runConfig.verifier.kind === 'generate',
+      autonomous: runConfig.autonomous,
+      ...(resolvedModels.approverModels !== undefined
+        ? { approverModels: resolvedModels.approverModels }
+        : {}),
+    });
+    if (swapNotice !== undefined) {
+      deps.logger?.info(swapNotice, {
+        runId,
+        approverModel: 'provider default',
+        agentModel: resolvedModels.approverIndependentFrom,
+      });
     }
     // Issue #125, part 2: a FULLY collapsed model configuration (agent = judge = approver) is a
     // typed degraded mode, recorded in the run header — a WARN alone cannot reach an operator who

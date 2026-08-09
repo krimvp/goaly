@@ -168,6 +168,42 @@ export function degradedMode(
 }
 
 /**
+ * The startup notice for issue #125's approver-independence default: the Sign-off approver DECLINED
+ * to inherit the agent's `--model` and was defaulted to the LLM provider's own model. `undefined`
+ * when the default did not fire (nothing to announce).
+ *
+ * It branches on the SAME {@link Independence} value the warnings and {@link degradedMode} compute,
+ * because the two wordings are not interchangeable. Declining to inherit `--model X` is a REQUEST
+ * for a distinct second key, not a confirmed one: when the harness family and the LLM provider are
+ * the same vendor, goaly cannot resolve that provider's own default model id, so "the second key is
+ * a different model than the one that wrote the code" is a claim it never established — and it was
+ * printed sandwiched between two INDEPENDENCE-UNVERIFIED warnings, the most strongly-worded of the
+ * four being the false one. Only a pair established `independent` (a cross-vendor worker, or two
+ * different known ids) earns the confirmed wording.
+ */
+export function approverSwapNotice(
+  resolved: ResolvedModels,
+  harness: HarnessChoice,
+  llmProvider: LlmProviderChoice,
+  context: IndependenceContext = {},
+): string | undefined {
+  const agent = resolved.approverIndependentFrom;
+  if (agent === undefined) return undefined;
+  const { workerApprover } = collapses(resolved, harness, llmProvider, context);
+  const head =
+    `Sign-off approver DECLINED to inherit the coding agent's --model ${agent}: --model selects ` +
+    `the agent (and the judge rung), so the approver falls back to the ${llmProvider} provider's ` +
+    'own model instead of inheriting it. ';
+  const tail =
+    `Pass --approver-model ${agent} to collapse them again, or --approver-model <other> / ` +
+    '--approver-models to choose the skeptic yourself.';
+  if (workerApprover === 'independent') {
+    return `${head}The coding agent runs on a DIFFERENT vendor family than the approver's provider, so the second key cannot be the model that wrote the code. ${tail}`;
+  }
+  return `${head}INDEPENDENCE UNVERIFIED: goaly cannot resolve that provider's default model id, so it CANNOT confirm the second key differs from the model that wrote the code — if the default IS ${agent}, the two keys share one model. ${tail}`;
+}
+
+/**
  * The advisory for a pair goaly could NOT establish either way: the role's model is known, the
  * approver's is the provider's own default, and goaly has no way to resolve that default's id. It
  * says what is true — the check could not be made — and names the flag that makes it checkable.

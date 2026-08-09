@@ -13,7 +13,9 @@ import { contractDefectContext, workspaceDefectContext } from './context';
 import { DEFAULT_DEFECT_HINT_CAP, formatDefectSection, selectDefectHints } from './select';
 import {
   DEFECT_TRUST_FENCED_ONLY,
+  DEFECT_TRUST_RELOCATED,
   DEFECT_TRUST_SANDBOXED,
+  defectTrust,
   resolveDefectCorpus,
 } from './wiring';
 import { makeFakeContract, recordingLogger } from '../testing/fakes';
@@ -203,7 +205,12 @@ describe('resolveDefectCorpus — the compose-time resolution', () => {
    */
   it.each([
     ['no sandbox: the hints are fenced, not vouched for', false, DEFECT_TRUST_FENCED_ONLY],
-    ['an active sandbox masks $HOME/.goaly from the agent', true, DEFECT_TRUST_SANDBOXED],
+    // ROUND-5 REGRESSION: the trust string was picked from the `sandboxed` boolean ALONE, so a
+    // corpus relocated by `--defect-corpus <path>` — the very use case the docs advertise — logged
+    // "an active --sandbox policy masks $HOME/.goaly so the agent seam cannot read the signing key"
+    // while the key sat beside the corpus in the agent's own rw workspace. DENIED_HOME_SECRETS
+    // masks $HOME/.goaly and nothing else, so the jail puts that key out of reach of nobody.
+    ['a jail does NOT reach a corpus moved out of $HOME/.goaly', true, DEFECT_TRUST_RELOCATED],
   ])('LOGS how much the provenance is worth — %s', async (_label, sandboxed, expected) => {
     const dir = workspace();
     const corpusPath = path.join(dir, 'defects.jsonl');
@@ -225,6 +232,33 @@ describe('resolveDefectCorpus — the compose-time resolution', () => {
     expect(DEFECT_TRUST_FENCED_ONLY).toContain('same uid');
     expect(DEFECT_TRUST_FENCED_ONLY).toContain('untrusted fence');
     expect(DEFECT_TRUST_SANDBOXED).toContain('$HOME/.goaly');
+  });
+
+  /**
+   * The masked claim is true of exactly one thing: a key that lives inside the directory
+   * `DENIED_HOME_SECRETS` masks. `defectTrust` is the pure decision, so the masked case can be
+   * pinned without writing anything into the developer's real `~/.goaly`.
+   */
+  describe('defectTrust — the jail claim is made only where the jail actually reaches', () => {
+    const home = '/home/someone';
+    const inHome = path.join(home, '.goaly', 'defects.key');
+
+    it('claims the mask only for a key under the masked $HOME/.goaly', () => {
+      expect(defectTrust(true, inHome, home)).toBe(DEFECT_TRUST_SANDBOXED);
+    });
+
+    it.each([
+      ['a relocated corpus in the agent’s rw workspace', '/work/repo/team-defects.key'],
+      ['a sibling directory that merely starts the same', path.join(home, '.goaly-shared/x.key')],
+      ['another user’s home', '/home/other/.goaly/defects.key'],
+    ])('refuses the mask claim for %s', (_label, keyPath) => {
+      expect(defectTrust(true, keyPath, home)).toBe(DEFECT_TRUST_RELOCATED);
+    });
+
+    it('an un-sandboxed run is fenced-only wherever the corpus lives', () => {
+      expect(defectTrust(false, inHome, home)).toBe(DEFECT_TRUST_FENCED_ONLY);
+      expect(defectTrust(false, '/work/repo/team.key', home)).toBe(DEFECT_TRUST_FENCED_ONLY);
+    });
   });
 
   it('--no-defect-corpus: no corpus (nothing can be written) and no section', () => {

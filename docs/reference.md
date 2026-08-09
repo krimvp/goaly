@@ -1329,8 +1329,12 @@ matters and the signature is easy to over-read:
   authenticating authenticates nothing about that party. Two things narrow that, and neither is the
   signature: the **untrusted fence** above (what actually contains a planted line), and an active
   **`--sandbox` policy**, which masks `$HOME/.goaly` — key and default corpus both — from the agent
-  seam. The injection log states which of the two situations the run is in, in a `trust` field, so
-  you never have to infer it. No key ⇒ nothing is verifiable ⇒ no hints; this is fail-closed on
+  seam. That mask covers the **default location only**: `--defect-corpus <path>` keeps its key beside
+  the corpus, so a corpus relocated into the workspace (or anywhere else outside `$HOME/.goaly`)
+  leaves its key inside the tree the agent is given read-write — a jail changes nothing there. The
+  injection log states which of the **three** situations the run is in, in a `trust` field, so you
+  never have to infer it: sandboxed with the key masked, sandboxed but relocated out of the mask, or
+  un-sandboxed — and the last two say plainly that the fence, not the signature, is the containment. No key ⇒ nothing is verifiable ⇒ no hints; this is fail-closed on
   *provenance* and still fail-open for the *run*. (A corpus written before signing or before the
   nonce existed verifies as empty — `goaly config defects clear` resets it; it re-learns from the
   next adjudication.)

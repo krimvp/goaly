@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { degradedMode, independenceWarnings } from './independence';
+import { approverSwapNotice, degradedMode, independenceWarnings } from './independence';
 import { resolveModels } from './models';
 import { DegradedMode, degradedModeDetail, degradedModeTag } from '../domain/degraded';
 
@@ -289,5 +289,48 @@ describe('degradedMode (issue #125): the typed self-judged label', () => {
     expect(detail).toContain('m');
     expect(detail).toContain('--generate --autonomous');
     expect(detail).toContain('--approver-model');
+  });
+});
+
+/**
+ * ROUND-5 REGRESSION. The REAL run path printed the issue-#125 notice unconditionally whenever the
+ * approver-independence default fired: "the second key is a different model than the one that wrote
+ * the code" — a verified claim, emitted sandwiched between two INDEPENDENCE-UNVERIFIED warnings and
+ * a degraded-mode WARN saying the opposite. The dry-run sibling had already been corrected; the run
+ * path had not, so the run's own diagnostics contradicted themselves and the most strongly-worded
+ * of them was the false one.
+ */
+describe('approverSwapNotice — never reports UNVERIFIED independence as verified', () => {
+  it('says UNVERIFIED when the approver sits on the provider default it cannot resolve', () => {
+    const resolved = resolveModels({ model: 'gpt-5-mini' }, { llmProvider: 'claude' });
+    const notice = approverSwapNotice(resolved, 'claude', 'claude');
+
+    expect(notice).toBeDefined();
+    expect(notice).toContain('INDEPENDENCE UNVERIFIED');
+    expect(notice).toContain('DECLINED to inherit');
+    expect(notice).not.toContain('is a different model than the one that wrote the code');
+    expect(notice).not.toContain('kept INDEPENDENT');
+    // …and it agrees with the label the very same wiring records in the run header.
+    expect(degradedMode(resolved, 'claude', 'claude')?.kind).toBe('independence-unverified');
+  });
+
+  it('keeps the confirmed wording only when the pair IS established independent', () => {
+    // codex harness + claude provider: the worker cannot share the approver's model at all.
+    const resolved = resolveModels({ model: 'gpt-5-mini' }, { llmProvider: 'claude' });
+    const notice = approverSwapNotice(resolved, 'codex', 'claude');
+
+    expect(notice).toContain('DIFFERENT vendor family');
+    expect(notice).not.toContain('INDEPENDENCE UNVERIFIED');
+  });
+
+  it('is silent when the independence default never fired', () => {
+    expect(approverSwapNotice(resolveModels({}), 'claude', 'claude')).toBeUndefined();
+    expect(
+      approverSwapNotice(
+        resolveModels({ model: 'm', approverModel: 'other' }, { llmProvider: 'claude' }),
+        'claude',
+        'claude',
+      ),
+    ).toBeUndefined();
   });
 });

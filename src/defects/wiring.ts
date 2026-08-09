@@ -1,3 +1,5 @@
+import os from 'node:os';
+import path from 'node:path';
 import type { Logger } from '../log/logger';
 import { FileDefectCorpus, defaultDefectCorpusPath, type DefectCorpus } from './corpus';
 import { workspaceDefectContext } from './context';
@@ -39,6 +41,36 @@ export const DEFECT_TRUST_FENCED_ONLY =
   'signed only against hand-edited/copied/foreign lines — with --sandbox none the coding agent runs ' +
   'as the same uid and can read the signing key, so these hints are contained by the untrusted ' +
   'fence, not by the signature';
+export const DEFECT_TRUST_RELOCATED =
+  'signed only against hand-edited/copied/foreign lines — --defect-corpus put the corpus and its ' +
+  'signing key OUTSIDE the $HOME/.goaly directory a --sandbox policy masks, so the jail does not ' +
+  'put the key beyond the agent seam\'s reach; these hints are contained by the untrusted fence, ' +
+  'not by the signature';
+
+/**
+ * Which of the three provenance claims is TRUE for this run.
+ *
+ * The mask claim ({@link DEFECT_TRUST_SANDBOXED}) is about one specific directory: `DENIED_HOME_SECRETS`
+ * masks `$HOME/.goaly` and nothing else, while the workspace is bound read-write for the agent. So
+ * `sandboxed` alone does not establish it — `--defect-corpus <workspace>/team-defects.jsonl` (the
+ * shape the docs advertise) resolves its key to `<workspace>/team-defects.key`, inside the very tree
+ * the agent can write. Selecting the string from the boolean therefore asserted, as per-run
+ * diagnostics, a containment the jail does not provide.
+ *
+ * Exported (and given an explicit `homeDir`) so the masked case is pinnable without a test ever
+ * touching a developer's real `~/.goaly`.
+ */
+export function defectTrust(
+  sandboxed: boolean,
+  keyPath: string,
+  homeDir: string = os.homedir(),
+): string {
+  if (!sandboxed) return DEFECT_TRUST_FENCED_ONLY;
+  const masked = path.resolve(homeDir, '.goaly');
+  const key = path.resolve(keyPath);
+  const inside = key === masked || key.startsWith(`${masked}${path.sep}`);
+  return inside ? DEFECT_TRUST_SANDBOXED : DEFECT_TRUST_RELOCATED;
+}
 
 /**
  * Resolve the corpus for a run. Fail-open by construction: `read()` swallows a missing/corrupt
@@ -46,8 +78,9 @@ export const DEFECT_TRUST_FENCED_ONLY =
  * today's behavior. Logs which patterns were injected (the issue's reproducibility answer: the
  * hidden local state that shaped the bar is named in the run's own diagnostics) — and, in the same
  * line, HOW MUCH that provenance is worth on this run, because the answer differs by sandbox policy
- * and a reader should not have to reconstruct it. `sandboxed` is `true` when a real jail is in
- * force (any launcher but the identity passthrough).
+ * AND by where the corpus lives (see {@link defectTrust}) and a reader should not have to
+ * reconstruct it. `sandboxed` is `true` when a real jail is in force (any launcher but the identity
+ * passthrough) — on its own that does NOT establish that the jail hides the signing key.
  */
 export function resolveDefectCorpus(
   options: DefectCorpusOptions | undefined,
@@ -67,7 +100,7 @@ export function resolveDefectCorpus(
       path: corpus.path,
       count: hints.length,
       patterns: hints.map((h) => h.text),
-      trust: sandboxed ? DEFECT_TRUST_SANDBOXED : DEFECT_TRUST_FENCED_ONLY,
+      trust: defectTrust(sandboxed, corpus.keyPath),
     });
   }
   return { corpus, section: formatDefectSection(hints) };
