@@ -33,11 +33,16 @@ import { wrapUntrusted } from '../verify/prompt-safety';
  * like any other run, and its new bar faces the anti-softening negative control before a worker token
  * is spent (`prepareWorkspace`'s pre-flight; see `classifyRecontractedBar`). That control applies
  * whether or not the re-authored bar declares `generatedFiles` — a successor whose bar is a bare
- * `--verify-cmd` is exactly the softening shape it exists to catch. It is NOT unconditional, and the
- * two cases where it cannot run are logged loudly rather than skipped in silence: the control fires
- * only on a bar that ALREADY PASSES at t=0, so a re-authored bar with no deterministic rung has
- * nothing to execute before the first turn, and — being a model judgement — it needs a wired
- * `--llm-provider`. Both are fail-open (proceed), like the control itself.
+ * `--verify-cmd` is exactly the softening shape it exists to catch — and whatever the inherited tree
+ * contains (a tree with no implementation source makes a green MORE suspicious, so it is evidence for
+ * the classifier, never a reason to skip it). It is NOT unconditional, and EVERY case where it cannot
+ * run is logged loudly rather than skipped in silence. The control fires only on a bar that ALREADY
+ * PASSES at t=0, so it does not run when the re-authored bar has no deterministic rung to execute, a
+ * rung errored instead of producing a verdict, or a `requiredTools` program is missing (the install is
+ * delegated to the agent and goaly's own pre-flight is skipped) — and, being a model judgement, it
+ * needs a wired `--llm-provider`. All four are fail-open (proceed) and announce themselves, like the
+ * control itself. The other prepare-phase exits are ABORTS (no worker turn follows) or a RED bar (the
+ * control's precondition — a bar that already passes — is absent, not defeated).
  */
 
 /** At most one re-contract per chain by default: a bad bar gets one repair, never a ratchet. */

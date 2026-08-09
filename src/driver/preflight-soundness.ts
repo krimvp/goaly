@@ -227,13 +227,16 @@ export async function classifyVacuousContract(
  * {@link classifyVacuousContract} asks, asked on the one other tree where a green at t=0 is
  * suspicious rather than impossible to interpret.
  *
- * A successor run inherits the predecessor's tree, so it is NOT from-scratch and the green mirror
- * above deliberately never fires. But a re-contract is precisely the moment a bar can get weakened:
- * it was just re-authored with a defect report in hand, on a tree whose implementation is visible.
- * A bar that already passes there is either (a) legitimate — the implementation really was correct
- * and only the bar was wrong, which is the whole reason this recovery exists — or (b) a bar softened
- * into vacuity / shaped around whatever the tree happens to do. Only the model can tell those apart,
- * so it is asked BEFORE a worker token is spent.
+ * A successor run inherits the predecessor's tree, so it is usually NOT from-scratch and the green
+ * mirror above deliberately never fires. But a re-contract is precisely the moment a bar can get
+ * weakened: it was just re-authored with a defect report in hand, on a tree whose implementation is
+ * visible. A bar that already passes there is either (a) legitimate — the implementation really was
+ * correct and only the bar was wrong, which is the whole reason this recovery exists — or (b) a bar
+ * softened into vacuity / shaped around whatever the tree happens to do. Only the model can tell those
+ * apart, so it is asked BEFORE a worker token is spent. It is asked on EVERY re-contract green,
+ * including the rarer case of an inherited tree with no implementation source in it — there (a) cannot
+ * explain the green at all, so {@link RecontractEvidence.emptyOfSource} is threaded into the prompt as
+ * evidence rather than used by the caller as a precondition.
  *
  * A negative control is worthless if it cannot see what it is judging, so it is shown the EVIDENCE a
  * human would need to answer "was this softened?": the re-authored rungs/rubric, the CONTENTS of the
@@ -292,6 +295,13 @@ export type RecontractEvidence = {
   readonly predecessorBar?: string;
   /** The adjudicated defect the repair was authored against (the one licensed change). */
   readonly defect?: string;
+  /**
+   * Whether the INHERITED tree holds no implementation source (the caller's `isEmptyOfSource`, which
+   * fail-safes to false). Evidence, not a gate: a re-contract green is suspicious on any tree, but on
+   * a tree with nothing in it the legitimate explanation — "the implementation on disk is correct" —
+   * is unavailable, so the prompt says so. Absent ⇒ the ordinary inherited-tree framing.
+   */
+  readonly emptyOfSource?: boolean;
 };
 
 /** Cap one authored file folded into the control's prompt, so a huge test file cannot blow the call. */
@@ -336,9 +346,17 @@ function buildRecontractPrompt(
     `RE-AUTHORED VERIFICATION FILES (frozen — the worker cannot change these):\n${
       paths.length > 0 ? paths : '  (none)'
     }`,
-    'CONTEXT: this is a RE-CONTRACT. The predecessor run\'s bar was adjudicated defective and its ' +
-      'implementation is still on disk, so the new bar passing may be legitimate — or may mean the ' +
-      'repair weakened it.',
+    evidence.emptyOfSource === true
+      ? 'CONTEXT: this is a RE-CONTRACT. The predecessor run\'s bar was adjudicated defective, and ' +
+        'the inherited tree is EMPTY OF IMPLEMENTATION SOURCE — the predecessor left no implementation ' +
+        'behind, so the usual legitimate explanation ("the implementation already on disk is correct") ' +
+        'does NOT apply here. A bar that genuinely exercises the goal should be RED on such a tree. ' +
+        'The one remaining legitimate reading is that the goal is genuinely already satisfied without ' +
+        'any implementation of it; if you cannot see that, a green means the re-authored bar is ' +
+        'vacuous or asserts less than the goal requires.'
+      : 'CONTEXT: this is a RE-CONTRACT. The predecessor run\'s bar was adjudicated defective and its ' +
+        'implementation is still on disk, so the new bar passing may be legitimate — or may mean the ' +
+        'repair weakened it.',
     ...recontractEvidenceSections(evidence),
     `VERIFICATION OUTPUT ON THE INHERITED TREE (it PASSED):\n${wrapUntrusted(detail, { label: 'OUTPUT' })}`,
     'Compare the re-authored bar above with the predecessor\'s bar and the adjudicated defect. Was ' +

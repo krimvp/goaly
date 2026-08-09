@@ -1334,10 +1334,18 @@ Five guards keep this from becoming a weakening channel:
   prompt only, and an LLM error, an unparseable reply, missing evidence, or any uncertainty all
   proceed. The control applies **whether or not the re-authored bar generated any verification
   files** — a successor whose "repair" is a bare `--verify-cmd` is precisely the softening shape it
-  exists to catch. It is not unconditional, and the two cases where it *cannot* run are logged
-  loudly rather than skipped silently: it fires only on a bar that already **passes** before the
-  first turn, so a re-authored bar with **no deterministic rung** has nothing to execute then, and
-  being a model judgement it needs a wired `--llm-provider`. Both proceed (fail-open).
+  exists to catch — and **whatever the inherited tree contains**: if the tree holds no implementation
+  source at all, the green cannot be explained by a correct implementation on disk, so that fact is
+  handed to the classifier as *evidence* rather than used to skip it. It is **not unconditional**,
+  and every case where it *cannot* run is logged loudly (`--recontract anti-softening negative
+  control could not run — …`) rather than skipped silently. It fires only on a bar that already
+  **passes** before the first turn, so it does not run when: the re-authored bar has **no
+  deterministic rung** to execute then; a rung **errored** instead of producing a verdict; a
+  `requiredTools` program is **missing**, so the bar cannot be executed at all (goaly delegates the
+  install to the agent and skips its own pre-flight); or — being a model judgement — **no
+  `--llm-provider` is wired**. All four proceed (fail-open) and say so. The remaining exits from the
+  prepare phase are aborts (`TOOLS_MISSING`, `SETUP_FAILED`, `CONTRACT_UNSOUND`), where no worker
+  turn follows, or a **red** bar, where the control's precondition is simply absent.
 - **The chain is bounded.** `--max-recontracts` (default 1) caps how many re-contracts a chain may
   contain. The depth lives in the run log header, so the cap holds **across the chain, not per
   process** — a second `--recontract` off a successor is refused even from a fresh shell.
