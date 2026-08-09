@@ -299,9 +299,10 @@ goaly run --goal "..." --generate --phased --dry-run
 It prints the fully-merged, fully-validated configuration — resolved verifier intent, harness and
 autonomy, provider and every model, budgets, per-step timeouts, stuck thresholds, baseline, sandbox,
 and which config files contributed — then exits `0`. That includes what the **second key** will run
-on (`sign-off model (2nd key)`) and a `degraded mode` row when the agent, the judge rung and the
-approver all collapse onto one model — see
-[degraded mode](#degraded-mode-self-judged).
+on (`sign-off model (2nd key)`, including `independence UNVERIFIED` when the approver's model cannot
+be compared) and a `degraded mode` row when the agent, the judge rung and the approver collapse — or
+may have collapsed — onto one model; see
+[degraded mode](#degraded-mode-self-judged-and-independence-unverified).
 
 It runs **after** every read-only check a real run performs (config merge, `--cost-table`,
 `--baseline` resolution, `--resume` / `--from-run` log reads, the preflight) and **before** the first
@@ -421,7 +422,15 @@ resolve a CLI's own default model id, so a `--model` that happens to name that s
 detectable. To restore the old inheriting behavior explicitly, pass `--approver-model <the same
 model>`; to choose the skeptic yourself, pass a different one.
 
-### Degraded mode: `SELF-JUDGED`
+Because that limit is real, the row-1 wiring is **never reported as independent**. Asking for the
+provider's default is a *request* for a distinct second key, not proof of one: if the provider's own
+default happens to be `X`, all three roles are one model again. goaly says exactly that — an
+`INDEPENDENCE UNVERIFIED` startup warning per collapsed pair, `independence UNVERIFIED` on the
+`--dry-run` sign-off row, and the [`INDEPENDENCE-UNVERIFIED` degraded mode](#degraded-mode-self-judged-and-independence-unverified)
+in the run header. Passing `--approver-model` (or `--approver-models`) on a model you know differs is
+what makes the second key *verifiable*.
+
+### Degraded mode: `SELF-JUDGED` and `INDEPENDENCE-UNVERIFIED`
 
 When the coding agent, the LLM judge rung **and** the Sign-off approver all still resolve to one
 model — the zero-config default run, where only one model is available — the run is recorded as a
@@ -442,9 +451,22 @@ The same line appears in `goaly runs show <id>` (and the header field is readabl
 consumer — CI, the UI), so a DONE that nobody independently reviewed is *labelled* as such rather
 than only warned about at startup — a warning nobody is present to read is a record, not a control.
 
-The label is exactly that: a **label**. It never weakens or strengthens a gate — the frozen ladder
-and the veto-only approver still both have to turn for DONE — and it never enters the frozen
-contract. Setting `--approver-model` (or `--approver-models` with ≥2 distinct models) removes it.
+A second kind, `INDEPENDENCE-UNVERIFIED` (`kind: "independence-unverified"`), covers the wiring goaly
+**cannot** decide: `--model X` where the approver was defaulted to the provider's own model. The
+agent and the judge rung run on `X`; the approver runs on a model id goaly has no way to resolve, so
+it can neither confirm nor rule out that all three are `X`. That is *not* independence, and it is not
+an observed collapse either — it is an unverifiable claim, and it is reported as one:
+
+```
+degraded:    INDEPENDENCE-UNVERIFIED — the coding agent and the LLM judge rung ran on X
+             (--generate --autonomous), and the Sign-off approver ran on the LLM provider's OWN
+             DEFAULT model, whose id goaly cannot resolve — so it could not confirm the second key
+             is a different model. …
+```
+
+Both kinds are exactly that: a **label**. Neither weakens nor strengthens a gate — the frozen ladder
+and the veto-only approver still both have to turn for DONE — and neither enters the frozen
+contract. Setting `--approver-model` (or `--approver-models` with ≥2 distinct models) removes them.
 
 Approver-panel flags (`--approver-quorum`, `--approver-models`, `--approver-lenses`,
 `--approver-diversity-temp`) are covered under
@@ -1111,7 +1133,7 @@ things a `DONE`/`ABORTED` line alone cannot tell you:
 
 | Line | Meaning |
 | --- | --- |
-| `degraded:` | a typed [degraded mode](#degraded-mode-self-judged) — today `SELF-JUDGED`, the two keys on one model |
+| `degraded:` | a typed [degraded mode](#degraded-mode-self-judged-and-independence-unverified) — `SELF-JUDGED` (the two keys on one model) or `INDEPENDENCE-UNVERIFIED` (goaly could not compare them) |
 | `adjudicated:` | this run's [contract-fault verdict](#in-loop-contract-fault-adjudication-contract_defective) (SOUND or DEFECTIVE, with the generalized anti-pattern), and for a defective one the exact `--recontract` command that recovers without discarding the tree |
 | `successor of:` | this run's [re-contract provenance](#re-contracting-a-defective-bar---recontract): the predecessor run + its frozen `contractHash`, the verdict that justified the successor, and the depth in the chain |
 
@@ -1207,6 +1229,16 @@ Five guards keep this from becoming a weakening channel:
 `--recontract` requires `--from-run`; `--max-recontracts` requires `--recontract`. Both are
 per-invocation only (never settable from a config file) — a persisted re-contract would re-point
 every run in the tree at one predecessor's defective contract.
+
+**Resuming a successor keeps its successor-ness.** `--from-run` cannot be combined with `--resume`,
+so a resumed successor gets none of that wiring from the command line — it comes back off the run-log
+header, which recorded it write-ahead at run start. Two things ride on that: the pre-flight negative
+control above still runs (with the same predecessor bar + defect as evidence), and a resume that has
+not yet frozen its contract — a crash before the freeze, or a Seal "revise" round — re-authors with
+the **repair brief** rather than a blank authoring pass. The brief is rebuilt from the header, so it
+carries the header's clipped copy of the predecessor bar and verdict; a log written before that field
+existed cannot be rebuilt at all, and goaly says so and points at a fresh
+`goaly --from-run <predecessor> --recontract` instead of silently degrading.
 
 ## The defect corpus (cross-run learning)
 
@@ -1474,8 +1506,9 @@ agent, judge, and approver all resolve to one model — the self-author + self-j
 genuinely independent skeptic. Beyond the warning, goaly acts on it: the approver
 [does not inherit `--model`](#the-sign-off-approver-does-not-inherit---model) where a distinct model
 is available, and an irreducible collapse is recorded as the typed
-[`SELF-JUDGED` degraded mode](#degraded-mode-self-judged) in the run header, the terminal summary
-and `goaly runs show`.
+[`SELF-JUDGED` degraded mode](#degraded-mode-self-judged-and-independence-unverified) in the run
+header, the terminal summary and `goaly runs show` — with `INDEPENDENCE-UNVERIFIED` for the wiring
+goaly cannot compare at all.
 
 **The second key can be a multi-vote panel.**
 

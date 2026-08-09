@@ -51,13 +51,20 @@ describe('the default run and the second key (issue #125)', () => {
     expect(degraded).toEqual({ kind: 'self-judged', generate: true, autonomous: true });
   });
 
-  it('`--model X` keeps the approver off the agent’s model, and the run is NOT degraded', async () => {
+  it('`--model X` keeps the approver off the agent’s model, but independence stays UNVERIFIED', async () => {
     const { models, degraded } = await resolve(['ship the parser', '--model', 'big-model']);
     expect(models.harness).toBe('big-model');
     expect(models.judge).toBe('big-model');
-    expect(models.approver).toBeUndefined(); // the claude provider's own model
+    expect(models.approver).toBeUndefined(); // the claude provider's own model — id unknown to goaly
     expect(models.approverIndependentFrom).toBe('big-model');
-    expect(degraded).toBeUndefined();
+    // goaly asked for a different model; it cannot confirm it GOT one (the provider's default could
+    // itself be `big-model`). Labelled as unverified — never as a verified independent second key.
+    expect(degraded).toEqual({
+      kind: 'independence-unverified',
+      model: 'big-model',
+      generate: true,
+      autonomous: true,
+    });
   });
 
   it('an explicit --approver-model is the independent second key (no label, no auto-swap)', async () => {

@@ -9,6 +9,7 @@ import { executeRun, nextStepHint } from './run-cmd';
 import { renderRunDetail } from './runs';
 import { drive, type DriverDeps } from '../driver/driver';
 import { FileRunLog } from '../runlog/file-runlog';
+import { RunProvenance } from '../runlog/runlog';
 import { readRun } from '../runlog/inspect';
 import { RunId } from '../domain/ids';
 import { recontractCommand } from '../followup/recontract';
@@ -164,6 +165,81 @@ describe('the CLI guards on a real run log', () => {
     const r = await dryRun(dir, ['--from-run', 'run-nope', '--recontract']);
     expect(r.code).toBe(2);
     expect(r.err).toContain('no such run');
+  });
+});
+
+/** Drive a successor run (a NEW bar over the kept tree) into `dir`, recording `provenance`. */
+async function seedSuccessorRun(
+  dir: string,
+  runId: string,
+  provenance: {
+    predecessorRunId: RunId;
+    predecessorContractHash: string;
+    verdict: string;
+    recontracts: number;
+    predecessorBar?: string;
+  },
+): Promise<void> {
+  const workspace = new FakeWorkspace('0000000', 'a fake diff');
+  await drive(
+    {
+      compiler: new FakeCompiler(makeFakeContract({ goal: GOAL, rubric: 'the corrected bar' })),
+      seal: new FakeSealGate({ kind: 'approve' }),
+      harness: new FakeHarness([{ postHash: '0000009' }], workspace),
+      makeLadder: () => new FakeVerifier([{ pass: true, confidence: 1, detail: 'green' }]),
+      approver: new FakeApprover([{ veto: false }]),
+      workspace,
+      clock: new ManualClock(),
+      budget: new ManualBudgetMeter(false),
+      runlog: new FileRunLog(path.join(dir, STATE_DIR, runId)),
+    },
+    makeConfig({ goal: GOAL }),
+    RunId.parse(runId),
+    { provenance: RunProvenance.parse(provenance) },
+  );
+}
+
+/**
+ * `--from-run` cannot be combined with `--resume`, so a resumed successor gets NO follow-up state
+ * from the command line. Both halves of it — the pre-flight negative control's wiring (the driver)
+ * and the compiler's repair brief (here) — must therefore come back off the persisted header.
+ */
+describe('a resumed --recontract successor keeps its follow-up state', () => {
+  let dir: string | null = null;
+  afterEach(async () => {
+    if (dir !== null) await rm(dir, { recursive: true, force: true });
+    dir = null;
+  });
+
+  const PREDECESSOR_BAR = 'Previous frozen contract (hash abc) — DEFECTIVE:\n  bar:\n    1. [deterministic] node old.js';
+
+  it('rebuilds the repair brief from the header when the predecessor bar was recorded', async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'goaly-recontract-'));
+    await seedSuccessorRun(dir, 'run-succ-bar', {
+      predecessorRunId: RunId.parse('run-pred'),
+      predecessorContractHash: contract.contractHash,
+      verdict: DEFECTIVE.reason,
+      recontracts: 1,
+      predecessorBar: PREDECESSOR_BAR,
+    });
+    const r = await dryRun(dir, ['--resume', 'run-succ-bar']);
+    expect(r.code).toBe(0);
+    expect(r.err).not.toContain('repair brief');
+  });
+
+  it('says so loudly when the log predates the recorded bar and the brief cannot be rebuilt', async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'goaly-recontract-'));
+    await seedSuccessorRun(dir, 'run-succ-nobar', {
+      predecessorRunId: RunId.parse('run-pred'),
+      predecessorContractHash: contract.contractHash,
+      verdict: DEFECTIVE.reason,
+      recontracts: 1,
+    });
+    const r = await dryRun(dir, ['--resume', 'run-succ-nobar']);
+    expect(r.code).toBe(0);
+    // Degrading in silence is the bug; naming the limit and the fresh successor command is the fix.
+    expect(r.err).toContain('repair brief');
+    expect(r.err).toContain(recontractCommand('run-pred'));
   });
 });
 

@@ -34,6 +34,39 @@ const sameModel = (a: string | undefined, b: string | undefined): boolean => a =
 const label = (m: string | undefined): string => m ?? 'the tool default';
 
 /**
+ * How independent one role is FROM the Sign-off approver. Three states, not two — because goaly can
+ * only ever compare the models it was ASKED for, and one wiring leaves it comparing a known id
+ * against an id it cannot resolve:
+ *
+ *  - `collapsed`   — the two resolved to the SAME model. Observed, not inferred.
+ *  - `independent` — the two resolved to DIFFERENT KNOWN models (or different vendors entirely).
+ *  - `unverified`  — the approver was defaulted to the LLM provider's OWN model (issue #125's
+ *    approver-independence default) and goaly cannot resolve that provider's default id. `X !==
+ *    undefined` is then not evidence of anything: if the provider's default IS X, the roles have
+ *    collapsed and a strict-equality check reports independence anyway. This is exactly the
+ *    silent-degradation the third state exists to make impossible.
+ */
+type Independence = 'collapsed' | 'independent' | 'unverified';
+
+/**
+ * True when the approver was left on the LLM provider's own default model by the issue-#125
+ * independence default: `approver` is unset AND `approverIndependentFrom` records the agent model it
+ * declined. That pairing is what marks "goaly asked for a different model but cannot confirm it got
+ * one" — an ordinary `undefined` approver (no `--model` in play at all) is a plain shared default and
+ * still compares equal, so it stays a `collapsed`.
+ */
+function approverOnUnresolvableDefault(resolved: ResolvedModels): boolean {
+  return resolved.approver === undefined && resolved.approverIndependentFrom !== undefined;
+}
+
+/** Compare one role's model against the approver's, honestly — including "cannot tell". */
+function independenceFrom(role: string | undefined, resolved: ResolvedModels): Independence {
+  if (sameModel(role, resolved.approver)) return 'collapsed';
+  if (approverOnUnresolvableDefault(resolved)) return 'unverified';
+  return 'independent';
+}
+
+/**
  * Run-shape context (follow-on H) that lets the independence check ESCALATE for the most
  * deadlock-prone wiring: `--generate --autonomous`, where the model both self-authors its bar AND
  * self-judges it with no human in the loop. Both default to false so a caller that omits them gets
@@ -82,25 +115,35 @@ function collapses(
   harness: HarnessChoice,
   llmProvider: LlmProviderChoice,
   context: IndependenceContext,
-): { judgeApprover: boolean; workerApprover: boolean } {
-  const panelIndependent = panelIsModelIndependent(context.approverModels);
+): { judgeApprover: Independence; workerApprover: Independence } {
+  if (panelIsModelIndependent(context.approverModels)) {
+    return { judgeApprover: 'independent', workerApprover: 'independent' };
+  }
   return {
-    judgeApprover: !panelIndependent && sameModel(resolved.judge, resolved.approver),
+    judgeApprover: independenceFrom(resolved.judge, resolved),
+    // A worker on a DIFFERENT vendor family than the approver's provider cannot share its model at
+    // all, so that pair is independent without needing to resolve any default id.
     workerApprover:
-      !panelIndependent &&
-      harnessFamily(harness) === llmProvider &&
-      sameModel(resolved.harness, resolved.approver),
+      harnessFamily(harness) === llmProvider ? independenceFrom(resolved.harness, resolved) : 'independent',
   };
 }
 
 /**
- * The typed degraded-mode label (issue #125) for a resolved wiring: present ONLY on a FULL collapse —
- * the coding agent, the LLM judge rung and the Sign-off approver all on one model. That is the
- * configuration where the two keys are drawn from a single distribution, so a DONE it produces is
- * labelled `self-judged` in the run header, the terminal summary and `goaly runs show` instead of
- * only in a startup WARN nobody is present to read. A partial collapse (judge↔approver only, say)
- * still gets its advisory warning below but is NOT recorded as a degraded run — the second key is
- * still a different model than the one that wrote the code.
+ * The typed degraded-mode label (issue #125) for a resolved wiring: present when BOTH pairs — the
+ * judge rung and the coding agent, each against the Sign-off approver — fail to be established as
+ * independent. That is the configuration where the two keys may be drawn from a single distribution,
+ * so a DONE it produces is labelled in the run header, the terminal summary and `goaly runs show`
+ * instead of only in a startup WARN nobody is present to read. A partial collapse (judge↔approver
+ * only, say) still gets its advisory warning below but is NOT recorded as a degraded run — the second
+ * key is still a different model than the one that wrote the code.
+ *
+ * Two kinds, and the distinction is load-bearing:
+ *  - `self-judged` — both pairs OBSERVED to be the same model (goaly compared two known ids).
+ *  - `independence-unverified` — at least one pair could not be established either way, because the
+ *    approver sits on the provider's own unresolvable default. goaly asked for a distinct second key
+ *    and cannot confirm it got one. Before this, that wiring produced NO label and NO warning at all,
+ *    which reads as "verified independent" — strictly worse than the loud self-judged label it
+ *    replaced. An unverifiable claim is never reported as a verified one.
  *
  * Pure: it labels, it never gates. Nothing here can promote or block a DONE.
  */
@@ -111,13 +154,71 @@ export function degradedMode(
   context: IndependenceContext = {},
 ): DegradedMode | undefined {
   const c = collapses(resolved, harness, llmProvider, context);
-  if (!c.judgeApprover || !c.workerApprover) return undefined;
+  if (c.judgeApprover === 'independent' || c.workerApprover === 'independent') return undefined;
+  const verified = c.judgeApprover === 'collapsed' && c.workerApprover === 'collapsed';
+  // `self-judged` names the model every role shares; `independence-unverified` names the model the
+  // agent + judge share — the one the approver's unresolvable default might turn out to be.
+  const model = verified ? resolved.approver : resolved.approverIndependentFrom;
   return {
-    kind: 'self-judged',
-    ...(resolved.approver !== undefined ? { model: resolved.approver } : {}),
+    kind: verified ? 'self-judged' : 'independence-unverified',
+    ...(model !== undefined ? { model } : {}),
     generate: context.generate === true,
     autonomous: context.autonomous === true,
   };
+}
+
+/**
+ * The advisory for a pair goaly could NOT establish either way: the role's model is known, the
+ * approver's is the provider's own default, and goaly has no way to resolve that default's id. It
+ * says what is true — the check could not be made — and names the flag that makes it checkable.
+ * Deliberately distinct wording from the observed-collapse warnings so the two are never conflated.
+ */
+function unverifiedWarning(role: string, resolved: ResolvedModels): string {
+  const agent = label(resolved.approverIndependentFrom);
+  return (
+    `INDEPENDENCE UNVERIFIED: ${role} runs on ${agent}, and the Sign-off approver was defaulted to ` +
+    "the LLM provider's OWN model, whose id goaly cannot resolve — so it CANNOT confirm the two are " +
+    `different models. If that provider default is ${agent}, the two keys share one model. Pass ` +
+    '--approver-model <a model you know differs> (or --approver-models) to make the second key verifiable.'
+  );
+}
+
+/**
+ * Follow-on H: in `--generate --autonomous` the model self-authors its bar AND self-judges it. When
+ * the coding agent, the judge rung, AND the Sign-off approver all collapse onto ONE model, that is
+ * the self-author + self-judge deadlock gpt-oss hit (a compiling 484-LOC server that `completed`
+ * with no diff against its own judge rung): the model can author a bar it then cannot satisfy and
+ * cannot recognize as satisfied, so it stalls. Escalated ABOVE the plain advisories — it is the most
+ * deadlock-prone setup, and the two-key guarantee (invariant #3) is only nominal here.
+ *
+ * It escalates on an UNVERIFIED pair too, in its own wording: "goaly cannot rule this out" is the
+ * honest claim there, and staying silent about the most deadlock-prone wiring because the check was
+ * unmakeable is the failure mode this whole third state exists to remove. Returns `undefined` when
+ * either pair is established independent.
+ */
+function selfJudgeEscalation(
+  resolved: ResolvedModels,
+  judgeApprover: Independence,
+  workerApprover: Independence,
+): string | undefined {
+  if (judgeApprover === 'independent' || workerApprover === 'independent') return undefined;
+  if (judgeApprover === 'collapsed' && workerApprover === 'collapsed') {
+    return (
+      `SELF-JUDGE RISK (--generate --autonomous): the coding agent, the LLM judge rung, AND the ` +
+      `Sign-off approver all resolve to the same model (${label(resolved.approver)}) — the model ` +
+      'self-authors its bar and self-judges it with no human in the loop, the most deadlock-prone ' +
+      'setup (it can stall on a bar it cannot satisfy or recognize as satisfied). Strongly consider ' +
+      '--approver-model (and/or --judge-model) on a DIFFERENT model/provider so the second key is a ' +
+      'genuinely independent skeptic.'
+    );
+  }
+  return (
+    `SELF-JUDGE RISK, UNVERIFIED (--generate --autonomous): the coding agent and the LLM judge rung ` +
+    `run on ${label(resolved.approverIndependentFrom)}, and the Sign-off approver was defaulted to ` +
+    "the LLM provider's OWN model, whose id goaly cannot resolve — so it CANNOT rule out that all " +
+    'three are one model, the self-author + self-judge deadlock, with no human in the loop. Pass ' +
+    '--approver-model on a model you know differs (or --approver-models) to make it verifiable.'
+  );
 }
 
 /**
@@ -139,39 +240,31 @@ export function independenceWarnings(
     context,
   );
 
-  // Follow-on H: in `--generate --autonomous` the model self-authors its bar AND self-judges it. When
-  // the coding agent, the judge rung, AND the Sign-off approver all collapse onto ONE model, that is
-  // the self-author + self-judge deadlock gpt-oss hit (a compiling 484-LOC server that `completed`
-  // with no diff against its own judge rung): the model can author a bar it then cannot satisfy and
-  // cannot recognize as satisfied, so it stalls. Escalate it ABOVE the plain advisories — it is the
-  // most deadlock-prone setup, and the two-key guarantee (invariant #3) is only nominal here.
-  if (context.generate === true && context.autonomous === true && judgeApproverCollapse && workerApproverCollapse) {
-    warnings.push(
-      `SELF-JUDGE RISK (--generate --autonomous): the coding agent, the LLM judge rung, AND the ` +
-        `Sign-off approver all resolve to the same model (${label(resolved.approver)}) — the model ` +
-        'self-authors its bar and self-judges it with no human in the loop, the most deadlock-prone ' +
-        'setup (it can stall on a bar it cannot satisfy or recognize as satisfied). Strongly consider ' +
-        '--approver-model (and/or --judge-model) on a DIFFERENT model/provider so the second key is a ' +
-        'genuinely independent skeptic.',
-    );
+  if (context.generate === true && context.autonomous === true) {
+    const escalation = selfJudgeEscalation(resolved, judgeApproverCollapse, workerApproverCollapse);
+    if (escalation !== undefined) warnings.push(escalation);
   }
 
   // The judge rung and the approver always run on the same llm-provider, so they share one model
   // whenever their resolved models match — the second key then inherits the first key's blind spots.
-  if (judgeApproverCollapse) {
+  if (judgeApproverCollapse === 'collapsed') {
     warnings.push(
       `the LLM judge rung and the Sign-off approver run on the same model (${label(resolved.approver)}); ` +
         'pass --approver-model to keep the two keys independent',
     );
+  } else if (judgeApproverCollapse === 'unverified') {
+    warnings.push(unverifiedWarning('the LLM judge rung', resolved));
   }
 
   // The worker and the approver collapse only when they are the same vendor family AND model — then
   // the agent grading the work is effectively the agent that wrote it.
-  if (workerApproverCollapse) {
+  if (workerApproverCollapse === 'collapsed') {
     warnings.push(
       `the coding agent and the Sign-off approver share the same model (${label(resolved.approver)}); ` +
         'pass --approver-model (or a different --llm-provider) so the approver stays an independent skeptic',
     );
+  } else if (workerApproverCollapse === 'unverified') {
+    warnings.push(unverifiedWarning('the coding agent', resolved));
   }
 
   // A multi-vote approver panel (issue #84) on ONE model is variance reduction, not perspective
@@ -179,7 +272,7 @@ export function independenceWarnings(
   // it only when the panel is actually multi-vote AND it shares a model with the judge or the worker
   // (a panel on a genuinely separate --approver-model already is the independent second key).
   const quorum = context.approverQuorum ?? 1;
-  if (quorum > 1 && (judgeApproverCollapse || workerApproverCollapse)) {
+  if (quorum > 1 && (judgeApproverCollapse === 'collapsed' || workerApproverCollapse === 'collapsed')) {
     warnings.push(
       `the Sign-off approver runs a ${quorum}-reviewer quorum on a SINGLE model ` +
         `(${label(resolved.approver)}) that it shares with the judge rung and/or the coding agent — ` +

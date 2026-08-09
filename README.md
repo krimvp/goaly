@@ -63,7 +63,9 @@ COMPILE ──► SEAL ──► setup + pre-flight ──► ┌─────
   *agent's* model; the approver defaults to a **different** one wherever the provider offers it. If
   the agent, the judge rung and the approver still collapse onto one model, the run is recorded as
   a typed `SELF-JUDGED` degraded mode in the run header, the terminal summary and `goaly runs show`
-  — so a DONE nobody independently reviewed is labelled everywhere it is reported.
+  — so a DONE nobody independently reviewed is labelled everywhere it is reported. And when goaly
+  cannot *resolve* the approver's model to compare it at all (the provider's own default), the run is
+  labelled `INDEPENDENCE-UNVERIFIED` rather than passed off as independent.
 - **The control flow has zero LLM calls.** A pure reducer owns all policy; everything stochastic
   hides behind narrow interfaces at four seams.
 - **Every run is crash-safe and resumable.** A write-ahead log under `.goaly/<runId>/` makes runs
@@ -115,7 +117,7 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Satisfiability critic](docs/reference.md#the-satisfiability-critic-false-red-guard) | on by default; `--no-satisfiability-critic` | The mirror of red-teaming: one call before the freeze asks whether a **correct** implementation could still FAIL the authored bar — an unsatisfiable frozen bar costs the whole run. |
 | [Contract dry run](docs/reference.md#the-contract-dry-run-compile-time-positive-control) | on by default; `--contract-dry-run false` | The positive control, by **execution** rather than opinion: before the freeze, a throwaway reference implementation runs against the authored bar in a scratch copy. Red ⇒ the bar is refused and re-authored (the author gets a whitelist summary of the failure — frozen-file frames plus one bounded assertion line — never the runner's output, which quotes the reference). The reference never touches your tree, and the scratch obeys `--sandbox`. |
 | [Approver panels](docs/reference.md#hardening-against-reward-hacking) | `--approver-quorum`, `--approver-models` | Sign-off as a refute-first multi-vote panel, optionally across distinct models. |
-| [Key independence](docs/reference.md#the-sign-off-approver-does-not-inherit---model) | `--approver-model` | The approver never inherits the agent's `--model` where a distinct one exists; an irreducible collapse is labelled `SELF-JUDGED` in the header, summary and `runs show`. |
+| [Key independence](docs/reference.md#the-sign-off-approver-does-not-inherit---model) | `--approver-model` | The approver never inherits the agent's `--model` where a distinct one exists; an irreducible collapse is labelled `SELF-JUDGED`, and an unresolvable one `INDEPENDENCE-UNVERIFIED`, in the header, summary and `runs show`. |
 | [Sandboxing](docs/reference.md#sandboxing) | `--sandbox`, `--sandbox-net` | OS-jail the agent and verifier (bwrap / firejail / container), with egress allowlists. |
 | [Operator control](docs/reference.md#operator-control-watch-steer-extend) | `--resume`, `--note` | Watch live, steer with notes, raise caps mid-run — never the frozen bar. |
 | [Follow-ups](docs/reference.md#following-up-after-a-run-ends---from-run) | `--from-run` | A new re-verified goal that knows what the last run did. |

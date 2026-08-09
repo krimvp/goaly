@@ -80,6 +80,52 @@ describe('independenceWarnings', () => {
     });
   });
 
+  describe('an UNRESOLVABLE approver default is never read as independence (issue #125 follow-up)', () => {
+    // `--model X` + a provider with its own default model: the approver DECLINES to inherit X and is
+    // left `undefined` ("the provider's own default"). goaly cannot resolve that default's id, so
+    // `X !== undefined` proves nothing — if the default IS X, all three roles are one model.
+    const unresolved = () => resolveModels({ model: 'claude-x' }, { llmProvider: 'claude' });
+
+    it('warns that the judge↔approver independence is UNVERIFIED rather than staying silent', () => {
+      const w = independenceWarnings(unresolved(), 'claude', 'claude');
+      expect(w.length).toBeGreaterThan(0);
+      const note = w.find((s) => s.includes('UNVERIFIED') && s.includes('judge'));
+      expect(note).toBeDefined();
+      expect(note).toContain('claude-x');
+      expect(note).toContain('--approver-model');
+    });
+
+    it('warns that the coding agent↔approver independence is UNVERIFIED too', () => {
+      const w = independenceWarnings(unresolved(), 'claude', 'claude');
+      expect(w.some((s) => s.includes('UNVERIFIED') && s.includes('coding agent'))).toBe(true);
+    });
+
+    it('escalates the --generate --autonomous case as an UNVERIFIED self-judge risk', () => {
+      const w = independenceWarnings(unresolved(), 'claude', 'claude', {
+        generate: true,
+        autonomous: true,
+      });
+      expect(w[0]).toContain('SELF-JUDGE RISK');
+      expect(w[0]).toContain('UNVERIFIED');
+    });
+
+    it('says nothing about unverified independence once --approver-model names a real model', () => {
+      const resolved = resolveModels(
+        { model: 'claude-x', approverModel: 'other' },
+        { llmProvider: 'claude' },
+      );
+      expect(independenceWarnings(resolved, 'claude', 'claude')).toEqual([]);
+    });
+
+    it('a genuinely independent --approver-models panel is not "unverified" either', () => {
+      const resolved = resolveModels(
+        { model: 'claude-x', approverModels: ['a', 'b'] },
+        { llmProvider: 'claude' },
+      );
+      expect(independenceWarnings(resolved, 'claude', 'claude', { approverModels: ['a', 'b'] })).toEqual([]);
+    });
+  });
+
   describe('--approver-quorum on one model = variance reduction (issue #84)', () => {
     it('notes a multi-vote panel that shares a model with the judge/worker', () => {
       const resolved = resolveModels({ model: 'claude-x' });
@@ -175,9 +221,35 @@ describe('degradedMode (issue #125): the typed self-judged label', () => {
     expect(degradedMode(resolved, 'claude', 'claude')).toBeUndefined();
   });
 
-  it('is ABSENT when the approver auto-declines to inherit --model (issue #125 part 1)', () => {
+  it('labels the auto-declined approver as UNVERIFIED, not as an independent second key', () => {
+    // Issue #125 part 1 leaves the approver on the provider's OWN default model, whose id goaly
+    // cannot resolve. That is not evidence of independence — if the default is `claude-x`, every
+    // role is one model and the old code reported nothing at all.
     const resolved = resolveModels({ model: 'claude-x' }, { llmProvider: 'claude' });
-    expect(degradedMode(resolved, 'claude', 'claude', { generate: true, autonomous: true })).toBeUndefined();
+    const d = degradedMode(resolved, 'claude', 'claude', { generate: true, autonomous: true });
+    expect(d).toEqual({
+      kind: 'independence-unverified',
+      model: 'claude-x',
+      generate: true,
+      autonomous: true,
+    });
+    expect(DegradedMode.safeParse(d).success).toBe(true);
+    // It must never be confused with the VERIFIED full collapse.
+    expect(d?.kind).not.toBe('self-judged');
+    expect(degradedModeTag(d!)).toBe('INDEPENDENCE-UNVERIFIED');
+    const detail = degradedModeDetail(d!);
+    expect(detail).toContain('claude-x');
+    expect(detail).toContain('--approver-model');
+  });
+
+  it('stays ABSENT when the approver default cannot collide with the worker (different vendor)', () => {
+    // `--harness claude --llm-provider codex --model X`: the approver runs on codex's own default, so
+    // the worker↔approver pair is genuinely independent — only the judge↔approver pair is unverified.
+    const resolved = resolveModels({ model: 'claude-x' }, { llmProvider: 'codex' });
+    expect(degradedMode(resolved, 'claude', 'codex')).toBeUndefined();
+    expect(independenceWarnings(resolved, 'claude', 'codex').some((s) => s.includes('UNVERIFIED'))).toBe(
+      true,
+    );
   });
 
   it('is ABSENT on a PARTIAL collapse (judge↔approver only — the worker is a different vendor)', () => {

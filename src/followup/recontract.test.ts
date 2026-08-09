@@ -8,6 +8,7 @@ import {
   DEFAULT_MAX_RECONTRACTS,
   planRecontract,
   recontractCommand,
+  recontractSeedFromProvenance,
 } from './recontract';
 import {
   FakeHarness,
@@ -205,6 +206,43 @@ describe('the re-authoring seed', () => {
     expect(decision.plan.seed).not.toContain(AGENT_TEXT);
     expect(decision.plan.seed).not.toContain(SIGNATURE);
     expect(decision.plan.provenance.verdict).not.toContain(AGENT_TEXT);
+  });
+});
+
+describe('the re-authoring seed survives --resume (rebuilt from the header provenance)', () => {
+  it('reconstructs the repair brief from provenance alone — same goal, bar, and fenced defect', async () => {
+    const prior = await predecessor('run-seed-resume', DEFECTIVE);
+    const decision = planRecontract(prior);
+    if (!decision.ok) throw new Error('expected an eligible predecessor');
+
+    // `--from-run` cannot be combined with `--resume`, so a resumed successor that still has to
+    // COMPILE has only the persisted header to rebuild its brief from.
+    const rebuilt = recontractSeedFromProvenance(contract.goal, decision.plan.provenance);
+    expect(rebuilt).toBeDefined();
+    expect(rebuilt).toContain(contract.goal);
+    expect(rebuilt).toContain(contract.contractHash);
+    expect(rebuilt).toContain('verify/db.test.ts');
+    expect(rebuilt).toContain(DEFECTIVE.reason);
+    expect(rebuilt).toContain('REPAIR');
+    expect(rebuilt!.toLowerCase()).toContain('never weaken');
+    // Still fenced: the adjudicator's report read worker-influenced output either way.
+    expect(rebuilt!.slice(0, rebuilt!.indexOf(DEFECTIVE.reason))).toMatch(
+      /<<UNTRUSTED ADJUDICATION [0-9a-f]+>>/,
+    );
+    // …and still carries no worker-supplied text.
+    expect(rebuilt).not.toContain(AGENT_TEXT);
+  });
+
+  it('returns undefined for a header written before the predecessor bar was recorded', () => {
+    const rebuilt = recontractSeedFromProvenance('some goal', {
+      predecessorRunId: RunId.parse('run-old'),
+      predecessorContractHash: contract.contractHash,
+      verdict: 'the bar was unsatisfiable',
+      recontracts: 1,
+    });
+    // No bar to show ⇒ no brief. A "repair the previous bar" instruction that never shows the bar
+    // would be worse than the plain authoring prompt, so the caller warns instead.
+    expect(rebuilt).toBeUndefined();
   });
 });
 

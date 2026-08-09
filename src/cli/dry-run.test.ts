@@ -50,12 +50,16 @@ describe('renderResolvedConfig', () => {
     expect(collapsed).toMatch(/degraded mode\s+SELF-JUDGED/);
     expect(collapsed).toContain('--approver-model <other>');
 
-    // --model names the AGENT's model; the approver declines to inherit it, so no degraded mode.
-    const independent = await render([
+    // --model names the AGENT's model; the approver declines to inherit it — but it lands on the
+    // provider's own default, whose id goaly cannot resolve, so the row says UNVERIFIED (never
+    // "independent") and the run is labelled INDEPENDENCE-UNVERIFIED rather than silently clean.
+    const unverified = await render([
       'run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'claude', '--model', 'big-model',
     ]);
-    expect(independent).toContain("kept INDEPENDENT of the agent's --model big-model");
-    expect(independent).not.toContain('degraded mode');
+    expect(unverified).toContain("declined to inherit the agent's --model big-model");
+    expect(unverified).toContain('independence UNVERIFIED');
+    expect(unverified).not.toContain('kept INDEPENDENT');
+    expect(unverified).toMatch(/degraded mode\s+INDEPENDENCE-UNVERIFIED/);
 
     // An explicit second-key model is shown as-is.
     const explicit = await render([

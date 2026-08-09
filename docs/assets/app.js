@@ -111,7 +111,7 @@
     },
     signoff: {
       t: "SIGN-OFF — veto-only",
-      d: "Runs only on a green check. An independent reviewer can veto, never promote a red — the second key for DONE. Independence is wired, not assumed: the approver does not inherit the agent's --model where the provider offers another one, and a run whose agent, judge rung and approver still collapse onto one model is labelled SELF-JUDGED (degraded) in the run header, the terminal summary and `goaly runs show`.",
+      d: "Runs only on a green check. An independent reviewer can veto, never promote a red — the second key for DONE. Independence is wired, not assumed: the approver does not inherit the agent's --model where the provider offers another one, a run whose agent, judge rung and approver still collapse onto one model is labelled SELF-JUDGED (degraded) in the run header, the terminal summary and `goaly runs show`, and one where that comparison is impossible (the approver on the provider's own unresolvable default) is labelled INDEPENDENCE-UNVERIFIED rather than reported as independent.",
       pills: ['<span class="pill fail">veto-only</span>', '<span class="pill violet">--approver-model</span>'],
     },
     decide: {

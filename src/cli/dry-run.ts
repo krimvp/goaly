@@ -223,12 +223,16 @@ function keyIndependenceRows(parsed: ParsedArgs, config: RunConfig): Row[] {
     approverQuorum: config.approver.quorum,
     ...(models.approverModels !== undefined ? { approverModels: models.approverModels } : {}),
   });
+  // Honest wording: declining to inherit `--model X` is a REQUEST for a distinct second key, not a
+  // confirmed one — goaly cannot resolve the provider's own default model id, so it must not print
+  // "kept INDEPENDENT" for a pair it never compared.
   const approver =
     models.approverModels !== undefined
       ? `panel: ${models.approverModels.join(', ')}`
       : (models.approver ?? "(the provider's own default)") +
         (models.approverIndependentFrom !== undefined
-          ? ` — kept INDEPENDENT of the agent's --model ${models.approverIndependentFrom}`
+          ? ` — declined to inherit the agent's --model ${models.approverIndependentFrom}; ` +
+            'independence UNVERIFIED (goaly cannot resolve the provider default)'
           : '');
   return [
     ['sign-off model (2nd key)', approver],
@@ -237,8 +241,11 @@ function keyIndependenceRows(parsed: ParsedArgs, config: RunConfig): Row[] {
       : ([
           [
             'degraded mode',
-            `${degradedModeTag(degraded)} — agent, judge rung and approver share one model; ` +
-              'pass --approver-model <other> for an independent second key',
+            `${degradedModeTag(degraded)} — ${
+              degraded.kind === 'independence-unverified'
+                ? "the approver's model could not be compared to the agent's/judge's"
+                : 'agent, judge rung and approver share one model'
+            }; pass --approver-model <other> for an independent second key`,
           ],
         ] as Row[])),
   ];

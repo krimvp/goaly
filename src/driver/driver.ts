@@ -46,6 +46,7 @@ import { classifyContractFault } from './preflight-soundness';
 import { appendAdjudicatedDefect, type DefectCorpus } from '../defects/corpus';
 import { Baseline, recordCheckpoint, type CheckpointDeps } from './baseline';
 import { logEvent } from './log-event';
+import { buildOutcome } from './outcome';
 
 // Re-exported from {@link ./baseline} (the checkpoint primitive + the Baseline diff-scope module live
 // there now); kept on the Driver's public surface for embedders and the existing index.ts exports.
@@ -226,6 +227,8 @@ export async function drive(
   let ladder: Verifier | null = null;
   let contractHash: ContractHash | null = null;
   let pendingNote: string | null = null;
+  /** The run's EFFECTIVE successor provenance — see {@link Bootstrapped.provenance}. */
+  let provenance: RunProvenance | undefined;
   const log = deps.logger ?? noopLogger;
   const llmMeter = deps.llmMeter ?? new LlmTokenMeter();
   // Telemetry (pure observability seam): a fire-and-forget sink for lifecycle datapoints. Strictly
@@ -286,7 +289,7 @@ export async function drive(
   // ABORTED like every other seam — a disk-full/corrupt-log throw here used to escape `drive()`
   // entirely (the only rejection path left), reaching the caller as a raw stack trace.
   try {
-    ({ state, commands, seq, contractHash, ladder, pendingNote } = await bootstrap(
+    ({ state, commands, seq, contractHash, ladder, pendingNote, provenance } = await bootstrap(
       deps, config, runId, options, baseline, log,
     ));
   } catch (e) {
@@ -375,7 +378,7 @@ export async function drive(
               seq,
               config.resumeBestOfIncomplete,
             )
-          : await perform(command, deps, ladder, llmMeter, baseline, runId, options.provenance);
+          : await perform(command, deps, ladder, llmMeter, baseline, runId, provenance);
       if (performed.seq !== undefined) seq = performed.seq;
       const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge
       if (performed.ladder !== undefined) ladder = performed.ladder;
@@ -917,13 +920,25 @@ type Bootstrapped = {
   ladder: Verifier | null;
   /** Un-consumed operator note (ADR 0012) to append to the NEXT agent turn's prompt; null if none. */
   pendingNote: string | null;
+  /**
+   * The successor provenance this run ACTUALLY has (issue #117): `options` on a fresh run, re-read
+   * from the header on `--resume` (see {@link bootstrap}). Everything after bootstrap must use THIS,
+   * never `options.provenance`, or a resumed successor loses its pre-flight negative control.
+   */
+  provenance: RunProvenance | undefined;
 };
 
 /**
- * The pre-loop IO in one guarded place: on `--resume`, fold the log, rebuild the ladder, re-point
- * the baselines, and re-arm the budget meter with prior spend; on a fresh run, write the header.
- * Called inside `drive()`'s bootstrap try/catch so any throw here (corrupt log, disk full) resolves
- * to a typed ABORTED rather than the last remaining rejection path out of `drive()`.
+ * The pre-loop IO in one guarded place: on `--resume`, fold the log, rebuild the ladder, re-point the
+ * baselines, re-arm the budget meter with prior spend, and RE-ADOPT the successor provenance from the
+ * header; on a fresh run, write the header. Called inside `drive()`'s bootstrap try/catch so any throw
+ * here (corrupt log, disk full) resolves to a typed ABORTED rather than a rejection out of `drive()`.
+ *
+ * Successor provenance (issue #117) can ONLY arrive from a fresh `--from-run … --recontract` (the CLI
+ * rejects `--from-run` with `--resume`), but it IS in the header — so, like the `baseline` pin below,
+ * a resume reads it back from there. Without that, a resumed re-contract reached `PREPARE_WORKSPACE`
+ * with no provenance and the GREEN negative control (what keeps a re-contract from becoming a
+ * weakening channel) returned early without running anything and without saying so.
  */
 async function bootstrap(
   deps: DriverDeps,
@@ -941,7 +956,8 @@ async function bootstrap(
     const startedAt = deps.clock.now();
     const runStartBaseline = deps.workspace.currentBaseline();
     await deps.runlog.writeHeader(freshRunHeader(runId, startedAt, config, runStartBaseline, options));
-    return { state, commands, seq: 0, contractHash: null, ladder: null, pendingNote: null };
+    const fresh = { seq: 0, contractHash: null, ladder: null, pendingNote: null };
+    return { state, commands, ...fresh, provenance: options.provenance };
   }
 
   const resumed = await resume(deps, config, runId, options.extend);
@@ -984,6 +1000,16 @@ async function bootstrap(
         : {}),
     });
   }
+  // Re-adopt the successor provenance the header recorded (issue #117). An `options` provenance still
+  // wins (the log is the FALLBACK, not an override), though the CLI can never supply one on a resume.
+  // Logged loudly — the re-contract negative control is a real gate, so its wiring is never silent.
+  const provenance = options.provenance ?? resumed.provenance;
+  if (options.provenance === undefined && resumed.provenance !== undefined) {
+    log.info('resume: re-adopted the successor (--recontract) provenance from the run log header', {
+      predecessorRunId: resumed.provenance.predecessorRunId,
+      recontracts: resumed.provenance.recontracts,
+    });
+  }
   return {
     state: resumed.state,
     commands: resumed.commands,
@@ -991,6 +1017,7 @@ async function bootstrap(
     contractHash: resumed.contractHash,
     ladder: resumed.contract !== null ? deps.makeLadder(resumed.contract) : null,
     pendingNote: resumed.pendingNote,
+    provenance,
   };
 }
 
@@ -1031,6 +1058,8 @@ type Resumed = {
   priorSpend: TokenUsage | null;
   /** Un-consumed operator note from the replay fold (ADR 0012); null when none is pending. */
   pendingNote: string | null;
+  /** Header successor provenance (`--recontract`, issue #117); see {@link bootstrap} for why. */
+  provenance: RunProvenance | undefined;
 };
 
 /**
@@ -1057,6 +1086,7 @@ async function resume(
       headerBaseline: null,
       priorSpend: null,
       pendingNote: null,
+      provenance: undefined,
     };
   }
 
@@ -1105,6 +1135,7 @@ async function resume(
     headerBaseline: stored.header.baseline ?? null,
     priorSpend,
     pendingNote,
+    provenance: stored.header.provenance,
   };
 }
 
@@ -1119,32 +1150,3 @@ function hasExtension(x: RunExtension): boolean {
   );
 }
 
-function buildOutcome(state: OrchestratorState, runId: RunId): RunOutcome {
-  switch (state.tag) {
-    case 'DONE':
-      return {
-        status: 'DONE',
-        iterations: state.iterations,
-        contractHash: state.contractHash,
-        runId,
-      };
-    case 'FAILED':
-      return {
-        status: 'FAILED',
-        reason: state.reason,
-        iterations: state.iterations,
-        contractHash: state.contractHash ?? null,
-        runId,
-      };
-    case 'ABORTED':
-      return {
-        status: 'ABORTED',
-        reason: state.reason,
-        iterations: state.iterations,
-        contractHash: state.contractHash ?? null,
-        runId,
-      };
-    default:
-      throw new Error(`buildOutcome called on non-terminal state ${state.tag}`);
-  }
-}

@@ -8,7 +8,11 @@ import {
   isHarnessChoice,
   type ParsedArgs,
 } from './args';
-import { planRecontract, recontractCommand } from '../followup/recontract';
+import {
+  planRecontract,
+  recontractCommand,
+  recontractSeedFromProvenance,
+} from '../followup/recontract';
 import type { RunProvenance } from '../runlog/runlog';
 import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
@@ -302,6 +306,11 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
   // overlays + this invocation's explicit extension), NOT this invocation's re-parsed defaults — so
   // the budget meter, best-of wiring, etc. match exactly what the resume fold will compute.
   let runConfig = followup.config;
+  // The compile-phase authoring seed. On a fresh `--from-run` run it comes from the resolution
+  // above; on `--resume` of a `--recontract` successor it is REBUILT from the header provenance (see
+  // below) — the same root cause as the driver's dropped provenance: follow-up state only ever
+  // arrived from the fresh CLI invocation, and `--from-run` cannot be combined with `--resume`.
+  let followupSeed = followup.followupSeed;
   const resumeRunId = parsed.resumeRunId; // stable narrow (parsed is rebound on harness adoption)
   if (resumeRunId !== undefined) {
     const stateDir = path.join(parsed.workspace, STATE_DIR);
@@ -369,6 +378,26 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       }
       const effective = extendedRunConfig(stored.header.config, stored.entries);
       runConfig = extend !== undefined ? applyRunExtension(effective, extend) : effective;
+
+      // Re-contract successor (issue #117): rebuild the REPAIR BRIEF from the header's provenance.
+      // It only matters when this resume still has to COMPILE (a crash before the contract was
+      // persisted, or a Seal "revise" round); past the freeze nothing re-authors and the seed is
+      // inert. Without it such a recompile authored a fresh bar with the adjudicated defect out of
+      // view — the successor quietly degrading into an ordinary authoring pass over the kept tree.
+      const headerProvenance = stored.header.provenance;
+      if (headerProvenance !== undefined) {
+        const rebuilt = recontractSeedFromProvenance(effective.goal, headerProvenance);
+        if (rebuilt !== undefined) {
+          followupSeed = rebuilt;
+        } else {
+          io.err(
+            `goaly: --resume: this run is a --recontract successor of ` +
+              `${headerProvenance.predecessorRunId}, but its log predates the recorded predecessor ` +
+              `bar — a re-compile on this resume would re-author the bar without the repair brief. ` +
+              `Prefer a fresh: ${recontractCommand(headerProvenance.predecessorRunId)}\n`,
+          );
+        }
+      }
     }
   }
 
@@ -448,7 +477,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
         workspaceRoot: parsed.workspace,
         workspaceMode: concreteWorkspaceMode,
         runId,
-        ...(followup.followupSeed !== undefined ? { followupSeed: followup.followupSeed } : {}),
+        ...(followupSeed !== undefined ? { followupSeed } : {}),
         ...(parsed.baseUrl !== undefined ? { baseUrl: parsed.baseUrl } : {}),
         ...(llmApiKey !== undefined ? { llmApiKey } : {}),
         ...(parsed.baseline !== undefined
