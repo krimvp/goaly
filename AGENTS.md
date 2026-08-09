@@ -102,6 +102,26 @@ HarnessAdapter(#1)   Verifier/Ladder(#2)   Approver/Sign-off(#3)   Clock+Budget(
 Each seam has ≥2 implementations (real + fake), so the orchestrator can't tell which it called.
 That is why a new harness is one file and why the whole policy is testable with zero IO.
 
+## Working style
+
+- **Write replies in ASD-STE100 Simplified Technical English.** Short sentences, active voice, one
+  word for one meaning, no synonyms for variety, no idioms. This applies to chat answers, commit
+  messages, PR bodies, and issue text — not to code identifiers or quoted output.
+- **Write as little code as possible.** Before you add a module, a helper, or a branch, look for
+  the behavior in the repo (`src/agent-cli/output.ts`, `src/verify/`, `src/workspace/`,
+  `src/testing/fakes.ts` are common homes). If something close exists, generalize it instead of
+  writing a parallel version. Think twice, then delete a line before you add one. The smallest
+  diff that satisfies the invariants and the tests wins.
+- **No config knobs until they are asked for.** Do not add a CLI flag, a `goalyrc` field, or an
+  options object entry "for flexibility". A knob is public surface: it must be parsed, defaulted,
+  documented in the reference and the landing page, and kept forever. Pick the correct behavior
+  and hard-code it. Add the knob when a real user asks for the other behavior.
+- **Comments only when strictly necessary.** A comment earns its place when it explains something
+  the code cannot: a non-obvious invariant, a subtle failure mode, a dependency on another module's
+  behavior, or *why* an odd shape is correct. Do not restate the code, do not label sections, do
+  not write per-parameter prose for a self-evident signature. If the code needs a comment to be
+  readable, first try to make the code readable.
+
 ## Code conventions
 
 - **TypeScript strict**, plus `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,

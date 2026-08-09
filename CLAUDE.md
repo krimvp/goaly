@@ -7,6 +7,9 @@ harness. It applies to all agents working in this repo.
 Quick reference:
 
 - `npm run typecheck` and `npm test` must both be clean/green before any change is done.
+- Working style (`AGENTS.md` → "Working style"): reply in ASD-STE100 Simplified Technical English;
+  write the least code possible and reuse/generalize what already exists; no new config knobs until
+  a user asks; comments only for what the code cannot say.
 - The reducer (`src/orchestrator/`) is pure and synchronous — never add IO/LLM/`Promise` there.
 - The success contract is frozen after Seal; DONE needs two keys (verifier + approver).
 - Every external seam parses with Zod and fails closed.
