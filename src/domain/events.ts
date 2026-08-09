@@ -4,6 +4,7 @@ import { CompiledContract } from './contract';
 import { PhasePlan } from './plan';
 import { Verdict, ApprovalVerdict, SealDecision, type SealEditPatch } from './verdict';
 import { RunConfig, StuckPolicy } from './config';
+import { DegradedMode } from './degraded';
 import { TokenUsage, TokenBreakdown, UsageReport } from './usage';
 
 /**
@@ -260,6 +261,27 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     tag: z.literal('CHECKPOINTED'),
     /** The git tree SHA snapshotted as the new diff baseline. */
     tree: DiffHash,
+  }),
+  /**
+   * The run's typed DEGRADED-MODE label (issue #125) was ESCALATED by a `--resume` whose key wiring
+   * is more collapsed than the one the run started with (e.g. a run recorded
+   * `independence-unverified` whose resume ran fully self-judged). The header records the label the
+   * FIRST invocation resolved, but the models a run uses are re-resolved from EVERY invocation's
+   * flags, so the record has to be able to move.
+   *
+   * It moves by APPEND, never by rewriting the header (ADR 0012's RUN_EXTENDED pattern): the header
+   * is written exactly once, and a crash during an in-place `header.json` rewrite would have left an
+   * otherwise-resumable run unreadable — trading the whole run for a label. Readers derive the
+   * effective label with `effectiveDegraded` (header ∨ every marker, most-degraded wins).
+   *
+   * Like CHECKPOINTED / CANDIDATE_* / RUN_EXTENDED this is a Driver-side MARKER, NEVER fed to
+   * `step()` (replay skips it): the label gates nothing, never enters the frozen contract, and never
+   * reaches the reducer (invariant #1).
+   */
+  z.object({
+    tag: z.literal('DEGRADED_ESCALATED'),
+    /** The run's effective label after this escalation (already the more severe of the two). */
+    degraded: DegradedMode,
   }),
   /**
    * One best-of-N candidate finished (issue #85). When `--candidates N` (N>1), the Driver fans out K

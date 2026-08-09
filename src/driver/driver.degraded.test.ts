@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { drive, type DriverDeps } from './driver';
 import { RunId } from '../domain/ids';
 import { RunLogHeader } from '../runlog/runlog';
+import { effectiveDegraded, replay } from '../runlog/replay';
 import type { DegradedMode } from '../domain/degraded';
 import {
   FakeHarness,
@@ -88,7 +89,12 @@ describe('drive() — the degraded-mode label in the run-log header (issue #125)
  * record did not follow: the terminal summary printed `degraded: SELF-JUDGED` while
  * `goaly runs show <id>` still printed INDEPENDENCE-UNVERIFIED — or, worse, nothing at all. That is
  * exactly the collapse-recorded-nowhere failure issue #125 exists to prevent, on the path where the
- * header is the only artifact `runs show`, the UI header feed and any downstream consumer read.
+ * log is the only artifact `runs show`, the UI header feed and any downstream consumer read.
+ *
+ * The record moves by APPEND (a `DEGRADED_ESCALATED` marker), never by rewriting the header — see
+ * `degraded-header.test.ts` for why (a crash inside an in-place header rewrite bricks the run). So
+ * these assert the DERIVED label (`effectiveDegraded` = header ∨ every marker), which is what every
+ * reader reports, and that the header itself is left exactly as written.
  */
 describe('drive() — the degraded label is reconciled on resume, never left stale', () => {
   const unverified: DegradedMode = {
@@ -126,13 +132,22 @@ describe('drive() — the degraded label is reconciled on resume, never left sta
     return { msgs: records.map((r) => r.msg) };
   }
 
-  it('UPGRADES the header when the resumed invocation collapses the keys further', async () => {
+  /** The label every reader reports: the header's, escalated by every appended marker. */
+  async function effective(log: InMemoryRunLog): Promise<DegradedMode | undefined> {
+    const stored = (await log.read())!;
+    return effectiveDegraded(stored.header.degraded, stored.entries);
+  }
+
+  it('UPGRADES the record when the resumed invocation collapses the keys further', async () => {
     const log = new InMemoryRunLog();
     await driveToDone(log, unverified);
 
     const { msgs } = await resumeWith(log, selfJudged);
 
-    expect((await log.read())!.header.degraded).toEqual(selfJudged);
+    expect(await effective(log)).toEqual(selfJudged);
+    // …by APPENDING a marker, leaving the write-once header exactly as the fresh run wrote it.
+    expect((await log.read())!.header.degraded).toEqual(unverified);
+    expect((await log.read())!.entries.some((e) => e.event.tag === 'DEGRADED_ESCALATED')).toBe(true);
     expect(msgs.join(' ')).toContain('key wiring differs');
   });
 
@@ -143,7 +158,7 @@ describe('drive() — the degraded label is reconciled on resume, never left sta
 
     await resumeWith(log, selfJudged);
 
-    expect((await log.read())!.header.degraded).toEqual(selfJudged);
+    expect(await effective(log)).toEqual(selfJudged);
   });
 
   it('never DOWNGRADES: iterations that already ran degraded stay on the record', async () => {
@@ -152,18 +167,38 @@ describe('drive() — the degraded label is reconciled on resume, never left sta
 
     const { msgs } = await resumeWith(log, undefined);
 
-    expect((await log.read())!.header.degraded).toEqual(selfJudged);
+    expect(await effective(log)).toEqual(selfJudged);
     expect(msgs.join(' ')).toContain('key wiring differs');
   });
 
-  it('is silent and rewrites nothing when the resumed wiring matches', async () => {
+  it('is silent and records nothing when the resumed wiring matches', async () => {
     const log = new InMemoryRunLog();
     await driveToDone(log, selfJudged);
-    const before = JSON.stringify((await log.read())!.header);
+    const before = (await log.read())!;
+    const beforeHeader = JSON.stringify(before.header);
+    const beforeEntries = before.entries.length;
 
     const { msgs } = await resumeWith(log, selfJudged);
 
-    expect(JSON.stringify((await log.read())!.header)).toBe(before);
+    const after = (await log.read())!;
+    expect(JSON.stringify(after.header)).toBe(beforeHeader);
+    expect(after.entries.filter((e) => e.event.tag === 'DEGRADED_ESCALATED')).toHaveLength(0);
+    expect(after.entries.length).toBe(beforeEntries);
     expect(msgs.join(' ')).not.toContain('key wiring differs');
+  });
+
+  it('the appended marker never reaches the reducer (it replays to the same state)', async () => {
+    const log = new InMemoryRunLog();
+    await driveToDone(log, unverified);
+    const beforeState = replay(makeConfig({ goal: 'labelled goal' }), (await log.read())!.entries)
+      .state.tag;
+
+    await resumeWith(log, selfJudged);
+
+    const stored = (await log.read())!;
+    expect(stored.entries.some((e) => e.event.tag === 'DEGRADED_ESCALATED')).toBe(true);
+    expect(replay(makeConfig({ goal: 'labelled goal' }), stored.entries).state.tag).toBe(
+      beforeState,
+    );
   });
 });

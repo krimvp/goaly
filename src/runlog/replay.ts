@@ -2,6 +2,7 @@ import type { RunConfig } from '../domain/config';
 import type { CompiledContract } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
 import type { Command, OrchestratorEvent, RunExtension } from '../domain/events';
+import { mostDegraded, type DegradedMode } from '../domain/degraded';
 import type { ContractHash, DiffHash } from '../domain/ids';
 import type { LoopCtx, OrchestratorState } from '../orchestrator/state';
 import { initial, step } from '../orchestrator/step';
@@ -257,7 +258,32 @@ const DRIVER_ONLY_TAGS: ReadonlySet<string> = new Set([
   'CANDIDATE_RAN',
   'CANDIDATE_SELECTED',
   'RUN_EXTENDED',
+  'DEGRADED_ESCALATED',
 ]);
+
+/**
+ * The run's effective DEGRADED-MODE label (issue #125): the header's label escalated by every
+ * `DEGRADED_ESCALATED` marker the log carries, most-degraded wins.
+ *
+ * The header is written ONCE, at run start, with the label the FIRST invocation's wiring resolved to
+ * — but the models a run uses are re-resolved from every invocation's flags, so a `--resume` with
+ * different (or absent) `--model` / `--approver-model` flags changes which keys actually run. That
+ * change is recorded as an APPENDED marker rather than an in-place header rewrite (a crash inside a
+ * truncate-then-refill of `header.json` would brick an otherwise-resumable run for the sake of a
+ * label), so every reader has to derive rather than read. Pure and total; a log with no marker
+ * returns the header value unchanged, so old logs are unaffected.
+ */
+export function effectiveDegraded(
+  headerDegraded: DegradedMode | undefined,
+  entries: readonly RunLogEntry[],
+): DegradedMode | undefined {
+  let effective = headerDegraded;
+  for (const entry of entries) {
+    if (entry.event.tag !== 'DEGRADED_ESCALATED') continue;
+    effective = mostDegraded(effective, entry.event.degraded);
+  }
+  return effective;
+}
 
 /** Index of the last entry the reducer actually folds, or -1 when there is none. */
 function lastFoldedIndex(entries: readonly RunLogEntry[]): number {
@@ -433,6 +459,10 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
     if (entry.event.tag === 'CANDIDATE_RAN' || entry.event.tag === 'CANDIDATE_SELECTED') {
       continue;
     }
+    // A DEGRADED_ESCALATED entry is a wiring-LABEL marker (issue #125): like CHECKPOINTED it is a
+    // Driver-side record the reducer never sees. Readers derive the effective label from it with
+    // {@link effectiveDegraded}; the fold simply skips it.
+    if (entry.event.tag === 'DEGRADED_ESCALATED') continue;
     // A RUN_EXTENDED entry is an operator-control marker (ADR 0012): its config overlay was already
     // applied above; here we only track its note, which stays pending until a turn consumes it.
     if (entry.event.tag === 'RUN_EXTENDED') {

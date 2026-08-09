@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { FileRunLog } from '../runlog/file-runlog';
 import type { RunLogEntry } from '../runlog/runlog';
 import { runLockActive } from '../runlog/lock';
+import { degradedModeTag } from '../domain/degraded';
 
 /**
  * `goaly runs watch <runId>` — attach to a run from ANOTHER terminal and follow it live (operator
@@ -150,6 +151,10 @@ export function renderWatchEvent(entry: RunLogEntry, iteration: number): string 
       const tail = fallback > 0 ? `, ${fallback} downgraded to sequential` : '';
       return `${at}  wave: ${merged}/${e.outcomes.length} phase(s) merged + re-verified${tail}`;
     }
+    case 'DEGRADED_ESCALATED':
+      // Issue #125: this resume's key wiring is more collapsed than the one the run started with.
+      // Never plumbing — it says a DONE from here on is even less independently reviewed.
+      return `${at}  degraded mode escalated to ${degradedModeTag(e.degraded)} (resumed wiring)`;
     case 'CHECKPOINTED':
       return null; // internal diff-baseline plumbing — noise for a human watcher
   }

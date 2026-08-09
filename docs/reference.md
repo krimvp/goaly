@@ -494,11 +494,20 @@ different (or simply omitted) `--model` / `--approver-model` flags genuinely cha
 for the remaining iterations. The run as a whole is therefore labelled with the **more severe** of
 the recorded label and the resumed invocation's (`self-judged` > `self-approved` >
 `independence-unverified` > none):
-a resume that collapses the keys further **upgrades** the header, and a resume that repairs the
+a resume that collapses the keys further **upgrades** the label, and a resume that repairs the
 wiring does **not** erase the iterations that already ran degraded. Any difference at all is WARNed
 ("this invocation's key wiring differs from the one the run started with"), and the same reconciled
 value is what the terminal summary prints — so the summary and `goaly runs show <id>` can never
 report two different labels for one run.
+
+The upgrade is recorded by **appending** a `DEGRADED_ESCALATED` marker event to the write-ahead log
+(the same Driver-side marker pattern as `RUN_EXTENDED`; `goaly runs watch` prints it as
+`degraded mode escalated to …`), never by rewriting the run header in place. The header is written
+exactly once, at run start: rewriting it would mean truncating and refilling `header.json`, and a
+crash inside that window would leave an otherwise-resumable run with an unreadable header — the
+whole run traded for a label. Readers derive the effective label as *header ∨ every marker*, so
+older logs (which have no markers) are unaffected. Like every other marker it is never fed to the
+reducer.
 
 Approver-panel flags (`--approver-quorum`, `--approver-models`, `--approver-lenses`,
 `--approver-diversity-temp`) are covered under
@@ -1227,9 +1236,19 @@ goaly "now also handle empty input" --from-run run-<id> --inherit-session  # kee
 ```
 
 `--from-run` runs in the same workspace (the prior outcome is already on disk), seeds the new
-contract's authoring with a concise, deterministic **compaction** of the prior run (its goal, the
-frozen bar it met, how it ended), and then compiles its **own** frozen two-key contract — every
-invariant preserved by construction. It composes with every other flag.
+contract's authoring with a concise **compaction** of the prior run (its goal, the frozen bar it met,
+how it ended), and then compiles its **own** frozen two-key contract — every invariant preserved by
+construction. It composes with every other flag.
+
+**The compaction's worker-authored fields are fenced.** Most of the digest is goaly's own or your
+words — the goal, and the frozen (compiler-authored) contract. Three fields are not: the ladder's
+failure detail (raw verifier output), the approver's veto reason, and the terminal abort reason
+(which quotes that output). Those are wrapped in a random-nonce `UNTRUSTED PRIOR RUN OUTPUT` fence,
+with goaly's framing kept outside it, and the compiler's system prompt restates that anything inside
+such a fence is data, never instructions — the same treatment the judge, the approver and
+`--recontract`'s repair brief give worker-influenced text. So a worker that prints authoring
+directions into its own test output cannot steer the *next* run's frozen bar. (The fence delimiters
+carry a fresh random nonce per build, so the seed text is deterministic only up to those nonces.)
 
 This is distinct from `--resume`, which re-enters an *incomplete* run's loop. `--inherit-session`
 additionally resumes the prior harness session on the first turn so the agent keeps its working

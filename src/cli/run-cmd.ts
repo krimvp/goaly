@@ -27,6 +27,7 @@ import type { RunLogEntry } from '../runlog/runlog';
 import { FileRunLog } from '../runlog/file-runlog';
 import {
   adjudicationVerdict,
+  effectiveDegraded,
   extendedRunConfig,
   applyRunExtension,
   resumeStreakRelief,
@@ -272,7 +273,9 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
     }
     const stored = await new FileRunLog(path.join(stateDir, resumeRunId)).read();
     if (stored !== null) {
-      recordedDegraded = stored.header.degraded;
+      // Header ∨ every logged escalation: a previous resume records a more collapsed wiring as a
+      // DEGRADED_ESCALATED marker (never a header rewrite), so the label is DERIVED from the log.
+      recordedDegraded = effectiveDegraded(stored.header.degraded, stored.entries);
       // Relieve any stuck streak the log has already banked (see `resumeStreakRelief`): without it
       // a run that ABORTED at the crash / unevaluable / repeat threshold re-aborts on the resume
       // fold before the harness gets a single turn, no matter what the operator just fixed. Merged

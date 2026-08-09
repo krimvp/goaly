@@ -73,6 +73,11 @@ async function dryRun(dir: string, argv: string[]): Promise<{ code: number; err:
   return { code: result.code, err };
 }
 
+/** Normalize the per-call random nonce of the seed's UNTRUSTED fences, so seeds stay comparable. */
+function withoutNonces(seed: string): string {
+  return seed.replace(/(<<\/?UNTRUSTED [A-Z ]+) [0-9a-f]+>>/g, '$1>>');
+}
+
 describe('a --from-run follow-up records its predecessor and its compaction', () => {
   let dir: string | null = null;
   afterEach(async () => {
@@ -91,7 +96,12 @@ describe('a --from-run follow-up records its predecessor and its compaction', ()
 
     expect(resolution.ok).toBe(true);
     if (!resolution.ok) return;
-    expect(resolution.followupSeed).toBe(compactRun(prior.detail));
+    // The seed IS the prior-run compaction. Compared modulo the untrusted-fence nonce, which is
+    // random per call: the recorded seed is the one string that was BUILT here (asserted below), so
+    // a re-derivation is never expected to be byte-identical.
+    expect(withoutNonces(resolution.followupSeed ?? '')).toBe(
+      withoutNonces(compactRun(prior.detail)),
+    );
     // The header record must carry the very seed the compiler is handed — not a re-derivation that
     // could drift, and not just an id whose run may later be pruned.
     expect(resolution.followup?.predecessorRunId).toBe('run-pred');

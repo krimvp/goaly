@@ -11,7 +11,7 @@ import { iterationCount, type OrchestratorState } from '../orchestrator/state';
 import { errorMessage } from '../util/errors';
 import { FileRunLog } from './file-runlog';
 import type { RunLogHeader, RunLogEntry, RunProvenance } from './runlog';
-import { replay } from './replay';
+import { effectiveDegraded, replay } from './replay';
 import { summarizeUsage } from './usage';
 import { lastRealSessionId } from './session-id';
 
@@ -77,10 +77,12 @@ export type RunDetail = {
    */
   readonly harness: string | undefined;
   /**
-   * The run's typed degraded-mode label from the log header (issue #125), or undefined for a run
-   * with none (including logs written before the field existed). Today only `self-judged`: agent,
-   * judge rung and Sign-off approver on one model, so the two keys were not independent. Reported
-   * next to the status so a DONE from such a run is never read as an independently reviewed one.
+   * The run's EFFECTIVE typed degraded-mode label (issue #125), or undefined for a run with none
+   * (including logs written before the field existed): the header's label escalated by every logged
+   * `DEGRADED_ESCALATED` marker, so a resume whose key wiring collapsed further is reflected here
+   * without any run's header ever being rewritten in place. E.g. `self-judged`: agent, judge rung
+   * and Sign-off approver on one model, so the two keys were not independent. Reported next to the
+   * status so a DONE from such a run is never read as an independently reviewed one.
    */
   readonly degraded: DegradedMode | undefined;
   /**
@@ -179,7 +181,9 @@ export function runDetail(header: RunLogHeader, entries: readonly RunLogEntry[])
     stateTag: state.tag,
     reason: terminalReason(state),
     harness: header.harness,
-    degraded: header.degraded,
+    // Header ∨ every logged escalation (issue #125): a resume whose key wiring was more collapsed
+    // records a DEGRADED_ESCALATED marker rather than rewriting the header, so this is derived.
+    degraded: effectiveDegraded(header.degraded, entries),
     sessionId: lastRealSessionId(entries),
     startedAt: header.startedAt,
     endedAt: last?.ts,

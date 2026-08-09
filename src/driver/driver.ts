@@ -969,7 +969,21 @@ async function bootstrap(
   }
 
   const resumed = await resume(deps, config, runId, options.extend);
-  await reconcileDegraded(deps.runlog, resumed.header, options.degraded, log);
+  // Keep the run's degraded-mode label truthful across resumes (issue #125). Recorded as an APPENDED
+  // marker, so it advances `seq` like any other write-ahead entry — never as a header rewrite.
+  const escalations = await reconcileDegraded(
+    deps.runlog,
+    resumed.header,
+    options.degraded,
+    log,
+    {
+      runId,
+      seq: resumed.seq,
+      contractHash: resumed.contractHash,
+      stateTag: resumed.state.tag,
+      now: deps.clock.now(),
+    },
+  );
   // An extension that did not un-terminate the run (e.g. a note on a stuck abort whose tripping
   // detector was not raised) is loud, not silent — the outcome will still be the terminal one.
   if (options.extend !== undefined && isTerminal(resumed.state)) {
@@ -1022,7 +1036,7 @@ async function bootstrap(
   return {
     state: resumed.state,
     commands: resumed.commands,
-    seq: resumed.seq,
+    seq: resumed.seq + escalations,
     contractHash: resumed.contractHash,
     ladder: resumed.contract !== null ? deps.makeLadder(resumed.contract) : null,
     pendingNote: resumed.pendingNote,

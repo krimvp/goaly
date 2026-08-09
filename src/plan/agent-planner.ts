@@ -5,6 +5,7 @@ import { freezePlan } from '../util/hash';
 import { extractBalancedJson } from '../util/json-extract';
 import type { LlmProvider } from '../llm/provider';
 import { looksLikeLlmTimeout } from '../compile/agent-compiler';
+import { UNTRUSTED_SYSTEM_CLAUSE } from '../verify/prompt-safety';
 import type { Planner } from './planner';
 
 /** Schema for the JSON the planning LLM must emit (validated fail-closed, invariant #6). */
@@ -39,7 +40,13 @@ const SYSTEM_PROMPT =
   '- "goal" is a concrete, self-contained instruction for that phase. "intent" optionally hints how to ' +
   'author that phase\'s verification; "rubric" optionally guides its judge portion. Omit what you don\'t need.\n' +
   '- Do NOT include a final "make everything pass" / "run the whole test suite" phase — a cumulative ' +
-  'acceptance step on the ORIGINAL goal is added automatically after your phases.';
+  'acceptance step on the ORIGINAL goal is added automatically after your phases.\n' +
+  // The planner's `feedback` channel can carry model- or worker-authored text: a `--from-run`
+  // follow-up seeds it with the prior run's compaction, whose verifier output / veto reason /
+  // abort reason are fenced by `compactRun`. Like every other seam that splices such text into a
+  // prompt (compiler, judge, approver, adversarial rung, pre-flight), restate the fence rule so the
+  // fenced block reads as data, never as planning instructions.
+  UNTRUSTED_SYSTEM_CLAUSE;
 
 function parseGenerated(raw: string): Plan {
   const json = extractBalancedJson(raw);
