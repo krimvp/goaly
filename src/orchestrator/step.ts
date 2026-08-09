@@ -8,7 +8,7 @@ import type { OrchestratorState, LoopCtx, PhaseCtx } from './state';
 import { initialCtx } from './state';
 import { decide, matchedGeneratedFiles, type Decision } from './decide';
 import {
-  compileFailedReason, planFailedReason,
+  compileFailedReason, planFailedReason, withPhaseContext,
   PREFLIGHT_OUTPUT_QUOTE, SETUP_OUTPUT_QUOTE, TOOLS_DETAIL_QUOTE,
 } from './reason-quote';
 import { normalizeDetail, contractDefectiveReason, contractSoundReason } from './stuck';
@@ -356,7 +356,7 @@ function stepCompiling(
       // phase. The compiler's words are QUOTED behind a lead-in, never claimed as goaly's own
       // (`reason-quote.ts`): under --phased this compile ran AFTER the previous phase's worker turns.
       return [
-        { tag: 'FAILED', reason: phaseReason(phase, compileFailedReason(event.reason)), iterations: 0, contractHash: undefined },
+        { tag: 'FAILED', reason: withPhaseContext(phase, compileFailedReason(event.reason)), iterations: 0, contractHash: undefined },
         [],
       ];
     }
@@ -410,7 +410,7 @@ function stepAwaitSeal(
       return [
         {
           tag: 'ABORTED',
-          reason: phaseReason(phase, event.decision.reason),
+          reason: withPhaseContext(phase, event.decision.reason),
           iterations: 0,
           contractHash: contract.contractHash,
         },
@@ -424,7 +424,7 @@ function stepAwaitSeal(
         return [
           {
             tag: 'ABORTED',
-            reason: phaseReason(
+            reason: withPhaseContext(
               phase,
               `Seal revision cap (${config.maxSealRevisions}) reached without approval`,
             ),
@@ -537,7 +537,7 @@ function stepPreparing(
       return [
         {
           tag: 'FAILED',
-          reason: phaseReason(
+          reason: withPhaseContext(
             phase,
             'TOOLS_MISSING: a tool the verification needs is not installed before any agent turn. ' +
               `${TOOLS_DETAIL_QUOTE}${prepared.detail}`,
@@ -551,7 +551,7 @@ function stepPreparing(
       return [
         {
           tag: 'FAILED',
-          reason: phaseReason(
+          reason: withPhaseContext(
             phase,
             'SETUP_FAILED: the workspace setup command failed before any agent turn. ' +
               `${SETUP_OUTPUT_QUOTE}${prepared.detail}`,
@@ -565,7 +565,7 @@ function stepPreparing(
       return [
         {
           tag: 'FAILED',
-          reason: phaseReason(
+          reason: withPhaseContext(
             phase,
             'CONTRACT_UNSOUND: the frozen verification is unsound — the defect is in the authored ' +
               'verification, not the implementation. ' +
@@ -670,13 +670,18 @@ function stepAdjudicating(
   event: OrchestratorEvent,
 ): StepResult {
   if (event.tag !== 'CONTRACT_ADJUDICATED') throw invalidTransition('ADJUDICATING', event);
-  const reason = event.defective
-    ? contractDefectiveReason(matchedGeneratedFiles(ctx), event.reason, fallbackReason)
-    : contractSoundReason(fallbackReason);
   return [
     {
+      // Both branches are covered reason BUILDERS, inline rather than via a local: the structural
+      // check classifies the expression it can SEE, and a bare identifier assigned one line above
+      // is exactly the shape it must refuse to trust (`reason-boundary.test.ts`).
       tag: 'ABORTED',
-      reason: phaseReason(ctx.phase, reason),
+      reason: withPhaseContext(
+        ctx.phase,
+        event.defective
+          ? contractDefectiveReason(matchedGeneratedFiles(ctx), event.reason, fallbackReason)
+          : contractSoundReason(fallbackReason),
+      ),
       iterations: ctx.iteration,
       contractHash: ctx.contract.contractHash,
     },
@@ -724,7 +729,7 @@ function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
       return [
         {
           tag: 'FAILED',
-          reason: phaseReason(ctx.phase, decision.reason),
+          reason: withPhaseContext(ctx.phase, decision.reason),
           iterations: ctx.iteration,
           contractHash: ctx.contract.contractHash,
         },
@@ -734,7 +739,7 @@ function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
       return [
         {
           tag: 'ABORTED',
-          reason: phaseReason(ctx.phase, decision.reason),
+          reason: withPhaseContext(ctx.phase, decision.reason),
           iterations: ctx.iteration,
           contractHash: ctx.contract.contractHash,
         },
@@ -759,20 +764,6 @@ function phaseDone(ctx: LoopCtx): StepResult {
     ];
   }
   return [{ tag: 'DONE', iterations: ctx.iteration, contractHash: ctx.contract.contractHash }, []];
-}
-
-/**
- * Prefix a terminal reason with the phase position so a phased run's failures point at WHICH phase
- * (1-based, with the goal). The acceptance phase is named explicitly. A classic run (no phase) is
- * returned unchanged, so existing reasons/tests are byte-for-byte the same.
- */
-function phaseReason(phase: PhaseCtx | undefined, reason: string): string {
-  if (phase === undefined) return reason;
-  const total = phase.plan.phases.length;
-  if (phase.index >= total) return `acceptance phase (cumulative contract): ${reason}`;
-  const sub = phase.plan.phases[phase.index];
-  const goal = sub !== undefined ? ` (${sub.goal})` : '';
-  return `phase ${phase.index + 1}/${total}${goal}: ${reason}`;
 }
 
 /**

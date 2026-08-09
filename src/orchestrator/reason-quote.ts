@@ -28,10 +28,12 @@
  * `--phased` between-phase checkpoint, so it runs AFTER worker turns and an exception message there
  * can carry tree-authored content. Those reasons are built here for the same reason.
  *
- * HONEST SCOPE — what the prefix is, exactly. It is text goaly authored, plus two kinds of value
- * that were FROZEN before the loop began and that the worker cannot reach mid-run: the compiled
- * contract's authored file paths (`contractDefectiveReason`) and, in a phased run, the sealed plan's
- * sub-goal title (`phaseReason`).
+ * HONEST SCOPE — what the prefix is, exactly. It is text goaly authored, plus ONE kind of value that
+ * was FROZEN before the loop began and that the worker cannot reach mid-run: the compiled contract's
+ * authored file paths (`contractDefectiveReason`). A phased run's sub-goal TITLE was in that bucket
+ * too and should not have been — frozen is not the same as goaly-authored, and a plan title is a
+ * planner LLM's (or a `--plan-file` author's) prose. It is now appended behind
+ * {@link PHASE_CONTEXT_QUOTE}, so the ordering rule holds there as well: marker first, quotes after.
  *
  * It is NOT a claim about a reason goaly passes through VERBATIM. Exactly one such reason is left:
  * a human's Seal/plan-Seal reject text, which has no lead-in and is returned entire — a human's
@@ -41,6 +43,8 @@
  * tree the worker just wrote. They are now built by {@link compileFailedReason} /
  * {@link planFailedReason} and quoted behind a lead-in like any other external text.
  */
+
+import type { PhaseCtx } from './state';
 
 /** The repeated (normalized) verifier failure signature — worker-authored (test names, assertions). */
 export const SIGNATURE_QUOTE = 'Repeated failure signature: ';
@@ -85,6 +89,16 @@ export const DRIVER_ERROR_QUOTE = 'Driver error: ';
  */
 export const AUTHORING_ERROR_QUOTE = 'Authoring error: ';
 
+/**
+ * A phased run's position, INCLUDING the sealed plan's sub-goal title. The position itself is
+ * goaly's (`phase 2/5`), but the title is plan-authored prose — an LLM's or a human's words — so the
+ * whole context is appended behind this lead-in rather than prefixed onto the reason. It used to be
+ * prefixed, which put non-goaly text AHEAD of the typed marker: a title containing a lead-in moved
+ * the cut inside the phase prefix (dropping the marker from the trusted text), and a title
+ * containing hint-table words selected the operator's remediation.
+ */
+export const PHASE_CONTEXT_QUOTE = 'Phase context: ';
+
 /** All of the above, in no particular order — a reader takes the EARLIEST match in a reason. */
 export const QUOTED_TEXT_LEAD_INS: readonly string[] = [
   SIGNATURE_QUOTE,
@@ -97,6 +111,7 @@ export const QUOTED_TEXT_LEAD_INS: readonly string[] = [
   NESTED_REASON_QUOTE,
   DRIVER_ERROR_QUOTE,
   AUTHORING_ERROR_QUOTE,
+  PHASE_CONTEXT_QUOTE,
 ];
 
 /** Typed marker for a Driver-authored fail-closed abort (bootstrap throw / last-resort catch). */
@@ -126,4 +141,23 @@ export function compileFailedReason(detail: string): string {
 /** A terminal `PLAN_FAILED` — the message is the planner's, so it is quoted, never claimed. */
 export function planFailedReason(detail: string): string {
   return `${PLAN_FAILED_MARKER}: the phase plan could not be authored. ${AUTHORING_ERROR_QUOTE}${detail}`;
+}
+
+/**
+ * APPEND the phase position to a terminal reason so a phased run's failures point at WHICH phase
+ * (1-based, with the sub-goal). The acceptance phase is named explicitly; a classic run (no phase)
+ * is returned unchanged. Not a reason BUILDER — it decorates a reason another builder already
+ * authored — so it must never disturb that reason's own goaly-authored prefix: the context goes
+ * AFTER, behind {@link PHASE_CONTEXT_QUOTE}. Lives here, next to the lead-in it uses, rather than in
+ * `step.ts`, so the ordering rule and the thing that could invert it sit in one file.
+ */
+export function withPhaseContext(phase: PhaseCtx | undefined, reason: string): string {
+  if (phase === undefined) return reason;
+  const total = phase.plan.phases.length;
+  if (phase.index >= total) {
+    return `${reason} ${PHASE_CONTEXT_QUOTE}acceptance phase (cumulative contract)`;
+  }
+  const sub = phase.plan.phases[phase.index];
+  const goal = sub !== undefined ? ` (${sub.goal})` : '';
+  return `${reason} ${PHASE_CONTEXT_QUOTE}phase ${phase.index + 1}/${total}${goal}`;
 }

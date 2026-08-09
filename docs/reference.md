@@ -1159,10 +1159,15 @@ kill an hours-long run. All defaults, no flags needed
   reach — a verifier failure signature, the harness's last stderr, a setup command's output, an
   adjudicator's prose — and every such quote begins at a fixed lead-in (`Repeated failure signature:`,
   `Last harness output:`, `Last verifier output:`, `Missing tools:`, `Setup output:`, `Pre-flight
-  output:`, `Adjudicator:`, `Original stuck condition:`, `Driver error:`, `Authoring error:`), with
+  output:`, `Adjudicator:`, `Original stuck condition:`, `Driver error:`, `Authoring error:`,
+  `Phase context:`), with
   goaly's typed marker always ahead of the first one. The hint matches only the text before the
   earliest lead-in, so a test named
   `handles no-diff` cannot select the hint and point you at a flag that would not continue your run.
+  Under `--phased` the phase position is *appended* behind `Phase context:` (e.g. `… Phase context:
+  phase 2/5 (add the retry loop)`) rather than prefixed: the sub-goal title is your planner's prose,
+  not goaly's words, so a title containing a lead-in or a hint keyword must not be able to move the
+  boundary or pick the remediation.
   The boundary covers the **driver's** own terminal aborts too — a bootstrap throw or its last-resort
   catch reads `DRIVER_ERROR: … Driver error: <the exception>` — because that catch also wraps the
   `--phased` between-phase checkpoint, which runs *after* worker turns. Likewise a terminal

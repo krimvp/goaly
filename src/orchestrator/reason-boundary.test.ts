@@ -2,13 +2,22 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { initial, step } from './step';
+import { decide } from './decide';
 import * as stuck from './stuck';
 import * as reasonQuote from './reason-quote';
-import { PreparedOutcome } from '../domain/events';
+import { PreparedOutcome, type RunOutcome } from '../domain/events';
+import { RunId } from '../domain/ids';
 import { goalyAuthoredReason, hintSubject } from '../cli/reason-text';
+import { nextStepHint } from '../cli/run-cmd';
 import { bestOfFloor } from '../driver/best-of-driver';
 import type { DriverDeps } from '../driver/driver';
 import { makeCtx, makeConfig, makeFakeContract, makeFakePlan, dh } from '../testing/fakes';
+import {
+  classifyReasonExpr,
+  reasonExprsAfter,
+  unclassifiedReasons,
+  type ReasonPolicy,
+} from '../testing/reason-scan';
 import type { LoopCtx } from './state';
 
 /**
@@ -25,6 +34,20 @@ import type { LoopCtx } from './state';
  *     builders, the `StuckKind`s `detectStuck` can return, the terminal `PreparedOutcome` statuses),
  *     so a new builder that is not covered here fails this file rather than slipping through.
  */
+
+const sourceOf = (file: string): string =>
+  readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf8');
+
+/** Every registered lead-in, as the constant NAMES a template may interpolate and as their text. */
+const LEAD_INS = [
+  ...reasonQuote.QUOTED_TEXT_LEAD_INS,
+  ...Object.keys(reasonQuote).filter((name) => name.endsWith('_QUOTE')),
+];
+
+/** The poison-tested builders: every exported `*Reason` in the two reason-authoring modules. */
+const COVERED_BUILDERS = [...Object.keys(reasonQuote), ...Object.keys(stuck)].filter((name) =>
+  name.endsWith('Reason'),
+);
 
 /** A payload that would hijack the hint table if it landed in the goaly-authored prefix. */
 const POISON =
@@ -165,7 +188,7 @@ describe('abort-reason trust boundary — the DELEGATED authoring failures', () 
     expectQuoted(s.tag === 'FAILED' ? (s.reason ?? '') : '');
   });
 
-  it('quotes a mid-run phase COMPILE_FAILED behind a lead-in, keeping the phase in the prefix', () => {
+  it('quotes a mid-run phase COMPILE_FAILED behind a lead-in, marker ahead of the phase', () => {
     const [s0] = initial(makeConfig({ phased: true, maxCompileRetries: 0 }));
     const [s1] = step(s0, { tag: 'PLAN_COMPILED', plan });
     const [compiling] = step(s1, { tag: 'PLAN_SEAL_DECIDED', decision: { kind: 'approve' } });
@@ -173,8 +196,11 @@ describe('abort-reason trust boundary — the DELEGATED authoring failures', () 
     expect(failed.tag).toBe('FAILED');
     const reason = failed.tag === 'FAILED' ? (failed.reason ?? '') : '';
     expectQuoted(reason);
-    // The sealed sub-goal title is frozen pre-loop, so it stays inside goaly's own words.
-    expect(goalyAuthoredReason(reason)).toContain('phase 1/2');
+    // The phase context still names the phase, but AFTER the marker and behind its own lead-in:
+    // the sub-goal title is plan-authored prose, so it is quoted, not claimed.
+    expect(goalyAuthoredReason(reason)).toContain(reasonQuote.COMPILE_FAILED_MARKER);
+    expect(reason).toContain('phase 1/2');
+    expect(goalyAuthoredReason(reason)).not.toContain('phase 1/2');
   });
 
   it('quotes a PLAN_FAILED message behind a lead-in', () => {
@@ -184,6 +210,62 @@ describe('abort-reason trust boundary — the DELEGATED authoring failures', () 
     });
     expect(s.tag).toBe('FAILED');
     expectQuoted(s.tag === 'FAILED' ? (s.reason ?? '') : '');
+  });
+});
+
+describe('abort-reason trust boundary — a hostile sub-goal TITLE cannot steer the hint', () => {
+  /**
+   * ROUND-8 REGRESSION. The phase decorator (now `withPhaseContext`) used to PREFIX a terminal
+   * reason with the sealed plan's sub-goal TITLE — plan-authored prose, not goaly's words — putting
+   * it AHEAD of every typed marker. That inverted the ordering rule in the one place it mattered
+   * (frozen at Seal is not the same as goaly-authored): a title carrying a
+   * registered lead-in moved the cut INSIDE the phase prefix (dropping the marker out of the trusted
+   * text entirely), and a title carrying hint-table words selected the remediation. The phase
+   * context now follows the reason, behind its own registered lead-in.
+   */
+  const aborted = (reason: string): RunOutcome => ({
+    runId: RunId.parse('run-phase'),
+    status: 'FAILED',
+    contractHash: null,
+    iterations: 0,
+    reason,
+  });
+
+  function phaseCompileFailure(title: string): string {
+    const plan = makeFakePlan({ phases: [{ goal: title }, { goal: 'phase two' }] });
+    const [s0] = initial(makeConfig({ phased: true, maxCompileRetries: 0 }));
+    const [s1] = step(s0, { tag: 'PLAN_COMPILED', plan });
+    const [compiling] = step(s1, { tag: 'PLAN_SEAL_DECIDED', decision: { kind: 'approve' } });
+    const [failed] = step(compiling, { tag: 'COMPILE_FAILED', reason: 'authoring blew up' });
+    expect(failed.tag).toBe('FAILED');
+    return failed.tag === 'FAILED' ? (failed.reason ?? '') : '';
+  }
+
+  const honest = 'add the retry loop';
+  const AUTHORING_HINT = nextStepHint(aborted(phaseCompileFailure(honest)));
+
+  it('the honest control gets the authoring hint', () => {
+    expect(AUTHORING_HINT).toBeDefined();
+    expect(goalyAuthoredReason(phaseCompileFailure(honest))).toContain('COMPILE_FAILED');
+  });
+
+  it('a title carrying a registered lead-in cannot move the cut', () => {
+    const reason = phaseCompileFailure('make the CLI print "Driver error: " on a crash');
+    expect(goalyAuthoredReason(reason)).toContain('COMPILE_FAILED');
+    expect(hintSubject(reason)).toContain('COMPILE_FAILED');
+    expect(nextStepHint(aborted(reason))).toBe(AUTHORING_HINT);
+  });
+
+  it('a title carrying hint-table words cannot change the selected remediation', () => {
+    const reason = phaseCompileFailure('stop the agent hitting no-diff and STUCK_HARNESS_CRASH');
+    expect(nextStepHint(aborted(reason))).toBe(AUTHORING_HINT);
+  });
+
+  it('the phase context is still reported — outside goaly’s own words', () => {
+    const reason = phaseCompileFailure(honest);
+    expect(reason).toContain('phase 1/2');
+    expect(reason).toContain(honest);
+    expect(goalyAuthoredReason(reason)).not.toContain(honest);
   });
 });
 
@@ -215,42 +297,51 @@ describe('abort-reason trust boundary — the DRIVER-authored terminal reasons',
     expect(exported).toEqual(Object.keys(builders).sort());
   });
 
-  /** Identifiers goaly itself generates — safe to interpolate into the authored prefix. */
-  const GOALY_OWNED_HOLES = ['runId'];
-
-  /** A reason expression is guarded when it is a covered builder call, or interpolates only ours. */
-  function guarded(expr: string): boolean {
-    // `floor` is `bestOfFloor`'s return: a closed set of static, goaly-authored sentences that
-    // interpolate nothing at all — pinned by the two `bestOfFloor` cases below.
-    if (expr === 'floor') return true;
-    const call = /^([A-Za-z]+Reason)\(/.exec(expr);
-    if (call !== null) return Object.keys(builders).includes(call[1]!);
-    return [...expr.matchAll(/\$\{([^}]*)\}/g)].every((m) =>
-      GOALY_OWNED_HOLES.includes((m[1] ?? '').trim()),
-    );
-  }
+  /**
+   * What a driver-authored reason expression is allowed to BE. A whitelist: anything this cannot
+   * positively classify is rejected, so a shape nobody anticipated fails the check instead of
+   * passing it by default.
+   */
+  const DRIVER_POLICY: ReasonPolicy = {
+    builders: Object.keys(builders),
+    wrappers: [],
+    // The run id goaly minted itself — not worker-reachable.
+    goalyOwnedHoles: ['runId'],
+    leadIns: LEAD_INS,
+    delegated: {
+      floor:
+        '`bestOfFloor`’s return: a closed set of static goaly-authored sentences that interpolate ' +
+        'nothing at all — pinned structurally and behaviorally by the `bestOfFloor` cases below',
+    },
+  };
 
   /**
    * SCOPE, honestly: this walks `driver.ts`, the only module that authors a terminal `RunOutcome`
-   * of its own (`outcome.ts` just forwards the reducer's `state.reason`). The other driver modules
-   * DO interpolate exception text — a `wave-runner` unmerged-phase reason, a `tournament` candidate
-   * reason, an approver-error veto — but none of those is a terminal run reason: an unmerged phase
-   * re-runs sequentially and a veto is a per-iteration record, so neither reaches the hint table.
-   * If one ever does, it needs a lead-in and a row here.
+   * of its own (`outcome.ts` just forwards the reducer's `state.reason`, whose own authors are
+   * walked by the REDUCER block below). The other driver modules DO interpolate exception text — a
+   * `wave-runner` unmerged-phase reason, a `tournament` candidate reason, an approver-error veto —
+   * but none of those is a terminal run reason: an unmerged phase re-runs sequentially and a veto is
+   * a per-iteration record, so neither reaches the hint table. If one ever does, it needs a lead-in
+   * and a row here.
    */
   it('every driver-authored ABORTED reason is built behind a lead-in', () => {
-    const source = readFileSync(
-      fileURLToPath(new URL('../driver/driver.ts', import.meta.url)),
-      'utf8',
-    );
-    const declared = [...source.matchAll(/status: 'ABORTED',\n\s*reason: (.+),\n/g)].map(
-      (m) => m[1]!,
-    );
-    // Every ABORTED outcome literal must have been matched — a differently shaped one fails here
-    // rather than escaping the check.
-    expect(declared.length).toBe([...source.matchAll(/status: 'ABORTED',/g)].length);
+    const source = sourceOf('../driver/driver.ts');
+    const sites = /status: 'ABORTED',/g;
+    const declared = reasonExprsAfter(source, sites);
+    // Every ABORTED outcome literal must have been matched — a differently shaped one yields a
+    // sentinel expression that no policy classifies, so it fails here rather than escaping.
+    expect(declared.length).toBe([...source.matchAll(sites)].length);
     expect(declared.length).toBeGreaterThan(0);
-    expect(declared.filter((expr) => !guarded(expr))).toEqual([]);
+    expect(unclassifiedReasons(declared, DRIVER_POLICY)).toEqual([]);
+  });
+
+  it('the best-of-N start floor interpolates nothing at all (why `floor` is delegated)', () => {
+    // The one bare identifier the policy accepts, so its justification is checked structurally too,
+    // not just by the two behavioral cases below: the builder holds no `${…}` hole to fill.
+    const body =
+      /export async function bestOfFloor[\s\S]*?\n}\n/.exec(sourceOf('../driver/best-of-driver.ts'))?.[0] ?? '';
+    expect(body).toContain('requires a worktree host');
+    expect(body).not.toContain('${');
   });
 
   it('the best-of-N start floor quotes nothing (no host is configured)', async () => {
@@ -278,6 +369,164 @@ describe('abort-reason trust boundary — the DRIVER-authored terminal reasons',
     } as unknown as DriverDeps;
     const reason = (await bestOfFloor(deps)) ?? '';
     expect(reason).not.toContain(POISON);
+  });
+});
+
+describe('abort-reason trust boundary — the REDUCER-authored terminal reasons', () => {
+  /**
+   * ROUND-8 REGRESSION (the seam's other implementation). The structural enumeration above walks
+   * `driver.ts` only; the reducer's OWN terminal reasons — `decide.ts`'s FAILED/ABORTED decisions and
+   * `step.ts`'s terminal outcomes — were covered only by proxy (a builder is poison-tested, so a
+   * reason that HAPPENS to call it is safe). Nothing checked the reasons `step.ts`/`decide.ts` build
+   * INLINE, so splicing raw harness output into the maxIterations reason passed the whole suite.
+   * Both halves of the seam are now walked with the same positive-classification rule.
+   */
+  const stepPolicy: ReasonPolicy = {
+    builders: COVERED_BUILDERS,
+    // `withPhaseContext` only APPENDS the phase context, behind its own lead-in — pinned by the
+    // hostile sub-goal title cases above — so what matters is the reason it wraps.
+    wrappers: ['withPhaseContext'],
+    goalyOwnedHoles: ['config.maxPlanRevisions', 'config.maxSealRevisions'],
+    leadIns: LEAD_INS,
+    delegated: {
+      'event.decision.reason':
+        'a HUMAN’s Seal / plan-Seal rejection text — the one reason goaly passes through whole',
+      'decision.reason': 'DECIDE’s own reason, enumerated from decide.ts by the case below',
+    },
+  };
+
+  const decidePolicy: ReasonPolicy = {
+    builders: ['abortReason'],
+    wrappers: [],
+    goalyOwnedHoles: ['ctx.config.maxIterations'],
+    leadIns: LEAD_INS,
+    delegated: {},
+  };
+
+  it('every terminal reason step.ts builds is positively classified', () => {
+    const source = sourceOf('step.ts');
+    const sites = /tag: '(?:FAILED|ABORTED)',/g;
+    const exprs = reasonExprsAfter(source, sites);
+    expect(exprs.length).toBe([...source.matchAll(sites)].length);
+    expect(exprs.length).toBeGreaterThan(0);
+    expect(unclassifiedReasons(exprs, stepPolicy)).toEqual([]);
+  });
+
+  it('every terminal reason decide.ts builds is positively classified', () => {
+    const source = sourceOf('decide.ts');
+    const sites = /kind: '(?:FAILED|ABORTED)',/g;
+    const exprs = [
+      ...reasonExprsAfter(source, sites),
+      // The adjudication passthrough: this expression BECOMES a terminal ABORTED reason in
+      // `stepAdjudicating` when the contract is judged sound, so it is a terminal reason too.
+      ...reasonExprsAfter(source, /kind: 'ADJUDICATE',/g, 'fallbackReason'),
+    ];
+    const adjudicationSites = [...source.matchAll(/kind: 'ADJUDICATE',/g)].length;
+    expect(exprs.length).toBe([...source.matchAll(sites)].length + adjudicationSites);
+    expect(adjudicationSites).toBeGreaterThan(0);
+    expect(unclassifiedReasons(exprs, decidePolicy)).toEqual([]);
+  });
+
+  it('every reason-building helper the reducer keeps to itself is covered', () => {
+    // Local `*Reason` helpers are not exported, so the "covers every exported builder" cases above
+    // cannot see them. Each must be either a wrapper with its own cases, or a builder in the policy
+    // — a NEW private helper fails here rather than being classified by accident.
+    const local = (file: string): readonly string[] =>
+      [...sourceOf(file).matchAll(/^function ([A-Za-z]+Reason)\(/gm)].map((m) => m[1]!);
+    // step.ts authors no terminal reason of its own: every one it emits comes from a covered
+    // builder, from DECIDE, or from a human's Seal rejection.
+    expect(local('step.ts')).toEqual([]);
+    expect([...local('decide.ts')].sort()).toEqual([...decidePolicy.builders].sort());
+    // The one WRAPPER the policy trusts is EXPORTED from the module that owns the ordering rule,
+    // where its cases live — not a private decorator the scan would have to take on faith.
+    expect(Object.keys(reasonQuote)).toEqual(expect.arrayContaining([...stepPolicy.wrappers]));
+  });
+
+  it('DECIDE’s abort reason quotes the stuck evidence behind a lead-in (abortReason)', () => {
+    // The one private builder decide.ts owns: it composes the stuck message with a goaly-authored
+    // remediation-spend suffix. Exercised through the public `decide`, so nothing is exported just
+    // for the test.
+    const ctx = poisonedCtx({ remediations: { total: 1, noDiff: 1, repeat: 0, crash: 0 } });
+    const decision = decide(ctx, { pass: false, confidence: 1, detail: POISON }, null);
+    expect(decision.kind).toBe('ABORTED');
+    expectQuoted(decision.kind === 'ABORTED' ? decision.reason : '');
+  });
+
+  it('DECIDE’s maxIterations reason quotes nothing at all', () => {
+    const ctx = makeCtx({ iteration: 99, lastRunOutput: POISON });
+    const decision = decide(ctx, { pass: false, confidence: 1, detail: 'red' }, null);
+    expect(decision.kind).toBe('FAILED');
+    expect(decision.kind === 'FAILED' ? decision.reason : '').not.toContain(POISON);
+  });
+});
+
+describe('abort-reason trust boundary — the shapes that must NOT pass the source check', () => {
+  /**
+   * ROUND-8 REGRESSION. The driver-half check classified a reason expression by asking "is every
+   * `${}` hole goaly-owned?" — and `Array.every` over NO holes is `true`, so any expression that
+   * hid its interpolation one line up, or behind a helper the naming convention missed, was accepted
+   * by DEFAULT. The first three shapes below are the ones verified to reach a terminal reason with
+   * worker-reachable text in goaly's own words while the check stayed green; every shape here must
+   * now be REJECTED, because an unclassifiable expression has to fail loudly, never pass silently.
+   */
+  const policy: ReasonPolicy = {
+    builders: COVERED_BUILDERS,
+    wrappers: ['withPhaseContext'],
+    goalyOwnedHoles: ['runId'],
+    leadIns: LEAD_INS,
+    delegated: { floor: 'the best-of-N start floor, as in the driver policy' },
+  };
+
+  const probes: Record<string, string> = {
+    'a bare identifier built one line above': 'leaked',
+    'an unknown helper call whose name is not *Reason':
+      'describeBootstrapFailure(errorMessage(e))',
+    'a helper call that merely LOOKS like a builder': 'describeFailureReason(errorMessage(e))',
+    'an inline template interpolating worker-reachable text':
+      '`the driver failed unexpectedly (fail-closed): ${errorMessage(e)}`',
+    'raw harness output spliced into the maxIterations reason':
+      '`reached maxIterations (${ctx.config.maxIterations}) without satisfying the contract; ' +
+      'last harness output was ${ctx.lastRunOutput ?? \'\'}`',
+    'a member expression carrying an adapter’s text': 'event.run.output',
+    'a phase wrapper around an unclassifiable reason': 'withPhaseContext(ctx.phase, leaked)',
+    'the sentinel a terminal outcome carrying no reason property produces':
+      "<<no reason in the object at tag: 'ABORTED',>>",
+  };
+
+  for (const [shape, expr] of Object.entries(probes)) {
+    it(`rejects ${shape}`, () => {
+      expect(classifyReasonExpr(expr, policy).ok).toBe(false);
+    });
+  }
+
+  it('still accepts the shapes the boundary really uses', () => {
+    const accepted = [
+      'driverErrorReason(errorMessage(e))',
+      '`interrupted by user — resume this run with: --resume ${runId}`',
+      "'manual plan editing is not supported at the plan Seal — use revise'",
+      "'TOOLS_MISSING: a tool is missing. ' + `${TOOLS_DETAIL_QUOTE}${prepared.detail}`",
+      'withPhaseContext(ctx.phase, contractSoundReason(fallbackReason))',
+    ];
+    expect(accepted.filter((expr) => !classifyReasonExpr(expr, policy).ok)).toEqual([]);
+  });
+
+  it('the scan reads a MULTI-LINE reason expression whole', () => {
+    const source = [
+      "      return [{",
+      "        tag: 'ABORTED',",
+      '        reason: withPhaseContext(',
+      '          phase,',
+      '          `Seal revision cap (${config.maxSealRevisions}) reached without approval`,',
+      '        ),',
+      '        iterations: 0,',
+      '      }];',
+    ].join('\n');
+    const [expr] = reasonExprsAfter(source, /tag: 'ABORTED',/g);
+    expect(expr).toContain('maxSealRevisions');
+    expect(classifyReasonExpr(expr ?? '', policy).ok).toBe(false); // that hole is not in THIS policy
+    expect(
+      classifyReasonExpr(expr ?? '', { ...policy, goalyOwnedHoles: ['config.maxSealRevisions'] }).ok,
+    ).toBe(true);
   });
 });
 
