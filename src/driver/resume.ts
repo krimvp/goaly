@@ -1,4 +1,7 @@
-import { OrchestratorEvent as OrchestratorEventSchema } from '../domain/events';
+import {
+  OrchestratorEvent as OrchestratorEventSchema,
+  RUN_EXTENSION_FIELDS,
+} from '../domain/events';
 import type { Command, RunExtension } from '../domain/events';
 import type { RunConfig } from '../domain/config';
 import type { CompiledContract } from '../domain/contract';
@@ -131,14 +134,25 @@ export async function resume(
   };
 }
 
-/** Does this extension actually carry anything to persist? An empty object is a no-op resume. */
-function hasExtension(x: RunExtension): boolean {
-  return (
-    x.maxIterations !== undefined ||
-    x.budgetTokens !== undefined ||
-    x.budgetWallMs !== undefined ||
-    (x.stuck !== undefined && Object.keys(x.stuck).length > 0) ||
-    x.note !== undefined
-  );
+/**
+ * Does this extension actually carry anything to persist? An empty object is a no-op resume.
+ *
+ * Derived from the SCHEMA (`RUN_EXTENSION_FIELDS`), never a hand-written field list. A hand-written
+ * one drops any field added later: `candidates` was exactly that — `--resume <id> --candidates 4`
+ * (or a `--note` that is purely a delegation directive, which `collectResumeExtension` strips to
+ * `note: undefined` + `candidates: N`) produced NO RUN_EXTENDED marker, so the fold below ran on
+ * the stored config and the run silently kept its old fan-out while the CLI reported the override
+ * as accepted. The only structural rule left is that an EMPTY nested override (`stuck: {}`) carries
+ * nothing. Exported so a test can assert the coverage field-by-field.
+ */
+export function hasExtension(x: RunExtension): boolean {
+  return RUN_EXTENSION_FIELDS.some((key) => carriesValue(x[key]));
+}
+
+/** A field carries something unless it is absent — or an override object with no entries. */
+function carriesValue(value: unknown): boolean {
+  if (value === undefined) return false;
+  if (typeof value === 'object' && value !== null) return Object.keys(value).length > 0;
+  return true;
 }
 

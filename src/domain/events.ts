@@ -110,6 +110,35 @@ export const PreparedOutcome = z.discriminatedUnion('status', [
 export type PreparedOutcome = z.infer<typeof PreparedOutcome>;
 
 /**
+ * The PAYLOAD of a RUN_EXTENDED marker (ADR 0012) — every operator-extendable field, and the ONE
+ * definition of that field set. The marker itself is this schema plus its `tag` (see the union
+ * below), and {@link RUN_EXTENSION_FIELDS} enumerates it, so code that must react to "any field is
+ * present" (the resume path's decision to write a marker at all) derives the list from here instead
+ * of restating it. A restated list silently drops a newly-added field's override while still
+ * reporting it as accepted.
+ */
+const RunExtensionPayload = z.object({
+  /** New iteration cap (replaces the config's `maxIterations`). */
+  maxIterations: z.number().int().positive().optional(),
+  /** New token budget cap (replaces `budget.tokens`; past snapshots are re-judged against it). */
+  budgetTokens: z.number().int().positive().optional(),
+  /** New wall-clock budget cap (replaces `budget.wallClockMs`). */
+  budgetWallMs: z.number().int().positive().optional(),
+  /** Stuck-policy overrides (each field replaces its counterpart; absent fields keep the prior). */
+  stuck: StuckPolicy.partial().optional(),
+  /**
+   * Best-of-N candidates override (issue #85): raise/lower the per-iteration parallel fan-out
+   * mid-run — an OPERATIONAL loop knob like `maxIterations`, never the frozen contract. Capped at
+   * 16 like the config seam (each candidate is a full concurrent worker + worktree). Typically
+   * set from an explicit `--candidates` at resume or a natural-language `--note` directive
+   * ("try 4 parallel attempts" — see `src/cli/delegation.ts`).
+   */
+  candidates: z.number().int().positive().max(16).optional(),
+  /** Operator guidance appended to the NEXT agent prompt (worker steering, never the contract). */
+  note: z.string().min(1).optional(),
+});
+
+/**
  * EVENTS — the only things fed to the pure reducer. Each is the already-resolved result
  * of a Command's effect: every stochastic/IO operation completed in the Driver before the
  * Event was built. Events are persisted (write-ahead) and re-parsed on resume, so each has
@@ -341,27 +370,7 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
    * frozen (invariant #2), and both keys still gate DONE. Appended write-ahead at resume time so the
    * extension is auditable and every later replay/inspection folds with the same effective config.
    */
-  z.object({
-    tag: z.literal('RUN_EXTENDED'),
-    /** New iteration cap (replaces the config's `maxIterations`). */
-    maxIterations: z.number().int().positive().optional(),
-    /** New token budget cap (replaces `budget.tokens`; past snapshots are re-judged against it). */
-    budgetTokens: z.number().int().positive().optional(),
-    /** New wall-clock budget cap (replaces `budget.wallClockMs`). */
-    budgetWallMs: z.number().int().positive().optional(),
-    /** Stuck-policy overrides (each field replaces its counterpart; absent fields keep the prior). */
-    stuck: StuckPolicy.partial().optional(),
-    /**
-     * Best-of-N candidates override (issue #85): raise/lower the per-iteration parallel fan-out
-     * mid-run — an OPERATIONAL loop knob like `maxIterations`, never the frozen contract. Capped at
-     * 16 like the config seam (each candidate is a full concurrent worker + worktree). Typically
-     * set from an explicit `--candidates` at resume or a natural-language `--note` directive
-     * ("try 4 parallel attempts" — see `src/cli/delegation.ts`).
-     */
-    candidates: z.number().int().positive().max(16).optional(),
-    /** Operator guidance appended to the NEXT agent prompt (worker steering, never the contract). */
-    note: z.string().min(1).optional(),
-  }),
+  RunExtensionPayload.extend({ tag: z.literal('RUN_EXTENDED') }),
 ]);
 export type OrchestratorEvent = z.infer<typeof OrchestratorEvent>;
 
@@ -371,6 +380,18 @@ export type OrchestratorEvent = z.infer<typeof OrchestratorEvent>;
  * note only; the frozen contract fields are unrepresentable here by construction (invariant #2).
  */
 export type RunExtension = Omit<Extract<OrchestratorEvent, { tag: 'RUN_EXTENDED' }>, 'tag'>;
+
+/**
+ * Every field a {@link RunExtension} can carry, read off the schema itself — NOT a hand-maintained
+ * list. Consumers that must ask "does this extension carry anything?" (`hasExtension` on the resume
+ * path, which gates whether the RUN_EXTENDED marker is written at all) iterate this, so a field
+ * added to {@link RunExtensionPayload} is covered the moment it exists. Restating the field set by
+ * hand is what made a `--candidates`-only resume produce no marker: the override was discarded
+ * while the CLI still reported it as accepted.
+ */
+export const RUN_EXTENSION_FIELDS: readonly (keyof RunExtension)[] = Object.keys(
+  RunExtensionPayload.shape,
+) as (keyof RunExtension)[];
 
 /** Inputs the Driver must gather (workspace diff) before running the approver. */
 export type ApprovalInput = {

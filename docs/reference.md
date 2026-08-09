@@ -928,6 +928,11 @@ directory without `git init`.
 - `--workspace-mode auto` — pick `git` when the workspace is inside a git work tree, otherwise `file`.
   This is the default.
 
+File mode runs the verify command through the same seam git mode does, so the *could-not-evaluate*
+facts goaly owns about its own kill travel identically: a verify command it timed out, could not
+start, or killed for blowing the 16 MB captured-output cap is classified `CONTRACT_UNEVALUABLE`
+(still fail-closed, never a green) rather than read as an honest code red.
+
 File mode supports the full two-key loop, stuck detection, checkpoints, and resume. It does **not**
 support worktrees, best-of-N (`--candidates > 1`), or parallel phases, because those features need git
 plumbing. Harness-autonomy auto-pinning (which pins the review baseline to the run-start HEAD SHA) is
