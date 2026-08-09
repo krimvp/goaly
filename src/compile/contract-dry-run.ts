@@ -10,17 +10,27 @@ import { UNTRUSTED_SYSTEM_CLAUSE, wrapUntrusted } from '../verify/prompt-safety'
 import type { ScratchCopy, ScratchHost } from '../workspace/scratch-copy';
 import type { VerifierCompiler } from './compiler';
 import { SATISFIABILITY_GUARDRAIL } from './critiqued-compiler';
-import { namesFrozenFile, sanitizeRungOutput } from './rung-output';
+import { namesFrozenFile } from './frozen-paths';
 
-/** Max chars of a failing rung's output folded into the refusal reason, so the run log stays bounded. */
-const DETAIL_LIMIT = 2000;
+/**
+ * Max chars of a rung's own command echoed into the refusal, so one pathological command line
+ * cannot fill the reason (and, through it, the run log). The command is contract data goaly froze,
+ * not runner output — this is a log-hygiene bound, not a containment one.
+ */
+const COMMAND_LIMIT = 300;
 
-/** Stands in for a failing rung whose output carried nothing the whitelist could safely show. */
-const WITHHELD =
-  '(the rung printed nothing that could be shown — no line naming only the frozen verification ' +
-  'files, and no recognizable assertion message — so its output was withheld in full, because on ' +
-  'this run the tree it ran against also holds the throwaway reference implementation, which you ' +
-  'must not see)';
+/**
+ * Why the refusal quotes nothing the rung printed. Stated to the author, because an author who
+ * believes output was merely *omitted* will ask for it back.
+ */
+const NO_OUTPUT_NOTICE =
+  'Whatever the rung printed is NOT shown, and was not read at all. On this run the tree it ' +
+  'ran against also held a throwaway reference implementation of the goal, and a test runner reports ' +
+  'a failure by printing the source of the code under test — so its stdout and stderr are one ' +
+  'stream in which runner text and reference text are interleaved, with no way to tell them apart. ' +
+  'You do not need it: you AUTHORED the verification files, so you already know what they assert. ' +
+  'What you could not know is WHICH bar a correct implementation failed to clear, and that is stated ' +
+  'above.';
 
 /** Default kill-timeout for each scratch command (setup + each rung) — the 10 min the ladder uses. */
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -112,17 +122,26 @@ export type ContractDryRunOpts = {
  * is destroyed on every exit path. It never touches the workspace and never enters the run diff.
  * Leaking it would hand the worker the solution and recreate exactly the deadlock
  * `classifyVacuousContract` exists to catch. A file whose path names a frozen `generatedFiles`
- * entry is DISCARDED — by {@link namesFrozenFile}, the SAME predicate the output filter uses, so a
- * path can never be unfrozen when written and frozen when printed — and so the control can never
- * quietly rewrite the bar it measures.
+ * entry is DISCARDED — by {@link namesFrozenFile}, over the same canonical form the scratch copy's
+ * own `resolve(root, relPath)` produces — so the control can never quietly rewrite the bar it
+ * measures.
  *
  * The one channel OUT of the scratch is the refusal reason: it becomes `COMPILE_FAILED.reason` and
  * IS fed back to the contract author (and, through the author, into the frozen files a worker then
- * reads). A test runner reds by printing the source of the implementation under test — which on a
- * red is precisely the reference — so the failing rung's output is never passed through: it is
- * replaced by the STRUCTURED SUMMARY {@link sanitizeRungOutput} builds — the exit code, the failing
- * rung's identity, lines naming only frozen files, and at most one bounded assertion line. Every
- * other line is dropped, including lines that name no file (see that module for the honest limits).
+ * reads). THAT CHANNEL CARRIES NO RUNNER OUTPUT — not one byte of the scratch subprocess's stdout or
+ * stderr is read. The refusal is built entirely from data goaly owns: the exit code, and which rung
+ * of the frozen contract failed (its position, label and command). See {@link rungFailureDetail}.
+ *
+ * This is not a filter that got stricter; it is the removal of the channel a filter was guarding.
+ * Four successive sanitizers over `${stdout}\n${stderr}` were defeated in turn — a per-line
+ * blacklist, a structured summary, a path check, a positive/frame-context whitelist — because the
+ * reference implementation WRITES TO THOSE STREAMS. Runner text and reference text are interleaved
+ * in one adversary-writable stream, so provenance is not recoverable by shape: the reference can
+ * print prose, source, marker-shaped lines, `\r`-merged lines, or lines ending in the frozen file's
+ * own path, and be indistinguishable from the runner. The cost of dropping it is small, because THE
+ * COMPILER ALREADY HAS THE FROZEN VERIFICATION FILES — IT AUTHORED THEM. It does not need the
+ * runner to tell it what its own assertions say; it needs to know which bar failed, and that it
+ * failed. That is exactly what remains.
  *
  * FAIL-OPEN on infrastructure: no LLM, an unparseable reference, a scratch-copy failure, a setup
  * that cannot run, a timed-out or unstartable rung — all log and freeze as today. Like every other
@@ -192,12 +211,10 @@ export class ContractDryRunCompiler implements VerifierCompiler {
 
     // The bar must be measured EXACTLY as authored: a reference file that collides with a frozen
     // verification path would rewrite the very assertions under test, so it is dropped outright.
-    // Deliberately the SAME predicate the output filter uses to decide whether a frame names a
-    // frozen file, over the SAME canonical form the scratch copy's own `resolve(root, relPath)`
-    // produces. When the two disagreed, the same path was both WRITTEN and treated as frozen: a
-    // suffix-matching path (`src/check.mjs` vs a frozen `check.mjs`), and later a merely dotted
-    // spelling (`verify/./check.mjs`), rewrote the bar in the scratch copy AND had its own lines
-    // whitelisted into the refusal.
+    // The check runs over the SAME canonical form the scratch copy's own `resolve(root, relPath)`
+    // produces — when it did not, a merely dotted spelling (`verify/./check.mjs`) was judged
+    // unfrozen here and still landed on the frozen file, silently turning an unsatisfiable bar into
+    // a green.
     const pinned = contract.generatedFiles.map((f) => f.path);
     const files = reference.files.filter((f) => !namesFrozenFile(f.path, pinned));
     if (files.length < reference.files.length) {
@@ -240,28 +257,23 @@ export class ContractDryRunCompiler implements VerifierCompiler {
         };
       }
     }
-    for (const rung of rungs) {
+    for (const [i, rung] of rungs.entries()) {
       const r = await copy.run(rung.command, { timeoutMs: this.#timeoutMs });
       // A rung that timed out or could not be started never produced a real pass/fail — the same
       // could-not-EVALUATE facts goaly owns at verify time. Fail-open, never a red.
+      // `executionErrorReason` classifies from goaly's OWN facts (its timeout flag, its spawn
+      // failure), not from the command's text, so no stream content reaches the reason here either.
       const unevaluable = executionErrorReason(r);
       if (unevaluable !== null) {
         return { status: 'skipped', reason: `\`${rung.command}\`: ${unevaluable}` };
       }
       if (r.exitCode !== 0) {
-        // The tree that just failed CONTAINS the reference implementation, so the runner's own
-        // output quotes it (code frames, tracebacks, stack frames). BOTH streams go through the
-        // whitelist — a runner that reds on stdout leaks exactly as one that reds on stderr.
-        const clean = sanitizeRungOutput(
-          `${r.stdout}\n${r.stderr}`,
-          contract.generatedFiles.map((f) => f.path),
-          copy.root,
-        );
-        const detail = clean.length > 0 ? clean : WITHHELD;
+        // `r.stdout` / `r.stderr` are DELIBERATELY not read. See the class doc: the tree that just
+        // failed contains the reference implementation, which writes to those same streams.
         return {
           status: 'red',
           rung: rung.label ?? rung.command,
-          detail: `exit ${r.exitCode}\n${detail.slice(0, DETAIL_LIMIT)}`,
+          detail: rungFailureDetail(rung, i, rungs.length, r.exitCode),
         };
       }
     }
@@ -319,12 +331,40 @@ function isDeterministic(rung: Rung): rung is DeterministicRung {
 }
 
 /**
- * The refusal fed to the bounded re-author loop. It names the failing rung and carries the
- * STRUCTURED SUMMARY {@link sanitizeRungOutput} built from that rung's output — frames naming only
- * the frozen files plus at most one bounded assertion line, never the runner's output itself. An
- * author receiving a working solution would fold it into the frozen verification files, which is
- * precisely the deadlock this whole guard exists to prevent. Closes with the anti-softening rail so
- * "make it satisfiable" can never be read as "make it easier".
+ * The structured description of a failed rung, built ONLY from values goaly owns: the exit code the
+ * OS reported, and the rung's own position/label/command inside the contract goaly just compiled.
+ *
+ * Every one of these is contract data or a process-level fact. None of them travelled through the
+ * scratch subprocess's stdout or stderr, which is why this function takes no output argument — the
+ * type makes the guarantee, so a future edit cannot quietly re-open the channel by "just adding a
+ * little context". Only the command is length-bounded, and purely for log hygiene.
+ */
+export function rungFailureDetail(
+  rung: DeterministicRung,
+  index: number,
+  total: number,
+  exitCode: number,
+): string {
+  const label = rung.label !== undefined ? ` (${rung.label})` : '';
+  return [
+    `exit ${exitCode}`,
+    `failing rung: ${index + 1} of ${total}${label} — \`${bound(rung.command, COMMAND_LIMIT)}\``,
+    NO_OUTPUT_NOTICE,
+  ].join('\n');
+}
+
+/** Truncate to `max` chars with an ellipsis, so one long value cannot fill the reason. */
+function bound(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}…`;
+}
+
+/**
+ * The refusal fed to the bounded re-author loop. It names the failing rung and carries
+ * {@link rungFailureDetail} — the exit code and which frozen rung failed. It carries NOTHING the
+ * rung printed: an author receiving a working solution would fold it into the frozen verification
+ * files, which is precisely the deadlock this whole guard exists to prevent, and the rung's output
+ * cannot be separated from the reference implementation's (see the class doc). Closes with the
+ * anti-softening rail so "make it satisfiable" can never be read as "make it easier".
  */
 export function unsatisfiableReason(rung: string, detail: string): string {
   return (

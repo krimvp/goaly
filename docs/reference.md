@@ -1706,50 +1706,50 @@ Details that matter:
   the run diff, nor any worker prompt. It is not reused as a hint, a seed, or a fallback — handing
   the worker the solution would defeat the run and recreate exactly the deadlock the vacuous-contract
   check exists to catch. A reference file whose path collides with an authored verification file is
-  discarded, so the control can never rewrite the bar it measures — and the collision test is the
-  *same* predicate the output filter uses to decide whether a frame names a frozen file, so a path
-  can never be treated as unfrozen when it is written and as frozen when it is printed.
-- **The refusal carries a structured summary, not the runner's output.** A test runner reds by
-  printing the *source* of the code under test — and on a red, the code under test is the reference.
-  So the failing rung's output is never passed through: it is replaced by a **whitelist** summary
-  carrying the exit code, the failing rung's identity, the **locations** of lines whose every
-  file-ish token names a **frozen** verification file, and **at most one** assertion/error message
-  line — bounded to a single truncated line and dropped if it lexically parses as code (a
-  declaration, an assignment, a function literal). ANSI escapes are stripped before matching. A kept
-  frame is **truncated at the end of its location token** (path plus any `:LINE[:COL]` / `::test-id`
-  suffix): a runner is free to append text it did not compose after the path — pytest's
-  `FAILED <frozen path>::<test> - <the message the reference raised>` — and the frame branch is not
-  screened by the assertion-slot guards. **Everything else is dropped, including lines that name no
-  file at all** — a bare traceback body or a caret-marked code frame is exactly how runner source
-  leaks past a per-line blacklist — so an unrecognized runner format over-drops to nothing rather
-  than guessing, and the refusal then says so instead of quoting.
-  The assertion slot is also CONTEXT-sensitive, and the context test is **positive**: a no-file line
-  is admitted only when it is provably *runner-composed* — it carries an explicit runner marker
-  (pytest's `E `, mocha's `N)`, jest's `●`, `FAILED` / `--- FAIL:`, a capitalized
-  `Expected:`/`Received:`), or the scan is inside a runner-composed block (opened by a frozen-file
-  frame, by a gutter/caret the runner drew, or by a marker line; closed by a frame naming a
-  non-frozen file or by a line that parses as source). The earlier *negative* test ("refuse when the
-  previous non-empty line named a non-frozen file") assumed node's layout — header directly above
-  the source line — and never fired inside a pytest traceback, where source is printed first and the
-  header last, so `expected = <the whole reference algorithm>` claimed the slot. The ambiguous
-  `expected …` shape is stricter still: block context is not enough, it needs an explicit marker or
-  a frozen frame on the line immediately above. Bodies that look like an expression (a call with an
-  identifier argument) or end in a comma are refused too.
-  Otherwise the author would receive a working solution and could fold it into the frozen files — a
-  green bar at t=0, i.e. a wrong green. The filter is lexical plus local context, **not a proof**:
-  the one preserved message is whatever the runner printed, so a reference that throws with a secret
-  *as its message* still surfaces that one bounded line — a marker proves the runner *printed* the
-  line, never that it *authored* the content — and the text a frame carries *before* its location
-  (`at <fn> (…)`, `FAILED`) is kept unscreened. It does not deliver gutters, code-shaped bodies, or
-  anything after a frame's location; it is not proven to be free of reference text.
+  discarded, so the control can never rewrite the bar it measures — over the same canonical path form
+  the scratch copy's own write resolves, so a path can never be treated as unfrozen when it is
+  written and land on the frozen file anyway.
+- **The refusal carries no runner output at all.** A test runner reds by printing the *source* of the
+  code under test — and on a red, the code under test is the reference. The failing rung's stdout and
+  stderr are therefore **never read**: not filtered, not summarized, not sampled. What the author
+  receives is built only from data goaly owns —
+  1. the **exit code** the OS reported,
+  2. **which** rung of the frozen contract failed (its position, its label, its command),
+  3. the fact that a reference implementation authored for this goal could not clear it,
+  4. a note saying why nothing is quoted, so the omission is not read as an oversight.
+
+  This is the removal of a channel, not a stricter filter. Four earlier versions *did* filter that
+  output — a per-line blacklist, a structured summary, a path check, a positive/frame-context
+  whitelist — and each was defeated in turn, because `stdout`/`stderr` are the streams **the
+  reference implementation writes to**. Runner text and reference text are interleaved in one
+  adversary-writable stream, so provenance is not recoverable from shape: a reference can print
+  plain prose, raw source, marker-shaped lines (`E   ValueError: …`, `FAILED <frozen path>::<test>`),
+  `\r`-merged lines, or lines ending in the frozen file's own path, and be indistinguishable from
+  the runner. A runner marker only ever proved the runner *printed* a line, never that it *authored*
+  the content — which is the gap every round was defeated through.
+
+  The cost is smaller than it looks, because **the compiler already has the frozen verification
+  files — it authored them.** It does not need a runner to tell it what its own assertions say; it
+  needs to know which bar failed, and that it failed. That is exactly what survives. (What is
+  genuinely lost: a *runtime* fact the author could not derive from its own files — an import error,
+  a missing fixture, the concrete mismatched value. See the re-authoring note below.)
 - **The scratch copy is isolated from your tree.** Symlinks are never duplicated into it (a linked
   `node_modules`, a linked `src` — the pnpm/monorepo/`npm link` shapes — would be a path straight
   back into your real workspace, so a scratch `npm ci` would mutate it), and every write is checked
   against the copy's *real* path, not just its path string. A `setup` that relied on a linked
   `node_modules` simply fails there, and the dry run fails open. A reference file whose path
-  *resolves* onto an authored verification file is dropped, not written — the write side and the
-  output filter canonicalize paths identically, so `verify/./check.test.mjs` cannot rewrite the bar
-  it is measured against.
+  *resolves* onto an authored verification file is dropped, not written — the collision test
+  canonicalizes exactly as the write does, so `verify/./check.test.mjs` cannot rewrite the bar it is
+  measured against.
+- **Re-authoring with the reduced refusal.** The author is asked to re-author the rung it is told
+  failed, holding the files it wrote. That is enough for the failure class this guard exists for —
+  a bar no implementation can satisfy (issue #114's post-`mockRestore` call-count assertion is
+  re-derivable from the test source alone). It is *weaker* when the red came from something outside
+  the authored files (a wrong import path, a missing fixture, a toolchain quirk): the author must
+  re-read its own file and reason about it rather than being handed the runner's diagnosis, so a
+  re-author round can be spent narrowing down what a stack trace would have named outright. That is
+  the accepted price: a leaked solution is a **wrong green at t=0**, an extra re-author round is a
+  bounded cost paid before the loop starts.
 - **Scratch commands run credential-scrubbed**, exactly like the verify command (see below): the
   same `*_TOKEN` / `*_KEY` / `*SECRET*` / `AWS_*` / `GITHUB_*` variables are stripped before the
   contract's `setup` and its rungs execute, because that tree holds model-authored code.

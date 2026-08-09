@@ -91,11 +91,10 @@ describe('ContractDryRunCompiler (compile-time positive control, issue #115)', (
     expect((error as Error).message).not.toContain(secret);
   });
 
-  it('strips the reference implementation out of the FAILING RUNG OUTPUT folded into the refusal', async () => {
+  it('carries NO line of the failing rung output — not even the parts that look like the runner', async () => {
     // A test runner reds by printing code frames and stack frames OF THE IMPLEMENTATION under test —
-    // and on a red, the implementation under test IS the reference. That output becomes
-    // COMPILE_FAILED.reason and is fed verbatim to the contract author, so it must be sanitized down
-    // to frames naming the FROZEN files plus the assertion message.
+    // and on a red, the implementation under test IS the reference. Both streams are therefore
+    // adversary-writable, so the refusal reads neither: even the runner-shaped lines are gone.
     const runnerOutput = [
       ' FAIL  verify/check.test.mjs > solve',
       'AssertionError: expected 3 to be 4',
@@ -114,16 +113,16 @@ describe('ContractDryRunCompiler (compile-time positive control, issue #115)', (
     const error = (await compiler.compile(generateConfig).catch((e: unknown) => e)) as Error;
 
     expect(error).toBeInstanceOf(Error);
-    expect(error.message).not.toContain('MAGIC_ANSWER');
-    expect(error.message).not.toContain('src/widget.mjs');
-    expect(error.message).not.toContain('expect(solve(1))');
-    // …while everything the author actually needs survives.
+    for (const line of runnerOutput.split('\n')) {
+      expect(error.message).not.toContain(line.trim());
+    }
+    // …while everything the author actually needs — contract data goaly owns — survives.
     expect(error.message).toContain('exit 1');
-    expect(error.message).toContain('AssertionError: expected 3 to be 4');
-    expect(error.message).toContain('verify/check.test.mjs:5:3');
+    expect(error.message).toContain('failing rung: 1 of 1');
+    expect(error.message).toContain('npm test');
   });
 
-  it('strips a node-style location header block naming a non-frozen file', async () => {
+  it('carries no line of a node-style location header block either, on stdout as on stderr', async () => {
     const runnerOutput = [
       '/tmp/goaly-dry-run-abc/src/widget.mjs:2',
       '  const KEY = "LEAKED-SOLUTION";',
@@ -139,12 +138,12 @@ describe('ContractDryRunCompiler (compile-time positive control, issue #115)', (
 
     const error = (await compiler.compile(generateConfig).catch((e: unknown) => e)) as Error;
 
-    expect((error as Error).message).not.toContain('LEAKED-SOLUTION');
-    expect((error as Error).message).not.toContain('src/widget.mjs');
-    expect((error as Error).message).toContain('Error: boom');
+    expect(error.message).not.toContain('LEAKED-SOLUTION');
+    expect(error.message).not.toContain('src/widget.mjs');
+    expect(error.message).not.toContain('Error: boom');
   });
 
-  it('withholds the output entirely when every line of it speaks about non-frozen files', async () => {
+  it('says WHY nothing is quoted, so the author does not read the omission as an oversight', async () => {
     const compiler = new ContractDryRunCompiler({
       inner: new FakeCompiler(authoredContract()),
       llm: new FakeLlm([REFERENCE]),
@@ -163,7 +162,33 @@ describe('ContractDryRunCompiler (compile-time positive control, issue #115)', (
 
     expect(error.message).not.toContain('MAGIC_ANSWER');
     expect(error.message).toContain('exit 1');
-    expect(error.message).toContain('its output was withheld');
+    expect(error.message).toContain('was not read at all');
+    expect(error.message).toContain('you AUTHORED the verification files');
+  });
+
+  it('names the failing rung by LABEL and position when the contract gave it one', async () => {
+    const contract = authoredContract({
+      rungs: [
+        { kind: 'deterministic', command: 'npm run lint', label: 'lint' },
+        { kind: 'deterministic', command: 'npm test', label: 'unit' },
+      ],
+    });
+    const compiler = new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: new FakeLlm([REFERENCE]),
+      scratch: new FakeScratchHost({
+        results: [
+          { exitCode: 0, stdout: '', stderr: '' },
+          { exitCode: 3, stdout: 'noise', stderr: 'noise' },
+        ],
+      }),
+    });
+
+    const error = (await compiler.compile(generateConfig).catch((e: unknown) => e)) as Error;
+
+    expect(error.message).toContain('exit 3');
+    expect(error.message).toContain('failing rung: 2 of 2 (unit) — `npm test`');
+    expect(error.message).not.toContain('noise');
   });
 
   it('writes the reference ONLY into the scratch copy and destroys it on every exit path', async () => {
@@ -380,8 +405,9 @@ describe('ContractDryRunCompiler (compile-time positive control, issue #115)', (
 /**
  * The leak, executed for real: a runner reports a red by printing the SOURCE of the code under test,
  * and on a red the code under test is the reference implementation. The refusal becomes
- * `COMPILE_FAILED.reason` and is fed to the contract author, so the real subprocess output must come
- * back carrying the assertion and the frozen file's frames — and nothing of the reference.
+ * `COMPILE_FAILED.reason` and is fed to the contract author, so nothing the real subprocess printed
+ * may come back — not the reference's text, and not the runner's own framing around it, because the
+ * two share one stream and cannot be told apart inside it.
  */
 describe('ContractDryRunCompiler — the refusal never carries the reference implementation source', () => {
   const roots: string[] = [];
@@ -429,13 +455,17 @@ describe('ContractDryRunCompiler — the refusal never carries the reference imp
     expect(error.message).not.toContain('REFERENCE-ONLY-SECRET');
     expect(error.message).not.toContain('LOOKUP_TABLE');
     expect(error.message).not.toContain('src/widget.mjs');
-    expect(error.message).toMatch(/boom/); // the failure itself still reaches the author
+    expect(error.message).not.toMatch(/boom/); // …and neither does the runner's own framing
+    // The failure still reaches the author, as the identity of the rung a correct implementation
+    // could not clear — which is contract data goaly froze, not something the subprocess printed.
+    expect(error.message).toContain('failing rung: 1 of 1');
   });
 
-  it('bounds a real multi-line `Error(fn.toString())` message to its first line', async () => {
+  it('drops a real multi-line `Error(fn.toString())` message in full, first line included', async () => {
     // A reference that builds its error message out of its own source renders as a message whose
     // CONTINUATION lines name no file — the shape that walked straight through a filter whose
-    // default was to keep such lines.
+    // default was to keep such lines. The first line is no safer than the rest: the reference chose
+    // it too.
     const root = await mkdtemp(join(tmpdir(), 'goaly-dryrun-msg-'));
     roots.push(root);
     await mkdir(join(root, 'verify'), { recursive: true });
@@ -477,7 +507,7 @@ describe('ContractDryRunCompiler — the refusal never carries the reference imp
     expect(error.message).not.toContain('REFERENCE-ONLY-SECRET');
     expect(error.message).not.toContain('LOOKUP_TABLE');
     expect(error.message).not.toContain('function impl');
-    expect(error.message).toContain('Error: reference failed:');
+    expect(error.message).not.toContain('reference failed:');
   });
 });
 
@@ -565,7 +595,11 @@ describe('ContractDryRunCompiler — issue #114 regression (post-mockRestore cal
 
     expect(result).toBeInstanceOf(Error);
     expect((result as Error).message).toMatch(/refusing to freeze an UNSATISFIABLE bar/);
-    expect((result as Error).message).toMatch(/expected api\.format to have been called/);
+    // The bar's own assertion message is NOT quoted: it only ever reached goaly through the same
+    // stream the reference writes to. The author is told which rung failed instead — and it wrote
+    // that rung's assertions, so it can look them up itself.
+    expect((result as Error).message).not.toMatch(/expected api\.format to have been called/);
+    expect((result as Error).message).toContain('failing rung: 1 of 1');
     // SAFETY: the reference implementation never reached the real workspace.
     expect((await readdir(root)).sort()).toEqual(['verify']);
   });
@@ -580,11 +614,10 @@ describe('ContractDryRunCompiler — issue #114 regression (post-mockRestore cal
 });
 
 /**
- * The collision drop and the output whitelist must be the SAME function of the SAME value. When the
- * drop compared path STRINGS while `FsScratchCopy.writeFile` compares RESOLVED paths, a reference
- * file spelled `verify/./check.mjs` was judged unfrozen when written — so it OVERWROTE the frozen
- * bar in the scratch copy, turning a provably unsatisfiable bar into a green — and frozen when
- * printed, so every line it emitted was whitelisted into the refusal fed to the contract author.
+ * The collision drop must canonicalize paths exactly as the write does. When the drop compared path
+ * STRINGS while `FsScratchCopy.writeFile` compares RESOLVED paths, a reference file spelled
+ * `verify/./check.mjs` was judged unfrozen when written — so it OVERWROTE the frozen bar in the
+ * scratch copy, turning a provably unsatisfiable bar into a green.
  */
 describe('ContractDryRunCompiler — a dotted reference path cannot rewrite the bar it measures', () => {
   const roots: string[] = [];
