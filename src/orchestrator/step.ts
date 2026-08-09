@@ -7,6 +7,11 @@ import { waveIndicesAt } from '../domain/plan';
 import type { OrchestratorState, LoopCtx, PhaseCtx } from './state';
 import { initialCtx } from './state';
 import { decide, matchedGeneratedFiles, type Decision } from './decide';
+import {
+  PREFLIGHT_OUTPUT_QUOTE,
+  SETUP_OUTPUT_QUOTE,
+  TOOLS_DETAIL_QUOTE,
+} from './reason-quote';
 import { normalizeDetail, contractDefectiveReason, contractSoundReason } from './stuck';
 import { buildInitialPrompt, buildLoopPrompt } from './prompts';
 
@@ -532,7 +537,8 @@ function stepPreparing(
           tag: 'FAILED',
           reason: phaseReason(
             phase,
-            `TOOLS_MISSING: a tool the verification needs is not installed before any agent turn — ${prepared.detail}`,
+            'TOOLS_MISSING: a tool the verification needs is not installed before any agent turn. ' +
+              `${TOOLS_DETAIL_QUOTE}${prepared.detail}`,
           ),
           iterations: 0,
           contractHash: contract.contractHash,
@@ -545,7 +551,8 @@ function stepPreparing(
           tag: 'FAILED',
           reason: phaseReason(
             phase,
-            `SETUP_FAILED: the workspace setup command failed before any agent turn — ${prepared.detail}`,
+            'SETUP_FAILED: the workspace setup command failed before any agent turn. ' +
+              `${SETUP_OUTPUT_QUOTE}${prepared.detail}`,
           ),
           iterations: 0,
           contractHash: contract.contractHash,
@@ -559,7 +566,8 @@ function stepPreparing(
           reason: phaseReason(
             phase,
             'CONTRACT_UNSOUND: the frozen verification is unsound — the defect is in the authored ' +
-              `verification, not the implementation — ${prepared.detail}`,
+              'verification, not the implementation. ' +
+              `${PREFLIGHT_OUTPUT_QUOTE}${prepared.detail}`,
           ),
           iterations: 0,
           contractHash: contract.contractHash,

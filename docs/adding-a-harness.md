@@ -53,7 +53,8 @@ type HarnessRunResult = {
   sessionId: SessionId;
   status: 'completed' | 'crashed' | 'truncated' | 'timeout';
   tokensUsed?: number;
-  hint?: string;   // an actionable remediation your codec recognised (§5) — advice, never a status
+  // the KIND of remediation your codec recognised (§5) — advice, never a status, never free text
+  hint?: 'autonomy-refused' | 'auth-required' | 'rate-limited';
 };
 ```
 
@@ -206,8 +207,8 @@ estimator?, hint? })` (from `src/agent-cli/codec.ts`, used by claude **and** dro
 `estimator` (issue #24) is the `StreamTokenEstimator` `runCodecHarness` threads in when the run
 streamed: when the parsed envelope carries **no** `usage`, `classifyFlatRun` falls back to its local
 estimate and stamps `tokenSource: 'estimated'` (vs `'reported'` for a real count). A non-streaming run
-simply reports unknown spend, exactly as before. `hint` is your `diagnose` result (§5), attached to
-any non-`completed` status.
+simply reports unknown spend, exactly as before. `hint` is your `diagnose` result (§5) — a closed
+`HarnessRemediation` kind, not prose — attached to any non-`completed` status.
 
 **Spend is accounted on every status, not just `completed`.** A turn that did real work and then
 crashed, timed out, or was truncated still burned the tokens its envelope reports, so
@@ -332,13 +333,17 @@ goaly-code (no external CLI) is routed there to the follow-up path instead (`--f
 When a harness turn fails, goaly's `STUCK_HARNESS_CRASH` abort tells the operator to check that the
 CLI is installed, authenticated, and runnable. That is the right advice for a *crash* — and three
 dead ends when the CLI actually **refused** an action it was capable of, and said so in its own
-output. `diagnose` lets your codec recognise that case and supply the real remediation:
+output. `diagnose` lets your codec recognise that case and name the **kind** of remediation it calls
+for:
 
 ```ts
+// src/domain/events.ts — the closed set your codec may report
+type HarnessRemediation = 'autonomy-refused' | 'auth-required' | 'rate-limited';
+
 diagnose(input) {
   if (input.code === 0) return undefined;
   if (!/insufficient permission/i.test(`${input.stdout}\n${input.stderr}`)) return undefined;
-  return 'myagent refused an action at its current permission level — re-run with `--harness-autonomy medium`.';
+  return 'autonomy-refused';
 }
 
 classify(input) {
@@ -349,22 +354,32 @@ classify(input) {
 }
 ```
 
-Three rules make this safe:
+Four rules make this safe:
 
+- **A kind, never prose.** `diagnose` returns one of the `HarnessRemediation` values above (or
+  `undefined`); the sentence the operator reads is authored by goaly in `REMEDIATION_ADVICE`
+  (`src/orchestrator/stuck.ts`). That is not stylistic. The abort reason is read back by goaly's own
+  next-step hint, which trusts everything before the first *quote lead-in*
+  (`src/orchestrator/reason-quote.ts`) as goaly's own words — free text from a codec (which may echo
+  its CLI's output, and thus the worker's) would land inside that trusted prefix and could steer the
+  hint. `src/orchestrator/reason-boundary.test.ts` enforces the boundary.
 - **Advice, never classification.** The status stays whatever §2 decided — a refused run is still a
   fail-closed `crashed`, and the abort is still the same typed `STUCK_HARNESS_CRASH`. Only the
   remediation sentence changes. Never use `diagnose` to talk a failure into looking like a success.
 - **This is the only place error strings may be matched.** Invariant #8 forbids the stuck detectors
   from guessing at exit codes or error text; they classify solely from facts goaly owns. Your codec
   is exempt because it *is* the module that owns its CLI's dialect — the reducer only ever carries
-  the resulting string through, never derives it.
+  the resulting kind through, never derives it.
 - **Match narrowly and never throw.** Anchor on phrasing the CLI emits verbatim, gate on a non-zero
   exit, and return `undefined` for anything you don't positively recognise — a wrong hint is worse
-  than no hint, because the generic advice at least sends the operator somewhere real.
+  than no hint, because the generic advice at least sends the operator somewhere real. If your CLI's
+  failure fits none of the kinds, return `undefined`; adding a kind means adding its goaly-authored
+  sentence to `REMEDIATION_ADVICE` in the same change (a run log carrying an unknown kind parses as
+  "no hint", so old logs still replay).
 
 `droidCodec.diagnose` (`droid-codec.ts`) is the worked example: it recognises droid's autonomy
 refusal ("Exec ended early: insufficient permission to proceed. Re-run with --auto medium") and
-points at `--harness-autonomy`.
+returns `'autonomy-refused'`, which the reducer renders as the `--harness-autonomy` advice.
 
 ## Skeleton (copy `src/agent-cli/claude-codec.ts` and adapt)
 
@@ -712,6 +727,6 @@ with/without streaming) — see `src/harness/stream-extractors.test.ts` and `src
 - [ ] Registered in `src/agent-cli/registry.ts` (the `AgentCli` union + one `codecFor` case) and allowed in `parseHarness`/`parseLlmProvider` (`src/cli/args.ts`); documented the assumed CLI contract in a header comment. (`makeHarness`/`makeLlmProvider` are already generic — no per-CLI case.)
 - [ ] Added to `adapter.contract.test.ts` (an `AgentCliHarness` over your codec); codec-level tests for `parse` / argv dialects / `classify`; `npm run typecheck` and `npm test` are green.
 - [ ] (optional, streaming — issue #23) A `streamExtractor` (the shared `sdkStreamExtractor` / `flatStreamExtractor`, or a custom one); `harnessArgs`/`readonlyArgs` branch on `stream` if the streaming output format is a different flag; final result is identical with/without streaming; streaming test added.
-- [ ] (optional) A `diagnose` that recognises an actionable refusal in the CLI's own failure output and names the fix; matched narrowly, gated on a non-zero exit, never throws, never influences the status; wired into `classify` as `hint`.
+- [ ] (optional) A `diagnose` that recognises an actionable refusal in the CLI's own failure output and returns the matching `HarnessRemediation` KIND (never prose — goaly authors the sentence); matched narrowly, gated on a non-zero exit, never throws, never influences the status; wired into `classify` as `hint`.
 - [ ] (optional, only if read-only) Confirmed `readonlyArgs` is genuinely read-only — the LLM-provider role is then **automatic** via `codecFor` (no extra wiring); tested by constructing `AgentCliLlmProvider({ codec })` with a fake `exec` (returns parsed text, carries the read-only flag, fails closed).
 ```

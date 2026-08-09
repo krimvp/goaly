@@ -2,7 +2,7 @@ import type { RunConfig } from '../domain/config';
 import type { CompiledContract } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
 import type { ContractHash, SessionId, DiffHash } from '../domain/ids';
-import type { Verdict, BudgetSnapshot, HarnessRunResult } from '../domain';
+import type { Verdict, BudgetSnapshot, HarnessRemediation, HarnessRunResult } from '../domain';
 
 /**
  * The position of one phase within a frozen plan (issue #48). Threaded through the per-phase states
@@ -69,13 +69,15 @@ export type LoopCtx = {
   /** Output of the most recent agent run — surfaced verbatim when a crash streak aborts the run. */
   readonly lastRunOutput: string | undefined;
   /**
-   * The codec-recognised remediation for the most recent agent run, when its CLI named an
+   * The codec-recognised remediation KIND for the most recent agent run, when its CLI named an
    * actionable fix in its own failure output (see {@link HarnessRunResult.hint}) — e.g. droid
-   * refusing an action at its `--auto` tier. Used ONLY to replace the generic remediation text of a
-   * `STUCK_HARNESS_CRASH` abort; it never affects any classification or transition. The reducer
-   * carries the string, it never derives it (invariant #8: per-CLI string matching lives in the codec).
+   * refusing an action at its `--auto` tier. Used ONLY to select which goaly-authored sentence a
+   * `STUCK_HARNESS_CRASH` abort carries; it never affects any classification or transition. A closed
+   * enum, not prose: the reducer renders the text itself, so nothing a CLI printed can land in the
+   * goaly-authored prefix of the abort reason (`./reason-quote`). The reducer carries the kind, it
+   * never derives it (invariant #8: per-CLI string matching lives in the codec).
    */
-  readonly lastRunHint: string | undefined;
+  readonly lastRunHint: HarnessRemediation | undefined;
   readonly lastBudget: BudgetSnapshot | undefined;
   /** The ladder verdict of the current iteration (set in VERIFYING, read at Sign-off). */
   readonly lastVerdict: Verdict | undefined;

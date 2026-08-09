@@ -1,4 +1,12 @@
+import type { HarnessRemediation } from '../domain/events';
 import type { DiffHash } from '../domain/ids';
+import {
+  ADJUDICATOR_QUOTE,
+  HARNESS_OUTPUT_QUOTE,
+  NESTED_REASON_QUOTE,
+  SIGNATURE_QUOTE,
+  VERIFIER_OUTPUT_QUOTE,
+} from './reason-quote';
 import type { LoopCtx } from './state';
 
 /**
@@ -210,13 +218,19 @@ const CRASH_OUTPUT_LIMIT = 500;
  * the code or the frozen contract — so the message points the user at the harness, not at a downstream
  * verifier red, and surfaces the harness's own error output verbatim so the real cause is visible.
  *
- * `hint` is a codec-recognised remediation the CLI named in its OWN output (see
- * {@link HarnessRunResult.hint}) — e.g. droid refusing an action at its `--auto` tier. When present
- * it REPLACES the generic install/auth advice, which in that situation is three dead ends: the CLI
- * is installed, authenticated and runnable, and the real fix was already in the log. The abort kind
- * and the fail-closed outcome are identical either way — only the guidance changes.
+ * `hint` is a codec-recognised remediation KIND (see {@link HarnessRemediation}) — e.g. droid
+ * refusing an action at its `--auto` tier. It selects one of the goaly-authored sentences in
+ * {@link REMEDIATION_ADVICE} instead of the generic install/auth advice, which in that situation is
+ * three dead ends: the CLI is installed, authenticated and runnable, and the real fix was already in
+ * the log. The codec supplies only the kind — never prose — so the remediation the operator reads
+ * (and the hint table matches on) stays goaly's own words, ahead of the quoted harness output. The
+ * abort kind and the fail-closed outcome are identical either way; only the guidance changes.
  */
-function harnessCrashReason(threshold: number, output: string, hint?: string): string {
+function harnessCrashReason(
+  threshold: number,
+  output: string,
+  hint?: HarnessRemediation | undefined,
+): string {
   const trimmed = output.trim();
   const snippet =
     trimmed.length > CRASH_OUTPUT_LIMIT ? `${trimmed.slice(0, CRASH_OUTPUT_LIMIT)}…` : trimmed;
@@ -224,13 +238,34 @@ function harnessCrashReason(threshold: number, output: string, hint?: string): s
   const head =
     `STUCK_HARNESS_CRASH: the coding-agent harness exited abnormally ${threshold} times in a row — ` +
     'it never completed a turn, so this is not a problem with your code or the frozen contract. ';
-  const advice =
-    hint !== undefined && hint.length > 0
-      ? hint
-      : 'Check that the agent CLI is installed, authenticated, and runnable in this directory (try ' +
-        'invoking it directly), then re-run — optionally with a different --harness.';
+  const advice = hint !== undefined ? REMEDIATION_ADVICE[hint] : GENERIC_CRASH_ADVICE;
   return `${head}${advice}${tail}`;
 }
+
+/** What to tell the operator when no codec recognised anything in the CLI's output. */
+const GENERIC_CRASH_ADVICE =
+  'Check that the agent CLI is installed, authenticated, and runnable in this directory (try ' +
+  'invoking it directly), then re-run — optionally with a different --harness.';
+
+/**
+ * The goaly-authored remediation for each {@link HarnessRemediation} kind a codec can report. The
+ * prose lives HERE, not in the codec, so a third-party codec cannot put its CLI's output into the
+ * goaly-authored prefix of an abort reason (the boundary owned by `./reason-quote`); a codec only
+ * ever names one of these closed kinds.
+ */
+const REMEDIATION_ADVICE: Record<HarnessRemediation, string> = {
+  'autonomy-refused':
+    'The harness REFUSED an action at its current autonomy level — a permission gate, not a broken ' +
+    'install or a bad login, so the generic checks below would all pass. Raise the tier and re-run: ' +
+    '--harness-autonomy medium (or high).',
+  'auth-required':
+    'The harness reported that it is NOT AUTHENTICATED — run the agent CLI once by hand and ' +
+    'complete its login, then re-run. Raising a threshold cannot help until it can start a session.',
+  'rate-limited':
+    'The harness reported a RATE LIMIT or an exhausted quota — this is an account/provider limit, ' +
+    'not a code or contract problem. Wait for the window to reset, switch --model, or use a ' +
+    'different --harness, then re-run.',
+};
 
 /** True when the last `threshold` harness runs all crashed (a consecutive crash streak). */
 function isCrashStreak(history: readonly string[], threshold: number): boolean {
@@ -310,33 +345,6 @@ function timeoutNoDiffReason(threshold: number): string {
 const SIGNATURE_REASON_LIMIT = 500;
 
 /**
- * The lead-ins after which an abort reason QUOTES text goaly did not author — a verifier failure
- * signature, an adjudicator's prose, a harness's stderr. Everything from the first of these to the
- * END of the reason is untrusted: the coding agent can steer it (a test name, an assertion message),
- * so no consumer may key a decision off it.
- *
- * Two rules keep that statable, and both are enforced by construction below:
- *  1. every reason builder that quotes external text uses one of these constants, and
- *  2. every goaly-authored marker (`CONTRACT_DEFECTIVE`, `CONTRACT_ADJUDICATED_SOUND`, `STUCK_*`)
- *     is emitted BEFORE the first quote, never after it.
- *
- * So `reason.slice(0, indexOfFirstLeadIn)` is exactly the goaly-authored part, and a reader that
- * matches only that prefix cannot be steered by the worker (see `goalyAuthoredReason` in the CLI).
- */
-export const SIGNATURE_QUOTE = 'Repeated failure signature: ';
-export const ADJUDICATOR_QUOTE = 'Adjudicator: ';
-export const HARNESS_OUTPUT_QUOTE = 'Last harness output: ';
-export const VERIFIER_OUTPUT_QUOTE = 'Last verifier output: ';
-
-/** All of the above, in no particular order — the CLI takes the EARLIEST match in a reason. */
-export const QUOTED_TEXT_LEAD_INS: readonly string[] = [
-  SIGNATURE_QUOTE,
-  ADJUDICATOR_QUOTE,
-  HARNESS_OUTPUT_QUOTE,
-  VERIFIER_OUTPUT_QUOTE,
-];
-
-/**
  * The repeat-failure abort reason (Fix #3 — issue: stuck on a byte-identical verifier error). Keeps the
  * legacy `repeat-failure` marker for back-compat, adds the typed `STUCK_REPEATED_FAILURE` label, names
  * the repeated (already-normalized) signature, and hints where the fix actually lies — so a worker that
@@ -383,10 +391,10 @@ export const CONTRACT_SOUND_MARKER = 'CONTRACT_ADJUDICATED_SOUND';
  * `planRecontract` refuses for a sound verdict).
  *
  * The marker leads and the quoted repeat-failure text (which ends in the WORKER-authored failure
- * signature) trails, per the ordering rule at {@link QUOTED_TEXT_LEAD_INS}: a reader keying off the
- * marker must be able to find it in the goaly-authored prefix, not behind text the worker steers.
- * It used to be the other way round, which is what let a crafted signature outrank the marker in the
- * CLI's next-step hint table.
+ * signature) trails, per the ordering rule in `./reason-quote`: a reader keying off the marker must
+ * be able to find it in the goaly-authored prefix, not behind text the worker steers. It used to be
+ * the other way round, which is what let a crafted signature outrank the marker in the CLI's
+ * next-step hint table.
  */
 export function contractSoundReason(fallbackReason: string): string {
   return (
@@ -394,7 +402,7 @@ export function contractSoundReason(fallbackReason: string): string {
     'found SATISFIABLE — the assertion CAN be met, the implementation simply has not met it yet. ' +
     'That adjudication is recorded, so this run ends here: replay folds the recorded verdict and a ' +
     'raised --stuck-repeat-threshold cannot un-terminate it. Carry the tree forward into a fresh ' +
-    `run instead. Original stuck condition: ${fallbackReason}`
+    `run instead. ${NESTED_REASON_QUOTE}${fallbackReason}`
   );
 }
 
@@ -411,6 +419,10 @@ export function contractSoundReason(fallbackReason: string): string {
  * the implementation may be correct and the tree is worth keeping, and carries the original
  * repeat-failure text as context. It deliberately does NOT name a successor command: the reducer has
  * no `runId` (that is Driver identity, not loop state) — the CLI's next-step hint owns that.
+ *
+ * `paths` are the FROZEN contract's authored files, so naming them ahead of the first lead-in is
+ * deliberate: they were compiled and sealed before the loop began and the worker cannot change them
+ * mid-run. The adjudicator's prose and the nested stuck reason are both quoted (`./reason-quote`).
  */
 export function contractDefectiveReason(
   paths: readonly string[],
@@ -429,8 +441,8 @@ export function contractDefectiveReason(
     `implementation could satisfy it. The defect is in ${named}, which is frozen, so the worker can ` +
     'never fix it. Your implementation may well be correct: KEEP the working tree — it was not ' +
     'rejected on its merits. Re-run with a corrected bar (an explicit --verify-cmd, or a refined ' +
-    `goal) rather than more iterations against this one.${why.length > 0 ? ` Adjudicator: ${why}` : ''}` +
-    ` Original stuck condition: ${fallbackReason}`
+    `goal) rather than more iterations against this one.${why.length > 0 ? ` ${ADJUDICATOR_QUOTE}${why}` : ''}` +
+    ` ${NESTED_REASON_QUOTE}${fallbackReason}`
   );
 }
 

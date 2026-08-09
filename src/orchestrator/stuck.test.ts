@@ -301,11 +301,12 @@ describe('detectStuck', () => {
 
     it('prefers the codec-recognised remediation over the generic install/auth advice', () => {
       // droid refusing an action at its --auto tier: the CLI is installed, authenticated and
-      // runnable, so the generic advice is three dead ends. The codec named the real fix.
+      // runnable, so the generic advice is three dead ends. The codec named the KIND of fix; the
+      // sentence the operator reads is authored here (so no CLI text enters the trusted prefix).
       const ctx = makeCtx({
         runStatusHistory: ['crashed', 'crashed'],
         lastRunOutput: 'Exec ended early: insufficient permission to proceed.',
-        lastRunHint: 'droid REFUSED an action at its autonomy level — re-run with --harness-autonomy medium.',
+        lastRunHint: 'autonomy-refused',
       });
       const message = detectStuck(ctx)?.message ?? '';
       expect(message).toContain('STUCK_HARNESS_CRASH'); // same typed abort, same fail-closed outcome

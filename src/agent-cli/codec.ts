@@ -15,7 +15,7 @@
  */
 
 import { SessionId, coerceSessionId, isSentinelSession } from '../domain/ids';
-import { HarnessRunResult } from '../domain/events';
+import { HarnessRunResult, type HarnessRemediation } from '../domain/events';
 import { runProcess } from '../util/spawn';
 import { parseAgentOutput, type AgentOutput, type FieldExtractor } from './output';
 import { StreamTap, type AgentEventSink, type StreamEventExtractor } from './stream';
@@ -123,19 +123,28 @@ export interface AgentCliCodec {
   readonly readonlyMintSession?: boolean;
 
   /**
-   * Recognise an ACTIONABLE remediation in this CLI's own failure output and phrase it for the
-   * operator — the one place per-CLI error strings are allowed to be matched, because a codec is
-   * the module that owns its CLI's dialect. The canonical case: droid exits non-zero with
-   * "insufficient permission to proceed / re-run with --auto medium", which goaly would otherwise
-   * report as a generic "check the CLI is installed and authenticated" environment failure while
-   * the real fix sat two lines up in the same log.
+   * Recognise an ACTIONABLE remediation in this CLI's own failure output and name its KIND — the one
+   * place per-CLI error strings are allowed to be matched, because a codec is the module that owns
+   * its CLI's dialect. The canonical case: droid exits non-zero with "insufficient permission to
+   * proceed / re-run with --auto medium", which goaly would otherwise report as a generic "check the
+   * CLI is installed and authenticated" environment failure while the real fix sat two lines up in
+   * the same log.
+   *
+   * Returns a {@link HarnessRemediation} KIND, never prose: the operator-facing sentence is authored
+   * by goaly (`REMEDIATION_ADVICE` in `src/orchestrator/stuck.ts`), so a codec that echoed its CLI's
+   * output could not put that text inside the goaly-authored prefix of an abort reason — the prefix
+   * the CLI's next-step hint reads (`src/orchestrator/reason-quote.ts`). If your CLI's failure has no
+   * matching kind, return `undefined` and the generic guidance stands.
    *
    * ADVICE ONLY. It never influences `classify`'s status — the run stays `crashed` and fail-closed
    * (invariant #4), and the stuck classification still keys purely on facts goaly owns (invariant
-   * #8). It only replaces the REMEDIATION TEXT of the resulting abort. Optional: a codec with
-   * nothing to recognise omits it and the generic guidance stands. Must never throw.
+   * #8). It only selects the REMEDIATION SENTENCE of the resulting abort. Optional. Must never throw.
    */
-  diagnose?(input: { stdout: string; stderr: string; code: number | null }): string | undefined;
+  diagnose?(input: {
+    stdout: string;
+    stderr: string;
+    code: number | null;
+  }): HarnessRemediation | undefined;
 
   /** Tolerantly parse this CLI's stdout into the shared {@link AgentOutput}. Never throws. */
   parse(stdout: string): AgentOutput | null;
@@ -307,8 +316,8 @@ export function classifyFlatRun(opts: {
   sessionId?: string | undefined;
   unknownSession: string;
   estimator?: StreamTokenEstimator | undefined;
-  /** Optional codec-recognised remediation for a FAILED run (see {@link AgentCliCodec.diagnose}). */
-  hint?: string | undefined;
+  /** Optional codec-recognised remediation KIND for a FAILED run (see {@link AgentCliCodec.diagnose}). */
+  hint?: HarnessRemediation | undefined;
 }): HarnessRunResult {
   const { parsed, code, stderr, timedOut, sessionId, unknownSession, estimator, hint } = opts;
   const session = coerceSessionId(parsed?.sessionId ?? sessionId, unknownSession);
@@ -326,7 +335,7 @@ export function classifyFlatRun(opts: {
       ? { tokenBreakdown: parsed.breakdown }
       : {}),
   };
-  const advice = hint !== undefined && hint.length > 0 ? { hint } : {};
+  const advice = hint !== undefined ? { hint } : {};
 
   if (timedOut === true) {
     return HarnessRunResult.parse({

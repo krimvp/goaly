@@ -6,6 +6,23 @@ import { Verdict, ApprovalVerdict, SealDecision, type SealEditPatch } from './ve
 import { RunConfig, StuckPolicy } from './config';
 import { TokenUsage, TokenBreakdown, UsageReport } from './usage';
 
+/**
+ * The closed set of remediations a codec may report for a failed harness run (see
+ * {@link HarnessRunResult.hint}). A codec names the KIND it recognised in its CLI's output; the
+ * operator-facing sentence is authored by goaly (`REMEDIATION_ADVICE` in
+ * `src/orchestrator/stuck.ts`), so no CLI text can reach the goaly-authored part of an abort reason.
+ *
+ *  - `autonomy-refused` — the CLI refused an action at its current permission/autonomy tier.
+ *  - `auth-required`    — the CLI reported it is not logged in / has no usable credentials.
+ *  - `rate-limited`     — the CLI reported a rate limit or an exhausted quota.
+ *
+ * Unrecognised values are DROPPED on parse (`.catch(undefined)`), not rejected: a run log written
+ * before this was an enum carries free-text advice, and a resume of it must still replay — it simply
+ * falls back to the generic guidance.
+ */
+export const HarnessRemediation = z.enum(['autonomy-refused', 'auth-required', 'rate-limited']);
+export type HarnessRemediation = z.infer<typeof HarnessRemediation>;
+
 /** What a harness adapter returns. `diffHash` is computed by the Workspace, not here. */
 export const HarnessRunResult = z.object({
   output: z.string(),
@@ -24,15 +41,20 @@ export const HarnessRunResult = z.object({
    */
   tokenBreakdown: TokenBreakdown.optional(),
   /**
-   * An ACTIONABLE remediation the CODEC recognised in this CLI's own failure output — e.g. droid
-   * refusing an action at its current `--auto` tier. Advice only: it never changes the `status`
-   * above (which stays classified from facts goaly owns — its own timeout, the exit code — per
-   * invariant #8), it only replaces the generic "check your install/auth" guidance in the
-   * `STUCK_HARNESS_CRASH` abort with the fix the harness itself named. Per-CLI string knowledge
-   * lives in the codec (`AgentCliCodec.diagnose`), never in the reducer; the reducer only ever
-   * carries this string through. Absent ⇒ nothing recognised.
+   * The remediation KIND the CODEC recognised in this CLI's own failure output — e.g. droid refusing
+   * an action at its current `--auto` tier. Advice only: it never changes the `status` above (which
+   * stays classified from facts goaly owns — its own timeout, the exit code — per invariant #8), it
+   * only selects which goaly-authored sentence replaces the generic "check your install/auth"
+   * guidance in the `STUCK_HARNESS_CRASH` abort. Per-CLI string knowledge lives in the codec
+   * (`AgentCliCodec.diagnose`), never in the reducer. Absent ⇒ nothing recognised.
+   *
+   * It is a CLOSED enum, not free text, because the reason it feeds is read back by the CLI's
+   * next-step hint: prose supplied by a third-party codec (which may echo the CLI's output) would
+   * land inside the goaly-authored prefix of that reason and could steer the hint. See
+   * `src/orchestrator/reason-quote.ts` for the boundary and `REMEDIATION_ADVICE` in
+   * `src/orchestrator/stuck.ts` for the prose each kind renders as.
    */
-  hint: z.string().min(1).optional(),
+  hint: HarnessRemediation.optional().catch(undefined),
 });
 export type HarnessRunResult = z.infer<typeof HarnessRunResult>;
 

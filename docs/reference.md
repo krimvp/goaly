@@ -1145,6 +1145,19 @@ kill an hours-long run. All defaults, no flags needed
   [`CONTRACT_DEFECTIVE`](#in-loop-contract-fault-adjudication-contract_defective) bar — the
   [`--recontract`](#re-contracting-a-defective-bar---recontract) successor command that keeps your
   tree.
+- **The `next:` hint reads only goaly's own words.** A terminal reason quotes evidence the worker can
+  reach — a verifier failure signature, the harness's last stderr, a setup command's output, an
+  adjudicator's prose — and every such quote begins at a fixed lead-in (`Repeated failure signature:`,
+  `Last harness output:`, `Last verifier output:`, `Missing tools:`, `Setup output:`, `Pre-flight
+  output:`, `Adjudicator:`, `Original stuck condition:`), with goaly's typed marker always ahead of
+  the first one. The hint matches only the text before the earliest lead-in, so a test named
+  `handles no-diff` cannot select the hint and point you at a flag that would not continue your run.
+  A codec's crash remediation is likewise a closed kind (e.g. the `--harness-autonomy` advice for a
+  refusal) whose sentence goaly authors, not text the CLI printed. Two honest caveats: a run logged
+  *before* this ordering rule can still have its bracketed `CONTRACT_ADJUDICATED_SOUND` marker
+  honored from the whole reason (the worst case is a milder hint — it names no threshold), and a
+  reason goaly passes through whole rather than builds — a compile/plan failure message, or your own
+  Seal rejection text — has no lead-in and is read entire.
 
 ## Operator control (watch, steer, extend)
 

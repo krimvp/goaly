@@ -1,20 +1,27 @@
-import { CONTRACT_SOUND_MARKER, QUOTED_TEXT_LEAD_INS } from '../orchestrator/stuck';
+import { QUOTED_TEXT_LEAD_INS } from '../orchestrator/reason-quote';
+import { CONTRACT_SOUND_MARKER } from '../orchestrator/stuck';
 
 /**
  * Separating goaly's OWN words in an abort reason from the text it merely QUOTES.
  *
  * A terminal reason often carries external evidence so the failure is diagnosable: the repeated
- * verifier-failure signature, an adjudicator's prose, the harness's last stderr. All of that is
- * WORKER-STEERABLE — a test name or an assertion message becomes part of the reason — so anything
- * that makes a DECISION from the reason (today: the CLI's next-step hint) must read only the part
- * goaly authored. Otherwise a test called `handles no-diff` can pick the hint, and the operator is
- * pointed at a flag that cannot continue their run.
+ * verifier-failure signature, an adjudicator's prose, the harness's last stderr, a setup command's
+ * output. All of that is WORKER-REACHABLE — a test name or an assertion message becomes part of the
+ * reason — so anything that makes a DECISION from the reason (today: the CLI's next-step hint) must
+ * read only the part goaly authored. Otherwise a test called `handles no-diff` can pick the hint,
+ * and the operator is pointed at a flag that cannot continue their run.
  *
- * The reducer holds up its half of the bargain (see `QUOTED_TEXT_LEAD_INS` in
- * `src/orchestrator/stuck.ts`): every quote starts at one of a handful of fixed lead-ins, and every
- * typed marker is emitted BEFORE the first quote. So the goaly-authored part is simply the prefix
- * that ends at the earliest lead-in — a boundary the worker cannot move, because moving it earlier
- * only removes ITS OWN text from view.
+ * The reducer holds up its half of the bargain (see `src/orchestrator/reason-quote.ts`, whose rules
+ * `src/orchestrator/reason-boundary.test.ts` enforces over every builder): every quote starts at one
+ * of a handful of fixed lead-ins, and every typed marker is emitted BEFORE the first quote. So the
+ * goaly-authored part is simply the prefix that ends at the earliest lead-in — a boundary the worker
+ * cannot move, because moving it earlier only removes ITS OWN text from view.
+ *
+ * Scope, honestly: the prefix is goaly's own words plus values frozen before the loop began (the
+ * contract's authored paths, a phased run's sealed sub-goal title). A reason that goaly does not
+ * BUILD but passes through whole — a `COMPILE_FAILED`/`PLAN_FAILED` message or a human's Seal
+ * rejection — has no lead-in and is returned entire; it is pre-loop text the worker never touches,
+ * but it is not goaly's own prose either.
  */
 export function goalyAuthoredReason(reason: string): string {
   let cut = reason.length;
