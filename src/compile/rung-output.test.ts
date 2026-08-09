@@ -372,3 +372,138 @@ describe('sanitizeRungOutput — the assertion slot is not claimable by a raw so
     expect(summary).toContain('Error: boom 3');
   });
 });
+
+/**
+ * ROUND-5 REGRESSION. The location-block signal was a NEGATIVE one: "the previous non-empty line
+ * carries a non-frozen file token". That assumes node's layout (header directly ABOVE the offending
+ * source line). pytest prints the frame source FIRST and the `path:LINE: Error` header LAST, and
+ * inside a multi-line statement the previous non-empty line is itself source or a `^^^^` caret — so
+ * the signal never fires anywhere in pytest output, and the bare `expected …` shape claimed the
+ * assertion slot with a RAW REFERENCE SOURCE LINE (verified end-to-end with real pytest 9.0.2).
+ *
+ * The rule is now POSITIVE: a no-file line must be provably runner-composed to be eligible at all,
+ * and the `expected …` shape needs an explicit runner marker (or a frozen frame immediately above).
+ */
+describe('sanitizeRungOutput — a no-file line must be PROVABLY runner-composed', () => {
+  const FROZEN_BAR = ['verify/check_impl.py'];
+  const FORMULA = 'amount * ZZ9_TABLE[0] + 42 if amount > 50 else amount * 2';
+
+  /**
+   * pytest always prints the FROZEN test's own frame first, so `sawFrozenFrame` is set for the rest
+   * of the output; from then on the only thing standing between the reference's source and the slot
+   * was "the previous non-empty line carries a non-frozen file token" — which is false for every
+   * line INSIDE a traceback body.
+   */
+  const PYTEST_HEAD = [
+    '=================================== FAILURES ===================================',
+    '________________________________ test_tariff ___________________________________',
+    'verify/check_impl.py:9: in test_tariff',
+    '    result = compute(100)',
+    'src/impl.py:4: in compute',
+  ];
+
+  it('pytest: a reference source line whose previous line is itself source is refused', () => {
+    const out = [
+      ...PYTEST_HEAD,
+      '    band = _band_for(amount)',
+      `    expected = ${FORMULA}`,
+      'E   NameError: the band lookup is not defined',
+    ].join('\n');
+
+    const summary = sanitizeRungOutput(out, FROZEN_BAR);
+
+    expect(summary).not.toContain(FORMULA);
+    expect(summary).not.toContain('ZZ9_TABLE');
+    // The runner's OWN marked line still reaches the author.
+    expect(summary).toContain('NameError');
+  });
+
+  it('pytest: a reference source line whose previous line is a caret is refused too', () => {
+    // The two-line-frame shape the previous fix missed entirely: no file token above the candidate,
+    // just the caret pytest draws under the offending expression.
+    const out = [
+      ...PYTEST_HEAD,
+      '        return (',
+      '^^^^^^^^^^^^^^^^',
+      `    expected = ${FORMULA}`,
+    ].join('\n');
+
+    const summary = sanitizeRungOutput(out, FROZEN_BAR);
+
+    expect(summary).not.toContain(FORMULA);
+    expect(summary).not.toContain('ZZ9_TABLE');
+  });
+
+  it('a bare `expected …` line is refused even inside a runner-composed frame block', () => {
+    const out = [
+      ' ❯ verify/check_impl.py:9:30',
+      '      7 |   x = 1',
+      `    expected = ${FORMULA}`,
+    ].join('\n');
+
+    expect(sanitizeRungOutput(out, FROZEN_BAR)).not.toContain('ZZ9_TABLE');
+  });
+
+  it('an ANSI-wrapped plain runner cannot smuggle the same line through', () => {
+    const esc = '';
+    const out = [
+      ' ❯ verify/check_impl.py:9:30',
+      `${esc}[31m    def compute(amount):${esc}[0m`,
+      `${esc}[1m    expected = ${FORMULA}${esc}[0m`,
+    ].join('\n');
+
+    expect(sanitizeRungOutput(out, FROZEN_BAR)).not.toContain('ZZ9_TABLE');
+  });
+
+  it('keeps a MARKED expected line, which is the runner speaking', () => {
+    const marked = sanitizeRungOutput('E   expected 15 to be 12', FROZEN_BAR);
+    expect(marked).toContain('expected 15 to be 12');
+  });
+});
+
+/**
+ * ROUND-5 REGRESSION. The frame branch was a second, WIDER channel than the module doc admitted:
+ * it kept the WHOLE line as long as every file token on it was frozen. pytest's short-summary line
+ * is `FAILED <frozen path>::<test> - <the message the reference raised>` — a frozen path plus
+ * arbitrary reference-authored free text — and up to MAX_LINES of them survived, bypassing every
+ * assertion-slot guard. A frame is now truncated at the end of its location token.
+ */
+describe('sanitizeRungOutput — a frame keeps its location, not the free text after it', () => {
+  const FROZEN_BAR = ['verify/check_impl.py'];
+
+  it("pytest short summary: the reference's exception message is cut off the FAILED line", () => {
+    const out = [
+      '=========================== short test summary info ============================',
+      'FAILED verify/check_impl.py::test_a - ValueError: ZZ9_TABLE band 7 out of range',
+      'FAILED verify/check_impl.py::test_b - KeyError: SECRET_BAND_TABLE lookup failed',
+    ].join('\n');
+
+    const summary = sanitizeRungOutput(out, FROZEN_BAR);
+
+    expect(summary).not.toContain('ZZ9_TABLE');
+    expect(summary).not.toContain('SECRET_BAND_TABLE');
+    // The identity of the failing test — which the author wrote — still survives.
+    expect(summary).toContain('verify/check_impl.py::test_a');
+    expect(summary).toContain('::test_b');
+  });
+
+  it('a vitest header keeps the file, not the trailing test title chain', () => {
+    const summary = sanitizeRungOutput(
+      ' FAIL  verify/check_impl.py > tariff > REFERENCE_ONLY_TITLE',
+      FROZEN_BAR,
+    );
+
+    expect(summary).not.toContain('REFERENCE_ONLY_TITLE');
+    expect(summary).toContain('verify/check_impl.py');
+  });
+
+  it('keeps the `:LINE:COL` suffix and the closing paren of a stack frame', () => {
+    const summary = sanitizeRungOutput(
+      '    at Object.<anonymous> (verify/check_impl.py:4:5) SECRET_TRAILER',
+      FROZEN_BAR,
+    );
+
+    expect(summary).not.toContain('SECRET_TRAILER');
+    expect(summary).toContain('verify/check_impl.py:4:5)');
+  });
+});

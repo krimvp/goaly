@@ -1650,25 +1650,36 @@ Details that matter:
 - **The refusal carries a structured summary, not the runner's output.** A test runner reds by
   printing the *source* of the code under test — and on a red, the code under test is the reference.
   So the failing rung's output is never passed through: it is replaced by a **whitelist** summary
-  carrying the exit code, the failing rung's identity, lines whose every file-ish token names a
-  **frozen** verification file, and **at most one** assertion/error message line — bounded to a
-  single truncated line and dropped if it lexically parses as code (a declaration, an assignment, a
-  function literal). ANSI escapes are stripped before matching. **Everything else is dropped,
-  including lines that name no file at all** — a bare traceback body or a caret-marked code frame is
-  exactly how runner source leaks past a per-line blacklist — so an unrecognized runner format
-  over-drops to nothing rather than guessing, and the refusal then says so instead of quoting.
-  The assertion slot is also CONTEXT-sensitive, not purely lexical: a no-file line is refused when it
-  sits inside a runner's location-header block (its previous non-empty line named a **non-frozen**
-  file, or the next line is the caret that closes the block) — that block's middle line is raw source
-  of the file the header named, which is how node's uncaught-exception format handed the author a
-  reference source line verbatim. Bodies that look like an expression (a call with an identifier
-  argument) or end in a comma are refused too.
+  carrying the exit code, the failing rung's identity, the **locations** of lines whose every
+  file-ish token names a **frozen** verification file, and **at most one** assertion/error message
+  line — bounded to a single truncated line and dropped if it lexically parses as code (a
+  declaration, an assignment, a function literal). ANSI escapes are stripped before matching. A kept
+  frame is **truncated at the end of its location token** (path plus any `:LINE[:COL]` / `::test-id`
+  suffix): a runner is free to append text it did not compose after the path — pytest's
+  `FAILED <frozen path>::<test> - <the message the reference raised>` — and the frame branch is not
+  screened by the assertion-slot guards. **Everything else is dropped, including lines that name no
+  file at all** — a bare traceback body or a caret-marked code frame is exactly how runner source
+  leaks past a per-line blacklist — so an unrecognized runner format over-drops to nothing rather
+  than guessing, and the refusal then says so instead of quoting.
+  The assertion slot is also CONTEXT-sensitive, and the context test is **positive**: a no-file line
+  is admitted only when it is provably *runner-composed* — it carries an explicit runner marker
+  (pytest's `E `, mocha's `N)`, jest's `●`, `FAILED` / `--- FAIL:`, a capitalized
+  `Expected:`/`Received:`), or the scan is inside a runner-composed block (opened by a frozen-file
+  frame, by a gutter/caret the runner drew, or by a marker line; closed by a frame naming a
+  non-frozen file or by a line that parses as source). The earlier *negative* test ("refuse when the
+  previous non-empty line named a non-frozen file") assumed node's layout — header directly above
+  the source line — and never fired inside a pytest traceback, where source is printed first and the
+  header last, so `expected = <the whole reference algorithm>` claimed the slot. The ambiguous
+  `expected …` shape is stricter still: block context is not enough, it needs an explicit marker or
+  a frozen frame on the line immediately above. Bodies that look like an expression (a call with an
+  identifier argument) or end in a comma are refused too.
   Otherwise the author would receive a working solution and could fold it into the frozen files — a
   green bar at t=0, i.e. a wrong green. The filter is lexical plus local context, **not a proof**:
   the one preserved message is whatever the runner printed, so a reference that throws with a secret
-  *as its message* still surfaces that one bounded line, and a line that both looks like a runner
-  message and stands outside any header block is kept whoever composed it. It does not deliver
-  frames, gutters or code-shaped bodies; it is not proven to be free of reference text.
+  *as its message* still surfaces that one bounded line — a marker proves the runner *printed* the
+  line, never that it *authored* the content — and the text a frame carries *before* its location
+  (`at <fn> (…)`, `FAILED`) is kept unscreened. It does not deliver gutters, code-shaped bodies, or
+  anything after a frame's location; it is not proven to be free of reference text.
 - **The scratch copy is isolated from your tree.** Symlinks are never duplicated into it (a linked
   `node_modules`, a linked `src` — the pnpm/monorepo/`npm link` shapes — would be a path straight
   back into your real workspace, so a scratch `npm ci` would mutate it), and every write is checked

@@ -13,17 +13,21 @@ import { posix } from 'node:path';
  * So this is a WHITELIST, and a narrow one. A line survives only if it is either
  *
  * 1. a line whose every file-ish token names one of the frozen `generatedFiles` (the bar's own
- *    frames), or
+ *    frames) — and then only its LOCATION survives: the line is truncated at the end of its last
+ *    file token (plus any `:LINE[:COL]` / `::test-id` suffix), because a runner is free to append
+ *    arbitrary reference-authored text after the path (pytest's
+ *    `FAILED <frozen path>::<test> - <the message the reference raised>`), or
  * 2. the FIRST line matching one of the recognized assertion/error shapes below, carrying no
- *    file-ish token at all AND not sitting inside a runner's location-header block.
+ *    file-ish token at all AND provably composed by the runner (see below).
  *
  * Everything else is dropped — including lines that name no file, which is exactly the default that
  * leaked pytest traceback bodies and jest's `> 5 | …` marker line past the previous line-by-line
  * blacklist. A kept line is stripped of ANSI escapes, truncated to {@link MAX_LINE_CHARS}, and
  * dropped if it lexically parses as code by the checks below; at most {@link MAX_LINES} survive.
  *
- * The single assertion slot is CONTEXT-SENSITIVE, not purely lexical. Node's uncaught-exception
- * block prints
+ * The single assertion slot is CONTEXT-SENSITIVE, and the context test is POSITIVE. The earlier
+ * NEGATIVE form ("refuse when the previous non-empty line names a non-frozen file") assumed node's
+ * layout, where a header sits directly above the offending source line:
  *
  * ```
  * /scratch/src/reference.mjs:7        ← header (dropped: names a non-frozen file)
@@ -31,17 +35,31 @@ import { posix } from 'node:path';
  *               ^                     ← caret (dropped)
  * ```
  *
- * and that middle line is reference source, not a message the runner composed. So a no-file
- * candidate is refused when its previous non-empty line is a location header naming a NON-frozen
- * file, or when the next line is the caret that closes such a block.
+ * pytest does the opposite — source first, `src/impl.py:4: NameError` header last — so INSIDE a
+ * traceback body the previous non-empty line is itself source or a `^^^^` caret, the negative
+ * signal never fires, and `expected = <the whole reference algorithm>` claimed the slot. Being
+ * "not obviously inside a header block" is the COMMON case for reference source, not the exception.
+ *
+ * So a no-file candidate must now be affirmatively RUNNER-COMPOSED: either it carries an explicit
+ * runner marker itself ({@link RUNNER_MARKER} — pytest's `E `, mocha's `N)`, jest's `●`,
+ * `FAILED`/`--- FAIL:`, a capitalized `Expected:`/`Received:`), or the scan is currently inside a
+ * runner-composed block ({@link runnerContext}: opened by a frame naming only frozen files, by a
+ * gutter/caret the runner drew, or by a marker line; closed by a frame naming a NON-frozen file or
+ * by a line that lexically parses as source). The ambiguous `expected …` shape — equally a fixture
+ * literal or an assignment in the reference — is stricter still: block context is NOT enough, it
+ * needs an explicit marker or a frozen frame on the immediately preceding line.
  *
  * HONEST LIMITS. This is a lexical + local-context filter, not a proof:
  * - the one kept assertion line is whatever the runner put in the message, so a reference that
  *   throws with a secret *as its message* still surfaces that message (bounded to one truncated
- *   line, dropped if it looks like code or like an expression, and dropped when it sits inside a
- *   location-header block). It is NOT proven to be free of reference-implementation text: a line
- *   that both looks like a runner message and stands outside any header block is kept, whoever
- *   composed it.
+ *   line, dropped if it looks like code or like an expression, and kept only in runner-composed
+ *   context). It is NOT proven to be free of reference-implementation text: a line that both looks
+ *   like a runner message and stands in runner-composed context is kept, whoever composed it. A
+ *   runner marker proves the RUNNER printed the line, never that the runner AUTHORED its content.
+ * - the frame branch keeps the text BEFORE the location token (the runner's `at …` / `FAILED` /
+ *   `❯` decoration, and any function name the frame names). That prefix is not proven to be
+ *   runner-composed either — it is bounded and, on every runner shape pinned here, names only the
+ *   frozen file's own symbols.
  * - {@link namesFrozenFile} matches a path SUFFIX when no `root` is given, so a frame naming
  *   `…/<frozen path>` under any prefix counts as frozen. That is why the dry run drops a reference
  *   file by the SAME predicate: whatever this treats as frozen is never written into the scratch
@@ -94,12 +112,27 @@ const ERROR_LINE =
 const PYTEST_ASSERT_LINE = /^\s*E\s+assert(?:ion)?\b[:\s]\s*(?<body>.*)$/i;
 
 /**
- * A runner's own `expected …` / `Expected: …` summary line. Unmarked, this shape is also what a
- * fixture/table literal in the reference implementation looks like (`expected: SECRET(n) * 7,`), so
- * it is only trusted once a frame naming a FROZEN file has already been seen in the same output —
- * i.e. the runner really is reporting on the bar.
+ * A runner's own `expected …` summary line. Unmarked, this shape is also exactly what a fixture
+ * table (`expected: SECRET(n) * 7,`) or an assignment (`expected = <the whole algorithm>`) in the
+ * reference implementation looks like — which is how a raw pytest source line claimed the assertion
+ * slot. It is therefore admitted ONLY with an explicit runner marker in front of it, or when the
+ * immediately preceding non-empty line was a frame naming only frozen files.
  */
 const EXPECTED_LINE = /^\s*expected\b[:\s]\s*(?<body>.*)$/i;
+
+/** The same shape carrying a runner's own gutter/marker (`E   expected …`, `1) expected …`). */
+const MARKED_EXPECTED_LINE = /^\s*(?:E\s+|\d+\)\s*|[●✕✗✘×]\s*)expected\b[:\s]\s*(?<body>.*)$/i;
+
+/** jest/vitest's capitalized diff pair — a header the runner composes, never a source line. */
+const DIFF_PAIR_LINE = /^\s*(?:Expected|Received)\s*:\s*(?<body>.*)$/;
+
+/**
+ * Text only a test runner prints: its own gutters, numbered-failure markers and status words. A
+ * line carrying one of these is taken as runner-composed FRAMING — which is a claim about who
+ * printed the line, never about who authored the rest of it.
+ */
+const RUNNER_MARKER =
+  /^\s*(?:E\s+\S|\d+\)\s|[●✕✗✘×]|FAILED\s|FAIL\s|--- FAIL:|not ok\s|Expected:|Received:)/;
 
 /** A statement/declaration opener — anchored, so it fires on source lines, not on prose. */
 const CODE_OPENER =
@@ -187,9 +220,34 @@ function canonical(p: string): string {
  * yields both `verify/check.test.mjs` and a truncated `check.test.mjs` (which would look unfrozen).
  */
 function fileRefs(line: string): string[] {
-  const slashed = line.match(SLASH_REF) ?? [];
-  const bare = line.replace(SLASH_REF, ' ').match(FILE_LINE_REF) ?? [];
-  return [...slashed, ...bare].map((t) => t.replace(/(?::\d+)+$/, ''));
+  return fileTokens(line).map((t) => t.text.replace(/(?::\d+)+$/, ''));
+}
+
+/** Every file-ish token with its end offset, directory-bearing tokens first (see {@link fileRefs}). */
+function fileTokens(line: string): { text: string; end: number }[] {
+  const slashed = [...line.matchAll(SLASH_REF)];
+  // Blank the directory-bearing tokens with SPACES so the bare pass keeps the original offsets.
+  const masked = line.replace(SLASH_REF, (m) => ' '.repeat(m.length));
+  const bare = [...masked.matchAll(FILE_LINE_REF)];
+  return [...slashed, ...bare].map((m) => ({ text: m[0], end: m.index + m[0].length }));
+}
+
+/** A `::test-id` / `::TestName` suffix, plus a closing bracket the runner wrapped the frame in. */
+const FRAME_SUFFIX = /^(?:::[\w$.[\]-]+)*[)\]]?/;
+
+/**
+ * A frame line cut down to its LOCATION: everything up to the end of its last file token, plus any
+ * `::test-id` suffix and closing bracket. Whatever the runner appended after that is free text it
+ * did not have to compose — pytest's short summary puts the exception message the REFERENCE raised
+ * there (`FAILED verify/x.py::test_a - ValueError: <reference text>`), and the frame branch is not
+ * screened by the assertion-slot guards, so that text is dropped rather than trusted.
+ */
+function frameLocation(line: string): string {
+  const tokens = fileTokens(line);
+  const end = tokens.reduce((max, t) => Math.max(max, t.end), 0);
+  if (end === 0) return line;
+  const tail = FRAME_SUFFIX.exec(line.slice(end))?.[0] ?? '';
+  return line.slice(0, end + tail.length);
 }
 
 /** True when the text lexically parses as source code rather than as a message about a failure. */
@@ -199,13 +257,19 @@ function looksLikeCode(text: string): boolean {
 
 /**
  * The line itself when it is a recognized assertion/error message that is not code; else nothing.
- * `sawFrozenFrame` gates the unmarked `expected …` shape (see {@link EXPECTED_LINE}).
+ *
+ * `bareExpectedOk` gates the UNMARKED `expected …` shape (see {@link EXPECTED_LINE}): it is true
+ * only when the previous non-empty line was a frame naming exclusively frozen files, i.e. the
+ * runner is demonstrably reporting on the bar right here. The marked forms need no such gate — the
+ * marker is the runner's own gutter and cannot be a raw source line.
  */
-function assertionLine(text: string, sawFrozenFrame: boolean): string | undefined {
+function assertionLine(text: string, bareExpectedOk: boolean): string | undefined {
   const match =
     ERROR_LINE.exec(text) ??
     PYTEST_ASSERT_LINE.exec(text) ??
-    (sawFrozenFrame ? EXPECTED_LINE.exec(text) : null);
+    MARKED_EXPECTED_LINE.exec(text) ??
+    DIFF_PAIR_LINE.exec(text) ??
+    (bareExpectedOk ? EXPECTED_LINE.exec(text) : null);
   if (match === null) return undefined;
   const body = match.groups?.['body'] ?? '';
   if (looksLikeCode(body)) return undefined;
@@ -213,29 +277,13 @@ function assertionLine(text: string, sawFrozenFrame: boolean): string | undefine
   return text.trim();
 }
 
-/**
- * True when a no-file line sits INSIDE a runner's location-header block, i.e. it is a RAW SOURCE
- * LINE of the file the header named rather than a message the runner composed. Two signals, either
- * of which is enough:
- *
- *  - the previous non-empty line carries a file-ish token that is NOT frozen (the header goaly just
- *    dropped — node prints `<path>:LINE` immediately above the offending source line), or
- *  - the next line is the caret that closes such a block.
- *
- * A header naming ONLY frozen files is deliberately not a trigger: the source under it is the bar's
- * own, which the author wrote and may see.
- */
-function insideLocationBlock(
-  previous: string | undefined,
-  next: string | undefined,
-  frozen: readonly string[],
-  root: string | undefined,
-): boolean {
-  if (next !== undefined && CARET_LINE.test(next)) return true;
-  if (previous === undefined) return false;
-  const refs = fileRefs(previous);
-  return refs.length > 0 && refs.some((r) => !namesFrozenFile(r, frozen, root));
-}
+/** Where the scan stands relative to the runner's own framing (see the module doc). */
+type Scan = {
+  /** True while the lines being read are the runner's own block rather than quoted source. */
+  runnerContext: boolean;
+  /** True when the previous non-empty line was a frame naming ONLY frozen files. */
+  afterFrozenFrame: boolean;
+};
 
 function bound(text: string): string {
   return text.length <= MAX_LINE_CHARS ? text : `${text.slice(0, MAX_LINE_CHARS)}…`;
@@ -255,32 +303,43 @@ export function sanitizeRungOutput(raw: string, frozen: readonly string[], root?
     .map((l) => l.replace(/\s+$/, ''));
   const kept: string[] = [];
   let message: string | undefined;
-  let sawFrozenFrame = false;
-  // The previous NON-EMPTY line, tracked before any filtering: the location header that makes a
-  // no-file line a source line is itself dropped, so the context must be read off the raw stream.
-  let previous: string | undefined;
+  // The output opens with the runner's own banner, never mid-source, so the scan starts inside
+  // runner-composed context; the first line of quoted source or the first foreign frame closes it.
+  const scan: Scan = { runnerContext: true, afterFrozenFrame: false };
   for (let i = 0; i < lines.length; i += 1) {
     const text = lines[i] ?? '';
     if (text.trim().length === 0) continue;
-    const before = previous;
-    previous = text;
-    if (GUTTER_LINE.test(text) || CARET_LINE.test(text)) continue;
+    const here: Scan = { ...scan };
+    if (GUTTER_LINE.test(text) || CARET_LINE.test(text)) {
+      // The runner drew this gutter/caret: whatever follows the block is its own output again.
+      scan.runnerContext = true;
+      scan.afterFrozenFrame = false;
+      continue;
+    }
     const refs = fileRefs(text);
     if (refs.length > 0) {
       const frozenOnly = refs.every((r) => namesFrozenFile(r, frozen, root));
-      if (frozenOnly) sawFrozenFrame = true;
+      // A frame naming a NON-frozen file is a location header for source goaly must not show, so it
+      // closes runner context; a frozen-only frame opens it.
+      scan.runnerContext = frozenOnly;
+      scan.afterFrozenFrame = frozenOnly;
       // Frames are capped, but the scan continues: a runner that prints many frozen frames before
       // its summary must not crowd out the one assertion line the author actually needs.
       if (kept.length >= MAX_LINES) continue;
-      if (frozenOnly && !looksLikeCode(text)) kept.push(bound(text.trim()));
+      // Only the LOCATION survives — the runner may have appended reference-authored free text.
+      if (frozenOnly && !looksLikeCode(text)) kept.push(bound(frameLocation(text).trim()));
       continue;
     }
     // Names no file at all: the pytest traceback body, jest's `> 5 | …` marker, a bare runner
-    // banner. Dropped by default — only ONE recognized assertion line is allowed through, and only
-    // when it is not sitting inside a location-header block (see `insideLocationBlock`).
+    // banner. Refused unless PROVABLY runner-composed (see the module doc).
+    const marked = RUNNER_MARKER.test(text);
+    scan.runnerContext = marked || (here.runnerContext && !looksLikeCode(text));
+    scan.afterFrozenFrame = false;
     if (message !== undefined) continue;
-    if (insideLocationBlock(before, lines[i + 1], frozen, root)) continue;
-    message = assertionLine(text, sawFrozenFrame);
+    if (!marked && !here.runnerContext) continue;
+    // The caret below closes a block whose source this line belongs to, whoever printed the header.
+    if (lines[i + 1] !== undefined && CARET_LINE.test(lines[i + 1] ?? '')) continue;
+    message = assertionLine(text, marked || here.afterFrozenFrame);
     if (message !== undefined) kept.push(bound(message));
   }
   return kept.join('\n').trim();
