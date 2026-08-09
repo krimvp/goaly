@@ -39,6 +39,33 @@ export const RunProvenance = z.object({
 export type RunProvenance = z.infer<typeof RunProvenance>;
 
 /**
+ * FOLLOW-UP provenance (Capability C, `--from-run`): the run this one continues, and the bounded
+ * prior-run COMPACTION that seeded its authoring.
+ *
+ * Recorded for the same reason `RunProvenance` is. The compaction only ever arrived from the fresh
+ * CLI invocation (`--from-run` is refused with `--resume`), so a resume that still has to COMPILE —
+ * a crash before `CONTRACT_COMPILED` was persisted, or a Seal "revise" round — re-authored the bar
+ * with ZERO prior-run context and said nothing. Compile is NOT necessarily once-per-run-process;
+ * only once-per-run-LOG, and the header is the only place the seed can survive a restart.
+ *
+ * Compose-time wiring like `harness`/`degraded`: never fed to the reducer, never part of any
+ * contract, written once at run start. Disjoint from `provenance` — a `--recontract` successor
+ * carries a repair brief instead, rebuilt from `provenance` on resume.
+ */
+export const RunFollowup = z.object({
+  /** The run this one builds on (`--from-run <id>`). */
+  predecessorRunId: RunId,
+  /**
+   * The bounded compaction of that run (see `compactRun`) — the exact text that seeded this run's
+   * authoring. Stored rather than re-derived so the seed survives even if the predecessor's log is
+   * pruned. OPTIONAL: logs written before this field existed still parse (invariant #6), and the
+   * resume path then WARNS instead of silently authoring without it.
+   */
+  seed: z.string().min(1).optional(),
+});
+export type RunFollowup = z.infer<typeof RunFollowup>;
+
+/**
  * One-time header: the full RunConfig for the run. The frozen contract is captured in the
  * CONTRACT_COMPILED event (logged loudly), so resume reconstructs it by replay.
  *
@@ -71,6 +98,7 @@ export const RunLogHeader = z.object({
   baseline: z.string().min(1).optional(),
   degraded: DegradedMode.optional(),
   provenance: RunProvenance.optional(),
+  followup: RunFollowup.optional(),
 });
 export type RunLogHeader = z.infer<typeof RunLogHeader>;
 
@@ -86,7 +114,12 @@ export function freshRunHeader(
   startedAt: number,
   config: RunConfig,
   baseline: string,
-  wiring: { harness?: string; degraded?: DegradedMode; provenance?: RunProvenance },
+  wiring: {
+    harness?: string;
+    degraded?: DegradedMode;
+    provenance?: RunProvenance;
+    followup?: RunFollowup;
+  },
 ): RunLogHeader {
   return {
     runId,
@@ -96,6 +129,7 @@ export function freshRunHeader(
     ...(baseline !== 'HEAD' ? { baseline } : {}),
     ...(wiring.degraded !== undefined ? { degraded: wiring.degraded } : {}),
     ...(wiring.provenance !== undefined ? { provenance: wiring.provenance } : {}),
+    ...(wiring.followup !== undefined ? { followup: wiring.followup } : {}),
   };
 }
 

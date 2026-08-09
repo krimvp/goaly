@@ -8,12 +8,8 @@ import {
   isHarnessChoice,
   type ParsedArgs,
 } from './args';
-import {
-  planRecontract,
-  recontractCommand,
-  recontractSeedFromProvenance,
-} from '../followup/recontract';
-import type { RunProvenance } from '../runlog/runlog';
+import { recontractCommand } from '../followup/recontract';
+import { resolveFollowup, resumeAuthoringSeed } from './followup-wiring';
 import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
 import { drive } from '../driver/driver';
@@ -26,13 +22,17 @@ import type { PlanGate } from '../plan/plan-gate';
 import type { PhasedStreamSink } from '../agent-cli/stream';
 import { readRun } from '../runlog/inspect';
 import { FileRunLog } from '../runlog/file-runlog';
-import { extendedRunConfig, applyRunExtension, resumeStreakRelief } from '../runlog/replay';
+import {
+  adjudicated,
+  extendedRunConfig,
+  applyRunExtension,
+  resumeStreakRelief,
+} from '../runlog/replay';
 import { renderResolvedConfig } from './dry-run';
 import type { RunExtension } from '../domain/events';
 import { acquireRunLock, RunLockedError, type RunLock } from '../runlog/lock';
 import { killActiveChildren } from '../util/spawn';
 import { detectWorkspaceMode, preflightRun } from './preflight';
-import { compactRun } from '../followup/compaction';
 import { resumeHint, renderResumeHint, type ResumeHint } from './resume-cmd';
 import { resolveModels } from './models';
 import { degradedMode } from './independence';
@@ -96,103 +96,6 @@ function startupFields(parsed: ParsedArgs): Record<string, string> {
   if (m.compilerModel !== undefined) fields.compilerModel = m.compilerModel;
   if (parsed.llmProvider !== 'claude') fields.llmProvider = parsed.llmProvider;
   return fields;
-}
-
-/**
- * Resolve the follow-up wiring (Capability C, `--from-run`). Returns the run config (possibly with an
- * inherited session seed) and the prior-run compaction to feed the compiler, or a fail-closed exit
- * code after writing a clear message. A normal run (no `--from-run`) passes through unchanged.
- */
-type FollowupResolution =
-  | {
-      readonly ok: true;
-      readonly config: RunConfig;
-      readonly followupSeed: string | undefined;
-      /** Set only for a `--recontract` successor (issue #117): recorded in the new run's header. */
-      readonly provenance?: RunProvenance;
-    }
-  | { readonly ok: false; readonly code: number };
-
-async function resolveFollowup(
-  parsed: ParsedArgs,
-  warn: (s: string) => void,
-): Promise<FollowupResolution> {
-  if (parsed.fromRunId === undefined) {
-    // --inherit-session / --recontract are meaningless without --from-run; fail closed rather than
-    // silently ignore. A re-contract in particular MUST name the run whose defect it repairs.
-    if (parsed.inheritSession) {
-      warn('goaly: --inherit-session requires --from-run <runId>\n');
-      return { ok: false, code: 2 };
-    }
-    if (parsed.recontract !== undefined) {
-      warn('goaly: --recontract requires --from-run <runId> (the run whose contract was adjudicated defective)\n');
-      return { ok: false, code: 2 };
-    }
-    return { ok: true, config: parsed.config, followupSeed: undefined };
-  }
-  if (parsed.resumeRunId !== undefined) {
-    warn('goaly: --from-run starts a NEW run and cannot be combined with --resume\n');
-    return { ok: false, code: 2 };
-  }
-
-  const stateDir = path.join(parsed.workspace, STATE_DIR);
-  const prior = await readRun(stateDir, parsed.fromRunId);
-  if (prior === null) {
-    warn(`goaly: --from-run ${parsed.fromRunId}: no such run in ${stateDir}\n`);
-    return { ok: false, code: 2 };
-  }
-  if (!prior.ok) {
-    warn(`goaly: --from-run ${parsed.fromRunId}: run log is corrupt: ${prior.error}\n`);
-    return { ok: false, code: 2 };
-  }
-  const followupSeed = compactRun(prior.detail);
-
-  // Session inheritance (opt-in). Cross-harness is invalid (session ids are harness-specific) → hard
-  // error; a no-op under --phased; a prior run with no recoverable session degrades to fresh (the
-  // compaction still applies). Otherwise seed the new config so the first turn resumes the prior session.
-  let config = parsed.config;
-  if (parsed.inheritSession) {
-    if (parsed.config.phased) {
-      warn('goaly: --inherit-session is ignored under --phased (using fresh session + compaction)\n');
-    } else if (prior.detail.harness !== undefined && prior.detail.harness !== parsed.harness) {
-      warn(
-        `goaly: --inherit-session needs the same harness as the prior run ` +
-          `(prior=${prior.detail.harness}, now=${parsed.harness}); session ids are harness-specific\n`,
-      );
-      return { ok: false, code: 2 };
-    } else if (prior.detail.sessionId === undefined) {
-      warn(
-        'goaly: --inherit-session: the prior run recorded no resumable session — ' +
-          'starting fresh (the compaction still applies)\n',
-      );
-    } else {
-      config = { ...parsed.config, seedSessionId: prior.detail.sessionId };
-    }
-  }
-
-  // `--recontract` (issue #117): a SUCCESSOR run for a bar goaly's OWN adjudicator condemned. The
-  // generic follow-up compaction is replaced by the defect-report repair brief, the goal is inherited
-  // from the predecessor's FROZEN contract (a repair changes the bar, not the goal), and the chain is
-  // bounded by the depth carried in the predecessor's header. Everything else — Seal, the freeze, the
-  // two keys, the pre-flight negative control — is an ordinary run.
-  if (parsed.recontract !== undefined) {
-    const decision = planRecontract(prior.detail, {
-      maxRecontracts: parsed.recontract.maxRecontracts,
-    });
-    if (!decision.ok) {
-      warn(`goaly: --recontract: ${decision.reason}\n`);
-      return { ok: false, code: 2 };
-    }
-    const { goal, seed, provenance } = decision.plan;
-    if (config.goal !== RESUMED_GOAL_PLACEHOLDER && config.goal !== goal) {
-      warn(
-        `goaly: --recontract re-authors the bar for the PREDECESSOR's frozen goal; the goal passed on ` +
-          `this command line is ignored (use --from-run without --recontract to change the goal)\n`,
-      );
-    }
-    return { ok: true, config: { ...config, goal }, followupSeed: seed, provenance };
-  }
-  return { ok: true, config, followupSeed };
 }
 
 /**
@@ -379,25 +282,25 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       const effective = extendedRunConfig(stored.header.config, stored.entries);
       runConfig = extend !== undefined ? applyRunExtension(effective, extend) : effective;
 
-      // Re-contract successor (issue #117): rebuild the REPAIR BRIEF from the header's provenance.
-      // It only matters when this resume still has to COMPILE (a crash before the contract was
-      // persisted, or a Seal "revise" round); past the freeze nothing re-authors and the seed is
-      // inert. Without it such a recompile authored a fresh bar with the adjudicated defect out of
-      // view — the successor quietly degrading into an ordinary authoring pass over the kept tree.
-      const headerProvenance = stored.header.provenance;
-      if (headerProvenance !== undefined) {
-        const rebuilt = recontractSeedFromProvenance(effective.goal, headerProvenance);
-        if (rebuilt !== undefined) {
-          followupSeed = rebuilt;
-        } else {
-          io.err(
-            `goaly: --resume: this run is a --recontract successor of ` +
-              `${headerProvenance.predecessorRunId}, but its log predates the recorded predecessor ` +
-              `bar — a re-compile on this resume would re-author the bar without the repair brief. ` +
-              `Prefer a fresh: ${recontractCommand(headerProvenance.predecessorRunId)}\n`,
-          );
-        }
+      // ADR-0012 operator door (issue #116). `nextStepHint` prints `--stuck-repeat-threshold` for a
+      // repeat abort, and a `defective:false` adjudication leaves that abort text byte-identical —
+      // so operators reach for the flag on a run whose contract was already adjudicated. The fold
+      // reproduces the recorded trip regardless (see `adjudicationPrecursors`), which is what keeps
+      // the resume from dying on an invalid transition; say so rather than let the flag look
+      // effective, and point at the relief that actually applies.
+      if (adjudicated(stored.entries) && extend?.stuck?.repeatFailureThreshold !== undefined) {
+        io.err(
+          `goaly: --resume: this run's contract was already adjudicated in-loop, so ` +
+            `--stuck-repeat-threshold does not continue it — the recorded adjudication replays as ` +
+            `it happened. More iterations against the same frozen bar is not the relief; ` +
+            `re-contract instead: ${recontractCommand(resumeRunId)}\n`,
+        );
       }
+
+      // Rebuild the compile-phase authoring seed from the HEADER: a resume that still has to
+      // COMPILE (pre-freeze crash, or a Seal "revise" round) otherwise re-authors the bar with the
+      // prior run — or the adjudicated defect — out of view. See `resumeAuthoringSeed`.
+      followupSeed = resumeAuthoringSeed(stored.header, effective.goal, io.err) ?? followupSeed;
     }
   }
 
@@ -669,6 +572,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
           ...(degraded !== undefined ? { degraded } : {}),
           ...(parsed.resumeExtend !== undefined ? { extend: parsed.resumeExtend } : {}),
           ...(followup.provenance !== undefined ? { provenance: followup.provenance } : {}),
+          ...(followup.followup !== undefined ? { followup: followup.followup } : {}),
         },
       );
     } finally {

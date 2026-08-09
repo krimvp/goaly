@@ -302,3 +302,12 @@ export function initialCtx(
     adjudicated: false,
   };
 }
+
+/**
+ * The remediation spend banked in a state's loop context, when the state carries one (plan 4.2).
+ * Pure and total: the terminal states carry no `LoopCtx`, so they simply answer `undefined`.
+ */
+export function remediationsTotal(state: OrchestratorState): number | undefined {
+  const ctx = (state as { ctx?: LoopCtx }).ctx;
+  return ctx?.remediations.total;
+}

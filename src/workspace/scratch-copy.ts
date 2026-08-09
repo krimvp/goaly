@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { errorMessage } from '../util/errors';
 import { realExec, type ExecFn } from './git-workspace';
+import { augmentToolPath, scrubEnv } from './scrub-env';
 import type { CommandResult } from './workspace';
 
 /**
@@ -31,7 +32,12 @@ export type ScratchCopy = {
    * implementation out of the real workspace, so the check resolves REAL paths, not just strings.
    */
   writeFile(relPath: string, content: string): Promise<void>;
-  /** Run a shell command in {@link root}, with the same timeout/spawn-failure reporting as a Workspace. */
+  /**
+   * Run a shell command in {@link root}, with the same timeout/spawn-failure reporting as a
+   * Workspace — and, in the real implementation, the same CREDENTIAL-SCRUBBED environment the
+   * verifier seam uses (`scrubEnv` + `augmentToolPath`), since these are the same untrusted
+   * commands over a tree that also holds model-authored code.
+   */
   run(command: string, opts?: { timeoutMs?: number }): Promise<CommandResult>;
 };
 
@@ -146,8 +152,16 @@ class FsScratchCopy implements ScratchCopy {
 
   async run(command: string, opts?: { timeoutMs?: number }): Promise<CommandResult> {
     try {
+      // The scratch runs the contract's `setup` and its deterministic rungs over a tree that also
+      // holds LLM-authored reference code — the same untrusted commands as the verifier seam, one
+      // compile step before the freeze. So it inherits the verifier seam's credential policy
+      // verbatim (`GitWorkspace.run`): secrets scrubbed, PATH extended with the per-user tool bin
+      // dirs so an agent-installed toolchain is still discoverable. Under the DEFAULT
+      // `--sandbox none` there is no jail either, so this is the only thing standing between
+      // model-authored code and ANTHROPIC_API_KEY / AWS_* / GITHUB_TOKEN.
       const r = await this.#exec('sh', ['-c', command], {
         cwd: this.root,
+        env: augmentToolPath(scrubEnv(process.env)),
         ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       });
       return {

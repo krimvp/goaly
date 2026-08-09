@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ContractDryRunCompiler } from './contract-dry-run';
@@ -575,6 +575,65 @@ describe('ContractDryRunCompiler — issue #114 regression (post-mockRestore cal
 
     expect(result).not.toBeInstanceOf(Error);
     expect((result as { contractHash: string }).contractHash).toBe(contract.contractHash);
+    expect((await readdir(root)).sort()).toEqual(['verify']);
+  });
+});
+
+/**
+ * The collision drop and the output whitelist must be the SAME function of the SAME value. When the
+ * drop compared path STRINGS while `FsScratchCopy.writeFile` compares RESOLVED paths, a reference
+ * file spelled `verify/./check.mjs` was judged unfrozen when written — so it OVERWROTE the frozen
+ * bar in the scratch copy, turning a provably unsatisfiable bar into a green — and frozen when
+ * printed, so every line it emitted was whitelisted into the refusal fed to the contract author.
+ */
+describe('ContractDryRunCompiler — a dotted reference path cannot rewrite the bar it measures', () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true });
+  });
+
+  it('drops a reference file that RESOLVES onto a frozen path, so the bar stays the authored one', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'goaly-dryrun-collide-'));
+    roots.push(root);
+    await mkdir(join(root, 'verify'), { recursive: true });
+    // A provably unsatisfiable bar: no implementation can make 1 equal 2.
+    const bar = ["import assert from 'node:assert/strict';", 'assert.equal(1, 2);'].join('\n');
+    await writeFile(join(root, 'verify', 'check.mjs'), bar, 'utf-8');
+
+    const contract = makeFakeContract({
+      goal: 'make one equal two',
+      rungs: [{ kind: 'deterministic', command: `"${process.execPath}" verify/check.mjs` }],
+      generatedFiles: [{ path: 'verify/check.mjs', sha256: sha256Hex(bar) }],
+    });
+    const reference = JSON.stringify({
+      files: [
+        {
+          // Resolves onto the frozen bar — a rewrite of the very assertions under test.
+          path: 'verify/./check.mjs',
+          content: "console.log('verify/check.mjs: SOLUTION SECRET_COLLIDE');",
+        },
+        { path: 'src/impl.mjs', content: 'export const x = 1;' },
+      ],
+    });
+
+    const result = await new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: new FakeLlm([reference]),
+      scratch: new FsScratchHost(root),
+      timeoutMs: 60_000,
+    })
+      .compile(generateConfig)
+      .catch((e: unknown) => e);
+
+    // The bar was measured AS AUTHORED, so the unsatisfiable rung reds and the freeze is refused.
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toMatch(/refusing to freeze an UNSATISFIABLE bar/);
+    // …and nothing the reference printed reached the contract author.
+    expect((result as Error).message).not.toContain('SECRET_COLLIDE');
+    expect((result as Error).message).not.toContain('SOLUTION');
+    // SAFETY: the real workspace still holds the authored bar, byte for byte.
+    expect(await readFile(join(root, 'verify', 'check.mjs'), 'utf-8')).toBe(bar);
     expect((await readdir(root)).sort()).toEqual(['verify']);
   });
 });

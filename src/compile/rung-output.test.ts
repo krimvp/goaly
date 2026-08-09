@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeRungOutput } from './rung-output';
+import { namesFrozenFile, normalizeRel, sanitizeRungOutput } from './rung-output';
 
 /**
  * The dry run's ONE channel out of the scratch copy is the refusal reason, and the tree that just
@@ -258,5 +258,117 @@ describe('sanitizeRungOutput — real runner shapes never leak the reference imp
     expect(summary).toContain('verify/check.test.mjs:9:30');
     expect(summary).not.toContain('.bak');
     expect(summary).not.toContain('node_modules');
+  });
+});
+
+describe('namesFrozenFile — the write side and the print side canonicalize identically', () => {
+  // PROVEN LEAK: the collision drop compared path STRINGS while `FsScratchCopy.writeFile` compares
+  // RESOLVED paths. A reference file spelled `verify/./check.test.mjs` was therefore judged
+  // UNFROZEN when written (so it overwrote the frozen bar in the scratch copy) and FROZEN when
+  // printed (so every line it emitted was whitelisted into the refusal fed to the contract author).
+  const FROZEN_BAR = ['verify/check.test.mjs'];
+
+  it.each([
+    'verify/./check.test.mjs',
+    'verify//check.test.mjs',
+    './verify/./check.test.mjs',
+    'verify/check.test.mjs/.',
+    'verify/sub/../check.test.mjs',
+    '  verify/./check.test.mjs  ',
+  ])('treats %j as the frozen file it resolves onto', (spelling) => {
+    expect(namesFrozenFile(spelling, FROZEN_BAR)).toBe(true);
+  });
+
+  it('normalizes both sides, so a frozen entry spelled oddly still matches', () => {
+    expect(namesFrozenFile('verify/check.test.mjs', ['verify/./check.test.mjs'])).toBe(true);
+    expect(normalizeRel('verify/./check.test.mjs')).toBe('verify/check.test.mjs');
+    expect(normalizeRel('./a//b/')).toBe('a/b');
+  });
+
+  it('still refuses a merely similar path', () => {
+    expect(namesFrozenFile('verify/check.test.mjs.bak', FROZEN_BAR)).toBe(false);
+    expect(namesFrozenFile('src/other.mjs', FROZEN_BAR)).toBe(false);
+  });
+
+  it('with a scratch root, a dotted spelling under the root resolves onto the frozen path', () => {
+    const root = '/tmp/goaly-dry-run-abc';
+    expect(namesFrozenFile(`${root}/verify/./check.test.mjs`, FROZEN_BAR, root)).toBe(true);
+    // …and a path OUTSIDE the copy is never frozen, however it is spelled.
+    expect(namesFrozenFile('/elsewhere/verify/check.test.mjs', FROZEN_BAR, root)).toBe(false);
+    // A relative token that merely LOOKS like the root prefix is not treated as absolute.
+    expect(namesFrozenFile('tmp/goaly-dry-run-abc/verify/check.test.mjs', FROZEN_BAR, root)).toBe(
+      false,
+    );
+  });
+});
+
+describe('sanitizeRungOutput — the assertion slot is not claimable by a raw source line', () => {
+  const FROZEN_BAR = ['verify/check.test.mjs'];
+
+  it("drops a source line inside node's uncaught-exception header block", () => {
+    // PROVEN LEAK: node prints `path:LINE`, then the RAW offending source line with no gutter, then
+    // a caret. The header is dropped (it names a non-frozen file) and the caret is dropped, but the
+    // bare source line matched the `expected …` shape and reached the contract author verbatim.
+    const out = [
+      '/tmp/goaly-dry-run-abc/src/reference.mjs:7',
+      '    expected: SECRET_FORMULA_H(n) * 7 + 1,',
+      '              ^',
+      '',
+      'AssertionError [ERR_ASSERTION]: 15 !== 12',
+      '    at Object.<anonymous> (/tmp/goaly-dry-run-abc/verify/check.test.mjs:3:1)',
+    ].join('\n');
+
+    const summary = sanitizeRungOutput(out, FROZEN_BAR, '/tmp/goaly-dry-run-abc');
+
+    expect(summary).not.toContain('SECRET_FORMULA_H');
+    expect(summary).not.toContain('expected:');
+    expect(summary).toContain('15 !== 12');
+  });
+
+  it.each([
+    '    expected: n <= 1 ? 1 : n * SECRET(n - 1),',
+    '    expected := SECRET * 7',
+    '    ValueError: SECRET * 7 + 1,',
+    '    ParseError: SECRET_LOOKUP(table),',
+    '    RetryFailure: SECRET_BACKOFF(n) * 7',
+  ])('drops the source line %j when it sits under a non-frozen location header', (source) => {
+    const out = ['/tmp/goaly-dry-run-abc/src/reference.mjs:7', source, '              ^'].join('\n');
+
+    const summary = sanitizeRungOutput(out, FROZEN_BAR, '/tmp/goaly-dry-run-abc');
+
+    expect(summary).not.toContain('SECRET');
+  });
+
+  it('drops a bare `expected …` line when no frame ever named a frozen file', () => {
+    // Unmarked, `expected: …` is also what a fixture table in the reference looks like, so it is
+    // only trusted once the runner has demonstrably been reporting on the frozen bar.
+    const orphan = sanitizeRungOutput('expected SECRET_TABLE[3] to be 12', FROZEN_BAR);
+    expect(orphan).toBe('');
+
+    const inContext = sanitizeRungOutput(
+      [' ❯ verify/check.test.mjs:9:30', 'expected 15 to be 12'].join('\n'),
+      FROZEN_BAR,
+    );
+    expect(inContext).toContain('expected 15 to be 12');
+  });
+
+  it('drops a candidate whose body is an expression rather than a message', () => {
+    expect(sanitizeRungOutput('Error: SECRET_HELPER(n - 1) * 7', FROZEN_BAR)).toBe('');
+    expect(sanitizeRungOutput('Error: SECRET lookup table,', FROZEN_BAR)).toBe('');
+  });
+
+  it('keeps the runner message that follows the caret of a dropped block', () => {
+    const out = [
+      '/tmp/goaly-dry-run-abc/src/reference.mjs:2',
+      '  const KEY = "LEAKED";',
+      '        ^',
+      '',
+      'Error: boom 3',
+    ].join('\n');
+
+    const summary = sanitizeRungOutput(out, FROZEN_BAR, '/tmp/goaly-dry-run-abc');
+
+    expect(summary).not.toContain('LEAKED');
+    expect(summary).toContain('Error: boom 3');
   });
 });

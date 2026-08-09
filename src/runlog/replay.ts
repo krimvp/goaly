@@ -35,7 +35,7 @@ import type { RunLogEntry } from './runlog';
  *    `--harness-idle-timeout-ms` — compose-time flags a resume already applies fresh — which is what
  *    the abort message names. Its own fold-desynchronization hazard (a log predating the detector
  *    can trip it MID-log, which relief here — tail-only by construction — could not cover anyway)
- *    is handled where it belongs, in the fold itself: see {@link withTimeoutNoDiffThreshold}.
+ *    is handled where it belongs, in the fold itself: see {@link TIMEOUT_NO_DIFF_UNREACHABLE}.
  *
  * It is not a weakening of stuck detection: the returned overlay is persisted as an ordinary
  * RUN_EXTENDED marker (ADR 0012 — operational knobs only, the frozen contract is unreachable
@@ -60,19 +60,20 @@ export function resumeStreakRelief(
 
 /**
  * Did this run already adjudicate its contract in-loop (issue #116)? If so the repeat-failure relief
- * above is SUPPRESSED, for two independent reasons:
+ * above is SUPPRESSED, ON THE MERITS: if the bar was adjudicated DEFECTIVE, more iterations against
+ * an unsatisfiable assertion are still unsatisfiable — a fresh contract is the only real relief,
+ * which is exactly what the CONTRACT_DEFECTIVE next-step hint says.
  *
- *  - Correctness of the fold (the load-bearing one). Relief may only change whether a detector trips
- *    at the TAIL of the log. Here a downstream event was already RECORDED off that trip
- *    (`… VERIFIED → CONTRACT_ADJUDICATED → ABORTED`), so raising the threshold would make the fold
- *    not enter ADJUDICATING at that VERIFIED — and the next entry would hit `invalidTransition`,
- *    turning the whole resume into `driver error`. A logged transition is a fact; relief must not
- *    desynchronize the fold from it.
- *  - On the merits. If the bar was adjudicated DEFECTIVE, more iterations against an unsatisfiable
- *    assertion are still unsatisfiable — a fresh contract is the only real relief, which is exactly
- *    what the CONTRACT_DEFECTIVE next-step hint says.
+ * This is deliberately NOT what keeps the fold in sync. Suppressing the AUTOMATIC relief could never
+ * be enough, because the ADR-0012 OPERATOR extension (`--resume <id> --stuck-repeat-threshold N`)
+ * reaches the same config through a different door — and goaly's own `nextStepHint` prints that very
+ * command after a `defective:false` adjudication. The fold defends itself instead: see
+ * {@link adjudicationPrecursors}.
+ *
+ * Exported so the CLI can WARN when an operator raises the threshold on such a run, rather than
+ * silently ignoring the flag they were told to pass.
  */
-function adjudicated(entries: readonly RunLogEntry[]): boolean {
+export function adjudicated(entries: readonly RunLogEntry[]): boolean {
   return entries.some((e) => e.event.tag === 'CONTRACT_ADJUDICATED');
 }
 
@@ -246,10 +247,7 @@ function lastFoldedIndex(entries: readonly RunLogEntry[]): number {
 /**
  * An effectively unreachable timeout-no-diff threshold — the streak is bounded by the iteration
  * count, so this DISABLES the detector for the fold it is applied to.
- */
-const TIMEOUT_NO_DIFF_UNREACHABLE = Number.MAX_SAFE_INTEGER;
-
-/**
+ *
  * Back-compat for the timeout-no-diff detector (issue #119) — the ONE detector that turned a
  * decision which previously returned `CONTINUE` into a terminal `ABORTED`. A run log written
  * BEFORE it existed can therefore contain a mid-log timeout+no-diff streak that the run simply
@@ -266,9 +264,68 @@ const TIMEOUT_NO_DIFF_UNREACHABLE = Number.MAX_SAFE_INTEGER;
  * This is a REPLAY-side concern, not a reducer one (invariant #1/#8): `detectStuck` stays pure and
  * purely history-driven — it is only ever handed a config, and here replay chooses which one.
  */
-function withTimeoutNoDiffThreshold(
+const TIMEOUT_NO_DIFF_UNREACHABLE = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Entry index → the repeat-failure threshold the fold MUST use, for every entry the log PROVES the
+ * repeat detector tripped at.
+ *
+ * `CONTRACT_ADJUDICATED` is only ever recorded out of `ADJUDICATING`, which `decide` enters ONLY on
+ * a `repeat` stuck trip (issue #116). So such an entry is proof that the repeat detector tripped at
+ * the folded entry just before it — a historical trip with a recorded downstream event, which no
+ * later relief may un-trip. The automatic resume relief already refuses to raise the threshold once
+ * a verdict is recorded, but the ADR-0012 OPERATOR extension reaches the same config through a
+ * different door (`--resume <id> --stuck-repeat-threshold N` — which goaly's own `nextStepHint`
+ * prints after a `defective:false` adjudication, whose abort text is byte-identical to the pre-#116
+ * repeat abort). Whichever door it came through, applying it before the fold made that VERIFIED
+ * return CONTINUE and the very next entry throw
+ * `invalid transition: event CONTRACT_ADJUDICATED in state RUNNING_AGENT` — a run that cannot be
+ * continued at all.
+ *
+ * The threshold used is the one that was IN FORCE THERE: the header value plus every RUN_EXTENDED
+ * overlay recorded BEFORE that entry. An overlay recorded after it cannot have applied to it (a
+ * marker is only ever appended at the tail, and this entry already has a folded successor), and
+ * using the historical value reproduces the recorded transition exactly — the abort reason QUOTES
+ * the threshold, so a merely trip-forcing value would rewrite the run's own text.
+ */
+function adjudicationPrecursors(
+  config: RunConfig,
+  entries: readonly RunLogEntry[],
+): ReadonlyMap<number, number> {
+  const precursors = new Map<number, number>();
+  let previousFolded = -1;
+  let threshold = config.stuckPolicy.repeatFailureThreshold;
+  let previousThreshold = threshold;
+  for (let i = 0; i < entries.length; i += 1) {
+    const event = entries[i]?.event;
+    if (event === undefined) continue;
+    if (event.tag === 'RUN_EXTENDED') {
+      threshold = event.stuck?.repeatFailureThreshold ?? threshold;
+      continue;
+    }
+    if (DRIVER_ONLY_TAGS.has(event.tag)) continue;
+    if (event.tag === 'CONTRACT_ADJUDICATED' && previousFolded >= 0) {
+      precursors.set(previousFolded, previousThreshold);
+    }
+    previousFolded = i;
+    previousThreshold = threshold;
+  }
+  return precursors;
+}
+
+/**
+ * Rewrite the fold-local stuck thresholds on a state's `LoopCtx`. The two knobs replay overrides —
+ * `timeoutNoDiffThreshold` (see {@link TIMEOUT_NO_DIFF_UNREACHABLE}) and `repeatFailureThreshold`
+ * (see {@link adjudicationPrecursors}) — are both cases of the SAME rule: relief may only change
+ * whether a detector trips where the log recorded no outcome off that decision. Every fold sets
+ * both explicitly, so the previous fold's override can never leak forward.
+ *
+ * This is a REPLAY-side concern, not a reducer one (invariant #1/#8): `detectStuck` stays pure and
+ * purely history-driven — it is only ever handed a config, and here replay chooses which one.
+ */
+function withStuckThresholds(
   state: OrchestratorState,
-  threshold: number,
+  thresholds: { timeoutNoDiff?: number; repeat?: number },
 ): OrchestratorState {
   switch (state.tag) {
     case 'RUNNING_AGENT':
@@ -276,12 +333,23 @@ function withTimeoutNoDiffThreshold(
     case 'AWAIT_SIGNOFF':
     case 'ADJUDICATING': {
       const { config } = state.ctx;
-      if (config.stuckPolicy.timeoutNoDiffThreshold === threshold) return state;
+      const timeoutNoDiff = thresholds.timeoutNoDiff ?? config.stuckPolicy.timeoutNoDiffThreshold;
+      const repeat = thresholds.repeat ?? config.stuckPolicy.repeatFailureThreshold;
+      if (
+        config.stuckPolicy.timeoutNoDiffThreshold === timeoutNoDiff &&
+        config.stuckPolicy.repeatFailureThreshold === repeat
+      ) {
+        return state;
+      }
       const ctx: LoopCtx = {
         ...state.ctx,
         config: {
           ...config,
-          stuckPolicy: { ...config.stuckPolicy, timeoutNoDiffThreshold: threshold },
+          stuckPolicy: {
+            ...config.stuckPolicy,
+            timeoutNoDiffThreshold: timeoutNoDiff,
+            repeatFailureThreshold: repeat,
+          },
         },
       };
       return { ...state, ctx };
@@ -317,8 +385,12 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
   let pendingNotes: string[] = [];
   // The last entry the reducer will fold — every earlier fold is a HISTORICAL decision the log has
   // already recorded the outcome of, so the timeout-no-diff trip is suppressed there (see
-  // `withTimeoutNoDiffThreshold`) and only the tail can go terminal on it.
+  // `TIMEOUT_NO_DIFF_UNREACHABLE`) and only the tail can go terminal on it.
   const tailIndex = lastFoldedIndex(entries);
+  // Entries the log PROVES the repeat detector tripped at (a `CONTRACT_ADJUDICATED` was recorded off
+  // them). A raised threshold — from the automatic relief or from an operator `--stuck-repeat-threshold`
+  // — must not un-trip those, or the very next entry is an invalid transition.
+  const precursors = adjudicationPrecursors(config, entries);
 
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
@@ -368,20 +440,24 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
     }
     // With extended budget caps, the persisted `exceeded` flags are re-judged against the new caps
     // (raw spent numbers stay the persisted facts) — else the fold would re-abort at the old cap.
-    const folded = withTimeoutNoDiffThreshold(
-      state,
-      index === tailIndex
-        ? effective.stuckPolicy.timeoutNoDiffThreshold
-        : TIMEOUT_NO_DIFF_UNREACHABLE,
-    );
+    const folded = withStuckThresholds(state, {
+      timeoutNoDiff:
+        index === tailIndex
+          ? effective.stuckPolicy.timeoutNoDiffThreshold
+          : TIMEOUT_NO_DIFF_UNREACHABLE,
+      repeat: precursors.get(index) ?? effective.stuckPolicy.repeatFailureThreshold,
+    });
     [state, commands] = step(
       folded,
       budgetExtended ? rejudgeBudget(entry.event, effective) : entry.event,
     );
   }
-  // Hand the caller a state whose ctx carries the run's REAL threshold: the suppression above is
+  // Hand the caller a state whose ctx carries the run's REAL thresholds: the overrides above are
   // fold-local scaffolding, and the Driver continues the live run from this very state.
-  state = withTimeoutNoDiffThreshold(state, effective.stuckPolicy.timeoutNoDiffThreshold);
+  state = withStuckThresholds(state, {
+    timeoutNoDiff: effective.stuckPolicy.timeoutNoDiffThreshold,
+    repeat: effective.stuckPolicy.repeatFailureThreshold,
+  });
 
   return {
     state,

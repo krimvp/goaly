@@ -259,4 +259,52 @@ describe('the adjudication is metered, replayable, and resume-safe', () => {
       expect(folded.state.reason).not.toContain('driver error');
     }
   });
+
+  it('an OPERATOR --stuck-repeat-threshold cannot desynchronize the fold either (ADR-0012 door)', async () => {
+    // The automatic relief is suppressed once a verdict is recorded, but `--resume <id>
+    // --stuck-repeat-threshold N` reaches the same config through RUN_EXTENDED — and it is exactly
+    // what `nextStepHint` prints for a `defective:false` adjudication, whose abort text is
+    // byte-identical to the pre-#116 repeat abort. Applied before the fold, a raised threshold made
+    // the tripping VERIFIED return CONTINUE and the next entry threw
+    // `invalid transition: event CONTRACT_ADJUDICATED in state RUNNING_AGENT`, so the run could not
+    // be continued AT ALL. The fold now reproduces a trip the log recorded a downstream event off.
+    const llm = new FakeLlm([JSON.stringify({ defective: false, reason: 'the bar looks fine' })]);
+    const runlog = new InMemoryRunLog();
+    await drive(wireRepeatRun({ llm, runlog }).deps, config, RunId.parse('run-operator-relief'));
+    const stored = await runlog.read();
+    const entries: RunLogEntry[] = [...stored!.entries];
+
+    // goaly's own printed next step for this abort is the repeat-threshold flag.
+    const abort = entries[entries.length - 1]!;
+    expect(abort.stateTagAfter).toBe('ABORTED');
+    expect(
+      nextStepHint({
+        runId: RunId.parse('run-operator-relief'),
+        status: 'ABORTED',
+        iterations: 1,
+        contractHash: null,
+        reason: 'STUCK_REPEATED_FAILURE: identical verifier failures',
+      }),
+    ).toContain('--stuck-repeat-threshold');
+
+    const extended: RunLogEntry[] = [
+      ...entries,
+      {
+        runId: RunId.parse('run-operator-relief'),
+        seq: entries.length + 1,
+        ts: 1,
+        contractHash: abort.contractHash,
+        event: { tag: 'RUN_EXTENDED', stuck: { repeatFailureThreshold: 6 } },
+        stateTagAfter: 'ABORTED',
+      },
+    ];
+
+    const folded = replay(stored!.header.config, extended);
+
+    expect(folded.state.tag).toBe('ABORTED');
+    if (folded.state.tag === 'ABORTED') {
+      expect(folded.state.reason).not.toContain('invalid transition');
+      expect(folded.state.reason).not.toContain('driver error');
+    }
+  });
 });

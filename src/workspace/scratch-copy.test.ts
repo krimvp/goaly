@@ -187,6 +187,43 @@ describe('FsScratchHost', () => {
     }
   });
 
+  it('runs with a CREDENTIAL-SCRUBBED environment, exactly like the verifier seam', async () => {
+    // The scratch runs the contract's `setup` and its deterministic rungs over a tree that also
+    // holds LLM-authored reference code, one compile step before the freeze — and under the DEFAULT
+    // `--sandbox none` there is no jail. Inheriting goaly's raw process.env would hand model-authored
+    // code ANTHROPIC_API_KEY / AWS_* / GITHUB_TOKEN, which `GitWorkspace.run` has always denied.
+    const root = await makeWorkspace();
+    const before = { ...process.env };
+    process.env.ANTHROPIC_API_KEY = 'sk-scratch-secret';
+    process.env.AWS_SECRET_ACCESS_KEY = 'aws-scratch-secret';
+    process.env.GITHUB_TOKEN = 'gh-scratch-secret';
+    process.env.GOALY_SCRATCH_HARMLESS = 'keep-me';
+    let env: NodeJS.ProcessEnv | undefined;
+    const host = new FsScratchHost(root, {
+      exec: async (_cmd, _args, opts: { cwd: string; env?: NodeJS.ProcessEnv }) => {
+        env = opts.env;
+        return { stdout: '', stderr: '', code: 0 };
+      },
+    });
+    const copy = await host.create();
+    try {
+      await copy.run('printenv');
+      expect(env).toBeDefined();
+      expect(env?.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(env?.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+      expect(env?.GITHUB_TOKEN).toBeUndefined();
+      // …while the ordinary toolchain environment survives, or no `setup` could ever run.
+      expect(env?.GOALY_SCRATCH_HARMLESS).toBe('keep-me');
+      expect(env?.PATH).toBeDefined();
+    } finally {
+      await host.destroy(copy);
+      for (const k of ['ANTHROPIC_API_KEY', 'AWS_SECRET_ACCESS_KEY', 'GITHUB_TOKEN', 'GOALY_SCRATCH_HARMLESS']) {
+        if (before[k] === undefined) delete process.env[k];
+        else process.env[k] = before[k];
+      }
+    }
+  });
+
   it('aborts (and cleans up) when the workspace exceeds the entry budget', async () => {
     const root = await makeWorkspace();
     for (let i = 0; i < 5; i += 1) {

@@ -807,7 +807,11 @@ Guarantees, all of them structural:
 - **Replay-safe.** The verdict is a Zod-parsed, write-ahead-logged `CONTRACT_ADJUDICATED` event, so
   `--resume` and `goaly runs show` reuse the recorded answer and never re-call the model. (Resume's
   automatic streak relief is suppressed for a run that adjudicated: more iterations against an
-  unsatisfiable bar are still unsatisfiable.)
+  unsatisfiable bar are still unsatisfiable.) A recorded verdict is a fact the replay reproduces:
+  raising `--stuck-repeat-threshold` on such a run — by hand, on a `defective: false` abort whose
+  text still names that flag — does **not** un-trip the repeat that led to it, so the run stays
+  resumable instead of dying on an invalid transition. goaly says so and points at
+  [`--recontract`](#re-contracting-a-defective-bar---recontract) when you pass the flag anyway.
 - **The reducer stays pure.** DECIDE only emits an `ADJUDICATE_CONTRACT` command; the driver
   performs the read-only call and feeds the event back (invariant #1). Its spend is metered against
   `--budget-tokens` under the verifier layer.
@@ -1164,6 +1168,14 @@ additionally resumes the prior harness session on the first turn so the agent ke
 memory — the new frozen contract still solely governs DONE. Valid only with the same `--harness` as
 the prior run; ignored under `--phased`. The end-of-run banner prints a "Continue this session:"
 hint with the same mapping as `runs resume-cmd`.
+
+**Resuming a follow-up keeps its compaction.** `--from-run` cannot be combined with `--resume`, so
+the seed can never arrive from the command line on a resume — the predecessor run id and the
+compaction itself are recorded write-ahead in the run-log header instead. It matters whenever a
+resume still has to *compile* (a crash before the freeze, or a Seal "revise" round): without it that
+re-author ran with zero prior-run context, silently. A log written before the header carried it
+cannot be rebuilt, and goaly says so and points at a fresh `--from-run` rather than degrading
+quietly. Past the freeze nothing re-authors, so the seed is inert there.
 
 ## Re-contracting a defective bar (`--recontract`)
 
@@ -1645,15 +1657,29 @@ Details that matter:
   including lines that name no file at all** — a bare traceback body or a caret-marked code frame is
   exactly how runner source leaks past a per-line blacklist — so an unrecognized runner format
   over-drops to nothing rather than guessing, and the refusal then says so instead of quoting.
+  The assertion slot is also CONTEXT-sensitive, not purely lexical: a no-file line is refused when it
+  sits inside a runner's location-header block (its previous non-empty line named a **non-frozen**
+  file, or the next line is the caret that closes the block) — that block's middle line is raw source
+  of the file the header named, which is how node's uncaught-exception format handed the author a
+  reference source line verbatim. Bodies that look like an expression (a call with an identifier
+  argument) or end in a comma are refused too.
   Otherwise the author would receive a working solution and could fold it into the frozen files — a
-  green bar at t=0, i.e. a wrong green. The filter is lexical, not a proof: the one preserved
-  message is whatever the runner printed, so a reference that throws with a secret *as its message*
-  still surfaces that one bounded line — it cannot deliver a function body, a file path, or a frame.
+  green bar at t=0, i.e. a wrong green. The filter is lexical plus local context, **not a proof**:
+  the one preserved message is whatever the runner printed, so a reference that throws with a secret
+  *as its message* still surfaces that one bounded line, and a line that both looks like a runner
+  message and stands outside any header block is kept whoever composed it. It does not deliver
+  frames, gutters or code-shaped bodies; it is not proven to be free of reference text.
 - **The scratch copy is isolated from your tree.** Symlinks are never duplicated into it (a linked
   `node_modules`, a linked `src` — the pnpm/monorepo/`npm link` shapes — would be a path straight
   back into your real workspace, so a scratch `npm ci` would mutate it), and every write is checked
   against the copy's *real* path, not just its path string. A `setup` that relied on a linked
-  `node_modules` simply fails there, and the dry run fails open.
+  `node_modules` simply fails there, and the dry run fails open. A reference file whose path
+  *resolves* onto an authored verification file is dropped, not written — the write side and the
+  output filter canonicalize paths identically, so `verify/./check.test.mjs` cannot rewrite the bar
+  it is measured against.
+- **Scratch commands run credential-scrubbed**, exactly like the verify command (see below): the
+  same `*_TOKEN` / `*_KEY` / `*SECRET*` / `AWS_*` / `GITHUB_*` variables are stripped before the
+  contract's `setup` and its rungs execute, because that tree holds model-authored code.
 - **Fail-open on infrastructure.** No LLM, an unparseable reference, a scratch-copy failure (including
   a workspace too large to copy cheaply), a `setup` that cannot run there, a rung that timed out or
   could not be started — each logs and freezes exactly as it does today. The dry run can only *reject*
@@ -1673,7 +1699,8 @@ Details that matter:
 
 Opt out with `--contract-dry-run false` (config-file key `contract-dry-run`).
 
-**The verify command runs with a credential-scrubbed environment.** Credential-looking variables
+**The verify command runs with a credential-scrubbed environment** — as do the contract dry run's
+scratch commands. Credential-looking variables
 (`*_TOKEN`, `*_KEY`, `*SECRET*`, `AWS_*`, `GITHUB_*`, …) are stripped so they can't be exfiltrated
 through a check; PATH/HOME and the toolchain env are kept. This narrows but does not eliminate the
 host trust boundary — only run `--autonomous` against repositories you trust, or pass `--sandbox`.

@@ -13,8 +13,16 @@ import type { Planner } from '../plan/planner';
  * (issue #51). The reducer keeps emitting `COMPILE_VERIFIER` / `COMPILE_PLAN` exactly as before
  * (including the first one with no feedback); these decorators sit at the composition root and inject
  * the seed as the call crosses the seam. The freeze is unaffected — each attempt is still frozen and
- * Sealed on its own (invariants #2/#3). Compile happens once and is persisted as CONTRACT_COMPILED,
- * so a resumed run never re-authors and the (un-persisted) seed is moot on replay.
+ * Sealed on its own (invariants #2/#3).
+ *
+ * A RESUME CAN STILL RE-AUTHOR. Compile is once per run LOG, not once per process: a crash before
+ * `CONTRACT_COMPILED` was persisted, or a Seal "revise" round, brings the resumed run back through
+ * `compile()`. The seed is a composition-root value and `--from-run` is refused with `--resume`, so
+ * it cannot arrive from the command line then — it must be RECONSTRUCTIBLE FROM THE RUN-LOG HEADER,
+ * which is why the follow-up's predecessor and its bounded compaction are recorded there
+ * (`RunFollowup`; the `--recontract` sibling rebuilds its repair brief from `RunProvenance`). A
+ * header that predates those fields cannot be rebuilt, and the resume path says so out loud rather
+ * than quietly authoring a fresh bar with no prior-run context.
  */
 
 /** Prepend the seed to the command feedback (or use it alone when the command carried none). */

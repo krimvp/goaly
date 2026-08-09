@@ -193,8 +193,11 @@ export class ContractDryRunCompiler implements VerifierCompiler {
     // The bar must be measured EXACTLY as authored: a reference file that collides with a frozen
     // verification path would rewrite the very assertions under test, so it is dropped outright.
     // Deliberately the SAME predicate the output filter uses to decide whether a frame names a
-    // frozen file: when the two disagreed, a reference file whose path suffix-matched a frozen entry
-    // was both WRITTEN and treated as frozen, so its frames survived into the refusal.
+    // frozen file, over the SAME canonical form the scratch copy's own `resolve(root, relPath)`
+    // produces. When the two disagreed, the same path was both WRITTEN and treated as frozen: a
+    // suffix-matching path (`src/check.mjs` vs a frozen `check.mjs`), and later a merely dotted
+    // spelling (`verify/./check.mjs`), rewrote the bar in the scratch copy AND had its own lines
+    // whitelisted into the refusal.
     const pinned = contract.generatedFiles.map((f) => f.path);
     const files = reference.files.filter((f) => !namesFrozenFile(f.path, pinned));
     if (files.length < reference.files.length) {

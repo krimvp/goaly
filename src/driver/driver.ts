@@ -1,6 +1,6 @@
 import type { Command, OrchestratorEvent, RunExtension, RunOutcome } from '../domain/events';
 import { OrchestratorEvent as OrchestratorEventSchema } from '../domain/events';
-import { freshRunHeader, type RunLogEntry, type RunProvenance } from '../runlog/runlog';
+import { freshRunHeader, type RunFollowup, type RunLogEntry, type RunProvenance } from '../runlog/runlog';
 import type { RunConfig } from '../domain/config';
 import type { DegradedMode } from '../domain/degraded';
 import type { CompiledContract } from '../domain/contract';
@@ -8,15 +8,9 @@ import type { ContractHash, RunId, SessionId } from '../domain/ids';
 import { DiffHash, coerceSessionId } from '../domain/ids';
 import type { Verdict } from '../domain/verdict';
 import type { TokenUsage, UsageReport } from '../domain/usage';
-import { isTerminal, iterationCount, type LoopCtx, type OrchestratorState } from '../orchestrator/state';
+import { isTerminal, iterationCount, remediationsTotal, type OrchestratorState } from '../orchestrator/state';
 import { MAX_STUCK_REMEDIATIONS } from '../orchestrator/remediate';
 import { initial, step } from '../orchestrator/step';
-
-/** The remediation spend banked in a state's loop context, when the state carries one (plan 4.2). */
-function remediationsTotal(state: OrchestratorState): number | undefined {
-  const ctx = (state as { ctx?: LoopCtx }).ctx;
-  return ctx?.remediations.total;
-}
 import { performRefreeze } from './refreeze';
 import { replay } from '../runlog/replay';
 import type { VerifierCompiler } from '../compile/compiler';
@@ -208,6 +202,12 @@ export type DriveOptions = {
    * passes on a from-scratch tree. Absent ⇒ an ordinary run, unchanged in every respect.
    */
   provenance?: RunProvenance;
+  /**
+   * Follow-up provenance (`--from-run`, Capability C): the predecessor run + the bounded prior-run
+   * compaction that seeded authoring. Header-only wiring (never contract, never reducer) so a resume
+   * that must still COMPILE can rebuild the seed instead of re-authoring with no prior context.
+   */
+  followup?: RunFollowup;
 };
 
 /**
