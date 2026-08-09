@@ -1222,13 +1222,15 @@ The **defect corpus** closes that loop, and it is the only cross-run state goaly
    **one compact record** to `~/.goaly/defects.jsonl` — the adjudicator's *generalized* anti-pattern,
    the *generalized* shape of the offending assertion, the language/test-runner derived from the
    frozen contract, and the `contractHash` + `runId` for provenance. Never the source, never the
-   diff, never the failure text. Each record is **HMAC-signed** with a key minted on first use next
-   to the corpus (`~/.goaly/defects.key`, owner-only permissions).
-2. Later `--generate` runs read it, **drop every line whose signature does not verify**, keep the
-   entries relevant to **this** workspace's language/runner, cap them, and inject them into the
-   contract-authoring prompt as a **"known false-red patterns — do not author these"** section —
-   fenced as untrusted data, like the diff at every other model-text seam. Every injected pattern is
-   logged, so a run says out loud which local state shaped its bar.
+   diff, never the failure text. Each record carries a per-record nonce and is **HMAC-signed** with a
+   key minted on first use next to the corpus (`~/.goaly/defects.key`, owner-only permissions).
+2. Later `--generate` runs read it, **drop every line whose signature does not verify**, collapse
+   replayed copies, keep the entries relevant to **this** workspace's language/runner, cap them, and
+   inject them into the contract-authoring prompt as a **"known false-red patterns — do not author
+   these"** section — fenced as untrusted data, like the diff at every other model-text seam. Every
+   injected pattern is logged, so a run says out loud which local state shaped its bar — together
+   with a `trust` line saying how much that provenance is worth on this run (see the threat model
+   below).
 
 ```bash
 goaly config defects list                    # what has been learned, with provenance
@@ -1242,42 +1244,66 @@ goaly --defect-corpus ./team-defects.jsonl "…"   # use a different corpus file
 `--defect-corpus <path>` and `--no-defect-corpus` are settable from a config file like other wiring
 flags; passing both is a usage error.
 
-**It cannot become a weakening channel** — the guarantees are structural, not conventions:
+**It cannot become a weakening channel.** The defenses are listed strongest-first, because the order
+matters and the signature is easy to over-read:
 
-- **Only an adjudicated `CONTRACT_DEFECTIVE` verdict can write.** The append takes a record type
-  that only the adjudication path can mint, so no other code path even compiles against it; a
-  `defective: false` verdict, an unparseable one, or a positive one with no generalized pattern
-  writes nothing.
-- **…and the read side does not trust the file either.** The corpus lives outside your workspace, so
-  a hand-added line would sit outside the run diff, the frozen-file integrity guard, and everything
-  Seal shows you — and the default sandbox policy is `none`, so the coding agent can reach the file
-  with an ordinary shell. Every record is therefore signed (HMAC-SHA256) with `~/.goaly/defects.key`,
-  minted on first use with owner-only permissions, and **any line whose signature is missing, wrong,
-  or made with another key is dropped on read**. No key ⇒ nothing is verifiable ⇒ no hints. This is
-  fail-closed on *provenance* and still fail-open for the *run*: "no hints" is exactly the pre-corpus
-  behavior, and nothing about a run is ever blocked by the corpus. (A corpus written before signing
-  existed verifies as empty — `goaly config defects clear` resets it; it re-learns from the next
-  adjudication.)
+- **The injected lines are data, not instructions — this is the primary defense.** A pattern is
+  model-authored text crossing into another model's prompt, so the section is wrapped in a
+  random-nonce UNTRUSTED fence and the compiler's system prompt restates the rule — the same
+  treatment the diff gets at the judge, approver, adversarial rung, pre-flight, and dry-run seams.
+  goaly's own framing stays outside the fence and is the only authoritative part. This is what
+  contains a hostile record whether or not its provenance is genuine. Downstream, a corpus-shaped
+  contract still faces the critics, Seal, the [pre-flight negative
+  control](#setup-preflight--soundness), the frozen ladder and both keys for DONE.
 - **No worker-supplied text can reach a record.** The record builder has no parameter for the
   failure signature, the diff, harness output, or file contents; everything but the adjudicator's
   own two generalized sentences is derived from the frozen contract, and the language/runner fields
   are closed enums.
-- **"This was hard" is inexpressible.** The schema is strict and has no iteration count, repeat
-  count, duration, token spend, or severity field — difficulty can never turn into "author an easier
-  bar". The free text cannot smuggle it back in: a `pattern` or assertion shape that argues from
-  **effort** (hard, difficult, effort, iterations, attempts, time, expensive, tokens, complex, "too
-  many") is refused by the schema — on mint *and* on read — rather than by an instruction the
-  adjudicator is trusted to obey. The prompt section is phrased as *impossibility* ("do not author
-  bars that are impossible to satisfy… never a reason to make the bar easier").
-- **The injected lines are data, not instructions.** A pattern is model-authored text crossing into
-  another model's prompt, so the section is wrapped in a random-nonce UNTRUSTED fence and the
-  compiler's system prompt restates the rule — the same treatment the diff gets at the judge,
-  approver, adversarial rung, pre-flight, and dry-run seams. goaly's own framing stays outside the
-  fence and is the only authoritative part.
+- **Only an adjudicated `CONTRACT_DEFECTIVE` verdict can write** — through goaly's own code. The
+  append takes a record type that only the adjudication path can mint, so no other code path even
+  compiles against it; a `defective: false` verdict, an unparseable one, or a positive one with no
+  generalized pattern writes nothing.
+- **The record *shape* cannot say "this was hard".** The schema is strict and has no iteration
+  count, repeat count, duration, token spend, or severity field — difficulty can never turn into
+  "author an easier bar" as *data*. The free text is held to a weaker standard: a `pattern` or
+  assertion shape using the **effort vocabulary** (hard, difficult, effort, iterations, attempts,
+  time, expensive, tokens, complex, "too many") is refused on mint *and* on read. That word list is a
+  **speed bump, not a filter** — it catches the honest "this bar was too hard for the agent" and is
+  trivially paraphrased around ("do not author a bar that demands the agent get every edge case right
+  in one go" passes it). It is kept because it is free and catches the likely case; the section's
+  *impossibility* framing and the fence above are what actually hold.
+- **Signing: what it buys, precisely.** Every record is signed (HMAC-SHA256) with
+  `~/.goaly/defects.key`, minted on first use with owner-only permissions, and carries a per-record
+  nonce inside the signed bytes. **Any line whose signature is missing, wrong, or made with another
+  key is dropped on read**, and any line that merely repeats a record already read — a replayed copy
+  — is collapsed rather than counted again (see the next bullet). So signing closes: hand-typed and
+  hand-edited lines, lines whose text was altered after the fact, lines copied in from another
+  machine or a shared/checked-in corpus, and replays. **It does not close the coding agent.** Under
+  the default `--sandbox none`, the agent is a subprocess with goaly's own uid, so reading
+  `defects.key` is exactly as available to it as appending to the corpus was; mode 0600 excludes
+  other *users*, not a same-uid process, and an HMAC key readable by the party you are
+  authenticating authenticates nothing about that party. Two things narrow that, and neither is the
+  signature: the **untrusted fence** above (what actually contains a planted line), and an active
+  **`--sandbox` policy**, which masks `$HOME/.goaly` — key and default corpus both — from the agent
+  seam. The injection log states which of the two situations the run is in, in a `trust` field, so
+  you never have to infer it. No key ⇒ nothing is verifiable ⇒ no hints; this is fail-closed on
+  *provenance* and still fail-open for the *run*. (A corpus written before signing or before the
+  nonce existed verifies as empty — `goaly config defects clear` resets it; it re-learns from the
+  next adjudication.)
+- **Replay is not influence.** A valid signature says a line was minted by an adjudication; it does
+  not say the line is there once. Appending 40 copies of a genuine line used to count as 40
+  occurrences, and the occurrence count is the second ranking key behind the five-hint cap — enough
+  copies pinned one pattern to the top and pushed every other hint out, without touching the key. So
+  a read now de-duplicates on the record's nonce **and** on `(contractHash, runId, pattern, assertion
+  shape)`, and caps how many records any single `(contractHash, runId)` may contribute (3; a run
+  legitimately adjudicates at most once). An occurrence count is therefore a count of *distinct
+  adjudications*.
 - **Bounded prompt.** Filtering + a cap mean a corpus of any size produces the same small section.
 - **Fail-open, never a gate.** A missing, unreadable, corrupt, or partly unparseable corpus degrades
   to exactly the pre-corpus behavior (bad lines are dropped on read, Zod-parsed); a failed write is
-  logged and dropped. It shapes an authoring prompt *before* the freeze and nothing else — Seal, the
+  logged and dropped. Every way the key can fail — absent, empty, non-hex, wrong length, a directory,
+  unreadable — reads as no records and never throws or blocks a run. It shapes an authoring prompt
+  *before* the freeze and nothing else — Seal, the
   critics, the [pre-flight negative control](#setup-preflight--soundness), the frozen ladder, and the
   two keys for DONE all apply to a corpus-influenced contract exactly as before.
 - **Local only.** Nothing is uploaded, shared, or fetched.
@@ -1649,7 +1675,13 @@ once: hosts may be bare names, subdomain wildcards, or pin a port. Traffic route
 loopback egress proxy goaly starts; every other egress is denied (HTTP 403 / refused CONNECT) and
 denied attempts are summarized after the run. Because both seams are constrained, the agent's
 model-API host must be on the list too. In both seams, `$HOME` credential locations (`~/.ssh`,
-`~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.docker`, `~/.kube`, `~/.npmrc`) are denied.
+`~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.docker`, `~/.kube`, `~/.npmrc`) are denied — along
+with `~/.goaly`, which holds goaly's own cross-run state: the [defect
+corpus](#the-defect-corpus-cross-run-learning) and the key that signs it. That mask is the only
+thing that actually puts the signing key out of the agent's reach; with `--sandbox none` the agent
+runs as goaly's own uid and can read it whatever its file mode. (It covers the default location, not
+a corpus moved elsewhere with `--defect-corpus <path>`. The *workspace's* `.goaly` run-log directory
+is unaffected.)
 
 A verify command that needs the network (e.g. an `npm test` that installs) fails under the default
 `--sandbox-net none` — pass `--sandbox-net allow` deliberately. The container path mirrors the

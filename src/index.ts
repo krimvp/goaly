@@ -195,6 +195,7 @@ export {
 export {
   DefectRecord,
   DEFECT_RECORD_VERSION,
+  MAX_RECORDS_PER_RUN,
   FileDefectCorpus,
   defaultDefectCorpusPath,
   defaultDefectCorpusKeyPath,
@@ -217,7 +218,12 @@ export {
   type DefectContext,
   type WorkspaceDefectContext,
 } from './defects/context';
-export { resolveDefectCorpus, type DefectCorpusOptions } from './defects/wiring';
+export {
+  resolveDefectCorpus,
+  DEFECT_TRUST_SANDBOXED,
+  DEFECT_TRUST_FENCED_ONLY,
+  type DefectCorpusOptions,
+} from './defects/wiring';
 
 // Seam #4 (real implementations) + concrete adapters/verifiers.
 export { SystemClock, type Clock } from './driver/clock';

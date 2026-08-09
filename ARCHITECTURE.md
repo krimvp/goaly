@@ -174,8 +174,12 @@ record (the adjudicator's generalized anti-pattern + language/runner derived fro
 contract + provenance) to `~/.goaly/defects.jsonl`, and a LATER run's compiler receives the
 relevant, capped subset as a "do not author these" prompt section. It is structurally write-gated (a
 phantom-branded record type only the adjudication path can mint), free of any input for
-worker-supplied text, and its schema has no field in which difficulty could be expressed. Fail-open
-by design — it is an advisory prior on AUTHORING, strictly before the freeze, never a gate.
+worker-supplied text, and its schema has no field in which difficulty could be expressed. Records
+are HMAC-signed and nonced, so a line typed, altered, copied in from elsewhere or *replayed* is
+dropped or collapsed on read — but the key is readable by any same-uid process, so that closes the
+file as a channel from elsewhere and NOT the coding agent; what contains a planted record is the
+untrusted fence the section is injected behind. Fail-open by design — it is an advisory prior on
+AUTHORING, strictly before the freeze, never a gate.
 
 **Zero-LLM is structural, not disciplinary:** `step` returns no `Promise` and is handed no
 adapters — only data. It *cannot* call an LLM. All fuzziness already happened in the Driver

@@ -1,4 +1,5 @@
 import { appendFileSync, mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
@@ -10,7 +11,11 @@ import {
 } from './corpus';
 import { contractDefectContext, workspaceDefectContext } from './context';
 import { DEFAULT_DEFECT_HINT_CAP, formatDefectSection, selectDefectHints } from './select';
-import { resolveDefectCorpus } from './wiring';
+import {
+  DEFECT_TRUST_FENCED_ONLY,
+  DEFECT_TRUST_SANDBOXED,
+  resolveDefectCorpus,
+} from './wiring';
 import { makeFakeContract, recordingLogger } from '../testing/fakes';
 
 /** Issue #122 — relevance filtering, the bound on prompt size, and the compose-time resolution. */
@@ -20,6 +25,7 @@ function rec(over: Partial<DefectRecord> = {}): DefectRecord {
   n += 1;
   return {
     v: DEFECT_RECORD_VERSION,
+    n: randomBytes(16).toString('hex'),
     ts: new Date(Date.UTC(2026, 0, 1) + n * 1000).toISOString(),
     pattern: `pattern ${n}`,
     language: 'typescript',
@@ -187,6 +193,38 @@ describe('resolveDefectCorpus — the compose-time resolution', () => {
     expect(resolved.section).not.toContain('python only');
     const log = records.find((r) => r.msg.includes('injecting known false-red patterns'));
     expect(log?.fields['patterns']).toEqual(['no post-restore call counts']);
+  });
+
+  /**
+   * Cluster B' — the injection log must say what the signature is worth ON THIS RUN, because the
+   * answer differs by sandbox policy: with `--sandbox none` the agent shares goaly's uid and can
+   * read the signing key, so the hints are contained by the untrusted fence and NOT by the HMAC.
+   * Stating that in the diagnostics is the honest alternative to implying a guarantee we don't have.
+   */
+  it.each([
+    ['no sandbox: the hints are fenced, not vouched for', false, DEFECT_TRUST_FENCED_ONLY],
+    ['an active sandbox masks $HOME/.goaly from the agent', true, DEFECT_TRUST_SANDBOXED],
+  ])('LOGS how much the provenance is worth — %s', async (_label, sandboxed, expected) => {
+    const dir = workspace();
+    const corpusPath = path.join(dir, 'defects.jsonl');
+    const seed = new FileDefectCorpus(corpusPath);
+    await seed.append(rec({ pattern: 'no post-restore call counts' }) as AdjudicatedDefect);
+    const { logger, records } = recordingLogger();
+    resolveDefectCorpus(
+      { enabled: true, path: corpusPath },
+      dir,
+      logger,
+      DEFAULT_DEFECT_HINT_CAP,
+      sandboxed,
+    );
+    const log = records.find((r) => r.msg.includes('injecting known false-red patterns'));
+    expect(log?.fields['trust']).toBe(expected);
+  });
+
+  it('the un-sandboxed trust line does not claim the signature stops the agent', () => {
+    expect(DEFECT_TRUST_FENCED_ONLY).toContain('same uid');
+    expect(DEFECT_TRUST_FENCED_ONLY).toContain('untrusted fence');
+    expect(DEFECT_TRUST_SANDBOXED).toContain('$HOME/.goaly');
   });
 
   it('--no-defect-corpus: no corpus (nothing can be written) and no section', () => {

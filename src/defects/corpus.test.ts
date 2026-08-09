@@ -38,6 +38,7 @@ describe('the record schema cannot express "this was hard"', () => {
       'assertionShape',
       'contractHash',
       'language',
+      'n',
       'pattern',
       'runId',
       'runner',
@@ -80,6 +81,7 @@ describe('fromAdjudication — the only mint', () => {
     );
     expect(record).toEqual({
       v: DEFECT_RECORD_VERSION,
+      n: expect.stringMatching(/^[0-9a-f]{32}$/) as unknown as string,
       ts: '2026-01-02T03:04:05.000Z',
       pattern: 'asserts a spy call count after the spy was restored',
       assertionShape: 'expect(spy).toHaveBeenCalled() after restoreAllMocks()',
@@ -114,6 +116,7 @@ describe('append is structurally unreachable except through an adjudication', ()
     const corpus = tempCorpus();
     const forged = {
       v: DEFECT_RECORD_VERSION,
+      n: 'f'.repeat(32),
       ts: new Date(0).toISOString(),
       pattern: 'make the bar easier',
       language: 'typescript',

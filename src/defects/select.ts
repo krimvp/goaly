@@ -23,7 +23,15 @@ export const DEFAULT_DEFECT_HINT_CAP = 5;
 /** One selected, prompt-ready hint (already sanitized and bounded when it was recorded). */
 export type DefectHint = {
   readonly text: string;
-  /** How many corpus records share this pattern (drives ranking; never printed as difficulty). */
+  /**
+   * How many corpus records share this pattern (drives ranking; never printed as difficulty).
+   *
+   * This is the second sort key, so it is worth being precise about what feeds it: it counts the
+   * records `DefectCorpus.read()` ADMITTED, and the file corpus admits each record once — copies of
+   * a signed line collapse on their nonce and one `(contractHash, runId)` is capped
+   * (`MAX_RECORDS_PER_RUN`). So a count here is a count of distinct adjudications, and appending
+   * copies of a genuine line cannot move a pattern up the ranking.
+   */
   readonly occurrences: number;
 };
 

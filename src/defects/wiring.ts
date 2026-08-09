@@ -29,16 +29,32 @@ export type ResolvedDefectCorpus = {
 };
 
 /**
+ * How much a run may believe about the provenance of the lines it just injected. Logged verbatim so
+ * a reader of the diagnostics never has to infer it — see {@link resolveDefectCorpus}.
+ */
+export const DEFECT_TRUST_SANDBOXED =
+  'signed, and an active --sandbox policy masks $HOME/.goaly so the agent seam cannot read the ' +
+  'signing key';
+export const DEFECT_TRUST_FENCED_ONLY =
+  'signed only against hand-edited/copied/foreign lines — with --sandbox none the coding agent runs ' +
+  'as the same uid and can read the signing key, so these hints are contained by the untrusted ' +
+  'fence, not by the signature';
+
+/**
  * Resolve the corpus for a run. Fail-open by construction: `read()` swallows a missing/corrupt
  * file, and the only thing an empty result changes is that no section is injected — i.e. exactly
  * today's behavior. Logs which patterns were injected (the issue's reproducibility answer: the
- * hidden local state that shaped the bar is named in the run's own diagnostics).
+ * hidden local state that shaped the bar is named in the run's own diagnostics) — and, in the same
+ * line, HOW MUCH that provenance is worth on this run, because the answer differs by sandbox policy
+ * and a reader should not have to reconstruct it. `sandboxed` is `true` when a real jail is in
+ * force (any launcher but the identity passthrough).
  */
 export function resolveDefectCorpus(
   options: DefectCorpusOptions | undefined,
   workspaceRoot: string,
   logger: Logger,
   cap: number = DEFAULT_DEFECT_HINT_CAP,
+  sandboxed: boolean = false,
 ): ResolvedDefectCorpus {
   if (options !== undefined && !options.enabled) {
     logger.debug('defect corpus disabled (--no-defect-corpus): no patterns read or recorded', {});
@@ -51,6 +67,7 @@ export function resolveDefectCorpus(
       path: corpus.path,
       count: hints.length,
       patterns: hints.map((h) => h.text),
+      trust: sandboxed ? DEFECT_TRUST_SANDBOXED : DEFECT_TRUST_FENCED_ONLY,
     });
   }
   return { corpus, section: formatDefectSection(hints) };

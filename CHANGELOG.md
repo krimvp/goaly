@@ -13,6 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an `npm audit --audit-level moderate` step to CI so new advisories fail the build.
 
 ### Fixed
+- **Defect-corpus signatures no longer replay, and the threat model is stated honestly.** A valid
+  HMAC proved a corpus line came from an adjudication, but not that it was there *once*: appending
+  40 copies of one genuine line made `read()` return 41 records, and because the occurrence count is
+  the second ranking key behind the five-hint cap, an append-only adversary could pin any pattern to
+  the top of the authoring prompt and push every other hint out — without touching the key. Records
+  now carry a per-record nonce inside the signed payload, and a read de-duplicates on that nonce and
+  on `(contractHash, runId, pattern, assertion shape)` and caps any single run's contribution at 3,
+  so an occurrence count is a count of *distinct adjudications* (record schema `v2`; a pre-v2 corpus
+  reads as empty — clear it and it re-learns). Separately, the module claimed the signature closed
+  the *coding agent*: it does not. The agent runs as goaly's own uid, so `~/.goaly/defects.key`
+  (mode 0600) is exactly as readable to it as the corpus was writable — 0600 excludes other users,
+  not a subprocess of ours. Every such claim is narrowed to what signing actually buys (hand-edited,
+  altered, copied-in, foreign-key and replayed lines), the **untrusted fence** around the injected
+  section is documented as the primary defense, the effort word list is described as a speed bump
+  rather than a guarantee, `$HOME/.goaly` joins the sandbox's denied-home-secrets set so an active
+  `--sandbox` policy really does put the key out of the agent seam's reach, and the injection log
+  now carries a `trust` field saying which of the two situations a run is in.
 - The **contract dry run's refusal is now a structured summary**, not filtered runner output
   (issue #115 follow-up). The previous per-line filter kept any line that named no file, which real
   runners exploit: pytest prints traceback source with no filename on the line, jest marks the
@@ -58,8 +75,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   author these" section, and log which patterns were injected. The safeguards are STRUCTURAL: only an
   adjudicated defective verdict can mint an appendable record (nothing else type-checks against the
   append), the record builder has no input through which worker-supplied text could arrive, and the
-  strict schema has NO field for iterations, duration, spend or severity — "this was hard" is
-  inexpressible, so it can never become "author an easier bar". Fail-OPEN in every direction (a
+  strict schema has NO field for iterations, duration, spend or severity — so "this was hard" can
+  never arrive as data and become "author an easier bar". Every record is HMAC-signed and nonce'd, so
+  a hand-edited, copied-in, foreign-key or replayed line is dropped or collapsed on read; that closes
+  the file as a channel from elsewhere, NOT the coding agent, which runs as goaly's own uid and can
+  read the signing key — what contains a planted record is the untrusted fence around the injected
+  section. Fail-OPEN in every direction (a
   missing/corrupt/unparseable corpus, or a failed write, degrades to exactly the previous behavior),
   and a corpus-influenced contract still faces the critics, Seal, the pre-flight negative control,
   the frozen ladder and both keys. `goaly config defects list|clear` inspects/resets it;

@@ -38,6 +38,7 @@ import { GitWorktreeHost } from '../workspace/git-worktree-host';
 import { writeVerificationFile } from '../workspace/workspace-files';
 import { detectWorkspaceFacts, type WorkspaceFacts } from '../workspace/workspace-facts';
 import { resolveDefectCorpus, type DefectCorpusOptions } from '../defects/wiring';
+import { DEFAULT_DEFECT_HINT_CAP } from '../defects/select';
 import { FileRunLog } from '../runlog/file-runlog';
 import { StreamTranscriptSink, STREAM_FILE } from '../runlog/stream-transcript';
 import { AgentCliHarness } from '../harness/agent-cli-harness';
@@ -463,8 +464,17 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   // The cross-run defect corpus (issue #122), resolved ONCE: `section` is injected into contract
   // authoring (bounded + filtered to this workspace's ecosystem, and logged so the hidden local
   // state that shaped the bar is named in the run's diagnostics); `corpus` is the writer only a
-  // CONTRACT_DEFECTIVE adjudication can use. Fail-open — an absent corpus changes nothing.
-  const defects = resolveDefectCorpus(options.defects, options.workspaceRoot, logger);
+  // CONTRACT_DEFECTIVE adjudication can use. Fail-open — an absent corpus changes nothing. The
+  // launcher is threaded in so the injection log can say plainly whether the corpus's HMAC means
+  // anything against the AGENT on this run (only a real jail masks `$HOME/.goaly`; under the
+  // default identity passthrough the agent shares goaly's uid and can read the signing key).
+  const defects = resolveDefectCorpus(
+    options.defects,
+    options.workspaceRoot,
+    logger,
+    DEFAULT_DEFECT_HINT_CAP,
+    !launcher.identity,
+  );
 
   // ONE budget meter for the whole run — hoisted so EXPERIMENTAL parallel-wave children share it
   // (the `--budget-tokens` cap governs the fan-out, not each child separately).

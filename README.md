@@ -87,10 +87,12 @@ contract is ever mutated — "the bar was wrong" becomes an auditable chain, not
 And once a bar has been adjudicated defective, goaly **remembers across runs**: the adjudicator's
 generalized anti-pattern (never your source, never the diff) is appended to `~/.goaly/defects.jsonl`
 and injected into future contract authoring as *"known false-red patterns — do not author these"*.
-It is filtered to your language/runner, capped, logged, fenced as untrusted data, and fail-open —
-and structurally incapable of weakening a bar: only an adjudicated `CONTRACT_DEFECTIVE` verdict can
-write a record, every record is HMAC-signed so a hand-added line is **dropped on read**, and neither
-the schema nor its free text can say "this was hard". `goaly config defects list` shows what it
+It is filtered to your language/runner, capped, logged, and fail-open. What keeps it from becoming a
+weakening channel is that a hint is **untrusted data all the way in** — fenced with a random nonce,
+framed as *impossibility*, and still facing the critics, Seal, the frozen ladder and both keys. On
+top of that: only an adjudicated `CONTRACT_DEFECTIVE` verdict can write a record, every record is
+HMAC-signed and nonce'd so a hand-added, edited, copied-in or **replayed** line is dropped on read,
+and the record schema has no field for "this was hard". `goaly config defects list` shows what it
 learned; `--no-defect-corpus` opts out.
 
 ## Features
