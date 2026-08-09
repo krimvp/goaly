@@ -22,14 +22,24 @@
  * only that prefix cannot be steered by the worker: moving the boundary earlier only removes the
  * worker's OWN text from view.
  *
+ * The boundary spans the DRIVER too, not just the reducer: the Driver authors terminal `ABORTED`
+ * outcomes of its own (see {@link bootstrapFailedReason} / {@link driverErrorReason}), and its
+ * last-resort catch is reachable with worker-influenced text — `CHECKPOINT_AND_ADVANCE` is a
+ * `--phased` between-phase checkpoint, so it runs AFTER worker turns and an exception message there
+ * can carry tree-authored content. Those reasons are built here for the same reason.
+ *
  * HONEST SCOPE — what the prefix is, exactly. It is text goaly authored, plus two kinds of value
  * that were FROZEN before the loop began and that the worker cannot reach mid-run: the compiled
  * contract's authored file paths (`contractDefectiveReason`) and, in a phased run, the sealed plan's
- * sub-goal title (`phaseReason`). It is NOT a claim about reasons that are wholly DELEGATED rather
- * than built here — a compile/plan failure message (`COMPILE_FAILED` / `PLAN_FAILED`, whose text is
- * the compiler LLM's or an exception's) and a human Seal reject reason are passed through verbatim,
- * so for those the "prefix" is the entire reason. They are authored before any worker turn, so the
- * worker cannot steer them, but they are not goaly's own words either.
+ * sub-goal title (`phaseReason`).
+ *
+ * It is NOT a claim about a reason goaly passes through VERBATIM. Exactly one such reason is left:
+ * a human's Seal/plan-Seal reject text, which has no lead-in and is returned entire — a human's
+ * words, not goaly's, and not the worker's either. The delegated AUTHORING failures used to sit here
+ * too and were described as pre-loop text the worker never touches; that was false under `--phased`,
+ * where `startPhaseCompile` compiles phase N+1's contract AFTER phase N's worker turns, over the
+ * tree the worker just wrote. They are now built by {@link compileFailedReason} /
+ * {@link planFailedReason} and quoted behind a lead-in like any other external text.
  */
 
 /** The repeated (normalized) verifier failure signature — worker-authored (test names, assertions). */
@@ -61,6 +71,20 @@ export const PREFLIGHT_OUTPUT_QUOTE = 'Pre-flight output: ';
  */
 export const NESTED_REASON_QUOTE = 'Original stuck condition: ';
 
+/**
+ * The Driver's own caught exception text on a fail-closed abort. Worker-reachable: the last-resort
+ * catch wraps `CHECKPOINT_AND_ADVANCE`, a `--phased` between-phase checkpoint that runs after worker
+ * turns, so the message can carry tree-authored content.
+ */
+export const DRIVER_ERROR_QUOTE = 'Driver error: ';
+
+/**
+ * The compiler's / planner's authoring-failure message — an LLM's prose or a thrown error's text.
+ * Worker-reachable under `--phased`, where phase N+1 is compiled over the tree phase N's worker
+ * wrote (an agent-compiler reads that tree, and its error text can quote it).
+ */
+export const AUTHORING_ERROR_QUOTE = 'Authoring error: ';
+
 /** All of the above, in no particular order — a reader takes the EARLIEST match in a reason. */
 export const QUOTED_TEXT_LEAD_INS: readonly string[] = [
   SIGNATURE_QUOTE,
@@ -71,4 +95,35 @@ export const QUOTED_TEXT_LEAD_INS: readonly string[] = [
   SETUP_OUTPUT_QUOTE,
   PREFLIGHT_OUTPUT_QUOTE,
   NESTED_REASON_QUOTE,
+  DRIVER_ERROR_QUOTE,
+  AUTHORING_ERROR_QUOTE,
 ];
+
+/** Typed marker for a Driver-authored fail-closed abort (bootstrap throw / last-resort catch). */
+export const DRIVER_ERROR_MARKER = 'DRIVER_ERROR';
+
+/** Typed marker for a terminal contract-authoring failure (the reducer's exhausted retry budget). */
+export const COMPILE_FAILED_MARKER = 'COMPILE_FAILED';
+
+/** Typed marker for a terminal plan-authoring failure (the reducer's exhausted retry budget). */
+export const PLAN_FAILED_MARKER = 'PLAN_FAILED';
+
+/** The pre-loop bootstrap (resume read / header write) threw — MARKER, own words, then the quote. */
+export function bootstrapFailedReason(detail: string): string {
+  return `${DRIVER_ERROR_MARKER}: run bootstrap failed before the loop started (fail-closed). ${DRIVER_ERROR_QUOTE}${detail}`;
+}
+
+/** The Driver's last-resort catch fired — MARKER, own words, then the quote. */
+export function driverErrorReason(detail: string): string {
+  return `${DRIVER_ERROR_MARKER}: the driver failed unexpectedly (fail-closed). ${DRIVER_ERROR_QUOTE}${detail}`;
+}
+
+/** A terminal `COMPILE_FAILED` — the message is the compiler's, so it is quoted, never claimed. */
+export function compileFailedReason(detail: string): string {
+  return `${COMPILE_FAILED_MARKER}: the verification contract could not be authored. ${AUTHORING_ERROR_QUOTE}${detail}`;
+}
+
+/** A terminal `PLAN_FAILED` — the message is the planner's, so it is quoted, never claimed. */
+export function planFailedReason(detail: string): string {
+  return `${PLAN_FAILED_MARKER}: the phase plan could not be authored. ${AUTHORING_ERROR_QUOTE}${detail}`;
+}

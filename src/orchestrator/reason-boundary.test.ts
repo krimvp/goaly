@@ -3,9 +3,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { initial, step } from './step';
 import * as stuck from './stuck';
+import * as reasonQuote from './reason-quote';
 import { PreparedOutcome } from '../domain/events';
-import { goalyAuthoredReason } from '../cli/reason-text';
-import { makeCtx, makeConfig, makeFakeContract, dh } from '../testing/fakes';
+import { goalyAuthoredReason, hintSubject } from '../cli/reason-text';
+import { bestOfFloor } from '../driver/best-of-driver';
+import type { DriverDeps } from '../driver/driver';
+import { makeCtx, makeConfig, makeFakeContract, makeFakePlan, dh } from '../testing/fakes';
 import type { LoopCtx } from './state';
 
 /**
@@ -142,6 +145,140 @@ describe('abort-reason trust boundary — the prepare-phase terminals', () => {
       expectQuoted(s.tag === 'FAILED' ? (s.reason ?? '') : '');
     });
   }
+});
+
+describe('abort-reason trust boundary — the DELEGATED authoring failures', () => {
+  /**
+   * `COMPILE_FAILED` / `PLAN_FAILED` carry a message goaly did not write (the compiler/planner LLM's
+   * prose, or a thrown error's text). Under `--phased` that text is NOT pre-loop: phase N+1's
+   * contract is compiled AFTER phase N's worker turns (`startPhaseCompile` → `COMPILE_VERIFIER`),
+   * over the tree the worker just wrote. So it needs a lead-in like any other quoted evidence.
+   */
+  const plan = makeFakePlan({ phases: [{ goal: 'phase one' }, { goal: 'phase two' }] });
+
+  it('quotes a COMPILE_FAILED message behind a lead-in (unphased)', () => {
+    const [s] = step(initial(makeConfig({ maxCompileRetries: 0 }))[0], {
+      tag: 'COMPILE_FAILED',
+      reason: POISON,
+    });
+    expect(s.tag).toBe('FAILED');
+    expectQuoted(s.tag === 'FAILED' ? (s.reason ?? '') : '');
+  });
+
+  it('quotes a mid-run phase COMPILE_FAILED behind a lead-in, keeping the phase in the prefix', () => {
+    const [s0] = initial(makeConfig({ phased: true, maxCompileRetries: 0 }));
+    const [s1] = step(s0, { tag: 'PLAN_COMPILED', plan });
+    const [compiling] = step(s1, { tag: 'PLAN_SEAL_DECIDED', decision: { kind: 'approve' } });
+    const [failed] = step(compiling, { tag: 'COMPILE_FAILED', reason: POISON });
+    expect(failed.tag).toBe('FAILED');
+    const reason = failed.tag === 'FAILED' ? (failed.reason ?? '') : '';
+    expectQuoted(reason);
+    // The sealed sub-goal title is frozen pre-loop, so it stays inside goaly's own words.
+    expect(goalyAuthoredReason(reason)).toContain('phase 1/2');
+  });
+
+  it('quotes a PLAN_FAILED message behind a lead-in', () => {
+    const [s] = step(initial(makeConfig({ phased: true, maxPlanRetries: 0 }))[0], {
+      tag: 'PLAN_FAILED',
+      reason: POISON,
+    });
+    expect(s.tag).toBe('FAILED');
+    expectQuoted(s.tag === 'FAILED' ? (s.reason ?? '') : '');
+  });
+});
+
+describe('abort-reason trust boundary — the DRIVER-authored terminal reasons', () => {
+  /**
+   * The reducer is only half of the boundary. The Driver authors terminal `ABORTED` outcomes of its
+   * own, and its last-resort catch is reachable with worker-influenced text: `CHECKPOINT_AND_ADVANCE`
+   * is a `--phased` between-phase checkpoint, i.e. it runs AFTER worker turns, so an exception
+   * message there can carry tree-authored content. Those reasons therefore live behind the same
+   * builders + lead-ins, and this block enumerates them from the code so a new one cannot skip it.
+   */
+  const builders: Record<string, () => string> = {
+    bootstrapFailedReason: () => reasonQuote.bootstrapFailedReason(POISON),
+    driverErrorReason: () => reasonQuote.driverErrorReason(POISON),
+    compileFailedReason: () => reasonQuote.compileFailedReason(POISON),
+    planFailedReason: () => reasonQuote.planFailedReason(POISON),
+  };
+
+  for (const [name, build] of Object.entries(builders)) {
+    it(`quotes its external argument behind a lead-in (${name})`, () => {
+      expectQuoted(build());
+    });
+  }
+
+  it('covers every reason builder the shared reason-quote module exports', () => {
+    const exported = Object.keys(reasonQuote)
+      .filter((name) => name.endsWith('Reason'))
+      .sort();
+    expect(exported).toEqual(Object.keys(builders).sort());
+  });
+
+  /** Identifiers goaly itself generates — safe to interpolate into the authored prefix. */
+  const GOALY_OWNED_HOLES = ['runId'];
+
+  /** A reason expression is guarded when it is a covered builder call, or interpolates only ours. */
+  function guarded(expr: string): boolean {
+    // `floor` is `bestOfFloor`'s return: a closed set of static, goaly-authored sentences that
+    // interpolate nothing at all — pinned by the two `bestOfFloor` cases below.
+    if (expr === 'floor') return true;
+    const call = /^([A-Za-z]+Reason)\(/.exec(expr);
+    if (call !== null) return Object.keys(builders).includes(call[1]!);
+    return [...expr.matchAll(/\$\{([^}]*)\}/g)].every((m) =>
+      GOALY_OWNED_HOLES.includes((m[1] ?? '').trim()),
+    );
+  }
+
+  /**
+   * SCOPE, honestly: this walks `driver.ts`, the only module that authors a terminal `RunOutcome`
+   * of its own (`outcome.ts` just forwards the reducer's `state.reason`). The other driver modules
+   * DO interpolate exception text — a `wave-runner` unmerged-phase reason, a `tournament` candidate
+   * reason, an approver-error veto — but none of those is a terminal run reason: an unmerged phase
+   * re-runs sequentially and a veto is a per-iteration record, so neither reaches the hint table.
+   * If one ever does, it needs a lead-in and a row here.
+   */
+  it('every driver-authored ABORTED reason is built behind a lead-in', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../driver/driver.ts', import.meta.url)),
+      'utf8',
+    );
+    const declared = [...source.matchAll(/status: 'ABORTED',\n\s*reason: (.+),\n/g)].map(
+      (m) => m[1]!,
+    );
+    // Every ABORTED outcome literal must have been matched — a differently shaped one fails here
+    // rather than escaping the check.
+    expect(declared.length).toBe([...source.matchAll(/status: 'ABORTED',/g)].length);
+    expect(declared.length).toBeGreaterThan(0);
+    expect(declared.filter((expr) => !guarded(expr))).toEqual([]);
+  });
+
+  it('the best-of-N start floor quotes nothing (no host is configured)', async () => {
+    const reason = await bestOfFloor({} as unknown as DriverDeps);
+    expect(reason).not.toBeNull();
+    expect(reason ?? '').not.toContain(POISON);
+  });
+
+  it('a marker-carrying reason is never handed to the legacy CONTRACT_ADJUDICATED_SOUND rescue', () => {
+    // The rescue exists for legacy repeat-failure logs; these reasons carry a typed marker of their
+    // own, so a compiler message echoing goaly's bracketed marker cannot re-point their hint.
+    const reason = reasonQuote.compileFailedReason(POISON);
+    expect(reason).toContain('[CONTRACT_ADJUDICATED_SOUND]'); // the poison really does try it
+    expect(hintSubject(reason)).toBe(goalyAuthoredReason(reason));
+    expect(hintSubject(reason)).not.toContain(stuck.CONTRACT_SOUND_MARKER);
+  });
+
+  it('the best-of-N start floor quotes nothing when the host throws', async () => {
+    const deps = {
+      worktrees: {
+        headResolves: () => {
+          throw new Error(POISON);
+        },
+      },
+    } as unknown as DriverDeps;
+    const reason = (await bestOfFloor(deps)) ?? '';
+    expect(reason).not.toContain(POISON);
+  });
 });
 
 describe('abort-reason trust boundary — the codec hint is a closed kind', () => {

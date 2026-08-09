@@ -1158,15 +1158,24 @@ kill an hours-long run. All defaults, no flags needed
   reach — a verifier failure signature, the harness's last stderr, a setup command's output, an
   adjudicator's prose — and every such quote begins at a fixed lead-in (`Repeated failure signature:`,
   `Last harness output:`, `Last verifier output:`, `Missing tools:`, `Setup output:`, `Pre-flight
-  output:`, `Adjudicator:`, `Original stuck condition:`), with goaly's typed marker always ahead of
-  the first one. The hint matches only the text before the earliest lead-in, so a test named
+  output:`, `Adjudicator:`, `Original stuck condition:`, `Driver error:`, `Authoring error:`), with
+  goaly's typed marker always ahead of the first one. The hint matches only the text before the
+  earliest lead-in, so a test named
   `handles no-diff` cannot select the hint and point you at a flag that would not continue your run.
+  The boundary covers the **driver's** own terminal aborts too — a bootstrap throw or its last-resort
+  catch reads `DRIVER_ERROR: … Driver error: <the exception>` — because that catch also wraps the
+  `--phased` between-phase checkpoint, which runs *after* worker turns. Likewise a terminal
+  `COMPILE_FAILED`/`PLAN_FAILED` quotes the authoring message behind `Authoring error:`: under
+  `--phased` the next phase's contract is compiled *after* the previous phase's worker turns, over
+  the tree that worker wrote, so that text is not pre-loop.
   A codec's crash remediation is likewise a closed kind (e.g. the `--harness-autonomy` advice for a
   refusal) whose sentence goaly authors, not text the CLI printed. Two honest caveats: a run logged
   *before* this ordering rule can still have its bracketed `CONTRACT_ADJUDICATED_SOUND` marker
-  honored from the whole reason (the worst case is a milder hint — it names no threshold), and a
-  reason goaly passes through whole rather than builds — a compile/plan failure message, or your own
-  Seal rejection text — has no lead-in and is read entire.
+  honored from the whole reason — the worst case is a milder hint (it names no threshold), and a
+  reason whose trusted prefix already carries a typed marker of its own is excluded from that rescue
+  entirely — and one
+  reason is still passed through whole rather than built — your own Seal/plan-Seal rejection text —
+  so it has no lead-in and is read entire.
 
 ## Operator control (watch, steer, extend)
 

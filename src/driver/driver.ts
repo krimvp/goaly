@@ -19,6 +19,7 @@ import type { TokenUsage, UsageReport } from '../domain/usage';
 import { isTerminal, iterationCount, remediationsTotal, type OrchestratorState } from '../orchestrator/state';
 import { MAX_STUCK_REMEDIATIONS } from '../orchestrator/remediate';
 import { initial, step } from '../orchestrator/step';
+import { bootstrapFailedReason, driverErrorReason } from '../orchestrator/reason-quote';
 import { performRefreeze } from './refreeze';
 import { replay } from '../runlog/replay';
 import type { VerifierCompiler } from '../compile/compiler';
@@ -304,7 +305,7 @@ export async function drive(
     log.error('run bootstrap failed (fail-closed → ABORTED)', { reason: errorMessage(e) });
     const outcome: RunOutcome = {
       status: 'ABORTED',
-      reason: `run bootstrap failed: ${errorMessage(e)}`,
+      reason: bootstrapFailedReason(errorMessage(e)),
       iterations: 0,
       contractHash: null,
       runId,
@@ -451,12 +452,15 @@ export async function drive(
   } catch (e) {
     // Last-resort safety net: every effectful seam is individually fail-closed, but an unexpected
     // throw (corrupt log on append, invalid transition) must still resolve to a terminal outcome
-    // rather than reject — so the caller always gets a RunOutcome.
+    // rather than reject — so the caller always gets a RunOutcome. The message is QUOTED behind a
+    // lead-in, never claimed as goaly's own words: this catch wraps CHECKPOINT_AND_ADVANCE, a
+    // --phased between-phase checkpoint that runs AFTER worker turns, so the exception text can
+    // carry tree-authored content (see `src/orchestrator/reason-quote.ts`).
     log.error('driver error (fail-closed → ABORTED)', { reason: errorMessage(e) });
     const extras = await buildOutcomeExtras(deps);
     const outcome: RunOutcome = {
       status: 'ABORTED',
-      reason: `driver error: ${errorMessage(e)}`,
+      reason: driverErrorReason(errorMessage(e)),
       iterations: iterationCount(state),
       contractHash: contractHash ?? null,
       runId,

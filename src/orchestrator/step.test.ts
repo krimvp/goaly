@@ -46,7 +46,12 @@ describe('step() transitions', () => {
   it('COMPILE_FAILED → terminal FAILED when retries are disabled (maxCompileRetries: 0)', () => {
     const [state] = initial(makeConfig({ maxCompileRetries: 0 }));
     const [next] = step(state, { tag: 'COMPILE_FAILED', reason: 'nope' });
-    expect(next).toMatchObject({ tag: 'FAILED', reason: 'nope', contractHash: undefined });
+    // The compiler's words are QUOTED behind the `Authoring error: ` lead-in, never claimed as
+    // goaly's own (see `reason-quote.ts`), so the marker leads and the message follows it.
+    expect(next).toMatchObject({ tag: 'FAILED', contractHash: undefined });
+    expect(next.tag === 'FAILED' ? next.reason : '').toBe(
+      'COMPILE_FAILED: the verification contract could not be authored. Authoring error: nope',
+    );
   });
 
   it('COMPILE_FAILED re-authors with the error as feedback, bounded by maxCompileRetries (issue #51)', () => {
@@ -64,7 +69,8 @@ describe('step() transitions', () => {
 
     // Round 2: budget exhausted (compileRound 2 == max) → terminal FAILED, never a skipped check.
     const [s3] = step(s2, { tag: 'COMPILE_FAILED', reason: 'final' });
-    expect(s3).toMatchObject({ tag: 'FAILED', reason: 'final', contractHash: undefined });
+    expect(s3).toMatchObject({ tag: 'FAILED', contractHash: undefined });
+    expect(s3.tag === 'FAILED' ? (s3.reason ?? '') : '').toContain('Authoring error: final');
   });
 
   it('a retried compile that succeeds proceeds to Seal (issue #51)', () => {
@@ -356,7 +362,10 @@ describe('step() transitions', () => {
     let state = step(initial(config)[0], { tag: 'CONTRACT_COMPILED', contract })[0];
     const [compiling] = step(state, { tag: 'SEAL_DECIDED', decision: { kind: 'edited' } });
     const [failed] = step(compiling, { tag: 'COMPILE_FAILED', reason: 'refreeze failed: file missing' });
-    expect(failed).toMatchObject({ tag: 'FAILED', reason: 'refreeze failed: file missing' });
+    expect(failed.tag).toBe('FAILED');
+    expect(failed.tag === 'FAILED' ? (failed.reason ?? '') : '').toContain(
+      'Authoring error: refreeze failed: file missing',
+    );
   });
 
   it('plan Seal edited is a fail-closed typed ABORTED (plans are LLM-revise only)', () => {

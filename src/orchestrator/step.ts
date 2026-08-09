@@ -8,9 +8,8 @@ import type { OrchestratorState, LoopCtx, PhaseCtx } from './state';
 import { initialCtx } from './state';
 import { decide, matchedGeneratedFiles, type Decision } from './decide';
 import {
-  PREFLIGHT_OUTPUT_QUOTE,
-  SETUP_OUTPUT_QUOTE,
-  TOOLS_DETAIL_QUOTE,
+  compileFailedReason, planFailedReason,
+  PREFLIGHT_OUTPUT_QUOTE, SETUP_OUTPUT_QUOTE, TOOLS_DETAIL_QUOTE,
 } from './reason-quote';
 import { normalizeDetail, contractDefectiveReason, contractSoundReason } from './stuck';
 import { buildInitialPrompt, buildLoopPrompt } from './prompts';
@@ -105,7 +104,8 @@ function stepPlanning(
           [{ tag: 'COMPILE_PLAN', config, feedback: planRetryFeedback(event.reason) }],
         ];
       }
-      return [{ tag: 'FAILED', reason: event.reason, iterations: 0, contractHash: undefined }, []];
+      // The planner's words are QUOTED behind a lead-in, never claimed as goaly's (`reason-quote.ts`).
+      return [{ tag: 'FAILED', reason: planFailedReason(event.reason), iterations: 0, contractHash: undefined }, []];
     }
     default:
       throw invalidTransition('PLANNING', event);
@@ -352,9 +352,11 @@ function stepCompiling(
           [{ tag: 'COMPILE_VERIFIER', config, feedback: compileRetryFeedback(event.reason) }],
         ];
       }
-      // In a phased run a phase's compile failure fails the WHOLE run (no silent skip), named by phase.
+      // In a phased run a phase's compile failure fails the WHOLE run (no silent skip), named by
+      // phase. The compiler's words are QUOTED behind a lead-in, never claimed as goaly's own
+      // (`reason-quote.ts`): under --phased this compile ran AFTER the previous phase's worker turns.
       return [
-        { tag: 'FAILED', reason: phaseReason(phase, event.reason), iterations: 0, contractHash: undefined },
+        { tag: 'FAILED', reason: phaseReason(phase, compileFailedReason(event.reason)), iterations: 0, contractHash: undefined },
         [],
       ];
     }

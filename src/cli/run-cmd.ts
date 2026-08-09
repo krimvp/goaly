@@ -734,7 +734,10 @@ export function nextStepHint(o: RunOutcome): string | undefined {
     [/reached maxIterations/, `continue with more room: ${resume} --max-iterations <N> --note "<guidance>", or ${inspect}`],
     [/no-diff/, `the agent stopped changing the tree — steer it: ${resume} --stuck-no-diff false --note "<hint>", or refine the goal in a follow-up: --from-run ${o.runId}`],
     [/oscillation/, `the agent is flip-flopping between two states — ${inspect}; steer it: ${resume} --stuck-oscillation false --note "<which way to go>"`],
-    [/compile failed|PLAN_FAILED|plan failed/i, `the contract/plan could not be authored — check the --llm-provider CLI runs & is authenticated, then retry`],
+    // COMPILE_FAILED / PLAN_FAILED are the typed markers the reducer now emits ahead of the quoted
+    // authoring message (`src/orchestrator/reason-quote.ts`); the prose alternatives keep older logs
+    // matching. Still a generic row: the marker sits in goaly's own words either way.
+    [/COMPILE_FAILED|PLAN_FAILED|compile failed|plan failed/i, `the contract/plan could not be authored — check the --llm-provider CLI runs & is authenticated, then retry`],
   ];
   for (const [pattern, hint] of table) if (pattern.test(reason)) return hint;
   return undefined;

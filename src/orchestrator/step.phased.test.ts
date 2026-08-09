@@ -52,7 +52,12 @@ describe('phased reducer (issue #48): PLAN → plan Seal → phase loop → ACCE
     // maxPlanRetries 0 keeps the historical single-shot behavior: the first failure is terminal.
     const [s0] = initial(makeConfig({ phased: true, maxPlanRetries: 0 }));
     const [s1] = step(s0, { tag: 'PLAN_FAILED', reason: 'planner blew up' });
-    expect(s1).toMatchObject({ tag: 'FAILED', reason: 'planner blew up' });
+    // The planner's words are QUOTED behind the `Authoring error: ` lead-in, never claimed as
+    // goaly's own (see `reason-quote.ts`), so the marker leads and the message follows it.
+    expect(s1.tag).toBe('FAILED');
+    expect(s1.tag === 'FAILED' ? s1.reason : '').toBe(
+      'PLAN_FAILED: the phase plan could not be authored. Authoring error: planner blew up',
+    );
   });
 
   it('PLAN_FAILED re-asks the planner with the error as feedback, bounded by maxPlanRetries', () => {
@@ -70,9 +75,12 @@ describe('phased reducer (issue #48): PLAN → plan Seal → phase loop → ACCE
     const [s2] = step(s1, { tag: 'PLAN_FAILED', reason: 'no JSON object' });
     expect(s2).toMatchObject({ tag: 'PLANNING', planRound: 2 });
 
-    // Budget spent → typed FAILED carrying the last reason. Never a plan accepted unvalidated.
+    // Budget spent → typed FAILED quoting the last reason. Never a plan accepted unvalidated.
     const [s3] = step(s2, { tag: 'PLAN_FAILED', reason: 'still no JSON' });
-    expect(s3).toMatchObject({ tag: 'FAILED', reason: 'still no JSON', iterations: 0 });
+    expect(s3).toMatchObject({ tag: 'FAILED', iterations: 0 });
+    expect(s3.tag === 'FAILED' ? (s3.reason ?? '') : '').toContain(
+      'Authoring error: still no JSON',
+    );
   });
 
   it('a plan-Seal revise resets the retry budget (each authoring gets its own)', () => {

@@ -1,4 +1,9 @@
-import { QUOTED_TEXT_LEAD_INS } from '../orchestrator/reason-quote';
+import {
+  COMPILE_FAILED_MARKER,
+  DRIVER_ERROR_MARKER,
+  PLAN_FAILED_MARKER,
+  QUOTED_TEXT_LEAD_INS,
+} from '../orchestrator/reason-quote';
 import { CONTRACT_SOUND_MARKER } from '../orchestrator/stuck';
 
 /**
@@ -17,11 +22,18 @@ import { CONTRACT_SOUND_MARKER } from '../orchestrator/stuck';
  * goaly-authored part is simply the prefix that ends at the earliest lead-in — a boundary the worker
  * cannot move, because moving it earlier only removes ITS OWN text from view.
  *
+ * The Driver holds up its half too: its own terminal `ABORTED` reasons are built by the same module
+ * (`bootstrapFailedReason` / `driverErrorReason`), so a caught exception's text — reachable with
+ * worker-influenced content, since the last-resort catch wraps the `--phased` between-phase
+ * checkpoint — is quoted rather than claimed.
+ *
  * Scope, honestly: the prefix is goaly's own words plus values frozen before the loop began (the
- * contract's authored paths, a phased run's sealed sub-goal title). A reason that goaly does not
- * BUILD but passes through whole — a `COMPILE_FAILED`/`PLAN_FAILED` message or a human's Seal
- * rejection — has no lead-in and is returned entire; it is pre-loop text the worker never touches,
- * but it is not goaly's own prose either.
+ * contract's authored paths, a phased run's sealed sub-goal title). Exactly ONE reason is still
+ * passed through whole with no lead-in — a human's Seal/plan-Seal rejection — so for that one the
+ * "prefix" is the entire reason: a human's words, not goaly's, and not the worker's. The
+ * `COMPILE_FAILED`/`PLAN_FAILED` authoring messages used to be in that bucket, described as pre-loop
+ * text the worker never touches; that was untrue under `--phased` (phase N+1 is compiled after phase
+ * N's worker turns), so they now carry a lead-in of their own.
  */
 export function goalyAuthoredReason(reason: string): string {
   let cut = reason.length;
@@ -50,10 +62,22 @@ const LEGACY_SOUND_MARKER = `[${CONTRACT_SOUND_MARKER}]`;
  * select the SOUND hint on an ordinary repeat-failure abort. That hint names no threshold and no
  * destructive action — it says "keep the tree and carry the goal forward with --from-run", which is
  * valid advice for a repeat-failure abort too — so the worst case is a milder hint, not a dead end.
+ *
+ * It is narrowed further by {@link OWN_MARKERS}: the rescue exists for legacy repeat-failure
+ * reasons, so a reason whose trusted prefix already carries a DIFFERENT typed marker of its own is
+ * never rescued. That keeps the marker-carrying reasons (driver aborts, authoring failures) out of
+ * the one path where quoted text has a say at all.
  */
+const OWN_MARKERS: readonly string[] = [
+  DRIVER_ERROR_MARKER,
+  COMPILE_FAILED_MARKER,
+  PLAN_FAILED_MARKER,
+];
+
 export function hintSubject(reason: string): string {
   const owned = goalyAuthoredReason(reason);
   if (owned.length === reason.length) return owned; // nothing was quoted: the whole reason is ours
   if (owned.includes(CONTRACT_SOUND_MARKER)) return owned;
+  if (OWN_MARKERS.some((marker) => owned.includes(marker))) return owned;
   return reason.includes(LEGACY_SOUND_MARKER) ? `${CONTRACT_SOUND_MARKER} ${owned}` : owned;
 }
