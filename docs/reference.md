@@ -1573,13 +1573,23 @@ Details that matter:
   the run diff, nor any worker prompt. It is not reused as a hint, a seed, or a fallback — handing
   the worker the solution would defeat the run and recreate exactly the deadlock the vacuous-contract
   check exists to catch. A reference file whose path collides with an authored verification file is
-  discarded, so the control can never rewrite the bar it measures.
-- **The refusal is sanitized before it reaches the author.** A test runner reds by printing the
-  *source* of the code under test — and on a red, the code under test is the reference. So the
-  failing rung's output is never passed through raw: the exit code, the assertion message, and stack
-  frames naming the **frozen** verification files are kept; source-frame gutter blocks (`  4| …`)
-  and every frame naming any other file are dropped. Otherwise the author would receive a working
-  solution and could fold it into the frozen files — a green bar at t=0, i.e. a wrong green.
+  discarded, so the control can never rewrite the bar it measures — and the collision test is the
+  *same* predicate the output filter uses to decide whether a frame names a frozen file, so a path
+  can never be treated as unfrozen when it is written and as frozen when it is printed.
+- **The refusal carries a structured summary, not the runner's output.** A test runner reds by
+  printing the *source* of the code under test — and on a red, the code under test is the reference.
+  So the failing rung's output is never passed through: it is replaced by a **whitelist** summary
+  carrying the exit code, the failing rung's identity, lines whose every file-ish token names a
+  **frozen** verification file, and **at most one** assertion/error message line — bounded to a
+  single truncated line and dropped if it lexically parses as code (a declaration, an assignment, a
+  function literal). ANSI escapes are stripped before matching. **Everything else is dropped,
+  including lines that name no file at all** — a bare traceback body or a caret-marked code frame is
+  exactly how runner source leaks past a per-line blacklist — so an unrecognized runner format
+  over-drops to nothing rather than guessing, and the refusal then says so instead of quoting.
+  Otherwise the author would receive a working solution and could fold it into the frozen files — a
+  green bar at t=0, i.e. a wrong green. The filter is lexical, not a proof: the one preserved
+  message is whatever the runner printed, so a reference that throws with a secret *as its message*
+  still surfaces that one bounded line — it cannot deliver a function body, a file path, or a frame.
 - **The scratch copy is isolated from your tree.** Symlinks are never duplicated into it (a linked
   `node_modules`, a linked `src` — the pnpm/monorepo/`npm link` shapes — would be a path straight
   back into your real workspace, so a scratch `npm ci` would mutate it), and every write is checked

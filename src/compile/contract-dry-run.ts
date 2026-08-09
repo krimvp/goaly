@@ -10,26 +10,17 @@ import { UNTRUSTED_SYSTEM_CLAUSE, wrapUntrusted } from '../verify/prompt-safety'
 import type { ScratchCopy, ScratchHost } from '../workspace/scratch-copy';
 import type { VerifierCompiler } from './compiler';
 import { SATISFIABILITY_GUARDRAIL } from './critiqued-compiler';
+import { namesFrozenFile, sanitizeRungOutput } from './rung-output';
 
 /** Max chars of a failing rung's output folded into the refusal reason, so the run log stays bounded. */
 const DETAIL_LIMIT = 2000;
 
-/** A test runner's source-frame gutter (`      4|   const x = 1;`) — verbatim source, always dropped. */
-const GUTTER_LINE = /^\s*\d+\s*\|/;
-
-/** The caret line that closes a frame block (`        |          ^` or `  ^`). */
-const CARET_LINE = /^\s*\|?\s*\^+\s*$/;
-
-/** A path-ish token containing a separator (`src/impl.ts`, `/tmp/x/impl.ts:5:9`, `node:internal/x`). */
-const SLASH_REF = /[\w.@~+-]*(?:\/[\w.@~+-]+)+(?::\d+(?::\d+)?)?/g;
-
-/** A bare `file.ext:LINE[:COL]` reference (a runner frame printed without a directory). */
-const FILE_LINE_REF = /[\w.@+-]+\.[A-Za-z]\w{0,6}:\d+(?::\d+)?/g;
-
-/** Stands in for a failing rung whose whole output spoke only about files outside the frozen bar. */
+/** Stands in for a failing rung whose output carried nothing the whitelist could safely show. */
 const WITHHELD =
-  '(the rung printed nothing that names the frozen verification files — its output was withheld ' +
-  'because on this run it quotes the throwaway reference implementation, which you must not see)';
+  '(the rung printed nothing that could be shown — no line naming only the frozen verification ' +
+  'files, and no recognizable assertion message — so its output was withheld in full, because on ' +
+  'this run the tree it ran against also holds the throwaway reference implementation, which you ' +
+  'must not see)';
 
 /** Default kill-timeout for each scratch command (setup + each rung) — the 10 min the ladder uses. */
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -120,15 +111,18 @@ export type ContractDryRunOpts = {
  * CRITICAL SAFETY — the reference implementation is written ONLY to the {@link ScratchCopy}, which
  * is destroyed on every exit path. It never touches the workspace and never enters the run diff.
  * Leaking it would hand the worker the solution and recreate exactly the deadlock
- * `classifyVacuousContract` exists to catch. A file whose path collides with a frozen
- * `generatedFiles` entry is DISCARDED, so the control can never quietly rewrite the bar it measures.
+ * `classifyVacuousContract` exists to catch. A file whose path names a frozen `generatedFiles`
+ * entry is DISCARDED — by {@link namesFrozenFile}, the SAME predicate the output filter uses, so a
+ * path can never be unfrozen when written and frozen when printed — and so the control can never
+ * quietly rewrite the bar it measures.
  *
  * The one channel OUT of the scratch is the refusal reason: it becomes `COMPILE_FAILED.reason` and
  * IS fed back to the contract author (and, through the author, into the frozen files a worker then
  * reads). A test runner reds by printing the source of the implementation under test — which on a
- * red is precisely the reference — so the failing rung's output is never passed through raw: it goes
- * through {@link sanitizeRungOutput}, which keeps the exit code, the assertion message and frames
- * naming the frozen files, and drops every gutter block and every frame naming anything else.
+ * red is precisely the reference — so the failing rung's output is never passed through: it is
+ * replaced by the STRUCTURED SUMMARY {@link sanitizeRungOutput} builds — the exit code, the failing
+ * rung's identity, lines naming only frozen files, and at most one bounded assertion line. Every
+ * other line is dropped, including lines that name no file (see that module for the honest limits).
  *
  * FAIL-OPEN on infrastructure: no LLM, an unparseable reference, a scratch-copy failure, a setup
  * that cannot run, a timed-out or unstartable rung — all log and freeze as today. Like every other
@@ -198,8 +192,11 @@ export class ContractDryRunCompiler implements VerifierCompiler {
 
     // The bar must be measured EXACTLY as authored: a reference file that collides with a frozen
     // verification path would rewrite the very assertions under test, so it is dropped outright.
-    const pinned = new Set(contract.generatedFiles.map((f) => normalizeRel(f.path)));
-    const files = reference.files.filter((f) => !pinned.has(normalizeRel(f.path)));
+    // Deliberately the SAME predicate the output filter uses to decide whether a frame names a
+    // frozen file: when the two disagreed, a reference file whose path suffix-matched a frozen entry
+    // was both WRITTEN and treated as frozen, so its frames survived into the refusal.
+    const pinned = contract.generatedFiles.map((f) => f.path);
+    const files = reference.files.filter((f) => !namesFrozenFile(f.path, pinned));
     if (files.length < reference.files.length) {
       this.#logger.warn('contract dry run: discarded reference files that collide with the frozen bar', {
         discarded: reference.files.length - files.length,
@@ -250,8 +247,13 @@ export class ContractDryRunCompiler implements VerifierCompiler {
       }
       if (r.exitCode !== 0) {
         // The tree that just failed CONTAINS the reference implementation, so the runner's own
-        // output quotes it (code frames, stack frames). Sanitize before it can reach the author.
-        const clean = sanitizeRungOutput(r.stderr || r.stdout, contract.generatedFiles.map((f) => f.path));
+        // output quotes it (code frames, tracebacks, stack frames). BOTH streams go through the
+        // whitelist — a runner that reds on stdout leaks exactly as one that reds on stderr.
+        const clean = sanitizeRungOutput(
+          `${r.stdout}\n${r.stderr}`,
+          contract.generatedFiles.map((f) => f.path),
+          copy.root,
+        );
         const detail = clean.length > 0 ? clean : WITHHELD;
         return {
           status: 'red',
@@ -313,74 +315,13 @@ function isDeterministic(rung: Rung): rung is DeterministicRung {
   return rung.kind === 'deterministic';
 }
 
-/** Normalize a workspace-relative path for collision comparison: trim, drop a leading `./`. */
-function normalizeRel(p: string): string {
-  const t = p.trim();
-  return t.startsWith('./') ? t.slice(2) : t;
-}
-
 /**
- * Every file-ish token on one output line, with any `:LINE[:COL]` suffix stripped. Directory-bearing
- * tokens are matched first and BLANKED OUT before the bare `file.ext:LINE` pass, so one frame never
- * yields both `verify/check.test.mjs` and a truncated `check.test.mjs` (which would look unfrozen).
- */
-function fileRefs(line: string): string[] {
-  const slashed = line.match(SLASH_REF) ?? [];
-  const bare = line.replace(SLASH_REF, ' ').match(FILE_LINE_REF) ?? [];
-  return [...slashed, ...bare].map((t) => t.replace(/(?::\d+)+$/, ''));
-}
-
-/** True when `ref` names one of the frozen verification files (path suffix match, any prefix). */
-function namesFrozenFile(ref: string, frozen: readonly string[]): boolean {
-  const token = normalizeRel(ref);
-  return frozen.some((f) => token === f || token.endsWith(`/${f}`));
-}
-
-/** A bare location header (`/tmp/x/src/impl.ts:2`) — node prints the offending SOURCE right after it. */
-function isLocationHeader(line: string): boolean {
-  return /^\s*\S+:\d+(?::\d+)?\s*$/.test(line);
-}
-
-/**
- * Strip everything that could quote the REFERENCE IMPLEMENTATION out of a failing rung's output.
- *
- * The rung failed inside a tree that contains the reference, and every real test runner reports a
- * failure by printing the implementation's source: code-frame gutters (`  4|  …`) and stack frames
- * naming its files. That output becomes `COMPILE_FAILED.reason` and is fed verbatim back to the
- * contract author — so the author would receive a working solution and could fold it into the frozen
- * verification files (a wrong-GREEN at t=0, with `classifyVacuousContract` failing open).
- *
- * Whitelist, never blacklist: a line is kept only when it names NO file at all (the assertion
- * message) or names ONLY frozen `generatedFiles` (the bar's own frames). Gutter/caret blocks go
- * unconditionally, and a dropped location header takes its trailing source block with it.
- */
-export function sanitizeRungOutput(raw: string, frozen: readonly string[]): string {
-  const paths = frozen.map(normalizeRel);
-  const kept: string[] = [];
-  let suppressing = false;
-  for (const line of raw.split('\n')) {
-    if (suppressing) {
-      if (line.trim().length === 0) suppressing = false;
-      continue;
-    }
-    if (GUTTER_LINE.test(line) || CARET_LINE.test(line)) continue;
-    const refs = fileRefs(line);
-    if (refs.length > 0 && !refs.every((r) => namesFrozenFile(r, paths))) {
-      suppressing = isLocationHeader(line);
-      continue;
-    }
-    kept.push(line);
-  }
-  return kept.join('\n').trim();
-}
-
-/**
- * The refusal fed to the bounded re-author loop. It names the failing rung and quotes its output —
- * already SANITIZED by {@link sanitizeRungOutput}, so what reaches the author is the assertion and
- * the frozen files' own frames, never the reference implementation: an author receiving a working
- * solution would fold it into the frozen verification files, which is precisely the deadlock this
- * whole guard exists to prevent. Closes with the anti-softening rail so "make it satisfiable" can
- * never be read as "make it easier".
+ * The refusal fed to the bounded re-author loop. It names the failing rung and carries the
+ * STRUCTURED SUMMARY {@link sanitizeRungOutput} built from that rung's output — frames naming only
+ * the frozen files plus at most one bounded assertion line, never the runner's output itself. An
+ * author receiving a working solution would fold it into the frozen verification files, which is
+ * precisely the deadlock this whole guard exists to prevent. Closes with the anti-softening rail so
+ * "make it satisfiable" can never be read as "make it easier".
  */
 export function unsatisfiableReason(rung: string, detail: string): string {
   return (

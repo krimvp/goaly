@@ -206,6 +206,43 @@ describe('ContractDryRunCompiler (compile-time positive control, issue #115)', (
     expect(scratch.written.map((f) => f.path)).toEqual(['src/widget.mjs']);
   });
 
+  it('treats a reference file that SUFFIX-matches a frozen path as a collision, so the two path checks agree', async () => {
+    // The collision drop and the "is this frame frozen?" test must answer identically. When the
+    // drop compared exact paths and the frame test compared suffixes, `src/check.mjs` against a
+    // frozen `check.mjs` was BOTH written into the scratch AND treated as frozen in the output —
+    // so its frames (and its path) survived into the refusal fed to the author.
+    const contract = authoredContract({
+      generatedFiles: [{ path: 'check.mjs', sha256: sha256Hex('assert(true)') }],
+    });
+    const scratch = new FakeScratchHost({
+      results: [
+        {
+          exitCode: 1,
+          stdout: '',
+          stderr: ' ❯ solve src/check.mjs:5:9\nAssertionError: expected 3 to be 4',
+        },
+      ],
+    });
+    const error = (await new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: new FakeLlm([
+        JSON.stringify({
+          files: [
+            { path: 'src/check.mjs', content: 'export const SOLUTION = "LEAKED";' },
+            { path: 'src/widget.mjs', content: 'export const x = 1;' },
+          ],
+        }),
+      ]),
+      scratch,
+    })
+      .compile(generateConfig)
+      .catch((e: unknown) => e)) as Error;
+
+    expect(scratch.written.map((f) => f.path)).toEqual(['src/widget.mjs']);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).not.toContain('src/check.mjs');
+  });
+
   it('runs the contract setup first, and only the DETERMINISTIC rungs (judge rungs are out of scope)', async () => {
     const contract = authoredContract({
       setup: 'npm ci',
@@ -393,6 +430,54 @@ describe('ContractDryRunCompiler — the refusal never carries the reference imp
     expect(error.message).not.toContain('LOOKUP_TABLE');
     expect(error.message).not.toContain('src/widget.mjs');
     expect(error.message).toMatch(/boom/); // the failure itself still reaches the author
+  });
+
+  it('bounds a real multi-line `Error(fn.toString())` message to its first line', async () => {
+    // A reference that builds its error message out of its own source renders as a message whose
+    // CONTINUATION lines name no file — the shape that walked straight through a filter whose
+    // default was to keep such lines.
+    const root = await mkdtemp(join(tmpdir(), 'goaly-dryrun-msg-'));
+    roots.push(root);
+    await mkdir(join(root, 'verify'), { recursive: true });
+    const bar = [
+      "import { solve } from '../src/widget.mjs';",
+      'solve();',
+    ].join('\n');
+    await writeFile(join(root, 'verify', 'check.mjs'), bar, 'utf-8');
+
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: `"${process.execPath}" verify/check.mjs` }],
+      generatedFiles: [{ path: 'verify/check.mjs', sha256: sha256Hex(bar) }],
+    });
+    const reference = JSON.stringify({
+      files: [
+        {
+          path: 'src/widget.mjs',
+          content: [
+            'function impl(amount) {',
+            '  const LOOKUP_TABLE = { magic: "REFERENCE-ONLY-SECRET" };',
+            '  return LOOKUP_TABLE.magic.length + amount;',
+            '}',
+            "export function solve() { throw new Error('reference failed:\\n' + impl.toString()); }",
+          ].join('\n'),
+        },
+      ],
+    });
+
+    const error = (await new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: new FakeLlm([reference]),
+      scratch: new FsScratchHost(root),
+      timeoutMs: 60_000,
+    })
+      .compile(generateConfig)
+      .catch((e: unknown) => e)) as Error;
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).not.toContain('REFERENCE-ONLY-SECRET');
+    expect(error.message).not.toContain('LOOKUP_TABLE');
+    expect(error.message).not.toContain('function impl');
+    expect(error.message).toContain('Error: reference failed:');
   });
 });
 

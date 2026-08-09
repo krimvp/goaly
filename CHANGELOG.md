@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an `npm audit --audit-level moderate` step to CI so new advisories fail the build.
 
 ### Fixed
+- The **contract dry run's refusal is now a structured summary**, not filtered runner output
+  (issue #115 follow-up). The previous per-line filter kept any line that named no file, which real
+  runners exploit: pytest prints traceback source with no filename on the line, jest marks the
+  offending line `> 5 | …` (defeating a gutter anchor), and a multi-line `Error(fn.toString())`
+  message renders as plain lines — each delivered reference-implementation source to the contract
+  author. The refusal now carries only the exit code, the failing rung's identity, lines whose every
+  file-ish token names a **frozen** verification file, and at most **one** assertion line (single
+  line, truncated, dropped if it lexically parses as code). ANSI escapes are stripped before
+  matching, and an unrecognized runner format over-drops to a withheld-output notice instead of
+  guessing. The collision drop that keeps a reference file out of the scratch copy now uses the
+  **same** path predicate as the output filter, so a path can no longer be treated as unfrozen when
+  written and frozen when printed. Both output streams are filtered, not just the first non-empty one.
 - A harness crash (after the Driver's retry is exhausted) no longer consumes an iteration under
   `--max-iterations`. Stuck detection still records the crash streak, and the budget still accounts
   for the abandoned attempt, but a transient crash cannot single-handedly exhaust a tight iteration
