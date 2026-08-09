@@ -82,10 +82,12 @@ export type RunFollowup = z.infer<typeof RunFollowup>;
  * so the pin survives a crash (at raised autonomy the agent may have committed mid-run, and falling
  * back to a MOVED HEAD would hand both keys an empty diff). Optional so older logs still parse.
  *
- * `degraded` records a typed DEGRADED-MODE label for the run (issue #125) — today only
- * `self-judged`: the coding agent, the LLM judge rung and the Sign-off approver all resolved to one
- * model, so the two keys share one distribution and a DONE from this run was not independently
- * reviewed. Compose-time wiring like `harness` (it never enters the frozen contract and never
+ * `degraded` records a typed DEGRADED-MODE label for the run (issue #125): `self-judged` (the coding
+ * agent, the LLM judge rung and the Sign-off approver all resolved to ONE model), `self-approved`
+ * (the approver resolved to the coding agent's model while the judge rung differs), or
+ * `independence-unverified` (the approver sits on a provider default goaly cannot resolve, so the
+ * comparison could not be made). In each case a DONE from this run was not independently reviewed —
+ * or cannot be shown to have been. Compose-time wiring like `harness` (it never enters the frozen contract and never
  * reaches the reducer), written once at run start so every downstream report — the terminal summary,
  * `goaly runs show`, the UI — can label the run rather than relying on a startup WARN nobody read.
  * Absent ⇒ no degraded mode (and older logs still parse).

@@ -88,9 +88,13 @@ export type IndependenceContext = {
    * Per-reviewer Sign-off models (follow-up to issue #84). When this lists ≥2 DISTINCT models, the
    * panel IS perspective-independent — distinct vendors/models with uncorrelated blind spots, not one
    * model re-sampled. That genuinely supplies the independent second key, so the judge↔approver,
-   * worker↔approver, and variance-reduction warnings are all SUPPRESSED. A single distinct model (a
-   * one-entry list, or every entry the same) collapses back to the single-model panel and the
-   * warnings still apply. Absent ⇒ the single-model approver.
+   * worker↔approver, and variance-reduction warnings are all SUPPRESSED.
+   *
+   * A single distinct model (a one-entry list, or every entry the same) is the single-model approver
+   * again — but on THAT model, which `resolveModels` resolves into {@link ResolvedModels.approver}.
+   * So `--model A --approver-models B` compares B against the judge/worker exactly like
+   * `--approver-model B` does, and is independent; only `--approver-models A` collapses.
+   * Absent ⇒ the single-model approver.
    */
   approverModels?: string[];
 };
@@ -107,8 +111,9 @@ function panelIsModelIndependent(models: string[] | undefined): boolean {
  *
  * A `--approver-models` panel with ≥2 DISTINCT models is the genuinely independent second key: the
  * approver no longer collapses onto the judge's or the worker's model, so both collapses are false.
- * (A one-model panel — a single entry or all-identical entries — falls back to the single-model
- * approver and the collapses still apply.)
+ * A ONE-model panel needs no special case here — `resolveModels` resolves `approver` onto that
+ * model, so the ordinary comparison below is already made against the model the panel actually runs
+ * (which is why `--model A --approver-models B` reports no collapse and no warning at all).
  */
 function collapses(
   resolved: ResolvedModels,
@@ -129,19 +134,26 @@ function collapses(
 }
 
 /**
- * The typed degraded-mode label (issue #125) for a resolved wiring: present when BOTH pairs — the
- * judge rung and the coding agent, each against the Sign-off approver — fail to be established as
- * independent. That is the configuration where the two keys may be drawn from a single distribution,
- * so a DONE it produces is labelled in the run header, the terminal summary and `goaly runs show`
- * instead of only in a startup WARN nobody is present to read. A partial collapse (judge↔approver
- * only, say) still gets its advisory warning below but is NOT recorded as a degraded run — the second
- * key is still a different model than the one that wrote the code.
+ * The typed degraded-mode label (issue #125) for a resolved wiring. A run is labelled whenever the
+ * WORKER↔APPROVER pair fails to be established independent — the Sign-off approver, the second key
+ * for DONE, is (or may be) the very model that wrote the code — and additionally when BOTH pairs
+ * fail. Those are the configurations where the two keys may be drawn from a single distribution, so
+ * a DONE they produce is labelled in the run header, the terminal summary and `goaly runs show`
+ * instead of only in a startup WARN nobody is present to read.
  *
- * Two kinds, and the distinction is load-bearing:
- *  - `self-judged` — both pairs OBSERVED to be the same model (goaly compared two known ids).
- *  - `independence-unverified` — at least one pair could not be established either way, because the
- *    approver sits on the provider's own unresolvable default. goaly asked for a distinct second key
- *    and cannot confirm it got one. Before this, that wiring produced NO label and NO warning at all,
+ * The one partial collapse that is NOT labelled is judge↔approver with an independent worker: there
+ * the second key really is a different model than the one that wrote the code, so it keeps only its
+ * advisory warning below. (This used to be stated as the reason no partial collapse is labelled,
+ * which was false for the OTHER partial branch — a worker↔approver collapse under a distinct judge
+ * model, reachable with `--model X --judge-model Y` on a provider with no default model of its own.)
+ *
+ * Three kinds, and the distinctions are load-bearing:
+ *  - `self-judged` — BOTH pairs OBSERVED to be the same model (goaly compared two known ids).
+ *  - `self-approved` — the worker↔approver pair OBSERVED collapsed while the judge rung is
+ *    independent: the skeptic runs the author's model, but the ladder's judge does not.
+ *  - `independence-unverified` — a pair could not be established either way, because the approver
+ *    sits on the provider's own unresolvable default. goaly asked for a distinct second key and
+ *    cannot confirm it got one. Before this, that wiring produced NO label and NO warning at all,
  *    which reads as "verified independent" — strictly worse than the loud self-judged label it
  *    replaced. An unverifiable claim is never reported as a verified one.
  *
@@ -154,13 +166,18 @@ export function degradedMode(
   context: IndependenceContext = {},
 ): DegradedMode | undefined {
   const c = collapses(resolved, harness, llmProvider, context);
-  if (c.judgeApprover === 'independent' || c.workerApprover === 'independent') return undefined;
-  const verified = c.judgeApprover === 'collapsed' && c.workerApprover === 'collapsed';
-  // `self-judged` names the model every role shares; `independence-unverified` names the model the
-  // agent + judge share — the one the approver's unresolvable default might turn out to be.
-  const model = verified ? resolved.approver : resolved.approverIndependentFrom;
+  // The skeptic is established to be a different model than the author: nothing to label, whatever
+  // the judge rung does (a judge↔approver collapse keeps its advisory warning only).
+  if (c.workerApprover === 'independent') return undefined;
+  const bothObserved = c.judgeApprover === 'collapsed' && c.workerApprover === 'collapsed';
+  const workerObserved = c.workerApprover === 'collapsed';
+  const kind = bothObserved ? 'self-judged' : workerObserved ? 'self-approved' : 'independence-unverified';
+  // The observed kinds name the model the approver shares with the agent (they are the same value);
+  // `independence-unverified` names the model the agent + judge share — the one the approver's
+  // unresolvable default might turn out to be.
+  const model = workerObserved ? resolved.approver : resolved.approverIndependentFrom;
   return {
-    kind: verified ? 'self-judged' : 'independence-unverified',
+    kind,
     ...(model !== undefined ? { model } : {}),
     generate: context.generate === true,
     autonomous: context.autonomous === true,

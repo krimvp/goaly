@@ -26,18 +26,29 @@ import { z } from 'zod';
  * goaly has no way to resolve, so "different from the agent's model" is unproven. Reporting the
  * second as the first would overclaim; reporting it as independent would underclaim, which is the
  * failure this kind exists to prevent.
+ *
+ * `self-approved` is the third distinct state: the Sign-off approver OBSERVABLY runs the model that
+ * wrote the code, while the judge rung runs a different one. Only ONE of the two keys is affected,
+ * so it is not `self-judged` — but the key it affects is the one whose whole job is to be a skeptic
+ * about the agent's own work, so it is not "independent" either. It used to produce NO label at all
+ * (any independent pair suppressed the whole thing), which is exactly the silent degradation this
+ * type exists to prevent: the second key WAS the model that wrote the code, and nothing in the run
+ * header, the summary or `goaly runs show` said so.
  */
-export const DEGRADED_MODE_KINDS = ['self-judged', 'independence-unverified'] as const;
+export const DEGRADED_MODE_KINDS = ['self-judged', 'self-approved', 'independence-unverified'] as const;
 
 export const DegradedMode = z.object({
   /**
    * `self-judged`: the coding agent, the LLM judge rung and the Sign-off approver all resolved to the
-   * SAME KNOWN model. `independence-unverified`: they may have — the approver runs on the provider's
-   * own default and goaly cannot tell whether that default is the agent's model.
+   * SAME KNOWN model. `self-approved`: the approver resolved to the CODING AGENT's model while the
+   * judge rung resolved to a different one. `independence-unverified`: they may have collapsed — the
+   * approver runs on the provider's own default and goaly cannot tell whether that default is the
+   * agent's model.
    */
   kind: z.enum(DEGRADED_MODE_KINDS),
   /**
    * For `self-judged`: the one model every role resolved to; ABSENT ⇒ the tool's own default model.
+   * For `self-approved`: the model the coding agent and the Sign-off approver share.
    * For `independence-unverified`: the model the coding agent and the judge rung share — the model
    * the approver's unresolvable default MIGHT also be.
    */
@@ -50,13 +61,16 @@ export const DegradedMode = z.object({
 export type DegradedMode = z.infer<typeof DegradedMode>;
 
 /**
- * How bad each kind is, for reconciling two labels. `self-judged` is an OBSERVED collapse and
- * therefore strictly worse than `independence-unverified`, which is a collapse that could not be
- * ruled out; both are worse than no label.
+ * How bad each kind is, for reconciling two labels. Observed beats unproven, and more collapsed
+ * roles beat fewer: `independence-unverified` is a collapse that could not be ruled out;
+ * `self-approved` is an OBSERVED collapse of the second key onto the model that wrote the code;
+ * `self-judged` is that plus the judge rung, i.e. every role on one model. All are worse than no
+ * label.
  */
 const SEVERITY: Record<DegradedMode['kind'], number> = {
   'independence-unverified': 1,
-  'self-judged': 2,
+  'self-approved': 2,
+  'self-judged': 3,
 };
 
 /**
@@ -97,6 +111,8 @@ export function degradedModeTag(d: DegradedMode): string {
   switch (d.kind) {
     case 'self-judged':
       return 'SELF-JUDGED';
+    case 'self-approved':
+      return 'SELF-APPROVED';
     case 'independence-unverified':
       return 'INDEPENDENCE-UNVERIFIED';
   }
@@ -114,6 +130,14 @@ export function degradedModeDetail(d: DegradedMode): string {
   const suffix = shape.length > 0 ? ` (${shape})` : '';
   const remedy =
     'Pass --approver-model <other-model> (or --approver-models) for an independent second key.';
+  if (d.kind === 'self-approved') {
+    return (
+      `the Sign-off approver — the SECOND KEY for DONE — ran the same model as the coding agent ` +
+      `that wrote the code (${d.model ?? 'one model (the tool default)'})${suffix}; only the LLM ` +
+      'judge rung ran a different one. The skeptic and the author are one distribution, so the ' +
+      `second key adds little independent evidence. ${remedy}`
+    );
+  }
   if (d.kind === 'independence-unverified') {
     return (
       `the coding agent and the LLM judge rung ran on ${d.model ?? 'one model'}${suffix}, and the ` +

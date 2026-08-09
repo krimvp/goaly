@@ -1,6 +1,6 @@
 import type { RunConfig } from '../domain/config';
 import type { ParsedArgs } from './args';
-import { degradedModeTag } from '../domain/degraded';
+import { degradedModeTag, type DegradedMode } from '../domain/degraded';
 import { degradedMode } from './independence';
 import { resolveModels } from './models';
 import { defaultDefectCorpusPath } from '../defects/corpus';
@@ -215,6 +215,18 @@ function modelRows(parsed: ParsedArgs): Row[] {
  * token is spent. Shows the resolved Sign-off model, says so when the approver declined to inherit
  * the agent's `--model`, and names the degraded mode when all three roles still collapse onto one.
  */
+/** One clause per degraded kind — exhaustive, so a new kind cannot silently reuse another's wording. */
+function degradedRowReason(kind: DegradedMode['kind']): string {
+  switch (kind) {
+    case 'independence-unverified':
+      return "the approver's model could not be compared to the agent's/judge's";
+    case 'self-approved':
+      return 'the approver runs the SAME model as the coding agent (the judge rung differs)';
+    case 'self-judged':
+      return 'agent, judge rung and approver share one model';
+  }
+}
+
 function keyIndependenceRows(parsed: ParsedArgs, config: RunConfig): Row[] {
   const models = resolveModels(parsed.models, { llmProvider: parsed.llmProvider });
   const degraded = degradedMode(models, parsed.harness, parsed.llmProvider, {
@@ -241,11 +253,9 @@ function keyIndependenceRows(parsed: ParsedArgs, config: RunConfig): Row[] {
       : ([
           [
             'degraded mode',
-            `${degradedModeTag(degraded)} — ${
-              degraded.kind === 'independence-unverified'
-                ? "the approver's model could not be compared to the agent's/judge's"
-                : 'agent, judge rung and approver share one model'
-            }; pass --approver-model <other> for an independent second key`,
+            `${degradedModeTag(degraded)} — ${degradedRowReason(
+              degraded.kind,
+            )}; pass --approver-model <other> for an independent second key`,
           ],
         ] as Row[])),
   ];

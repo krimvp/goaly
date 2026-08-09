@@ -300,9 +300,9 @@ It prints the fully-merged, fully-validated configuration — resolved verifier 
 autonomy, provider and every model, budgets, per-step timeouts, stuck thresholds, baseline, sandbox,
 and which config files contributed — then exits `0`. That includes what the **second key** will run
 on (`sign-off model (2nd key)`, including `independence UNVERIFIED` when the approver's model cannot
-be compared) and a `degraded mode` row when the agent, the judge rung and the approver collapse — or
-may have collapsed — onto one model; see
-[degraded mode](#degraded-mode-self-judged-and-independence-unverified).
+be compared) and a `degraded mode` row when the approver collapses onto the coding agent's
+model (with the judge rung, or on its own) — or may have; see
+[degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified).
 
 It runs **after** every read-only check a real run performs (config merge, `--cost-table`,
 `--baseline` resolution, `--resume` / `--from-run` log reads, the preflight) and **before** the first
@@ -426,11 +426,11 @@ Because that limit is real, the row-1 wiring is **never reported as independent*
 provider's default is a *request* for a distinct second key, not proof of one: if the provider's own
 default happens to be `X`, all three roles are one model again. goaly says exactly that — an
 `INDEPENDENCE UNVERIFIED` startup warning per collapsed pair, `independence UNVERIFIED` on the
-`--dry-run` sign-off row, and the [`INDEPENDENCE-UNVERIFIED` degraded mode](#degraded-mode-self-judged-and-independence-unverified)
+`--dry-run` sign-off row, and the [`INDEPENDENCE-UNVERIFIED` degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified)
 in the run header. Passing `--approver-model` (or `--approver-models`) on a model you know differs is
 what makes the second key *verifiable*.
 
-### Degraded mode: `SELF-JUDGED` and `INDEPENDENCE-UNVERIFIED`
+### Degraded mode: `SELF-JUDGED`, `SELF-APPROVED` and `INDEPENDENCE-UNVERIFIED`
 
 When the coding agent, the LLM judge rung **and** the Sign-off approver all still resolve to one
 model — the zero-config default run, where only one model is available — the run is recorded as a
@@ -451,7 +451,26 @@ The same line appears in `goaly runs show <id>` (and the header field is readabl
 consumer — CI, the UI), so a DONE that nobody independently reviewed is *labelled* as such rather
 than only warned about at startup — a warning nobody is present to read is a record, not a control.
 
-A second kind, `INDEPENDENCE-UNVERIFIED` (`kind: "independence-unverified"`), covers the wiring goaly
+A second kind, `SELF-APPROVED` (`kind: "self-approved"`), covers the *partial* collapse that still
+lands on the second key: the Sign-off approver resolves to the **coding agent's own model** while the
+LLM judge rung resolves to a different one. It is reachable without asking for it — e.g.
+`--harness goaly-code --llm-provider openai --model gpt-5 --judge-model gpt-5-mini`, where the
+provider has no default model of its own, so the [approver-independence
+default](#the-sign-off-approver-does-not-inherit---model) is skipped and the approver inherits
+`--model`:
+
+```
+degraded:    SELF-APPROVED — the Sign-off approver — the SECOND KEY for DONE — ran the same model as
+             the coding agent that wrote the code (gpt-5) (--generate --autonomous); only the LLM
+             judge rung ran a different one. The skeptic and the author are one distribution, so the
+             second key adds little independent evidence. …
+```
+
+The mirror-image partial collapse — judge↔approver on one model with the **worker** on another — is
+*not* labelled: there the second key genuinely is a different model than the one that wrote the code,
+so it stays an advisory startup warning only.
+
+A third kind, `INDEPENDENCE-UNVERIFIED` (`kind: "independence-unverified"`), covers the wiring goaly
 **cannot** decide: `--model X` where the approver was defaulted to the provider's own model. The
 agent and the judge rung run on `X`; the approver runs on a model id goaly has no way to resolve, so
 it can neither confirm nor rule out that all three are `X`. That is *not* independence, and it is not
@@ -464,15 +483,17 @@ degraded:    INDEPENDENCE-UNVERIFIED — the coding agent and the LLM judge rung
              is a different model. …
 ```
 
-Both kinds are exactly that: a **label**. Neither weakens nor strengthens a gate — the frozen ladder
-and the veto-only approver still both have to turn for DONE — and neither enters the frozen
-contract. Setting `--approver-model` (or `--approver-models` with ≥2 distinct models) removes them.
+All three kinds are exactly that: a **label**. None weakens or strengthens a gate — the frozen ladder
+and the veto-only approver still both have to turn for DONE — and none enters the frozen contract.
+Setting `--approver-model` (or `--approver-models`) on a model that differs from the agent's removes
+them.
 
 **On `--resume`, the label is reconciled — it is not left at what the first invocation resolved.**
 Model flags are *not* part of the frozen contract or of the resumed config overlay, so a resume with
 different (or simply omitted) `--model` / `--approver-model` flags genuinely changes which keys run
 for the remaining iterations. The run as a whole is therefore labelled with the **more severe** of
-the recorded label and the resumed invocation's (`self-judged` > `independence-unverified` > none):
+the recorded label and the resumed invocation's (`self-judged` > `self-approved` >
+`independence-unverified` > none):
 a resume that collapses the keys further **upgrades** the header, and a resume that repairs the
 wiring does **not** erase the iterations that already ran degraded. Any difference at all is WARNed
 ("this invocation's key wiring differs from the one the run started with"), and the same reconciled
@@ -804,8 +825,11 @@ worker has demonstrably changed the tree during the run, the run makes **one rea
 asking: *given this implementation, could any correct implementation pass this frozen check, or is
 the check itself unsatisfiable?*
 
-- `defective: false` → the run aborts with **today's repeat-failure reason**, plus a
-  **`CONTRACT_ADJUDICATED_SOUND`** marker. The diagnosis is unchanged; the marker is there because
+- `defective: false` → the run aborts with a **`CONTRACT_ADJUDICATED_SOUND`** marker, followed by
+  **today's repeat-failure reason** as `Original stuck condition:` context. The diagnosis is
+  unchanged, and the marker leads so it sits in goaly's own words rather than behind the quoted
+  (worker-authored) failure signature — the CLI's next-step hint reads only that leading part, so a
+  crafted test name can never select the hint. The marker is there because
   the two aborts are not equally *continuable*. A plain repeat abort ends on a re-derived detector
   trip, so `--resume <id> --stuck-repeat-threshold N` genuinely continues it. An adjudicated one
   ends on a **recorded** `CONTRACT_ADJUDICATED` event: replay folds that event to `ABORTED` whatever
@@ -1168,7 +1192,7 @@ things a `DONE`/`ABORTED` line alone cannot tell you:
 
 | Line | Meaning |
 | --- | --- |
-| `degraded:` | a typed [degraded mode](#degraded-mode-self-judged-and-independence-unverified) — `SELF-JUDGED` (the two keys on one model) or `INDEPENDENCE-UNVERIFIED` (goaly could not compare them) |
+| `degraded:` | a typed [degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified) — `SELF-JUDGED` (every role on one model), `SELF-APPROVED` (the approver on the coding agent's model, the judge rung on another) or `INDEPENDENCE-UNVERIFIED` (goaly could not compare them) |
 | `adjudicated:` | this run's [contract-fault verdict](#in-loop-contract-fault-adjudication-contract_defective) (SOUND or DEFECTIVE, with the generalized anti-pattern), and for a defective one the exact `--recontract` command that recovers without discarding the tree |
 | `successor of:` | this run's [re-contract provenance](#re-contracting-a-defective-bar---recontract): the predecessor run + its frozen `contractHash`, the verdict that justified the successor, and the depth in the chain |
 
@@ -1553,9 +1577,9 @@ agent, judge, and approver all resolve to one model — the self-author + self-j
 genuinely independent skeptic. Beyond the warning, goaly acts on it: the approver
 [does not inherit `--model`](#the-sign-off-approver-does-not-inherit---model) where a distinct model
 is available, and an irreducible collapse is recorded as the typed
-[`SELF-JUDGED` degraded mode](#degraded-mode-self-judged-and-independence-unverified) in the run
-header, the terminal summary and `goaly runs show` — with `INDEPENDENCE-UNVERIFIED` for the wiring
-goaly cannot compare at all.
+[`SELF-JUDGED` degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified) in the run
+header, the terminal summary and `goaly runs show` — `SELF-APPROVED` when only the approver runs the
+coding agent's model, and `INDEPENDENCE-UNVERIFIED` for the wiring goaly cannot compare at all.
 
 **The second key can be a multi-vote panel.**
 
@@ -1573,7 +1597,10 @@ goaly cannot compare at all.
 - `--approver-models m1,m2,…` runs the panel across **distinct models** (reviewer *i* → model *i*,
   cycled). With it, the quorum defaults to the model count, and ≥2 distinct models make the panel
   a genuinely independent second key (the collapse warnings are suppressed). A quorum on one model
-  is variance reduction, not independence — goaly warns about that too.
+  is variance reduction, not independence — goaly warns about that too. A list naming ONE distinct
+  model (`--approver-models B`, or `B,B`) is the single-model approver **on that model**: it is
+  judged for independence exactly like `--approver-model B`, so it collapses only when `B` is the
+  agent's or the judge's model.
 - **Cost:** a panel multiplies approver spend ~quorum× (metered against `--budget-tokens`).
   Mitigations: the panel stops polling once the outcome is mathematically decided, and reviewers
   share a cached prompt prefix (the lens rides the prompt tail). A small panel (≈3–5) is the
@@ -1898,7 +1925,8 @@ contributor *"one term, one meaning"* reference, see [`CONTEXT.md`](../CONTEXT.m
   happening; the tree is worth keeping. See
   [In-loop contract-fault adjudication](#in-loop-contract-fault-adjudication-contract_defective).
 - **`CONTRACT_ADJUDICATED_SOUND`** — the other verdict of the same adjudication: the frozen bar CAN
-  be met, the implementation simply has not met it yet. Carries the unchanged repeat-failure text;
+  be met, the implementation simply has not met it yet. Carries the unchanged repeat-failure text as
+  trailing context;
   the marker exists because the recorded verdict makes this abort uncontinuable by any `--resume`
   extension, so the next step is `goaly "<goal>" --from-run <id>`, not a threshold flag.
 - <a id="g-recontract"></a>**Re-contract / successor run** — the recovery from a `CONTRACT_DEFECTIVE`

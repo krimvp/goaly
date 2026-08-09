@@ -63,7 +63,9 @@ COMPILE ──► SEAL ──► setup + pre-flight ──► ┌─────
   *agent's* model; the approver defaults to a **different** one wherever the provider offers it. If
   the agent, the judge rung and the approver still collapse onto one model, the run is recorded as
   a typed `SELF-JUDGED` degraded mode in the run header, the terminal summary and `goaly runs show`
-  — so a DONE nobody independently reviewed is labelled everywhere it is reported. And when goaly
+  — so a DONE nobody independently reviewed is labelled everywhere it is reported. When only the
+  approver collapses onto the agent's model (the judge rung differs), that is labelled too, as
+  `SELF-APPROVED`: the second key was the model that wrote the code. And when goaly
   cannot *resolve* the approver's model to compare it at all (the provider's own default), the run is
   labelled `INDEPENDENCE-UNVERIFIED` rather than passed off as independent.
 - **The control flow has zero LLM calls.** A pure reducer owns all policy; everything stochastic

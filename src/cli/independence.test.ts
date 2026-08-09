@@ -186,13 +186,18 @@ describe('independenceWarnings', () => {
       expect(w.some((s) => s.includes('VARIANCE REDUCTION'))).toBe(true);
     });
 
-    it('a list whose entries are all the SAME model is not independent (warning kept)', () => {
+    it('a repeated ONE-model list is judged on THAT model, not on the agent’s (round-6 fix)', () => {
+      // `--model claude-x --approver-models m,m,m`: every reviewer provably runs `m`, so the second
+      // key is a different model than the judge's and the worker's — variance reduction ON TOP of a
+      // genuine model separation. It used to be reported as a collapse naming `claude-x`, a model
+      // the panel never runs.
       const resolved = resolveModels({ model: 'claude-x', approverModels: ['m', 'm', 'm'] });
+      expect(resolved.approver).toBe('m');
       const w = independenceWarnings(resolved, 'claude', 'claude', {
         approverQuorum: 3,
         approverModels: ['m', 'm', 'm'],
       });
-      expect(w.some((s) => s.includes('VARIANCE REDUCTION'))).toBe(true);
+      expect(w).toEqual([]);
     });
   });
 });
@@ -289,6 +294,91 @@ describe('degradedMode (issue #125): the typed self-judged label', () => {
     expect(detail).toContain('m');
     expect(detail).toContain('--generate --autonomous');
     expect(detail).toContain('--approver-model');
+  });
+});
+
+/**
+ * ROUND-6 REGRESSION (finding 1). An OBSERVED worker↔approver collapse — the Sign-off approver, the
+ * second key for DONE, literally the same model as the coding agent that wrote the code — was left
+ * completely UNLABELLED whenever the judge model happened to differ, because `degradedMode()`
+ * returned `undefined` as soon as EITHER pair was independent. Reproduced through the real CLI with
+ * no explicit `--approver-model`: `--harness goaly-code --llm-provider openai --model gpt-5
+ * --judge-model gpt-5-mini` — openai has no default model of its own, so the #125 approver
+ * independence default is skipped and the approver inherits the agent's model.
+ */
+describe('degradedMode — an observed worker↔approver collapse is degrading on its own', () => {
+  it('labels SELF-APPROVED when the approver runs the agent’s model but the judge differs', () => {
+    const resolved = resolveModels(
+      { model: 'gpt-5', judgeModel: 'gpt-5-mini' },
+      { llmProvider: 'openai' },
+    );
+    // The wiring the CLI actually produces: no independence default (openai has no own default).
+    expect(resolved.approver).toBe('gpt-5');
+    expect(resolved.harness).toBe('gpt-5');
+    expect(resolved.judge).toBe('gpt-5-mini');
+
+    const d = degradedMode(resolved, 'goaly-code', 'openai', { generate: true, autonomous: true });
+    expect(d).toEqual({
+      kind: 'self-approved',
+      model: 'gpt-5',
+      generate: true,
+      autonomous: true,
+    });
+    expect(DegradedMode.safeParse(d).success).toBe(true);
+    expect(degradedModeTag(d!)).toBe('SELF-APPROVED');
+    const detail = degradedModeDetail(d!);
+    expect(detail).toContain('gpt-5');
+    expect(detail).toContain('--approver-model');
+    // The startup WARN and the header label must agree — the warning names the same collapse.
+    expect(
+      independenceWarnings(resolved, 'goaly-code', 'openai').some((s) =>
+        s.includes('coding agent and the Sign-off approver share the same model'),
+      ),
+    ).toBe(true);
+  });
+
+  it('still labels the all-three collapse SELF-JUDGED, not SELF-APPROVED', () => {
+    expect(degradedMode(resolveModels({ model: 'm' }), 'claude', 'claude')).toMatchObject({
+      kind: 'self-judged',
+      model: 'm',
+    });
+  });
+
+  it('stays ABSENT for the judge↔approver-only collapse (the worker is a different vendor)', () => {
+    // The one partial collapse whose second key really is NOT the model that wrote the code.
+    expect(degradedMode(resolveModels({ model: 'm' }), 'codex', 'claude')).toBeUndefined();
+  });
+});
+
+/**
+ * ROUND-6 REGRESSION (finding 2). A Sign-off panel spelled `--approver-models` with fewer than 2
+ * DISTINCT models was reported as `self-judged` naming the AGENT's model — a VERIFIED-independent
+ * second key recorded as a collapse, the mirror of the failure #125 exists to prevent. It must
+ * behave exactly like the equivalent `--approver-model B`.
+ */
+describe('degradedMode — a one-model --approver-models panel is judged on the PANEL’s model', () => {
+  it('is ABSENT (and silent) for --model A --approver-models B', () => {
+    const resolved = resolveModels({ model: 'A', approverModels: ['B'] });
+    expect(degradedMode(resolved, 'claude', 'claude', { approverModels: ['B'] })).toBeUndefined();
+    expect(independenceWarnings(resolved, 'claude', 'claude', { approverModels: ['B'] })).toEqual([]);
+    // …identical to the single-flag spelling it is equivalent to.
+    const single = resolveModels({ model: 'A', approverModel: 'B' });
+    expect(degradedMode(single, 'claude', 'claude')).toBeUndefined();
+  });
+
+  it('is ABSENT (and silent) for a repeated one-model panel --approver-models B,B', () => {
+    const resolved = resolveModels({ model: 'A', approverModels: ['B', 'B'] });
+    const ctx = { approverModels: ['B', 'B'], approverQuorum: 2 };
+    expect(degradedMode(resolved, 'claude', 'claude', ctx)).toBeUndefined();
+    expect(independenceWarnings(resolved, 'claude', 'claude', ctx)).toEqual([]);
+  });
+
+  it('still labels a one-model panel that lands on the AGENT’s own model', () => {
+    const resolved = resolveModels({ model: 'A', approverModels: ['A'] });
+    expect(degradedMode(resolved, 'claude', 'claude', { approverModels: ['A'] })).toMatchObject({
+      kind: 'self-judged',
+      model: 'A',
+    });
   });
 });
 

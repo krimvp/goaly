@@ -220,7 +220,7 @@ function harnessCrashReason(threshold: number, output: string, hint?: string): s
   const trimmed = output.trim();
   const snippet =
     trimmed.length > CRASH_OUTPUT_LIMIT ? `${trimmed.slice(0, CRASH_OUTPUT_LIMIT)}…` : trimmed;
-  const tail = snippet.length > 0 ? ` Last harness output: ${snippet}` : '';
+  const tail = snippet.length > 0 ? ` ${HARNESS_OUTPUT_QUOTE}${snippet}` : '';
   const head =
     `STUCK_HARNESS_CRASH: the coding-agent harness exited abnormally ${threshold} times in a row — ` +
     'it never completed a turn, so this is not a problem with your code or the frozen contract. ';
@@ -265,7 +265,7 @@ function contractUnevaluableReason(threshold: number, detail: string): string {
   const trimmed = detail.trim();
   const snippet =
     trimmed.length > CRASH_OUTPUT_LIMIT ? `${trimmed.slice(0, CRASH_OUTPUT_LIMIT)}…` : trimmed;
-  const tail = snippet.length > 0 ? ` Last verifier output: ${snippet}` : '';
+  const tail = snippet.length > 0 ? ` ${VERIFIER_OUTPUT_QUOTE}${snippet}` : '';
   return (
     `CONTRACT_UNEVALUABLE: the frozen verifier ladder could not be evaluated to a real pass/fail ` +
     `${threshold} times in a row — the check itself failed to RUN (a missing tool, a network / ` +
@@ -310,13 +310,40 @@ function timeoutNoDiffReason(threshold: number): string {
 const SIGNATURE_REASON_LIMIT = 500;
 
 /**
+ * The lead-ins after which an abort reason QUOTES text goaly did not author — a verifier failure
+ * signature, an adjudicator's prose, a harness's stderr. Everything from the first of these to the
+ * END of the reason is untrusted: the coding agent can steer it (a test name, an assertion message),
+ * so no consumer may key a decision off it.
+ *
+ * Two rules keep that statable, and both are enforced by construction below:
+ *  1. every reason builder that quotes external text uses one of these constants, and
+ *  2. every goaly-authored marker (`CONTRACT_DEFECTIVE`, `CONTRACT_ADJUDICATED_SOUND`, `STUCK_*`)
+ *     is emitted BEFORE the first quote, never after it.
+ *
+ * So `reason.slice(0, indexOfFirstLeadIn)` is exactly the goaly-authored part, and a reader that
+ * matches only that prefix cannot be steered by the worker (see `goalyAuthoredReason` in the CLI).
+ */
+export const SIGNATURE_QUOTE = 'Repeated failure signature: ';
+export const ADJUDICATOR_QUOTE = 'Adjudicator: ';
+export const HARNESS_OUTPUT_QUOTE = 'Last harness output: ';
+export const VERIFIER_OUTPUT_QUOTE = 'Last verifier output: ';
+
+/** All of the above, in no particular order — the CLI takes the EARLIEST match in a reason. */
+export const QUOTED_TEXT_LEAD_INS: readonly string[] = [
+  SIGNATURE_QUOTE,
+  ADJUDICATOR_QUOTE,
+  HARNESS_OUTPUT_QUOTE,
+  VERIFIER_OUTPUT_QUOTE,
+];
+
+/**
  * The repeat-failure abort reason (Fix #3 — issue: stuck on a byte-identical verifier error). Keeps the
  * legacy `repeat-failure` marker for back-compat, adds the typed `STUCK_REPEATED_FAILURE` label, names
  * the repeated (already-normalized) signature, and hints where the fix actually lies — so a worker that
  * keeps editing unrelated files while the same error repeats is told to look at the file in the error,
  * the contract, or the setup, rather than churning on.
  */
-function repeatFailureReason(threshold: number, signature: string): string {
+export function repeatFailureReason(threshold: number, signature: string): string {
   const sig =
     signature.length > SIGNATURE_REASON_LIMIT
       ? `${signature.slice(0, SIGNATURE_REASON_LIMIT)}…`
@@ -324,7 +351,7 @@ function repeatFailureReason(threshold: number, signature: string): string {
   return (
     `repeat-failure (STUCK_REPEATED_FAILURE): the same verifier error has repeated ${threshold} ` +
     'times in a row despite code changes — the fix likely lies in the file named in the error, or in ' +
-    `the contract/setup, not in churning unrelated files. Repeated failure signature: ${sig}`
+    `the contract/setup, not in churning unrelated files. ${SIGNATURE_QUOTE}${sig}`
   );
 }
 
@@ -349,19 +376,25 @@ export const CONTRACT_DEFECTIVE_MARKER = 'CONTRACT_DEFECTIVE';
 export const CONTRACT_SOUND_MARKER = 'CONTRACT_ADJUDICATED_SOUND';
 
 /**
- * The abort reason for a sound in-loop adjudication: today's repeat-failure text, plus the one fact
- * the operator needs — this run cannot be continued by raising a threshold, because the adjudication
- * is on the record. The bar is satisfiable, so the tree is the thing that has not caught up yet;
- * carry the work forward as a follow-up rather than re-contracting (which `planRecontract` refuses
- * for a sound verdict).
+ * The abort reason for a sound in-loop adjudication: the one fact the operator needs — this run
+ * cannot be continued by raising a threshold, because the adjudication is on the record — plus
+ * today's repeat-failure text as context. The bar is satisfiable, so the tree is the thing that has
+ * not caught up yet; carry the work forward as a follow-up rather than re-contracting (which
+ * `planRecontract` refuses for a sound verdict).
+ *
+ * The marker leads and the quoted repeat-failure text (which ends in the WORKER-authored failure
+ * signature) trails, per the ordering rule at {@link QUOTED_TEXT_LEAD_INS}: a reader keying off the
+ * marker must be able to find it in the goaly-authored prefix, not behind text the worker steers.
+ * It used to be the other way round, which is what let a crafted signature outrank the marker in the
+ * CLI's next-step hint table.
  */
 export function contractSoundReason(fallbackReason: string): string {
   return (
-    `${fallbackReason} [${CONTRACT_SOUND_MARKER}] The frozen bar was re-adjudicated in-loop and ` +
+    `[${CONTRACT_SOUND_MARKER}] The frozen bar was re-adjudicated in-loop and ` +
     'found SATISFIABLE — the assertion CAN be met, the implementation simply has not met it yet. ' +
     'That adjudication is recorded, so this run ends here: replay folds the recorded verdict and a ' +
     'raised --stuck-repeat-threshold cannot un-terminate it. Carry the tree forward into a fresh ' +
-    'run instead.'
+    `run instead. Original stuck condition: ${fallbackReason}`
   );
 }
 

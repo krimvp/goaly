@@ -44,6 +44,25 @@ describe('resolveModels (cascade)', () => {
     });
   });
 
+  /**
+   * ROUND-6 REGRESSION. A one-model `--approver-models` panel left `approver` on the cascade value
+   * (the AGENT's model), so every consumer that reads `resolved.approver` — the independence check,
+   * the cost table, the dry-run row — believed the second key ran the agent's model when it
+   * provably ran the panel's. The panel model IS the approver's model when the panel has one
+   * distinct entry, so resolve it there.
+   */
+  it('resolves --approver-models with ONE distinct model onto that model (not the agent cascade)', () => {
+    expect(resolveModels(ModelSelection.parse({ model: 'm', approverModels: ['b'] }))).toEqual({
+      harness: 'm', compiler: 'm', judge: 'm', approver: 'b', planner: 'm', critic: 'm', explain: 'm',
+      approverModels: ['b'],
+    });
+    // Repeated entries are still ONE distinct model — the panel re-samples it.
+    expect(resolveModels(ModelSelection.parse({ model: 'm', approverModels: ['b', 'b'] }))).toEqual({
+      harness: 'm', compiler: 'm', judge: 'm', approver: 'b', planner: 'm', critic: 'm', explain: 'm',
+      approverModels: ['b', 'b'],
+    });
+  });
+
   it('--planner-model overrides only the planner step (issue #48)', () => {
     expect(resolveModels(ModelSelection.parse({ model: 'm', llmModel: 'L', plannerModel: 'P' }))).toEqual({
       harness: 'm', compiler: 'L', judge: 'L', approver: 'L', planner: 'P', critic: 'L', explain: 'L',

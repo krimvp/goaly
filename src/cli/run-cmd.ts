@@ -22,6 +22,7 @@ import type { PlanGate } from '../plan/plan-gate';
 import type { PhasedStreamSink } from '../agent-cli/stream';
 import { readRun } from '../runlog/inspect';
 import { CONTRACT_SOUND_MARKER } from '../orchestrator/stuck';
+import { hintSubject } from './reason-text';
 import type { RunLogEntry } from '../runlog/runlog';
 import { FileRunLog } from '../runlog/file-runlog';
 import {
@@ -678,9 +679,17 @@ export function adjudicatedResumeWarning(
  * Matched on the typed reason prefixes/tags the reducer and stuck detectors emit (`no-diff`,
  * `oscillation`, `STUCK_HARNESS_CRASH`, `STUCK_TIMEOUT_NO_DIFF`, `CONTRACT_DEFECTIVE`, …); an
  * unknown reason gets no hint.
+ *
+ * Matched against {@link hintSubject}, NOT the raw reason. An abort reason quotes worker-steerable
+ * text (the repeated verifier signature, the adjudicator's prose, the harness's stderr), and the
+ * generic rows below are plain substrings — so a test named `handles no-diff` inside an adjudicated
+ * run's signature used to hijack the hint and point the operator at `--stuck-no-diff false`, which
+ * provably cannot continue that run (an adjudicated abort is folded from a RECORDED event; no
+ * threshold un-terminates it). Reading only goaly's own words closes that; the typed-marker rows are
+ * additionally ordered ahead of the generic ones so the marker always wins on its own reason.
  */
 export function nextStepHint(o: RunOutcome): string | undefined {
-  const reason = o.reason ?? '';
+  const reason = hintSubject(o.reason ?? '');
   const inspect = `inspect with: goaly runs show ${o.runId}`;
   const resume = `goaly --resume ${o.runId}`;
   if (o.status === 'DONE' || reason.length === 0) return undefined;
@@ -704,19 +713,22 @@ export function nextStepHint(o: RunOutcome): string | undefined {
     [/TOOLS_MISSING/, `install the tools named above (or rerun with --install-missing-tools true)`],
     [/SETUP_FAILED/, `fix the setup command, or override it with --setup-cmd / disable it with --no-setup`],
     [/CONTRACT_UNSOUND/, `the frozen verification itself is broken on this tree — start a fresh run with a corrected goal or an explicit --verify-cmd`],
+    // Matched BEFORE the repeat-failure row (issue #116): a CONTRACT_DEFECTIVE reason CONTAINS the
+    // repeat-failure text as context, and raising --stuck-repeat-threshold cannot help against a bar
+    // no implementation can satisfy. The tree is worth keeping, so point at a fresh contract over the
+    // SAME workspace, not at more iterations.
+    [/CONTRACT_DEFECTIVE/, `the frozen bar itself was adjudicated defective — your tree may be correct, so KEEP it and re-contract: ${recontractCommand(o.runId)} (re-authors the bar from the defect report, keeps the tree, freezes a NEW contract under a NEW run id). Or own the bar yourself: goaly "<goal>" --from-run ${o.runId} --verify-cmd "<a check that is actually satisfiable>", or ${inspect}`],
+    // Matched BEFORE the repeat-failure row: an adjudicated-SOUND run ends on a RECORDED event, so
+    // --stuck-repeat-threshold (that row's advice) cannot un-terminate it.
+    [new RegExp(CONTRACT_SOUND_MARKER), `the bar was adjudicated SATISFIABLE, so the tree simply has not met it yet — and the recorded adjudication ends THIS run whatever the thresholds say. Keep the tree and carry the goal forward: goaly "<goal>" --from-run ${o.runId}, or ${inspect}`],
+    [/STUCK_REPEATED_FAILURE|identical .*failures/, `the same verifier failure repeated — steer it: ${resume} --stuck-repeat-threshold 6 --note "<hint>", or ${inspect}`],
+    // ── Generic substring rows LAST ────────────────────────────────────────────────────────────
+    // Everything above keys off a marker goaly itself emits; these match ordinary English that a
+    // typed reason may also happen to contain, so they only get a say once no marker matched.
     [/budget exceeded/, `raise the cap and continue: ${resume} --budget-tokens <N> (or --budget-wall-ms <N>)`],
     [/reached maxIterations/, `continue with more room: ${resume} --max-iterations <N> --note "<guidance>", or ${inspect}`],
     [/no-diff/, `the agent stopped changing the tree — steer it: ${resume} --stuck-no-diff false --note "<hint>", or refine the goal in a follow-up: --from-run ${o.runId}`],
     [/oscillation/, `the agent is flip-flopping between two states — ${inspect}; steer it: ${resume} --stuck-oscillation false --note "<which way to go>"`],
-    // Matched BEFORE the generic repeat-failure row (issue #116): a CONTRACT_DEFECTIVE reason
-    // CONTAINS the repeat-failure text as context, and raising --stuck-repeat-threshold cannot help
-    // against a bar no implementation can satisfy. The tree is worth keeping, so point at a fresh
-    // contract over the SAME workspace, not at more iterations.
-    [/CONTRACT_DEFECTIVE/, `the frozen bar itself was adjudicated defective — your tree may be correct, so KEEP it and re-contract: ${recontractCommand(o.runId)} (re-authors the bar from the defect report, keeps the tree, freezes a NEW contract under a NEW run id). Or own the bar yourself: goaly "<goal>" --from-run ${o.runId} --verify-cmd "<a check that is actually satisfiable>", or ${inspect}`],
-    // Matched BEFORE the generic repeat-failure row: an adjudicated-SOUND run ends on a RECORDED
-    // event, so --stuck-repeat-threshold (the generic row's advice) cannot un-terminate it.
-    [new RegExp(CONTRACT_SOUND_MARKER), `the bar was adjudicated SATISFIABLE, so the tree simply has not met it yet — and the recorded adjudication ends THIS run whatever the thresholds say. Keep the tree and carry the goal forward: goaly "<goal>" --from-run ${o.runId}, or ${inspect}`],
-    [/STUCK_REPEATED_FAILURE|identical .*failures/, `the same verifier failure repeated — steer it: ${resume} --stuck-repeat-threshold 6 --note "<hint>", or ${inspect}`],
     [/compile failed|PLAN_FAILED|plan failed/i, `the contract/plan could not be authored — check the --llm-provider CLI runs & is authenticated, then retry`],
   ];
   for (const [pattern, hint] of table) if (pattern.test(reason)) return hint;

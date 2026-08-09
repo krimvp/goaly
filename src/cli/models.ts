@@ -69,6 +69,22 @@ const PROVIDERS_WITHOUT_DEFAULT_MODEL: readonly LlmProviderChoice[] = ['openai']
  * own to fall back to. `--llm-model` and `--approver-model(s)` are deliberate statements about the
  * review roles and are always obeyed.
  */
+/**
+ * The ONE model a `--approver-models` panel runs on, or `undefined` when it runs on several (or
+ * none). A panel with a single distinct entry — `--approver-models B`, or `B,B` — is not a panel of
+ * perspectives at all: every reviewer is built on that model (`buildApprover` in `compose.ts` cycles
+ * the list), so `B` IS the Sign-off approver's model and must be resolved as such. Leaving `approver`
+ * on the cascade value instead made every consumer of {@link ResolvedModels.approver} — the
+ * independence check, the cost table, the `--dry-run` row — read the AGENT's model as the second
+ * key's, and report a provably independent second key as a collapse.
+ */
+function singlePanelModel(models: readonly string[] | undefined): string | undefined {
+  if (models === undefined) return undefined;
+  const distinct = new Set(models);
+  if (distinct.size !== 1) return undefined;
+  return [...distinct][0];
+}
+
 function canIndependentApprover(sel: ModelSelection, provider: LlmProviderChoice | undefined): boolean {
   if (sel.model === undefined) return false; // only one model is in play — nothing to be distinct from
   if (sel.approverModel !== undefined || sel.approverModels !== undefined) return false;
@@ -99,11 +115,15 @@ export function resolveModels(
 ): ResolvedModels {
   const llm = sel.llmModel ?? sel.model;
   const independent = canIndependentApprover(sel, opts.llmProvider);
+  const panelModel = singlePanelModel(sel.approverModels);
   return {
     harness: sel.model,
     compiler: sel.compilerModel ?? llm,
     judge: sel.judgeModel ?? llm,
-    approver: sel.approverModel ?? (independent ? undefined : llm),
+    // A one-model panel resolves ONTO that model — it is what every reviewer runs. A multi-model
+    // panel has no single model, so `approver` stays the cascade value and the panel list is what
+    // downstream reads (the independence check treats ≥2 distinct models as the independent key).
+    approver: sel.approverModel ?? panelModel ?? (independent ? undefined : llm),
     // The per-reviewer list is an explicit override, never cascaded from --model/--llm-model.
     approverModels: sel.approverModels,
     planner: sel.plannerModel ?? llm,
