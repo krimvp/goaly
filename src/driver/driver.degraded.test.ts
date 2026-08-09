@@ -17,6 +17,7 @@ import {
   makeConfig,
   passVerdict,
   approve,
+  recordingLogger,
 } from '../testing/fakes';
 
 /**
@@ -76,5 +77,93 @@ describe('drive() — the degraded-mode label in the run-log header (issue #125)
       autonomous: true,
     });
     expect((await log.read())!.header.degraded?.model).toBe('one-model');
+  });
+});
+
+/**
+ * ROUND-5 REGRESSION. The typed label was compose-time state written ONLY into a FRESH run's header
+ * (`bootstrap` calls `freshRunHeader` under `if (options.resume !== true)`) and never reconciled on
+ * resume — while the models actually used are re-resolved from the CURRENT invocation's flags. A
+ * resume with different model flags therefore silently changed which keys ran, and the authoritative
+ * record did not follow: the terminal summary printed `degraded: SELF-JUDGED` while
+ * `goaly runs show <id>` still printed INDEPENDENCE-UNVERIFIED — or, worse, nothing at all. That is
+ * exactly the collapse-recorded-nowhere failure issue #125 exists to prevent, on the path where the
+ * header is the only artifact `runs show`, the UI header feed and any downstream consumer read.
+ */
+describe('drive() — the degraded label is reconciled on resume, never left stale', () => {
+  const unverified: DegradedMode = {
+    kind: 'independence-unverified',
+    model: 'gpt-5-mini',
+    generate: true,
+    autonomous: true,
+  };
+  const selfJudged: DegradedMode = { kind: 'self-judged', generate: true, autonomous: true };
+
+  /** Resume the seeded log with a different invocation's wiring label. */
+  async function resumeWith(
+    log: InMemoryRunLog,
+    degraded: DegradedMode | undefined,
+  ): Promise<{ msgs: string[] }> {
+    const workspace = new FakeWorkspace('0000abc');
+    const { logger, records } = recordingLogger();
+    await drive(
+      {
+        compiler: new FakeCompiler(contract),
+        seal: new FakeSealGate({ kind: 'approve' }),
+        harness: new FakeHarness([{ postHash: '0000abc' }], workspace),
+        makeLadder: () => new FakeVerifier([passVerdict()]),
+        approver: new FakeApprover([approve()]),
+        workspace,
+        clock: new ManualClock(),
+        budget: new ManualBudgetMeter(false),
+        runlog: log,
+        logger,
+      },
+      makeConfig({ goal: 'labelled goal' }),
+      runId,
+      { resume: true, harness: 'claude', ...(degraded !== undefined ? { degraded } : {}) },
+    );
+    return { msgs: records.map((r) => r.msg) };
+  }
+
+  it('UPGRADES the header when the resumed invocation collapses the keys further', async () => {
+    const log = new InMemoryRunLog();
+    await driveToDone(log, unverified);
+
+    const { msgs } = await resumeWith(log, selfJudged);
+
+    expect((await log.read())!.header.degraded).toEqual(selfJudged);
+    expect(msgs.join(' ')).toContain('key wiring differs');
+  });
+
+  it('records a label on a resume of a run that started with none', async () => {
+    const log = new InMemoryRunLog();
+    await driveToDone(log);
+    expect((await log.read())!.header.degraded).toBeUndefined();
+
+    await resumeWith(log, selfJudged);
+
+    expect((await log.read())!.header.degraded).toEqual(selfJudged);
+  });
+
+  it('never DOWNGRADES: iterations that already ran degraded stay on the record', async () => {
+    const log = new InMemoryRunLog();
+    await driveToDone(log, selfJudged);
+
+    const { msgs } = await resumeWith(log, undefined);
+
+    expect((await log.read())!.header.degraded).toEqual(selfJudged);
+    expect(msgs.join(' ')).toContain('key wiring differs');
+  });
+
+  it('is silent and rewrites nothing when the resumed wiring matches', async () => {
+    const log = new InMemoryRunLog();
+    await driveToDone(log, selfJudged);
+    const before = JSON.stringify((await log.read())!.header);
+
+    const { msgs } = await resumeWith(log, selfJudged);
+
+    expect(JSON.stringify((await log.read())!.header)).toBe(before);
+    expect(msgs.join(' ')).not.toContain('key wiring differs');
   });
 });

@@ -1,8 +1,16 @@
 import type { Command, OrchestratorEvent, RunExtension, RunOutcome } from '../domain/events';
 import { OrchestratorEvent as OrchestratorEventSchema } from '../domain/events';
-import { freshRunHeader, type RunFollowup, type RunLogEntry, type RunProvenance } from '../runlog/runlog';
+import {
+  freshRunHeader,
+  type RunFollowup,
+  type RunLogEntry,
+  type RunLogHeader,
+  type RunProvenance,
+} from '../runlog/runlog';
 import type { RunConfig } from '../domain/config';
 import type { DegradedMode } from '../domain/degraded';
+import { reconcileDegraded } from './degraded-header';
+import { resume, type Resumed } from './resume';
 import type { CompiledContract } from '../domain/contract';
 import type { ContractHash, RunId, SessionId } from '../domain/ids';
 import { DiffHash, coerceSessionId } from '../domain/ids';
@@ -961,6 +969,7 @@ async function bootstrap(
   }
 
   const resumed = await resume(deps, config, runId, options.extend);
+  await reconcileDegraded(deps.runlog, resumed.header, options.degraded, log);
   // An extension that did not un-terminate the run (e.g. a note on a stuck abort whose tripping
   // detector was not raised) is loud, not silent — the outcome will still be the terminal one.
   if (options.extend !== undefined && isTerminal(resumed.state)) {
@@ -1030,123 +1039,3 @@ function withOperatorNote(command: Command, note: string): Command {
   if (command.tag !== 'RUN_AGENT' && command.tag !== 'RUN_AGENT_BEST_OF') return command;
   return { ...command, prompt: `${command.prompt}\n\n# Operator note (added at resume)\n${note}` };
 }
-
-// ---- resume / replay ------------------------------------------------------
-
-type Resumed = {
-  state: OrchestratorState;
-  commands: Command[];
-  seq: number;
-  contractHash: ContractHash | null;
-  contract: CompiledContract | null;
-  /** The latest internal checkpoint's tree SHA (issue #47), or null when none was taken. */
-  baseline: DiffHash | null;
-  /** The current phase's start tree SHA (last PHASE_ADVANCED), for re-pinning the approver (#49). */
-  phaseBaseline: DiffHash | null;
-  /**
-   * The run-start review baseline recorded in the header (`--baseline` / the raised-autonomy
-   * auto-pin), or null for the `HEAD` default and for logs that predate the field.
-   */
-  headerBaseline: string | null;
-  /**
-   * The prior run's TOTAL token spend folded from the log, so `drive()` can re-arm the LIVE budget
-   * meter. Without this a resumed run restarted `--budget-tokens` from zero — a run resumed near
-   * its cap got a whole fresh budget, and repeated resumes could overshoot it arbitrarily. Null on
-   * a fresh/unreadable log. (Wall-clock deliberately restarts per process: the gap between crash
-   * and resume is idle time, not spend — see ADR 0011.)
-   */
-  priorSpend: TokenUsage | null;
-  /** Un-consumed operator note from the replay fold (ADR 0012); null when none is pending. */
-  pendingNote: string | null;
-  /** Header successor provenance (`--recontract`, issue #117); see {@link bootstrap} for why. */
-  provenance: RunProvenance | undefined;
-};
-
-/**
- * Reconstruct state by folding the pure reducer over the persisted event stream, then
- * continue. No completed iteration is repeated — replay applies `step` only, never `perform`.
- */
-async function resume(
-  deps: DriverDeps,
-  config: RunConfig,
-  runId: RunId,
-  extend?: RunExtension,
-): Promise<Resumed> {
-  const stored = await deps.runlog.read();
-  if (stored === null) {
-    const [state, commands] = initial(config);
-    return {
-      state,
-      commands,
-      seq: 0,
-      contractHash: null,
-      contract: null,
-      baseline: null,
-      phaseBaseline: null,
-      headerBaseline: null,
-      priorSpend: null,
-      pendingNote: null,
-      provenance: undefined,
-    };
-  }
-
-  // Operator extension (ADR 0012): validate + persist the RUN_EXTENDED marker write-ahead FIRST,
-  // so the fold below (and every later replay / `runs show` / watch) sees the same effective config.
-  let entries = stored.entries;
-  if (extend !== undefined && hasExtension(extend)) {
-    const event = OrchestratorEventSchema.parse({ tag: 'RUN_EXTENDED', ...extend });
-    // The marker never feeds the reducer, so folding a draft entry first is safe — its
-    // `stateTagAfter` is derived from the fold WITH the extension applied.
-    const draft: RunLogEntry[] = [
-      ...entries,
-      {
-        runId,
-        seq: entries.length + 1,
-        ts: deps.clock.now(),
-        contractHash: entries[entries.length - 1]?.contractHash ?? null,
-        event,
-        stateTagAfter: 'COMPILING', // placeholder — replaced below from the fold
-      },
-    ];
-    const folded = replay(stored.header.config, draft);
-    const entry: RunLogEntry = { ...draft[draft.length - 1]!, stateTagAfter: folded.state.tag };
-    await deps.runlog.append(entry);
-    entries = [...stored.entries, entry];
-  }
-
-  // Same replay-fold the read-only `runs` inspection uses — a single source of truth so an
-  // inspected run's state matches exactly what resume reconstructs here.
-  const { state, commands, contract, contractHash, baseline, phaseBaseline, pendingNote } = replay(
-    stored.header.config,
-    entries,
-  );
-  const priorSpend = summarizeUsage(
-    entries.map((entry) => entry.event),
-    stored.header.config.budget,
-  ).total;
-  return {
-    state,
-    commands,
-    seq: entries.length,
-    contractHash,
-    contract,
-    baseline,
-    phaseBaseline,
-    headerBaseline: stored.header.baseline ?? null,
-    priorSpend,
-    pendingNote,
-    provenance: stored.header.provenance,
-  };
-}
-
-/** Does this extension actually carry anything to persist? An empty object is a no-op resume. */
-function hasExtension(x: RunExtension): boolean {
-  return (
-    x.maxIterations !== undefined ||
-    x.budgetTokens !== undefined ||
-    x.budgetWallMs !== undefined ||
-    (x.stuck !== undefined && Object.keys(x.stuck).length > 0) ||
-    x.note !== undefined
-  );
-}
-

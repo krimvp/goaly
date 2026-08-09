@@ -39,6 +39,7 @@ import { approverSwapNotice, degradedMode } from './independence';
 import {
   degradedModeDetail,
   degradedModeTag,
+  mostDegraded,
   type DegradedMode,
 } from '../domain/degraded';
 import { parsePriceTable, computeCost, type CostView, type PriceTable } from './cost';
@@ -214,6 +215,11 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
   // below) — the same root cause as the driver's dropped provenance: follow-up state only ever
   // arrived from the fresh CLI invocation, and `--from-run` cannot be combined with `--resume`.
   let followupSeed = followup.followupSeed;
+  // The degraded-mode label the run was STARTED with (issue #125). The models a run uses are
+  // re-resolved from every invocation's flags, so a resume can change which keys run; the label this
+  // process reports must be reconciled against the recorded one exactly as the Driver reconciles the
+  // header, or the terminal summary and `goaly runs show <id>` disagree about the same run.
+  let recordedDegraded: DegradedMode | undefined;
   const resumeRunId = parsed.resumeRunId; // stable narrow (parsed is rebound on harness adoption)
   if (resumeRunId !== undefined) {
     const stateDir = path.join(parsed.workspace, STATE_DIR);
@@ -263,6 +269,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
     }
     const stored = await new FileRunLog(path.join(stateDir, resumeRunId)).read();
     if (stored !== null) {
+      recordedDegraded = stored.header.degraded;
       // Relieve any stuck streak the log has already banked (see `resumeStreakRelief`): without it
       // a run that ABORTED at the crash / unevaluable / repeat threshold re-aborts on the resume
       // fold before the harness gets a single turn, no matter what the operator just fixed. Merged
@@ -431,7 +438,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
     // below, the degraded-mode label recorded in the run header, and the cost overlay at the end.
     // One resolution means the log, the header and the price report can never disagree.
     const resolvedModels = resolveModels(parsed.models, { llmProvider: parsed.llmProvider });
-    const degraded: DegradedMode | undefined = degradedMode(
+    const thisInvocationDegraded = degradedMode(
       resolvedModels,
       parsed.harness,
       parsed.llmProvider,
@@ -443,6 +450,13 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
           ? { approverModels: resolvedModels.approverModels }
           : {}),
       },
+    );
+    // On a resume the run as a whole is as degraded as its WORST invocation: the earlier iterations
+    // already ran with the wiring the header recorded, and a repaired wiring does not undo them.
+    // The Driver applies the same rule to the header itself, so the two can never disagree.
+    const degraded: DegradedMode | undefined = mostDegraded(
+      recordedDegraded,
+      thisInvocationDegraded,
     );
 
     // Human-facing startup banner, routed through the logger so it respects --log-level and lands

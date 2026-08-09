@@ -468,6 +468,17 @@ Both kinds are exactly that: a **label**. Neither weakens nor strengthens a gate
 and the veto-only approver still both have to turn for DONE — and neither enters the frozen
 contract. Setting `--approver-model` (or `--approver-models` with ≥2 distinct models) removes them.
 
+**On `--resume`, the label is reconciled — it is not left at what the first invocation resolved.**
+Model flags are *not* part of the frozen contract or of the resumed config overlay, so a resume with
+different (or simply omitted) `--model` / `--approver-model` flags genuinely changes which keys run
+for the remaining iterations. The run as a whole is therefore labelled with the **more severe** of
+the recorded label and the resumed invocation's (`self-judged` > `independence-unverified` > none):
+a resume that collapses the keys further **upgrades** the header, and a resume that repairs the
+wiring does **not** erase the iterations that already ran degraded. Any difference at all is WARNed
+("this invocation's key wiring differs from the one the run started with"), and the same reconciled
+value is what the terminal summary prints — so the summary and `goaly runs show <id>` can never
+report two different labels for one run.
+
 Approver-panel flags (`--approver-quorum`, `--approver-models`, `--approver-lenses`,
 `--approver-diversity-temp`) are covered under
 [Hardening](#hardening-against-reward-hacking).

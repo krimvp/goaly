@@ -49,6 +49,49 @@ export const DegradedMode = z.object({
 });
 export type DegradedMode = z.infer<typeof DegradedMode>;
 
+/**
+ * How bad each kind is, for reconciling two labels. `self-judged` is an OBSERVED collapse and
+ * therefore strictly worse than `independence-unverified`, which is a collapse that could not be
+ * ruled out; both are worse than no label.
+ */
+const SEVERITY: Record<DegradedMode['kind'], number> = {
+  'independence-unverified': 1,
+  'self-judged': 2,
+};
+
+/**
+ * The label a run as a WHOLE has earned, given the label it started with and the one the current
+ * invocation resolves to. The header is written once at run start, but the models a run uses are
+ * re-resolved from EVERY invocation's flags — so `--resume` with different (or absent) model flags
+ * silently changes which keys run. Taking the more severe of the two keeps the record honest in
+ * both directions: a resume that collapses the keys further upgrades the label, and a resume that
+ * repairs the wiring does NOT erase the iterations that already ran degraded.
+ *
+ * Pure and total; ties keep the EXISTING label so a no-op resume never rewrites the header.
+ */
+export function mostDegraded(
+  recorded: DegradedMode | undefined,
+  current: DegradedMode | undefined,
+): DegradedMode | undefined {
+  if (recorded === undefined) return current;
+  if (current === undefined) return recorded;
+  return SEVERITY[current.kind] > SEVERITY[recorded.kind] ? current : recorded;
+}
+
+/** Structural equality of two labels (absent included) — what decides whether a resume must warn. */
+export function sameDegradedMode(
+  a: DegradedMode | undefined,
+  b: DegradedMode | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.kind === b.kind &&
+    a.model === b.model &&
+    a.generate === b.generate &&
+    a.autonomous === b.autonomous
+  );
+}
+
 /** Short, stable tag for a degraded mode (the headline in one-line reports). */
 export function degradedModeTag(d: DegradedMode): string {
   switch (d.kind) {
