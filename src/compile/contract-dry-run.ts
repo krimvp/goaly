@@ -73,7 +73,9 @@ const CLOSING =
  * - `green` — a reference implementation greened the deterministic rungs: the bar is SATISFIABLE.
  * - `red` — it did not: the bar is defective and the freeze is refused.
  * - `skipped` — the control could not be performed at all (no reference authored, scratch failure,
- *   setup could not run, a rung timed out / could not be started). FAIL-OPEN: the contract freezes
+ *   setup could not run, a rung timed out / could not be started / was killed for blowing goaly's
+ *   captured-output cap — a live outcome here, since a reference implementation and its runner can
+ *   be very chatty and the kill leaves an ordinary-looking non-zero exit). FAIL-OPEN: the contract freezes
  *   exactly as it does today. A dry run must never be the reason a legitimate run cannot start.
  */
 export type DryRunOutcome =
@@ -144,7 +146,8 @@ export type ContractDryRunOpts = {
  * failed. That is exactly what remains.
  *
  * FAIL-OPEN on infrastructure: no LLM, an unparseable reference, a scratch-copy failure, a setup
- * that cannot run, a timed-out or unstartable rung — all log and freeze as today. Like every other
+ * that cannot run, a rung that timed out, could not be started, or was killed for exceeding goaly's
+ * captured-output cap — all log and freeze as today. Like every other
  * compile-phase guard it can only REJECT a contract or step aside; it can never turn a red bar green
  * or relax a rung, so invariants #2/#3/#4 are untouched (and the loop never sees any of this).
  */
@@ -259,10 +262,14 @@ export class ContractDryRunCompiler implements VerifierCompiler {
     }
     for (const [i, rung] of rungs.entries()) {
       const r = await copy.run(rung.command, { timeoutMs: this.#timeoutMs });
-      // A rung that timed out or could not be started never produced a real pass/fail — the same
-      // could-not-EVALUATE facts goaly owns at verify time. Fail-open, never a red.
-      // `executionErrorReason` classifies from goaly's OWN facts (its timeout flag, its spawn
-      // failure), not from the command's text, so no stream content reaches the reason here either.
+      // A rung that timed out, could not be started, or that GOALY ITSELF SIGKILLed for blowing the
+      // captured-output cap never produced a real pass/fail — the same could-not-EVALUATE facts
+      // goaly owns at verify time. Fail-open, never a red. That last one is not hypothetical here:
+      // this tree holds a reference implementation, and a chatty implementation or a verbose runner
+      // is exactly what fills the cap — reading the resulting SIGKILL exit as a genuine red would
+      // refuse the freeze of a perfectly sound contract. `executionErrorReason` classifies from
+      // goaly's OWN facts (its timeout flag, its spawn failure, its own cap kill), not from the
+      // command's text, so no stream content reaches the reason here either.
       const unevaluable = executionErrorReason(r);
       if (unevaluable !== null) {
         return { status: 'skipped', reason: `\`${rung.command}\`: ${unevaluable}` };

@@ -276,7 +276,15 @@ async function preflightDeterministic(
   log: Logger,
 ): Promise<PreparedOutcome> {
   const deterministic = contract.rungs.filter((r) => r.kind === 'deterministic');
-  if (deterministic.length === 0) return { status: 'proceed' };
+  if (deterministic.length === 0) {
+    // One of the two residual inapplicabilities of the re-contract anti-softening control, and it is
+    // STATED rather than skipped in silence: the control fires on a bar that ALREADY PASSES at t=0,
+    // so with no deterministic rung there is nothing to run before the first worker turn.
+    if (deps.recontract === true) {
+      logControlUnapplied(log, 'the re-authored bar has no deterministic rung to execute at t=0');
+    }
+    return { status: 'proceed' };
+  }
   const verifyMs = deps.timeouts?.verifyMs;
 
   // Fix B1 (revised — issue #78): is this a FROM-SCRATCH tree (no implementation source yet)? On such a
@@ -353,12 +361,23 @@ async function preflightDeterministic(
  *    the run header ({@link gatherRecontractEvidence}). A control shown only filenames and a pass count
  *    cannot detect softening at all — and, failing open, would wave it through.
  *
+ * The two arms have DIFFERENT preconditions, and conflating them is what once made the re-contract arm
+ * silently inapplicable. The vacuous arm needs an AUTHORED verifier (`generatedFiles`) — its whole
+ * hypothesis is that the implementation was authored into the frozen file set. The re-contract arm
+ * needs no such thing: a successor whose re-authored bar declares NO files and is a bare
+ * `--verify-cmd` is the most softened bar a repair can produce, so it is precisely what the control
+ * must judge. It therefore runs on a re-contract whether or not the new bar authored files.
+ *
  * FAIL-OPEN by construction — it must NEVER abort a legitimate run (a file that is simply not created
  * yet stays an honest red, handled by the caller; it can never reach here). It fires ONLY on the
- * high-confidence positive signal AND an LLM confirmation: an authored verifier + one of the two trees
- * above (`isEmptyOfSource` fail-safes to FALSE on any git error) + a model that, asked to rule IN the
- * legitimate case, confidently judges the contract unsound instead. No LLM, an LLM error, an
- * unparseable verdict, or any "sound"/uncertain answer all PROCEED.
+ * high-confidence positive signal AND an LLM confirmation: one of the two trees above
+ * (`isEmptyOfSource` fail-safes to FALSE on any git error) + a model that, asked to rule IN the
+ * legitimate case, confidently judges the contract unsound instead. An LLM error, an unparseable
+ * verdict, or any "sound"/uncertain answer all PROCEED.
+ *
+ * Two things genuinely PREVENT the re-contract arm from running, and both are LOGGED rather than
+ * skipped in silence: no LLM provider is wired (there is no classifier to ask — here), and the
+ * re-authored bar has no deterministic rung to execute at t=0 (in {@link preflightDeterministic}).
  *
  * Returns a typed abort, or `null` to proceed (including whenever the control does not apply).
  */
@@ -369,9 +388,23 @@ async function greenNegativeControl(
   emptyOfSource: boolean,
   log: Logger,
 ): Promise<PreparedOutcome | null> {
-  if (contract.generatedFiles.length === 0 || deps.llm === undefined) return null;
   const recontract = deps.recontract === true && !emptyOfSource;
-  if (!emptyOfSource && !recontract) return null;
+  // The VACUOUS mirror is about a compiler that authored the solution INTO the frozen file set, so it
+  // is meaningless without `generatedFiles`. The RE-CONTRACT control is not: a successor whose
+  // "repaired" bar authored nothing and is a bare `--verify-cmd` is the strongest softening shape
+  // there is, so gating it on `generatedFiles` disabled the control exactly where it mattered most.
+  if (!recontract && (contract.generatedFiles.length === 0 || !emptyOfSource)) return null;
+  if (deps.llm === undefined) {
+    // Stated, not silent: the control is a model judgement, so without a read-only LLM provider
+    // there is nothing to ask. Fail-open as always — it can only ever refuse a run, never green one.
+    if (recontract) {
+      logControlUnapplied(
+        log,
+        'the re-authored bar already passes on the inherited tree, but no LLM provider is wired to judge it (--llm-provider)',
+      );
+    }
+    return null;
+  }
   const classifyDeps = { llm: deps.llm, ...(deps.logger !== undefined ? { logger: deps.logger } : {}) };
   const green = recontract
     ? await classifyRecontractedBar(
@@ -399,6 +432,18 @@ async function greenNegativeControl(
     status: 'contract-unsound',
     detail: `${reason}${recontract ? RECONTRACT_REMEDY : VACUOUS_REMEDY}`.slice(0, DETAIL_LIMIT),
   };
+}
+
+/**
+ * Say out loud that the `--recontract` anti-softening negative control could not be applied. The
+ * control is fail-open, so an inapplicability can only ever be a silent hole in a guarantee the docs
+ * state — which is why it is logged with the reason rather than skipped quietly.
+ */
+function logControlUnapplied(log: Logger, why: string): void {
+  log.warn(
+    `pre-flight: --recontract anti-softening negative control could not run — ${why}. Proceeding unchecked (fail-open).`,
+    {},
+  );
 }
 
 /** Per-file / total caps on the re-authored verification content folded into the control's prompt. */

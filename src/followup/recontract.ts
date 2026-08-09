@@ -30,8 +30,14 @@ import { wrapUntrusted } from '../verify/prompt-safety';
  *     header, so the cap holds across the chain rather than per process.
  *
  * The remaining two guarantees are enforced elsewhere and unchanged: the successor Seals and freezes
- * like any other run, and its new bar still faces the negative control before a worker token is
- * spent (`prepareWorkspace`'s pre-flight; see `classifyRecontractedBar`).
+ * like any other run, and its new bar faces the anti-softening negative control before a worker token
+ * is spent (`prepareWorkspace`'s pre-flight; see `classifyRecontractedBar`). That control applies
+ * whether or not the re-authored bar declares `generatedFiles` — a successor whose bar is a bare
+ * `--verify-cmd` is exactly the softening shape it exists to catch. It is NOT unconditional, and the
+ * two cases where it cannot run are logged loudly rather than skipped in silence: the control fires
+ * only on a bar that ALREADY PASSES at t=0, so a re-authored bar with no deterministic rung has
+ * nothing to execute before the first turn, and — being a model judgement — it needs a wired
+ * `--llm-provider`. Both are fail-open (proceed), like the control itself.
  */
 
 /** At most one re-contract per chain by default: a bad bar gets one repair, never a ratchet. */

@@ -12,7 +12,19 @@ import type { CommandResult, Workspace } from './workspace';
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
 /** Low-level process result used by the injectable exec runner. */
-export type ExecResult = { stdout: string; stderr: string; code: number; timedOut?: boolean };
+export type ExecResult = {
+  stdout: string;
+  stderr: string;
+  code: number;
+  timedOut?: boolean;
+  /**
+   * True when the runner killed the command for exceeding the captured-output cap
+   * (`ProcessResult.truncated`). Carried here — rather than dropped at this layer — because it is a
+   * could-not-EVALUATE fact goaly owns, and the exit code left behind by the SIGKILL looks exactly
+   * like an honest non-zero failure. See {@link import('./workspace').CommandResult.outputCapped}.
+   */
+  outputCapped?: boolean;
+};
 
 /**
  * Injectable process runner. Defaults to a real `node:child_process` spawn helper so
@@ -67,15 +79,20 @@ export const realExec: ExecFn = async (cmd, args, opts) => {
     ...(opts.shell !== undefined ? { shell: opts.shell } : {}),
     ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs, killGroup: true } : {}),
   });
+  // The output cap is the OTHER way goaly kills a command it started (see `runProcess`), and the
+  // SIGKILL leaves an exit code indistinguishable from an honest failure — so the flag must travel
+  // with the result or the kill is silently re-read downstream as a genuine red.
+  const capped = r.truncated === true ? { outputCapped: true as const } : {};
   if (r.timedOut) {
     return {
       stdout: r.stdout,
       stderr: `${r.stderr}\n[goaly] command timed out after ${opts.timeoutMs}ms`,
       code: TIMEOUT_EXIT_CODE,
       timedOut: true,
+      ...capped,
     };
   }
-  return { stdout: r.stdout, stderr: r.stderr, code: r.code };
+  return { stdout: r.stdout, stderr: r.stderr, code: r.code, ...capped };
 };
 
 /**
@@ -399,8 +416,11 @@ export class GitWorkspace implements Workspace {
         exitCode: result.code,
         stdout: result.stdout,
         stderr: result.stderr,
-        // Propagate the one fact only goaly knows: whether IT killed the command for timing out.
+        // Propagate the facts only goaly knows: whether IT killed the command — for timing out, or
+        // for blowing the captured-output cap. Both leave an ordinary-looking non-zero exit behind,
+        // so dropping either turns a could-not-evaluate outcome into a bogus red.
         ...(result.timedOut === true ? { timedOut: true } : {}),
+        ...(result.outputCapped === true ? { outputCapped: true } : {}),
       };
     } catch (e) {
       // The spawn itself threw — goaly could not even start the command (it never ran).

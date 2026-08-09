@@ -168,7 +168,11 @@ class FsScratchCopy implements ScratchCopy {
         exitCode: r.code,
         stdout: r.stdout,
         stderr: r.stderr,
+        // Same could-not-evaluate facts the verifier seam propagates: goaly's own timeout kill and
+        // its own output-cap kill. A reference implementation is often CHATTY, so the cap is a live
+        // outcome here — and reading it as a red would refuse the freeze of a sound contract.
         ...(r.timedOut === true ? { timedOut: true } : {}),
+        ...(r.outputCapped === true ? { outputCapped: true } : {}),
       };
     } catch (e) {
       // The spawn itself threw — the command never ran. Reported like a Workspace's own spawn

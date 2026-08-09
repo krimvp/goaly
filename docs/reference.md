@@ -758,7 +758,8 @@ Details that make these accurate rather than trigger-happy:
   unrelated files while the same error repeats is still caught, and the abort names the repeated
   signature.
 - **Contract-unevaluable** distinguishes a verification-*environment* failure (verify command timed
-  out / couldn't start, judge errored) from a real red: the tree may be correct-but-unverified, so
+  out / couldn't start / was killed by goaly for exceeding its 16 MB captured-output cap, judge
+  errored) from a real red: the tree may be correct-but-unverified, so
   it's never blamed on the code — still fail-closed, never a green. It keys only on facts goaly
   owns, never exit-code/error-string guessing.
 - **Ephemeral verifier artifacts don't count as progress.** A conservative default set is excluded
@@ -1325,8 +1326,13 @@ Five guards keep this from becoming a weakening channel:
   **predecessor's bar** (carried in the successor's run header), and the **adjudicated defect** —
   the one thing the repair was licensed to change. Everything supplied is wrapped in an untrusted
   fence, and every failure of that channel degrades gracefully: an unreadable file drops from the
-  prompt only, and no LLM, an LLM error, an unparseable reply, missing evidence, or any uncertainty
-  all proceed.
+  prompt only, and an LLM error, an unparseable reply, missing evidence, or any uncertainty all
+  proceed. The control applies **whether or not the re-authored bar generated any verification
+  files** — a successor whose "repair" is a bare `--verify-cmd` is precisely the softening shape it
+  exists to catch. It is not unconditional, and the two cases where it *cannot* run are logged
+  loudly rather than skipped silently: it fires only on a bar that already **passes** before the
+  first turn, so a re-authored bar with **no deterministic rung** has nothing to execute then, and
+  being a model judgement it needs a wired `--llm-provider`. Both proceed (fail-open).
 - **The chain is bounded.** `--max-recontracts` (default 1) caps how many re-contracts a chain may
   contain. The depth lives in the run log header, so the cap holds **across the chain, not per
   process** — a second `--recontract` off a successor is refused even from a fresh shell.
@@ -1795,9 +1801,13 @@ Details that matter:
   same `*_TOKEN` / `*_KEY` / `*SECRET*` / `AWS_*` / `GITHUB_*` variables are stripped before the
   contract's `setup` and its rungs execute, because that tree holds model-authored code.
 - **Fail-open on infrastructure.** No LLM, an unparseable reference, a scratch-copy failure (including
-  a workspace too large to copy cheaply), a `setup` that cannot run there, a rung that timed out or
-  could not be started — each logs and freezes exactly as it does today. The dry run can only *reject*
-  a contract or step aside; it can never turn a red bar green or relax a rung.
+  a workspace too large to copy cheaply), a `setup` that cannot run there, a rung that timed out,
+  could not be started, or that goaly itself killed for blowing its captured-output cap (16 MB of
+  stdout+stderr — a live outcome when a chatty reference implementation meets a verbose runner) —
+  each logs and freezes exactly as it does today. Every one of those is a *could-not-evaluate*
+  outcome, classified only from facts goaly owns about its own kill, never from the command's text or
+  exit code. The dry run can only *reject* a contract or step aside; it can never turn a red bar
+  green or relax a rung.
 - **`--generate` only**, and only once the contract actually authored verification files. A
   user-supplied `--verify-cmd` is your own bar and is never dry-run.
 - **It obeys `--sandbox`.** The scratch runs the contract's `setup` and its deterministic rungs —
