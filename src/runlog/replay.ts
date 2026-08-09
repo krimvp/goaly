@@ -31,11 +31,16 @@ import type { RunLogEntry } from './runlog';
  *    when the previous turn crashed/timed out/was truncated). Pass `--stuck-no-diff false` for that.
  *  - NOT `timeoutNoDiffThreshold` (issue #119) either, even though it IS a counter: relief there
  *    would buy more ten-minute no-op turns at the same cap, which is the very waste that detector
- *    exists to stop. The real relief for it is a bigger `--harness-timeout-ms` /
- *    `--harness-idle-timeout-ms` — compose-time flags a resume already applies fresh — which is what
- *    the abort message names. Its own fold-desynchronization hazard (a log predating the detector
- *    can trip it MID-log, which relief here — tail-only by construction — could not cover anyway)
- *    is handled where it belongs, in the fold itself: see {@link TIMEOUT_NO_DIFF_UNREACHABLE}.
+ *    exists to stop. What makes those turns worth having is more room — `--harness-timeout-ms` /
+ *    `--harness-idle-timeout-ms` — but be precise about what a resume can do with them: they are
+ *    compose-time flags, NOT `RunExtension` fields, so a resume carrying only them produces no
+ *    extension, this fold re-trips the detector at the tail, and the run re-terminates before a
+ *    single turn. Continuing such a run therefore REQUIRES an explicit
+ *    `--stuck-timeout-no-diff-threshold` on the resume (it is in `RunExtension.stuck`), which is
+ *    what the abort message names first. Its own fold-desynchronization hazard (a log predating the
+ *    detector can trip it MID-log, which relief here — tail-only by construction — could not cover
+ *    anyway) is handled where it belongs, in the fold itself: see
+ *    {@link TIMEOUT_NO_DIFF_UNREACHABLE}.
  *
  * It is not a weakening of stuck detection: the returned overlay is persisted as an ordinary
  * RUN_EXTENDED marker (ADR 0012 — operational knobs only, the frozen contract is unreachable
@@ -59,22 +64,41 @@ export function resumeStreakRelief(
 }
 
 /**
- * Did this run already adjudicate its contract in-loop (issue #116)? If so the repeat-failure relief
- * above is SUPPRESSED, ON THE MERITS: if the bar was adjudicated DEFECTIVE, more iterations against
- * an unsatisfiable assertion are still unsatisfiable — a fresh contract is the only real relief,
- * which is exactly what the CONTRACT_DEFECTIVE next-step hint says.
+ * Did this run adjudicate its contract in-loop (issue #116), and how did it come out?
+ * `'defective'` / `'sound'` / `undefined` (never adjudicated). The LAST verdict wins; a run
+ * adjudicates at most once in practice.
  *
- * This is deliberately NOT what keeps the fold in sync. Suppressing the AUTOMATIC relief could never
- * be enough, because the ADR-0012 OPERATOR extension (`--resume <id> --stuck-repeat-threshold N`)
- * reaches the same config through a different door — and goaly's own `nextStepHint` prints that very
- * command after a `defective:false` adjudication. The fold defends itself instead: see
- * {@link adjudicationPrecursors}.
+ * Both verdicts suppress the repeat-failure relief above, and the reason is the SAME for both — but
+ * it is NOT the one the old comment gave ("more iterations against an unsatisfiable assertion are
+ * still unsatisfiable"), which is true only of `defective`. The real reason is structural: an
+ * adjudicated run's ABORTED comes from a RECORDED `CONTRACT_ADJUDICATED` event, and replay folds
+ * that event to ABORTED whatever the thresholds say. Raising the threshold — automatically here, or
+ * through the ADR-0012 operator door (`--resume <id> --stuck-repeat-threshold N`) — therefore cannot
+ * un-terminate the run in either case. Emitting relief for a `sound` verdict would not continue the
+ * run; it would only bank an inert RUN_EXTENDED marker and print a promise goaly cannot keep.
  *
- * Exported so the CLI can WARN when an operator raises the threshold on such a run, rather than
- * silently ignoring the flag they were told to pass.
+ * That is a real dead end for a `sound` verdict, and it is closed by MESSAGING, not by relief: the
+ * abort carries `CONTRACT_ADJUDICATED_SOUND` (see `contractSoundReason`) so `nextStepHint` and the
+ * CLI's resume warning name `goaly "<goal>" --from-run <id>` — a route that exists — instead of a
+ * threshold flag that does nothing or a `--recontract` that `planRecontract` refuses for a sound bar.
+ *
+ * Suppression here is also deliberately NOT what keeps the fold in sync — the operator door reaches
+ * the same config anyway. The fold defends itself: see {@link adjudicationPrecursors}, which pins
+ * the historical threshold for BOTH verdicts.
  */
+export function adjudicationVerdict(
+  entries: readonly RunLogEntry[],
+): 'defective' | 'sound' | undefined {
+  let verdict: 'defective' | 'sound' | undefined;
+  for (const e of entries) {
+    if (e.event.tag === 'CONTRACT_ADJUDICATED') verdict = e.event.defective ? 'defective' : 'sound';
+  }
+  return verdict;
+}
+
+/** True when the run adjudicated its contract in-loop, whatever the verdict. */
 export function adjudicated(entries: readonly RunLogEntry[]): boolean {
-  return entries.some((e) => e.event.tag === 'CONTRACT_ADJUDICATED');
+  return adjudicationVerdict(entries) !== undefined;
 }
 
 /** How many of the most recent harness turns crashed, back-to-back. Mirrors `isCrashStreak`. */
@@ -276,7 +300,7 @@ const TIMEOUT_NO_DIFF_UNREACHABLE = Number.MAX_SAFE_INTEGER;
  * later relief may un-trip. The automatic resume relief already refuses to raise the threshold once
  * a verdict is recorded, but the ADR-0012 OPERATOR extension reaches the same config through a
  * different door (`--resume <id> --stuck-repeat-threshold N` — which goaly's own `nextStepHint`
- * prints after a `defective:false` adjudication, whose abort text is byte-identical to the pre-#116
+ * printed after a `defective:false` adjudication, whose abort text used to be identical to the pre-#116
  * repeat abort). Whichever door it came through, applying it before the fold made that VERIFIED
  * return CONTINUE and the very next entry throw
  * `invalid transition: event CONTRACT_ADJUDICATED in state RUNNING_AGENT` — a run that cannot be

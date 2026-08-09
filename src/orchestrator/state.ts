@@ -208,7 +208,8 @@ export type OrchestratorState =
        * is making ONE read-only classification call; resolved by exactly one `CONTRACT_ADJUDICATED`.
        *
        * The run is ALREADY terminating when this state is entered — it exists only to choose the
-       * abort's LABEL. `fallbackReason` carries TODAY's byte-identical repeat-failure abort text,
+       * abort's LABEL. `fallbackReason` carries TODAY's repeat-failure abort text (kept verbatim in both
+       * branches; the sound branch appends a CONTRACT_ADJUDICATED_SOUND marker),
        * computed at trip time, so a `defective: false` verdict (and every failure mode that
        * fail-closes to it) is a pure relabel-nothing passthrough.
        */

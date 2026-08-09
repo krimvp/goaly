@@ -21,9 +21,11 @@ import type { SealGate } from '../compile/seal';
 import type { PlanGate } from '../plan/plan-gate';
 import type { PhasedStreamSink } from '../agent-cli/stream';
 import { readRun } from '../runlog/inspect';
+import { CONTRACT_SOUND_MARKER } from '../orchestrator/stuck';
+import type { RunLogEntry } from '../runlog/runlog';
 import { FileRunLog } from '../runlog/file-runlog';
 import {
-  adjudicated,
+  adjudicationVerdict,
   extendedRunConfig,
   applyRunExtension,
   resumeStreakRelief,
@@ -289,19 +291,11 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       const effective = extendedRunConfig(stored.header.config, stored.entries);
       runConfig = extend !== undefined ? applyRunExtension(effective, extend) : effective;
 
-      // ADR-0012 operator door (issue #116). `nextStepHint` prints `--stuck-repeat-threshold` for a
-      // repeat abort, and a `defective:false` adjudication leaves that abort text byte-identical —
-      // so operators reach for the flag on a run whose contract was already adjudicated. The fold
-      // reproduces the recorded trip regardless (see `adjudicationPrecursors`), which is what keeps
-      // the resume from dying on an invalid transition; say so rather than let the flag look
-      // effective, and point at the relief that actually applies.
-      if (adjudicated(stored.entries) && extend?.stuck?.repeatFailureThreshold !== undefined) {
-        io.err(
-          `goaly: --resume: this run's contract was already adjudicated in-loop, so ` +
-            `--stuck-repeat-threshold does not continue it — the recorded adjudication replays as ` +
-            `it happened. More iterations against the same frozen bar is not the relief; ` +
-            `re-contract instead: ${recontractCommand(resumeRunId)}\n`,
-        );
+      // ADR-0012 operator door (issue #116) — see `adjudicatedResumeWarning` for why the flag the
+      // operator was told to pass cannot work here, and why the route named depends on the VERDICT.
+      if (extend?.stuck?.repeatFailureThreshold !== undefined) {
+        const warning = adjudicatedResumeWarning(stored.entries, resumeRunId);
+        if (warning !== undefined) io.err(`${warning}\n`);
       }
 
       // Rebuild the compile-phase authoring seed from the HEADER: a resume that still has to
@@ -647,6 +641,37 @@ function describeRelief(relief: NonNullable<RunExtension['stuck']>): string {
 }
 
 /**
+ * The warning for `--resume <id> --stuck-repeat-threshold N` on a run that ADJUDICATED its contract
+ * in-loop (issue #116) — and the route that actually exists, chosen by the VERDICT.
+ *
+ * Why the flag cannot work, for either verdict: an adjudicated run ends on a RECORDED
+ * `CONTRACT_ADJUDICATED` event. Replay folds that event and lands on ABORTED no matter what the
+ * stuck thresholds say, so no `--resume` extension un-terminates it. (A plain repeat abort ends on a
+ * re-derived detector trip, which is why the same flag genuinely continues THAT run.)
+ *
+ * Why the route differs: `planRecontract` guard 1 accepts a `defective: true` verdict — the bar is
+ * the thing to replace — and REFUSES a `defective: false` one, whose whole meaning is that the bar
+ * is fine. Pointing a sound-verdict run at `--recontract` (as this warning used to, unconditionally)
+ * named a command that refuses it, closing the last exit. A sound verdict keeps the tree and carries
+ * the goal forward with `--from-run`.
+ */
+export function adjudicatedResumeWarning(
+  entries: readonly RunLogEntry[],
+  runId: string,
+): string | undefined {
+  const verdict = adjudicationVerdict(entries);
+  if (verdict === undefined) return undefined;
+  const head =
+    `goaly: --resume: this run's contract was already adjudicated in-loop, so ` +
+    `--stuck-repeat-threshold does not continue it — the recorded adjudication replays as it ` +
+    `happened, and the run re-terminates before the harness gets a turn.`;
+  if (verdict === 'defective') {
+    return `${head} The bar itself was judged unsatisfiable, so more iterations against it cannot help; re-contract instead: ${recontractCommand(runId)}`;
+  }
+  return `${head} The bar was judged SATISFIABLE, so --recontract refuses this run (there is no defect to repair). Keep the tree and carry the goal forward: goaly "<goal>" --from-run ${runId}`;
+}
+
+/**
  * A one-line, always-on "what do I do now" for the common terminal reasons — the zero-cost,
  * non-LLM complement to `--explain`. A first-time user seeing `status: ABORTED / reason: no-diff:
  * working tree unchanged…` should not need to read the architecture docs to know the next step.
@@ -671,7 +696,11 @@ export function nextStepHint(o: RunOutcome): string | undefined {
     [/CONTRACT_UNEVALUABLE/, `the verification could not RUN (environment problem, not a code red) — fix the tool/network it names, then continue: ${resume} --stuck-unevaluable-threshold 4`],
     // Matched BEFORE the generic /no-diff/ row: the tree stopped changing because the turn kept
     // being killed, so the fix is more room per turn, not `--stuck-no-diff false`.
-    [/STUCK_TIMEOUT_NO_DIFF/, `the agent kept being killed by the harness timeout with nothing to show — give a turn more room and continue: ${resume} --harness-timeout-ms 1800000 --harness-idle-timeout-ms 300000`],
+    // --harness-timeout-ms / --harness-idle-timeout-ms are NOT RunExtension fields, so a resume
+    // carrying only them produces no extension, the fold re-trips the detector at the tail, and the
+    // run lands back in the identical terminal ABORTED with zero turns run. The threshold is what
+    // un-terminates it; the timeouts are what make the extra turns worth having.
+    [/STUCK_TIMEOUT_NO_DIFF/, `the agent kept being killed by the harness timeout with nothing to show — give a turn more room and continue: ${resume} --stuck-timeout-no-diff-threshold 4 --harness-timeout-ms 1800000 --harness-idle-timeout-ms 300000`],
     [/TOOLS_MISSING/, `install the tools named above (or rerun with --install-missing-tools true)`],
     [/SETUP_FAILED/, `fix the setup command, or override it with --setup-cmd / disable it with --no-setup`],
     [/CONTRACT_UNSOUND/, `the frozen verification itself is broken on this tree — start a fresh run with a corrected goal or an explicit --verify-cmd`],
@@ -684,6 +713,9 @@ export function nextStepHint(o: RunOutcome): string | undefined {
     // against a bar no implementation can satisfy. The tree is worth keeping, so point at a fresh
     // contract over the SAME workspace, not at more iterations.
     [/CONTRACT_DEFECTIVE/, `the frozen bar itself was adjudicated defective — your tree may be correct, so KEEP it and re-contract: ${recontractCommand(o.runId)} (re-authors the bar from the defect report, keeps the tree, freezes a NEW contract under a NEW run id). Or own the bar yourself: goaly "<goal>" --from-run ${o.runId} --verify-cmd "<a check that is actually satisfiable>", or ${inspect}`],
+    // Matched BEFORE the generic repeat-failure row: an adjudicated-SOUND run ends on a RECORDED
+    // event, so --stuck-repeat-threshold (the generic row's advice) cannot un-terminate it.
+    [new RegExp(CONTRACT_SOUND_MARKER), `the bar was adjudicated SATISFIABLE, so the tree simply has not met it yet — and the recorded adjudication ends THIS run whatever the thresholds say. Keep the tree and carry the goal forward: goaly "<goal>" --from-run ${o.runId}, or ${inspect}`],
     [/STUCK_REPEATED_FAILURE|identical .*failures/, `the same verifier failure repeated — steer it: ${resume} --stuck-repeat-threshold 6 --note "<hint>", or ${inspect}`],
     [/compile failed|PLAN_FAILED|plan failed/i, `the contract/plan could not be authored — check the --llm-provider CLI runs & is authenticated, then retry`],
   ];

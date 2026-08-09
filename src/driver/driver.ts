@@ -841,7 +841,7 @@ async function perform(
       // In-loop contract-fault adjudication (issue #116): ONE read-only LLM call, at most once per
       // run, asking whether the frozen bar the worker keeps failing is itself unsatisfiable. The run
       // is already terminating, so EVERY failure mode here fail-closes to `defective: false` — which
-      // the reducer folds into today's byte-identical repeat-failure abort.
+      // the reducer folds into today's repeat-failure abort text, marked CONTRACT_ADJUDICATED_SOUND.
       //
       // Provider: the already-wired `prepareLlm` — the JUDGE model, deliberately not the compiler
       // model that authored the (possibly defective) bar, so the review is not purely self-review.

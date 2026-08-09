@@ -7,7 +7,7 @@ import { waveIndicesAt } from '../domain/plan';
 import type { OrchestratorState, LoopCtx, PhaseCtx } from './state';
 import { initialCtx } from './state';
 import { decide, matchedGeneratedFiles, type Decision } from './decide';
-import { normalizeDetail, contractDefectiveReason } from './stuck';
+import { normalizeDetail, contractDefectiveReason, contractSoundReason } from './stuck';
 import { buildInitialPrompt, buildLoopPrompt } from './prompts';
 
 /**
@@ -645,9 +645,14 @@ function stepAwaitSignoff(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
  * The adjudication resolved (issue #116). The run was ALREADY terminating when this state was
  * entered, so both branches end at the SAME ABORTED — only the reason differs:
  *  - `defective: false` (including every fail-closed path: no adjudicator, an LLM throw, an
- *    unparseable verdict) → `fallbackReason`, byte-identical to the pre-#116 repeat-failure abort.
+ *    unparseable verdict) → the repeat-failure text plus the CONTRACT_ADJUDICATED_SOUND marker.
  *  - `defective: true`    → the typed CONTRACT_DEFECTIVE relabel, naming the frozen file(s).
  * There is no branch to DONE, to a green, or back into the loop — diagnosis only (invariants #3/#4).
+ *
+ * The sound branch is marked rather than left byte-identical to the pre-#116 abort because the two
+ * are not equally CONTINUABLE: this ABORTED comes from a recorded event, so no `--resume` extension
+ * un-terminates it, while a plain repeat abort is re-derived and a raised threshold does. See
+ * {@link contractSoundReason}.
  */
 function stepAdjudicating(
   ctx: LoopCtx,
@@ -657,7 +662,7 @@ function stepAdjudicating(
   if (event.tag !== 'CONTRACT_ADJUDICATED') throw invalidTransition('ADJUDICATING', event);
   const reason = event.defective
     ? contractDefectiveReason(matchedGeneratedFiles(ctx), event.reason, fallbackReason)
-    : fallbackReason;
+    : contractSoundReason(fallbackReason);
   return [
     {
       tag: 'ABORTED',

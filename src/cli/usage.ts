@@ -183,9 +183,12 @@ Stuck-detection tuning:
                                   typed STUCK_TIMEOUT_NO_DIFF. Such a turn is excused as "ran out of
                                   time, not out of ideas", but only N-1 times in a row, so a worker
                                   that times out every iteration no longer burns the whole
-                                  --max-iterations budget in silent ten-minute no-ops. The fix it
-                                  names is more room per turn: --harness-timeout-ms and/or
-                                  --harness-idle-timeout-ms. Not silenced by --stuck-no-diff false.
+                                  --max-iterations budget in silent ten-minute no-ops. This flag is
+                                  also the ONLY one that CONTINUES such a run on --resume (the
+                                  timeout flags are compose-time, not resume extensions, so a resume
+                                  without it replays into the same abort); pair it with more room
+                                  per turn: --harness-timeout-ms and/or --harness-idle-timeout-ms.
+                                  Not silenced by --stuck-no-diff false.
   --auto-remediate-stuck <bool>   opt-in BOUNDED self-recovery (default false): instead of aborting,
                                   remediate each remediable stuck condition ONCE per run (max 3
                                   total) — a no-diff turn gets a canned try-a-different-approach

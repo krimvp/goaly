@@ -770,9 +770,15 @@ repeat-failure), is measured off the run's original thresholds so repeated resum
 than compound, is recorded as an ordinary `RUN_EXTENDED` marker (auditable in the log), and any
 explicit `--stuck-*` on the resume command line still wins. `no-diff` is a toggle rather than a
 counter, so it is not relieved — pass `--stuck-no-diff false` for that resume.
-`timeout-no-diff` is not relieved either: more room per turn (`--harness-timeout-ms` /
-`--harness-idle-timeout-ms`, applied fresh by any resume) is the real fix, and relief would just buy
-more full-length no-ops.
+`timeout-no-diff` is not relieved automatically either — relief would just buy more full-length
+no-ops. Be clear about what that means for the resume: the timeout flags are **not** `RunExtension`
+fields, so a resume carrying only `--harness-timeout-ms` / `--harness-idle-timeout-ms` produces no
+extension at all, the fold re-trips timeout-no-diff at the tail, and the run lands straight back in
+the identical terminal `ABORTED` with zero harness turns run. The flag that **un-terminates** such a
+run is `--stuck-timeout-no-diff-threshold` (which is in `RunExtension.stuck`); the timeout flags are
+what make the extra turns worth having. Pass both:
+`goaly --resume <id> --stuck-timeout-no-diff-threshold 4 --harness-timeout-ms 1800000 --harness-idle-timeout-ms 300000`,
+which is exactly what the abort's `next:` hint now prints.
 
 **Old run logs stay replayable.** `timeout-no-diff` is the one detector that turned a decision which
 previously continued into a terminal abort, so a log written *before* it existed can contain a
@@ -798,7 +804,17 @@ worker has demonstrably changed the tree during the run, the run makes **one rea
 asking: *given this implementation, could any correct implementation pass this frozen check, or is
 the check itself unsatisfiable?*
 
-- `defective: false` → the run aborts with **today's repeat-failure reason, byte-identical**.
+- `defective: false` → the run aborts with **today's repeat-failure reason**, plus a
+  **`CONTRACT_ADJUDICATED_SOUND`** marker. The diagnosis is unchanged; the marker is there because
+  the two aborts are not equally *continuable*. A plain repeat abort ends on a re-derived detector
+  trip, so `--resume <id> --stuck-repeat-threshold N` genuinely continues it. An adjudicated one
+  ends on a **recorded** `CONTRACT_ADJUDICATED` event: replay folds that event to `ABORTED` whatever
+  the thresholds say, so no `--resume` extension un-terminates it. While the texts were identical,
+  goaly's own `next:` hint pointed such a run at that inert flag, and the resume warning pointed it
+  at `--recontract`, which [`planRecontract` refuses](#re-contracting-a-defective-bar---recontract)
+  for a sound verdict — every documented exit was a dead end. The route that exists is
+  `goaly "<goal>" --from-run <id>`: the bar is satisfiable, so keep the tree and carry the goal
+  forward. That is what both the hint and the warning name now.
 - `defective: true` → the run aborts with a typed **`CONTRACT_DEFECTIVE`** reason that names the
   frozen file, says plainly that your implementation may be correct and the **tree is worth
   keeping**, and points at a corrected bar rather than at `--stuck-repeat-threshold` (which cannot
@@ -816,13 +832,16 @@ Guarantees, all of them structural:
 - **Bounded to once per run**, as replayable reducer state — so a `--resume` that re-trips the
   streak can't buy a second call.
 - **Replay-safe.** The verdict is a Zod-parsed, write-ahead-logged `CONTRACT_ADJUDICATED` event, so
-  `--resume` and `goaly runs show` reuse the recorded answer and never re-call the model. (Resume's
-  automatic streak relief is suppressed for a run that adjudicated: more iterations against an
-  unsatisfiable bar are still unsatisfiable.) A recorded verdict is a fact the replay reproduces:
-  raising `--stuck-repeat-threshold` on such a run — by hand, on a `defective: false` abort whose
-  text still names that flag — does **not** un-trip the repeat that led to it, so the run stays
-  resumable instead of dying on an invalid transition. goaly says so and points at
-  [`--recontract`](#re-contracting-a-defective-bar---recontract) when you pass the flag anyway.
+  `--resume` and `goaly runs show` reuse the recorded answer and never re-call the model. Resume's
+  automatic streak relief is suppressed for a run that adjudicated — for **either** verdict, and for
+  a structural reason rather than a judgement about satisfiability: the abort came from a recorded
+  event, so relief could not continue the run, only bank an inert `RUN_EXTENDED` marker and print a
+  promise goaly cannot keep. A recorded verdict is a fact the replay reproduces: raising
+  `--stuck-repeat-threshold` by hand does **not** un-trip the repeat that led to it, so the run stays
+  resumable-as-terminal instead of dying on an invalid transition. Pass the flag anyway and goaly
+  says so, and names the route that exists for your verdict —
+  [`--recontract`](#re-contracting-a-defective-bar---recontract) for `defective: true`,
+  `goaly "<goal>" --from-run <id>` for `defective: false` (which `--recontract` refuses).
 - **The reducer stays pure.** DECIDE only emits an `ADJUDICATE_CONTRACT` command; the driver
   performs the read-only call and feeds the event back (invariant #1). Its spend is metered against
   `--budget-tokens` under the verifier layer.
@@ -1095,9 +1114,10 @@ kill an hours-long run. All defaults, no flags needed
   `--budget-tokens`. (The wall-clock budget restarts per process — the crash-to-resume gap is idle
   time, not spend.)
 - **Terminal outcomes tell you the next step.** A failed/aborted run prints a one-line `next:`
-  hint — what the reason means and the exact command: `--resume` with the flag that actually helps
-  (`--harness-timeout-ms` for a `STUCK_TIMEOUT_NO_DIFF`, `--harness-autonomy` for a harness that
-  *refused* rather than crashed), `goaly runs show`, or — for a
+  hint — what the reason means and the exact command: `--resume` with the flag that actually
+  un-terminates the run (`--stuck-timeout-no-diff-threshold`, alongside the `--harness-timeout-ms`
+  that makes the extra turns useful, for a `STUCK_TIMEOUT_NO_DIFF`; `--harness-autonomy` for a
+  harness that *refused* rather than crashed), `goaly runs show`, or — for a
   [`CONTRACT_DEFECTIVE`](#in-loop-contract-fault-adjudication-contract_defective) bar — the
   [`--recontract`](#re-contracting-a-defective-bar---recontract) successor command that keeps your
   tree.
@@ -1877,6 +1897,10 @@ contributor *"one term, one meaning"* reference, see [`CONTEXT.md`](../CONTEXT.m
   to be failing an assertion no implementation could satisfy. Relabels an abort that was already
   happening; the tree is worth keeping. See
   [In-loop contract-fault adjudication](#in-loop-contract-fault-adjudication-contract_defective).
+- **`CONTRACT_ADJUDICATED_SOUND`** — the other verdict of the same adjudication: the frozen bar CAN
+  be met, the implementation simply has not met it yet. Carries the unchanged repeat-failure text;
+  the marker exists because the recorded verdict makes this abort uncontinuable by any `--resume`
+  extension, so the next step is `goaly "<goal>" --from-run <id>`, not a threshold flag.
 - <a id="g-recontract"></a>**Re-contract / successor run** — the recovery from a `CONTRACT_DEFECTIVE`
   verdict: `goaly --from-run <id> --recontract` keeps the tree, re-authors the bar from the defect
   report, and freezes a NEW contract under a NEW run id, recording `predecessorRunId` /

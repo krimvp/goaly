@@ -281,20 +281,28 @@ function contractUnevaluableReason(threshold: number, detail: string): string {
  * The timeout-no-diff abort reason (issue #119): `threshold` consecutive iterations were killed by
  * the harness wall-clock cap and each left the working tree untouched. That is a RESOURCE-shape
  * failure, not evidence the code or the contract is wrong — the worker keeps being guillotined
- * mid-turn, so every further iteration costs a full timeout for nothing. The message therefore names
- * the two flags that actually fix it: the hard cap (`--harness-timeout-ms`) and the idle/heartbeat
- * cap (`--harness-idle-timeout-ms`), which only kills a turn once it has gone QUIET, so a
- * still-progressing agent is not cut off. Still fail-closed: a cut-off turn is a `timeout` run and
- * the run aborts — never a green.
+ * mid-turn, so every further iteration costs a full timeout for nothing.
+ *
+ * The message names BOTH halves of the fix, in the order they matter on a resume. The timeout flags
+ * (`--harness-timeout-ms`, and `--harness-idle-timeout-ms` which only kills a turn once it has gone
+ * QUIET) are what give a turn room — but they are compose-time flags, NOT `RunExtension` fields, so
+ * a `--resume` carrying only them produces no extension, the fold re-trips this detector at the tail
+ * and the run re-terminates before a single turn. `--stuck-timeout-no-diff-threshold` IS in
+ * `RunExtension.stuck`, so it is the flag that actually un-terminates the run; it is named FIRST for
+ * that reason, not as an afterthought. Still fail-closed: a cut-off turn is a `timeout` run and the
+ * run aborts — never a green.
  */
 function timeoutNoDiffReason(threshold: number): string {
   return (
     `STUCK_TIMEOUT_NO_DIFF: the harness was killed by its wall-clock timeout ${threshold} times in ` +
     'a row and every one of those iterations left the working tree UNCHANGED — the agent is running ' +
     'out of TIME, not out of ideas, so more iterations at the same cap would burn the budget for ' +
-    'nothing. Give a turn more room: raise --harness-timeout-ms (the hard cap), and/or set ' +
-    '--harness-idle-timeout-ms so a still-progressing turn is only killed after it goes quiet. To ' +
-    'tolerate a longer run of cut-off turns instead, raise --stuck-timeout-no-diff-threshold.'
+    'nothing. To CONTINUE this run you must raise --stuck-timeout-no-diff-threshold on the resume: ' +
+    'it is the only one of these that a --resume extension can apply, so a resume without it just ' +
+    'replays back into this same abort. Pair it with more room per turn — raise ' +
+    '--harness-timeout-ms (the hard cap), and/or set --harness-idle-timeout-ms so a ' +
+    'still-progressing turn is only killed after it goes quiet — or the extra turns will be cut ' +
+    'off the same way.'
   );
 }
 
@@ -325,6 +333,37 @@ function repeatFailureReason(threshold: number, signature: string): string {
  * hint, the docs' outcome tables, and tests all key off ONE string rather than re-typing it.
  */
 export const CONTRACT_DEFECTIVE_MARKER = 'CONTRACT_DEFECTIVE';
+
+/**
+ * The typed marker closing a repeat-failure abort that WAS adjudicated in-loop and came back SOUND
+ * (issue #116's other branch — including every fail-closed path: no adjudicator, an LLM throw, an
+ * unparseable verdict).
+ *
+ * It exists because the two aborts are NOT equally continuable, and their text used to be
+ * byte-identical. A plain repeat abort ends on a re-derived detector trip, so `--resume <id>
+ * --stuck-repeat-threshold N` genuinely un-terminates it. An adjudicated one ends on a RECORDED
+ * `CONTRACT_ADJUDICATED` event: replay folds that event and lands on ABORTED whatever the
+ * thresholds say, so the same flag — which goaly's own next-step hint printed — does nothing at all.
+ * Naming the difference is what lets the hint point at a route that exists.
+ */
+export const CONTRACT_SOUND_MARKER = 'CONTRACT_ADJUDICATED_SOUND';
+
+/**
+ * The abort reason for a sound in-loop adjudication: today's repeat-failure text, plus the one fact
+ * the operator needs — this run cannot be continued by raising a threshold, because the adjudication
+ * is on the record. The bar is satisfiable, so the tree is the thing that has not caught up yet;
+ * carry the work forward as a follow-up rather than re-contracting (which `planRecontract` refuses
+ * for a sound verdict).
+ */
+export function contractSoundReason(fallbackReason: string): string {
+  return (
+    `${fallbackReason} [${CONTRACT_SOUND_MARKER}] The frozen bar was re-adjudicated in-loop and ` +
+    'found SATISFIABLE — the assertion CAN be met, the implementation simply has not met it yet. ' +
+    'That adjudication is recorded, so this run ends here: replay folds the recorded verdict and a ' +
+    'raised --stuck-repeat-threshold cannot un-terminate it. Carry the tree forward into a fresh ' +
+    'run instead.'
+  );
+}
 
 /**
  * The contract-defective abort reason (issue #116) — the sibling of {@link contractUnevaluableReason}.

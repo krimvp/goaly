@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { decide } from './decide';
 import { step } from './step';
-import { CONTRACT_DEFECTIVE_MARKER } from './stuck';
+import { CONTRACT_DEFECTIVE_MARKER, CONTRACT_SOUND_MARKER } from './stuck';
 import type { LoopCtx } from './state';
 import type { OrchestratorEvent } from '../domain/events';
 import { makeCtx, makeConfig, makeFakeContract, failVerdict, dh } from '../testing/fakes';
@@ -109,9 +109,14 @@ describe('ADJUDICATING — exactly one read-only command, then a relabelled abor
     if (state.tag === 'ADJUDICATING') expect(state.ctx.adjudicated).toBe(true);
   });
 
-  it('defective:false reproduces TODAY\'s repeat-failure abort BYTE-IDENTICALLY', () => {
+  it('defective:false keeps TODAY\'s repeat-failure text and MARKS that it was adjudicated', () => {
     // The control: the same ctx with the feature structurally unavailable (no authored files) takes
-    // the pre-#116 path straight to ABORTED. Its reason must equal the adjudicated passthrough.
+    // the pre-#116 path straight to ABORTED. The adjudicated abort must carry that text verbatim —
+    // nothing about the diagnosis changes — plus the CONTRACT_ADJUDICATED_SOUND marker. The two are
+    // NOT interchangeable and used to be byte-identical: this ABORTED comes from a RECORDED event,
+    // so no --resume extension un-terminates it, while the control's is a re-derived detector trip
+    // that `--stuck-repeat-threshold` genuinely continues. goaly's own next-step hint pointed at
+    // that flag for both, i.e. at a dead end for this one.
     const control = decide(
       repeatCtx({ contract: makeFakeContract({ generatedFiles: [] }) }),
       failVerdict(SIGNATURE),
@@ -127,7 +132,8 @@ describe('ADJUDICATING — exactly one read-only command, then a relabelled abor
     });
     expect(terminal.tag).toBe('ABORTED');
     if (terminal.tag !== 'ABORTED' || control.kind !== 'ABORTED') return;
-    expect(terminal.reason).toBe(control.reason);
+    expect(terminal.reason).toContain(control.reason);
+    expect(terminal.reason).toContain(CONTRACT_SOUND_MARKER);
     expect(terminal.reason).not.toContain(CONTRACT_DEFECTIVE_MARKER);
     expect(terminal.iterations).toBe(3);
     expect(terminal.contractHash).toBe(contract.contractHash);

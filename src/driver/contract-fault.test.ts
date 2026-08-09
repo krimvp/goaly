@@ -6,8 +6,8 @@ import { replay, resumeStreakRelief } from '../runlog/replay';
 import { RunId } from '../domain/ids';
 import type { RunLogEntry } from '../runlog/runlog';
 import type { OrchestratorEvent } from '../domain/events';
-import { nextStepHint } from '../cli/run-cmd';
-import { CONTRACT_DEFECTIVE_MARKER } from '../orchestrator/stuck';
+import { adjudicatedResumeWarning, nextStepHint } from '../cli/run-cmd';
+import { CONTRACT_DEFECTIVE_MARKER, CONTRACT_SOUND_MARKER } from '../orchestrator/stuck';
 import {
   FakeHarness,
   FakeVerifier,
@@ -306,5 +306,78 @@ describe('the adjudication is metered, replayable, and resume-safe', () => {
       expect(folded.state.reason).not.toContain('invalid transition');
       expect(folded.state.reason).not.toContain('driver error');
     }
+  });
+});
+
+/**
+ * ROUND-5 REGRESSION — the OPERATOR-RECOVERY side of the two terminal paths added by #116 and #119.
+ * Both left runs whose documented next step provably does nothing.
+ */
+describe('the next-step hints name flags that actually continue the run', () => {
+  const hint = (reason: string): string | undefined =>
+    nextStepHint({
+      runId: RunId.parse('run-hint'),
+      status: 'ABORTED',
+      iterations: 1,
+      contractHash: null,
+      reason,
+    });
+
+  it('STUCK_TIMEOUT_NO_DIFF names the extension flag that un-terminates it', () => {
+    // The timeout flags are NOT RunExtension fields: a resume carrying only them produces no
+    // extension at all, the fold re-trips timeout-no-diff at the tail, and the run lands straight
+    // back in the identical terminal ABORTED with zero harness turns run. Only
+    // --stuck-timeout-no-diff-threshold is in RunExtension.stuck and applied by applyRunExtension.
+    const h = hint('STUCK_TIMEOUT_NO_DIFF: the harness was killed by its wall-clock timeout 2 times');
+    expect(h).toContain('--stuck-timeout-no-diff-threshold');
+    expect(h).toContain('--harness-timeout-ms');
+  });
+
+  it('a SOUND in-loop adjudication is distinguishable, and its hint is not the inert flag', async () => {
+    // A `defective:false` adjudication ends the run on a RECORDED CONTRACT_ADJUDICATED event, so no
+    // --resume variant can un-terminate it — yet its abort text used to be byte-identical to the
+    // plain repeat abort, whose hint is `--resume … --stuck-repeat-threshold 6` (inert here).
+    const llm = new FakeLlm([JSON.stringify({ defective: false, reason: 'the bar looks fine' })]);
+    const outcome = await drive(wireRepeatRun({ llm }).deps, config, RunId.parse('run-sound-hint'));
+
+    expect(outcome.reason).toContain(CONTRACT_SOUND_MARKER);
+    const h = hint(outcome.reason ?? '');
+    expect(h).not.toContain('--stuck-repeat-threshold');
+    expect(h).toContain('--from-run run-hint');
+  });
+});
+
+/**
+ * ROUND-5 REGRESSION. The warning the CLI prints when an operator raises --stuck-repeat-threshold on
+ * an adjudicated run pointed at `goaly --from-run <id> --recontract`, which `planRecontract` guard 1
+ * REFUSES precisely when `defective` is false — so both the hint and the warning named dead ends.
+ */
+describe('adjudicatedResumeWarning — names the route that exists for each verdict', () => {
+  const entriesWith = (defective: boolean): RunLogEntry[] => [
+    {
+      runId: RunId.parse('run-warn'),
+      seq: 1,
+      ts: 1,
+      contractHash: null,
+      event: { tag: 'CONTRACT_ADJUDICATED', defective, reason: 'r' },
+      stateTagAfter: 'ABORTED',
+    },
+  ];
+
+  it('a DEFECTIVE verdict is routed to --recontract (which accepts it)', () => {
+    const w = adjudicatedResumeWarning(entriesWith(true), 'run-warn');
+    expect(w).toContain('--recontract');
+  });
+
+  it('a SOUND verdict is routed to --from-run, never to the refused --recontract', () => {
+    const w = adjudicatedResumeWarning(entriesWith(false), 'run-warn');
+    expect(w).toBeDefined();
+    // It may SAY that --recontract refuses this run; it must not hand over that command.
+    expect(w).not.toMatch(/--from-run run-warn --recontract/);
+    expect(w).toContain('goaly "<goal>" --from-run run-warn');
+  });
+
+  it('says nothing for a run that never adjudicated', () => {
+    expect(adjudicatedResumeWarning([], 'run-warn')).toBeUndefined();
   });
 });

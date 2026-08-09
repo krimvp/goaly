@@ -81,7 +81,10 @@ These are the product. A change that violates one is wrong even if tests pass �
    timeout-no-diff (consecutive iterations that BOTH hit the harness wall-clock cap and changed nothing
    → typed `STUCK_TIMEOUT_NO_DIFF`; it also BOUNDS the issue-#54 no-diff excuse, so a worker that times
    out every turn can no longer burn `maxIterations` in silent no-ops — the abort names
-   `--harness-timeout-ms` / `--harness-idle-timeout-ms`, the only real fix, and is never auto-remediated).
+   `--stuck-timeout-no-diff-threshold` (the only flag that un-terminates the run: the timeout flags are
+   not `RunExtension` fields, so a resume carrying only them re-trips the detector at the tail) plus
+   `--harness-timeout-ms` / `--harness-idle-timeout-ms`, which make the extra turns useful; never
+   auto-remediated).
    Classified ONLY from facts goaly owns (its own timeout / spawn-failure; the judge's own error) —
    never heuristic exit-code/error-string guessing — and prevented at the source (the compiler authors
    offline verify commands; a missing toolchain is a pre-loop `requiredTools` abort), budget.

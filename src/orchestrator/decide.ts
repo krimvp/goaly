@@ -105,7 +105,8 @@ export function decide(
 /**
  * The abort text a stuck condition produces — the ONE place it is built, so the adjudication
  * passthrough (issue #116) can carry it verbatim and a `defective: false` verdict is provably
- * byte-identical to the pre-#116 behavior.
+ * byte-identical to the pre-#116 behavior apart from a CONTRACT_ADJUDICATED_SOUND marker on the
+ * sound branch (see `contractSoundReason`).
  */
 function abortReason(ctx: LoopCtx, stuck: StuckReason): string {
   return ctx.remediations.total > 0
