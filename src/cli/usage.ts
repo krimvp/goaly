@@ -26,10 +26,12 @@ Usage:
                [--phased [--max-phases N] [--max-plan-revisions N] [--max-plan-retries N]
                          [--plan-file <p>] [--planner-model <m>] [--parallel-phases]]
                [--max-seal-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
+               [--no-defect-corpus | --defect-corpus <path>]
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
                [--stuck-oscillation true|false] [--stuck-crash-threshold N]
-               [--stuck-unevaluable-threshold N] [--auto-remediate-stuck]
+               [--stuck-unevaluable-threshold N] [--stuck-timeout-no-diff-threshold N]
+               [--auto-remediate-stuck]
                [--harness claude|codex|droid|pi|goaly-code] [--harness-autonomy low|medium|high]
                [--max-agent-turns N] [--model <m>]
                [--llm-model <m>] [--approver-quorum N] [--approver-diversity-temp T]
@@ -47,6 +49,7 @@ Usage:
                [--worktree [<name>]] [--dry-run]
                [--resume <runId> [--note "<text>"]]
                [--from-run <runId> [--inherit-session]]
+               [--from-run <runId> --recontract [--max-recontracts <N>]]
                [--log-level debug|info|warn|error] [--log-file <path>] [--no-log-file]
                [--stream] [--stream-transcript] [--stream-file <path>] [--explain] [--explain-model <m>]
 
@@ -65,6 +68,7 @@ Usage:
   goaly init [--harness <name>] [--autonomous] [--model <m>] [--verify-cmd "<cmd>"] [--yes] [--force]
              [--workspace <dir>]
   goaly config validate <path>
+  goaly config defects list|clear [--defect-corpus <path>]
   goaly completion bash|zsh|fish
 
   goaly help
@@ -111,6 +115,21 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                       how to keep it ('git add -f'). The integrity guard still pins them by content
                       hash on disk (excluded ≠ unprotected). Absent ⇒ the compiler picks the dir.
 
+Defect corpus — the CROSS-RUN feedback loop (ON by default, issue #122):
+  --no-defect-corpus  turn OFF the defect corpus. When a run's in-loop adjudication (#116) rules a
+                      frozen bar CONTRACT_DEFECTIVE, goaly appends the adjudicator's GENERALIZED
+                      anti-pattern (never source, never the diff, never anything about how hard the
+                      work was) to ~/.goaly/defects.jsonl, and future --generate authoring receives
+                      the relevant ones as a bounded 'known false-red patterns — do not author
+                      these' section. It is advisory and fail-open: a missing or corrupt corpus
+                      behaves exactly as if the feature did not exist, it is filtered to this
+                      workspace's language/runner and capped so the prompt stays bounded, and it can
+                      never weaken the bar — the section is about IMPOSSIBILITY, and a corpus-shaped
+                      contract still faces the critics, Seal, and the pre-flight negative control.
+                      Each injected pattern is logged, so a run says which local state shaped it.
+  --defect-corpus <path>  use <path> instead of ~/.goaly/defects.jsonl (also accepted by
+                      'goaly config defects'). Contradicts --no-defect-corpus.
+
 Diff baseline (issue #47 — keep a run's diff small without touching the user's git history):
   --baseline <ref>  compute the worker's diff (the approver's Sign-off input) against <ref> — any git
                     ref or SHA — instead of HEAD. Validated to resolve before the run starts
@@ -142,6 +161,9 @@ Stuck-detection tuning:
                                   iteration is NOT terminal if the previous turn timed out, or if the
                                   ladder is green and a FRESH veto is the only blocker — the agent
                                   gets one real turn to act on a correct critique first (issue #54).
+                                  The timeout excuse is bounded (see
+                                  --stuck-timeout-no-diff-threshold), which this toggle does not
+                                  disable.
   --stuck-repeat-threshold N      abort after N identical normalized verifier failures (default 3).
   --stuck-oscillation <bool>      toggle diff-hash oscillation detection (default true).
   --stuck-crash-threshold N       abort after N consecutive harness crashes (default 2) — a typed
@@ -155,6 +177,18 @@ Stuck-detection tuning:
                                   ENVIRONMENT is broken and your tree may be correct-but-unverified,
                                   instead of a misleading no-diff/repeat abort that blames (and
                                   discards) possibly-correct work. Still fail-closed (never DONE).
+  --stuck-timeout-no-diff-threshold N
+                                  abort after N consecutive iterations that BOTH hit the harness
+                                  wall-clock timeout AND left the tree unchanged (default 2) — a
+                                  typed STUCK_TIMEOUT_NO_DIFF. Such a turn is excused as "ran out of
+                                  time, not out of ideas", but only N-1 times in a row, so a worker
+                                  that times out every iteration no longer burns the whole
+                                  --max-iterations budget in silent ten-minute no-ops. This flag is
+                                  also the ONLY one that CONTINUES such a run on --resume (the
+                                  timeout flags are compose-time, not resume extensions, so a resume
+                                  without it replays into the same abort); pair it with more room
+                                  per turn: --harness-timeout-ms and/or --harness-idle-timeout-ms.
+                                  Not silenced by --stuck-no-diff false.
   --auto-remediate-stuck <bool>   opt-in BOUNDED self-recovery (default false): instead of aborting,
                                   remediate each remediable stuck condition ONCE per run (max 3
                                   total) — a no-diff turn gets a canned try-a-different-approach
@@ -181,17 +215,22 @@ Phased decomposition (issue #48 — split one big goal into a frozen plan of sma
                       The whole-run --budget-tokens cap is the sum across ALL phases. The acceptance
                       contract reuses your original verification: --verify-cmd becomes the cumulative
                       deterministic bar, or --generate authors cumulative acceptance on the original goal.
-  --plan-file <p>     source the plan from a JSON file ({ "phases": [{ "goal", "intent"?, "rubric"? }] })
-                      instead of authoring it with the LLM. Parsed fail-closed; a bad file is a typed
-                      PLAN_FAILED, never a skipped decomposition.
+  --plan-file <p>     source the plan from a JSON file ({ "phases": [{ "goal", "intent"?, "rubric"?,
+                      "id"?, "dependsOn"? }] }) instead of authoring it with the LLM. "id"/"dependsOn"
+                      declare the plan's dependency DAG (phases listed dependencies-first). Parsed
+                      fail-closed; a bad file — including an unknown id, a self-reference, a cycle, or
+                      a forward edge — is a typed PLAN_FAILED, never a skipped or silently linearized
+                      decomposition.
   --max-phases N      cap the number of sub-goals a plan may contain (default 10); a longer plan is a
                       fail-closed PLAN_FAILED.
   --max-plan-revisions N  cap the free-text plan-Seal revise rounds (default 10; 0 disables revision).
   --planner-model <m> model for the planner step only (cascades like the other LLM-step models).
   --autonomous        also auto-accepts the plan AND each phase contract — still frozen + logged loudly.
-  --parallel-phases   EXPERIMENTAL, opt-in — cooperative parallel WAVES: consecutive plan phases
-                      sharing a "group" value (plan-file: {"goal": …, "group": 1}) execute
-                      CONCURRENTLY, each as its own frozen, two-key CHILD goaly run in an isolated
+  --parallel-phases   EXPERIMENTAL, opt-in — cooperative parallel WAVES: every plan phase whose
+                      dependencies have all completed (the current TOPOLOGICAL FRONTIER of the frozen
+                      plan's DAG — declared with "id"/"dependsOn", or with the legacy "group" sugar for
+                      a contiguous band) executes CONCURRENTLY,
+                      each as its own frozen, two-key CHILD goaly run in an isolated
                       git worktree on the SHARED --budget-tokens meter. The children are then merged
                       in phase order (3-way git merge-tree — plumbing only, no commits) and each
                       merged phase's frozen DETERMINISTIC rungs are RE-VERIFIED on the combined tree
@@ -200,7 +239,7 @@ Phased decomposition (issue #48 — split one big goal into a frozen plan of sma
                       the classic sequential run on the merged tree (the bar never moves, only the
                       starting tree); the cumulative ACCEPTANCE contract still gates the whole run.
                       Requires --phased and --autonomous (children seal concurrently). Without this
-                      flag, grouped plans run strictly sequentially. Resume note: a crash mid-wave
+                      flag, a DAG/grouped plan runs strictly sequentially. Resume note: a crash mid-wave
                       re-runs the WHOLE wave on --resume (children live in ephemeral worktrees).
 
 Best-of-N parallel worker (issue #85 — tournament-select candidates against the frozen ladder):
@@ -267,6 +306,41 @@ Adversarial review (opt-in; a run without --adversarial is byte-for-byte unchang
   --critic-model <m>    model for all adversarial critics/refuters (cascades like the other
                         LLM-step models: --critic-model → --llm-model → --model)
 
+Satisfiability critic (ON by default under --generate — the one review step that is):
+  --no-satisfiability-critic  turn OFF the FALSE-RED satisfiability critic. The four --adversarial
+                        lenses all attack FALSE GREENS (could a lazy worker pass this bar without
+                        meeting the goal?). This is the mirror: ONE extra LLM call, before the
+                        freeze, asking whether a CORRECT, COMPLETE implementation could still FAIL
+                        the authored bar — an assertion no implementation can satisfy (the classic:
+                        a spy call-count assertion made AFTER mockRestore() cleared mock.calls), a
+                        bar coupled to one file layout instead of observable behavior, an assertion
+                        on timing / ordering / ids / float equality or on the environment. A finding
+                        triggers the same bounded re-author round, told to make the bar SATISFIABLE
+                        — never easier (it must still be RED on the current tree). Default-on
+                        because a false red costs the ENTIRE run while the guard costs one call.
+                        Runs only when --generate actually authored verification files; advisory
+                        (a broken critic ⇒ pass-through) and metered under the compile phase; uses
+                        --critic-model like the other critics.
+
+Contract dry run — the compile-time POSITIVE control (ON by default under --generate):
+  --contract-dry-run true|false
+                        prove the frozen bar can actually go GREEN before freezing it. Pre-flight
+                        only gives the bar a NEGATIVE control (it must be red on the current tree);
+                        nothing proved it can EVER be met, so an unsatisfiable bar froze and the run
+                        was unwinnable. With this on, the compiler also authors a THROWAWAY
+                        reference implementation, materializes it in a SCRATCH COPY of the workspace
+                        next to the authored verification files, and runs the contract's
+                        DETERMINISTIC rungs there (judge rungs are out of scope). Green ⇒ the scratch
+                        copy is destroyed and the contract freezes unchanged. Red ⇒ the bar is
+                        defective: the freeze is REFUSED and the failure feeds the same bounded
+                        re-author loop as a compile failure (--max-compile-retries). The reference
+                        implementation is written ONLY to the scratch copy and destroyed — it never
+                        reaches your workspace, the run diff, or any worker prompt. FAIL-OPEN: no
+                        LLM, a scratch-copy failure, a setup that can't run, or a timed-out rung all
+                        log and freeze exactly as today. Costs one authoring call + one verification
+                        run per compile attempt (metered under the compile phase, --compiler-model);
+                        inert for a user-supplied --verify-cmd (your bar, your call).
+
 Harness selection:
   --harness <name>      the write-role coding agent: claude (default) | codex | droid | pi |
                         goaly-code.
@@ -286,7 +360,14 @@ Model selection (all optional; default = each tool's own default):
   --model <m>           model for the harness AND the LLM steps (the global default)
   --llm-model <m>       model for all LLM steps (judge / approver / compiler)
   --judge-model <m>     model for the LLM-judge rung only
-  --approver-model <m>  model for the Sign-off approver only
+  --approver-model <m>  model for the Sign-off approver only. UNSET, the approver does NOT inherit a
+                        bare --model (that names the CODING AGENT's model): where the provider has a
+                        default model of its own the approver falls back to THAT, so the second key
+                        is a different model than the one that wrote the code (announced in the log).
+                        Pass the agent's model here to collapse them again on purpose. When only one
+                        model is available (no --model at all), the run is recorded as SELF-JUDGED —
+                        a typed degraded mode in the run header, the end-of-run summary and
+                        'goaly runs show'. A label, never a gate: DONE still needs both keys.
   --approver-quorum N   run Sign-off as an N-reviewer PANEL behind the unchanged approver seam
                         (default 1 = the single call, byte-for-byte unchanged). The panel greens
                         ONLY on a strict supermajority of no-veto votes (noVetoCount*2 > N) AND only
@@ -537,6 +618,21 @@ Follow-up after a run ends (build on a finished run — keeps every invariant by
                       governs DONE — inheritance only seeds the agent's memory, never the bar. Only
                       valid with the same --harness as the prior run (session ids are harness-specific);
                       ignored under --phased. Default off (fresh session + the compaction).
+  --recontract        with --from-run, start a SUCCESSOR run for a bar goaly itself adjudicated
+                      CONTRACT_DEFECTIVE (see the outcome's "next:" line, which prints this command
+                      verbatim). It KEEPS the predecessor's working tree — the implementation is the
+                      valuable artifact — inherits its FROZEN goal, and re-runs COMPILE with the defect
+                      report as authoring feedback, then freezes a NEW contract with a NEW contractHash
+                      under a NEW runId. No contract is EVER mutated: the successor's header records
+                      predecessorRunId / predecessorContractHash / the verdict (shown by 'goaly runs show'),
+                      so "the bar was wrong" is an auditable chain, not an in-place softening. Only a
+                      CONTRACT_DEFECTIVE adjudication can reach it (the worker can never trigger it, and
+                      no worker text feeds the re-authoring), and the new bar still faces the pre-flight
+                      negative control before a worker token is spent.
+  --max-recontracts <N>
+                      bound the re-contract CHAIN (default 1). The depth is carried in the run log, so
+                      the cap holds across the whole chain, not per process — a pathological loop cannot
+                      ratchet a bar downward across generations.
 
 Run history & inspection (read-only — pure replay of the write-ahead run log, no re-running):
   goaly runs list           a table of past runs under <workspace>/.goaly: id, status, iterations,
@@ -615,6 +711,11 @@ Onboarding (first-time setup):
                             and report the verdict (exit 0 valid / 1 invalid). For editor
                             auto-completion, register the shipped goalyrc.schema.json (see the
                             reference's Config file section).
+  goaly config defects list|clear [--defect-corpus <path>]
+                            inspect or reset the cross-run defect corpus: 'list' prints every
+                            recorded false-red pattern with its language/runner and provenance,
+                            'clear' deletes the file. Only an adjudicated CONTRACT_DEFECTIVE
+                            verdict can ever add to it.
   goaly config presets [--names] [--workspace <dir>]
                             list the named presets — built-in plus every config layer's (name,
                             defining source, keys) — exactly as a run in <dir> would resolve

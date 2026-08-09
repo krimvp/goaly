@@ -20,6 +20,16 @@ export type CommandResult = {
    * genuine failure). Absent ⇒ the command was started. Optional.
    */
   spawnFailed?: boolean;
+  /**
+   * True when goaly itself SIGKILLed the command for exceeding the captured-output cap
+   * (`RunProcessOptions.maxOutputBytes`, surfaced as `ProcessResult.truncated`). The third fact in
+   * this family that goaly OWNS — it chose the cap and it fired the signal — so, exactly like
+   * {@link timedOut} and {@link spawnFailed}, the command never produced a real pass/fail and the
+   * result is could-not-EVALUATE rather than a genuine red. The exit code that comes back is the
+   * `code ?? 1` fallback for a signalled child, i.e. indistinguishable from an honest failure, which
+   * is precisely why the flag has to travel. Absent ⇒ the output stayed under the cap. Optional.
+   */
+  outputCapped?: boolean;
 };
 
 /**

@@ -48,8 +48,9 @@ const FlagValue = z.union([z.string(), z.number(), z.boolean()]);
  * config file. Three kinds:
  *   - run identity / targeting (`resume`, `from-run`, `inherit-session`, `workspace`, `worktree`,
  *     `config` itself) — persisting these would point every run in the tree at one prior run;
- *   - one-shot steering (`note`, `dry-run`) — a persisted `dry-run: true` would silently turn every
- *     run in the tree into a no-op;
+ *   - one-shot steering (`note`, `dry-run`, `recontract`/`max-recontracts`) — a persisted
+ *     `dry-run: true` would silently turn every run in the tree into a no-op, and a persisted
+ *     `recontract` would re-point every run at one predecessor's defective contract;
  *   - alternate SOURCES for a value that already has a key (`goal-file` / `intent-file` /
  *     `rubric-file`, and the `defaults` alias for `autonomous`) — one spelling, no aliases.
  * Exported so the drift test can assert this is the complete difference between the CLI's documented
@@ -63,7 +64,9 @@ export const PER_INVOCATION_FLAGS: ReadonlySet<string> = new Set([
   'goal-file',
   'inherit-session',
   'intent-file',
+  'max-recontracts',
   'note',
+  'recontract',
   'resume',
   'rubric-file',
   'workspace',
@@ -99,6 +102,8 @@ const ConfigFileSchema = z
     'max-seal-revisions': FlagValue.optional(),
     'max-compile-retries': FlagValue.optional(),
     'verify-dir': FlagValue.optional(),
+    'defect-corpus': FlagValue.optional(),
+    'no-defect-corpus': FlagValue.optional(),
     smoke: FlagValue.optional(),
     'setup-cmd': FlagValue.optional(),
     'no-setup': FlagValue.optional(),
@@ -111,6 +116,7 @@ const ConfigFileSchema = z
     // so being unable to persist it meant retyping it on every single resume.
     'stuck-crash-threshold': FlagValue.optional(),
     'stuck-unevaluable-threshold': FlagValue.optional(),
+    'stuck-timeout-no-diff-threshold': FlagValue.optional(),
     'auto-remediate-stuck': FlagValue.optional(),
     'diff-ignore': FlagValue.optional(),
     baseline: FlagValue.optional(),
@@ -126,6 +132,8 @@ const ConfigFileSchema = z
     'adversarial-plan-critics': FlagValue.optional(),
     'adversarial-contract-critics': FlagValue.optional(),
     'adversarial-refuters': FlagValue.optional(),
+    'no-satisfiability-critic': FlagValue.optional(),
+    'contract-dry-run': FlagValue.optional(),
     'critic-model': FlagValue.optional(),
     'budget-tokens': FlagValue.optional(),
     'budget-wall-ms': FlagValue.optional(),

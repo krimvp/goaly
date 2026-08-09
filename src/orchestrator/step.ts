@@ -1,13 +1,18 @@
-import type { OrchestratorEvent, Command, HarnessRunResult } from '../domain/events';
+import type { OrchestratorEvent, Command } from '../domain/events';
 import type { RunConfig, VerifierIntent } from '../domain/config';
 import { pickGatePolicy, pickLoopPolicy, pickDriverWiring } from '../domain/config';
-import type { CompiledContract, Rung } from '../domain/contract';
+import type { CompiledContract } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
 import { waveIndicesAt } from '../domain/plan';
 import type { OrchestratorState, LoopCtx, PhaseCtx } from './state';
 import { initialCtx } from './state';
-import { decide, type Decision } from './decide';
-import { normalizeDetail } from './stuck';
+import { decide, matchedGeneratedFiles, type Decision } from './decide';
+import {
+  compileFailedReason, planFailedReason, withPhaseContext,
+  PREFLIGHT_OUTPUT_QUOTE, SETUP_OUTPUT_QUOTE, TOOLS_DETAIL_QUOTE,
+} from './reason-quote';
+import { normalizeDetail, contractDefectiveReason, contractSoundReason } from './stuck';
+import { buildInitialPrompt, buildLoopPrompt } from './prompts';
 
 /**
  * The pure reducer — the product's intelligence. `step(state, event) -> [state, Command[]]`
@@ -57,6 +62,8 @@ export function step(state: OrchestratorState, event: OrchestratorEvent): StepRe
       return stepVerifying(state.ctx, event);
     case 'AWAIT_SIGNOFF':
       return stepAwaitSignoff(state.ctx, event);
+    case 'ADJUDICATING':
+      return stepAdjudicating(state.ctx, state.fallbackReason, event);
     case 'DONE':
     case 'FAILED':
     case 'ABORTED':
@@ -97,7 +104,8 @@ function stepPlanning(
           [{ tag: 'COMPILE_PLAN', config, feedback: planRetryFeedback(event.reason) }],
         ];
       }
-      return [{ tag: 'FAILED', reason: event.reason, iterations: 0, contractHash: undefined }, []];
+      // The planner's words are QUOTED behind a lead-in, never claimed as goaly's (`reason-quote.ts`).
+      return [{ tag: 'FAILED', reason: planFailedReason(event.reason), iterations: 0, contractHash: undefined }, []];
     }
     default:
       throw invalidTransition('PLANNING', event);
@@ -192,10 +200,11 @@ function nextPhaseIndex(phase: PhaseCtx, from: number): number {
 
 /**
  * Begin a phase: COMPILING its derived config, carrying the phase position for the eventual advance.
- * EXPERIMENTAL parallel waves: when the phase heads a not-yet-attempted group of consecutive
- * same-`group` sub-goals AND `--parallel-phases` is on, the whole group is emitted as ONE `RUN_WAVE`
+ * EXPERIMENTAL parallel waves: when the phase opens a not-yet-attempted TOPOLOGICAL FRONTIER of the
+ * frozen plan's dependency graph (issue #123 — declared `dependsOn` edges, or the `group` sugar's
+ * contiguous band) AND `--parallel-phases` is on, the whole frontier is emitted as ONE `RUN_WAVE`
  * command instead (still exactly one command per state — the Driver invariant). Everything else —
- * ungrouped plans, the acceptance phase, a re-entered (already-attempted) member, the feature off —
+ * linear plans, the acceptance phase, a re-entered (already-attempted) member, the feature off —
  * takes the classic sequential compile, byte-for-byte.
  */
 function startPhaseCompile(phase: PhaseCtx): StepResult {
@@ -219,16 +228,22 @@ function startPhaseCompile(phase: PhaseCtx): StepResult {
 }
 
 /**
- * The wave the current phase would fan out, or a singleton when it must run sequentially: the
- * feature is off, the index is the acceptance phase, the group was ALREADY attempted (`waved` — an
- * unmerged member re-runs sequentially, never re-fans-out), or the group has one live member.
+ * The topological FRONTIER the current phase would fan out (issue #123), or a singleton when it must
+ * run sequentially: the feature is off, the index is the acceptance phase, this phase's fan-out was
+ * ALREADY attempted (`waved` — an unmerged member re-runs sequentially, never re-fans-out), or the
+ * frontier has one live member. Completed (`skip`) and already-attempted (`waved`) members are
+ * removed, so a partially-merged wave can never re-offer a phase that already ran.
  */
 function pendingWaveAt(phase: PhaseCtx): readonly number[] {
   if (!phase.baseConfig.parallelPhases) return [phase.index];
   if (phase.index >= phase.plan.phases.length) return [phase.index];
-  if ((phase.waved ?? []).includes(phase.index)) return [phase.index];
+  const waved = phase.waved ?? [];
+  if (waved.includes(phase.index)) return [phase.index];
   const skip = phase.skip ?? [];
-  return waveIndicesAt(phase.plan, phase.index).filter((i) => !skip.includes(i));
+  const frontier = waveIndicesAt(phase.plan, phase.index, skip).filter(
+    (i) => !skip.includes(i) && !waved.includes(i),
+  );
+  return frontier.length > 0 ? frontier : [phase.index];
 }
 
 /**
@@ -337,9 +352,11 @@ function stepCompiling(
           [{ tag: 'COMPILE_VERIFIER', config, feedback: compileRetryFeedback(event.reason) }],
         ];
       }
-      // In a phased run a phase's compile failure fails the WHOLE run (no silent skip), named by phase.
+      // In a phased run a phase's compile failure fails the WHOLE run (no silent skip), named by
+      // phase. The compiler's words are QUOTED behind a lead-in, never claimed as goaly's own
+      // (`reason-quote.ts`): under --phased this compile ran AFTER the previous phase's worker turns.
       return [
-        { tag: 'FAILED', reason: phaseReason(phase, event.reason), iterations: 0, contractHash: undefined },
+        { tag: 'FAILED', reason: withPhaseContext(phase, compileFailedReason(event.reason)), iterations: 0, contractHash: undefined },
         [],
       ];
     }
@@ -393,7 +410,7 @@ function stepAwaitSeal(
       return [
         {
           tag: 'ABORTED',
-          reason: phaseReason(phase, event.decision.reason),
+          reason: withPhaseContext(phase, event.decision.reason),
           iterations: 0,
           contractHash: contract.contractHash,
         },
@@ -407,7 +424,7 @@ function stepAwaitSeal(
         return [
           {
             tag: 'ABORTED',
-            reason: phaseReason(
+            reason: withPhaseContext(
               phase,
               `Seal revision cap (${config.maxSealRevisions}) reached without approval`,
             ),
@@ -520,9 +537,10 @@ function stepPreparing(
       return [
         {
           tag: 'FAILED',
-          reason: phaseReason(
+          reason: withPhaseContext(
             phase,
-            `TOOLS_MISSING: a tool the verification needs is not installed before any agent turn — ${prepared.detail}`,
+            'TOOLS_MISSING: a tool the verification needs is not installed before any agent turn. ' +
+              `${TOOLS_DETAIL_QUOTE}${prepared.detail}`,
           ),
           iterations: 0,
           contractHash: contract.contractHash,
@@ -533,9 +551,10 @@ function stepPreparing(
       return [
         {
           tag: 'FAILED',
-          reason: phaseReason(
+          reason: withPhaseContext(
             phase,
-            `SETUP_FAILED: the workspace setup command failed before any agent turn — ${prepared.detail}`,
+            'SETUP_FAILED: the workspace setup command failed before any agent turn. ' +
+              `${SETUP_OUTPUT_QUOTE}${prepared.detail}`,
           ),
           iterations: 0,
           contractHash: contract.contractHash,
@@ -546,10 +565,11 @@ function stepPreparing(
       return [
         {
           tag: 'FAILED',
-          reason: phaseReason(
+          reason: withPhaseContext(
             phase,
             'CONTRACT_UNSOUND: the frozen verification is unsound — the defect is in the authored ' +
-              `verification, not the implementation — ${prepared.detail}`,
+              'verification, not the implementation. ' +
+              `${PREFLIGHT_OUTPUT_QUOTE}${prepared.detail}`,
           ),
           iterations: 0,
           contractHash: contract.contractHash,
@@ -631,6 +651,44 @@ function stepAwaitSignoff(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
   return applyDecision(ctx, decide(ctx, verdict, event.approval));
 }
 
+/**
+ * The adjudication resolved (issue #116). The run was ALREADY terminating when this state was
+ * entered, so both branches end at the SAME ABORTED — only the reason differs:
+ *  - `defective: false` (including every fail-closed path: no adjudicator, an LLM throw, an
+ *    unparseable verdict) → the repeat-failure text plus the CONTRACT_ADJUDICATED_SOUND marker.
+ *  - `defective: true`    → the typed CONTRACT_DEFECTIVE relabel, naming the frozen file(s).
+ * There is no branch to DONE, to a green, or back into the loop — diagnosis only (invariants #3/#4).
+ *
+ * The sound branch is marked rather than left byte-identical to the pre-#116 abort because the two
+ * are not equally CONTINUABLE: this ABORTED comes from a recorded event, so no `--resume` extension
+ * un-terminates it, while a plain repeat abort is re-derived and a raised threshold does. See
+ * {@link contractSoundReason}.
+ */
+function stepAdjudicating(
+  ctx: LoopCtx,
+  fallbackReason: string,
+  event: OrchestratorEvent,
+): StepResult {
+  if (event.tag !== 'CONTRACT_ADJUDICATED') throw invalidTransition('ADJUDICATING', event);
+  return [
+    {
+      // Both branches are covered reason BUILDERS, inline rather than via a local: the structural
+      // check classifies the expression it can SEE, and a bare identifier assigned one line above
+      // is exactly the shape it must refuse to trust (`reason-boundary.test.ts`).
+      tag: 'ABORTED',
+      reason: withPhaseContext(
+        ctx.phase,
+        event.defective
+          ? contractDefectiveReason(matchedGeneratedFiles(ctx), event.reason, fallbackReason)
+          : contractSoundReason(fallbackReason),
+      ),
+      iterations: ctx.iteration,
+      contractHash: ctx.contract.contractHash,
+    },
+    [],
+  ];
+}
+
 /** Turn a pure Decision into the next state + commands. */
 function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
   switch (decision.kind) {
@@ -647,12 +705,31 @@ function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
     }
     case 'DONE':
       return phaseDone(ctx);
+    case 'ADJUDICATE':
+      // Exactly ONE command (the Driver's `commands.length === 1` invariant). The once-per-run
+      // ledger advance rides the transition exactly as `remediations` rides a CONTINUE, so the
+      // replay fold reproduces it and a resumed run cannot buy a second adjudication.
+      return [
+        {
+          tag: 'ADJUDICATING',
+          ctx: { ...ctx, adjudicated: true },
+          fallbackReason: decision.fallbackReason,
+        },
+        [
+          {
+            tag: 'ADJUDICATE_CONTRACT',
+            contract: ctx.contract,
+            signature: decision.signature,
+            repeatCount: decision.repeatCount,
+          },
+        ],
+      ];
     case 'FAILED':
       // A phase's failure fails the WHOLE run (decomposition can't skip a phase), named by phase.
       return [
         {
           tag: 'FAILED',
-          reason: phaseReason(ctx.phase, decision.reason),
+          reason: withPhaseContext(ctx.phase, decision.reason),
           iterations: ctx.iteration,
           contractHash: ctx.contract.contractHash,
         },
@@ -662,7 +739,7 @@ function applyDecision(ctx: LoopCtx, decision: Decision): StepResult {
       return [
         {
           tag: 'ABORTED',
-          reason: phaseReason(ctx.phase, decision.reason),
+          reason: withPhaseContext(ctx.phase, decision.reason),
           iterations: ctx.iteration,
           contractHash: ctx.contract.contractHash,
         },
@@ -690,20 +767,6 @@ function phaseDone(ctx: LoopCtx): StepResult {
 }
 
 /**
- * Prefix a terminal reason with the phase position so a phased run's failures point at WHICH phase
- * (1-based, with the goal). The acceptance phase is named explicitly. A classic run (no phase) is
- * returned unchanged, so existing reasons/tests are byte-for-byte the same.
- */
-function phaseReason(phase: PhaseCtx | undefined, reason: string): string {
-  if (phase === undefined) return reason;
-  const total = phase.plan.phases.length;
-  if (phase.index >= total) return `acceptance phase (cumulative contract): ${reason}`;
-  const sub = phase.plan.phases[phase.index];
-  const goal = sub !== undefined ? ` (${sub.goal})` : '';
-  return `phase ${phase.index + 1}/${total}${goal}: ${reason}`;
-}
-
-/**
  * Start one loop iteration. Exactly ONE command either way (the Driver `commands.length === 1`
  * invariant). With `--candidates N` (N>1, issue #85) emit `RUN_AGENT_BEST_OF` so the Driver runs a
  * best-of-N tournament and feeds back the winner's `AGENT_RAN` — decided PURELY from config, so the
@@ -721,115 +784,6 @@ function startIteration(
       ? { tag: 'RUN_AGENT_BEST_OF', prompt, sessionId, candidates }
       : { tag: 'RUN_AGENT', prompt, sessionId };
   return [{ tag: 'RUNNING_AGENT', ctx }, [command]];
-}
-
-// ---- pure prompt builders -------------------------------------------------
-
-function describeRungs(rungs: readonly Rung[]): string {
-  return rungs
-    .map((r, i) =>
-      r.kind === 'deterministic'
-        ? `${i + 1}. Run \`${r.command}\` — it must exit 0.`
-        : `${i + 1}. Judged against the frozen rubric: ${r.rubric}`,
-    )
-    .join('\n');
-}
-
-function buildInitialPrompt(
-  contract: CompiledContract,
-  installTools?: readonly string[],
-  setupHint?: string,
-): string {
-  return [
-    '# Goal',
-    contract.goal,
-    '',
-    buildBootstrapSection(contract, installTools),
-    buildSetupNoteSection(setupHint),
-    '# Frozen success contract (you cannot modify it)',
-    'Your work is accepted only when ALL of the following pass:',
-    describeRungs(contract.rungs),
-    contract.rubric ? `\nOverall rubric:\n${contract.rubric}` : '',
-    '',
-    'Make the changes needed to satisfy the contract. Do not weaken or rewrite the checks themselves.',
-    '',
-    VERIFICATION_DIVISION_OF_LABOR,
-  ].join('\n');
-}
-
-/**
- * The division-of-labor note carried by every worker prompt. The worker's ONE job each turn is to
- * EDIT the tree toward the goal; goaly runs the frozen contract itself after the turn and feeds the
- * result back next iteration. Spelling this out prevents the failure mode where the agent treats
- * "run the verification command" as a required submit step and — when that command can't run in its
- * environment — burns the whole turn flailing on it and ends with no edits (a no-diff stall). Running
- * its own quick checks is fine; getting stuck on one is not.
- */
-const VERIFICATION_DIVISION_OF_LABOR = [
-  '# How verification works (do not run it yourself to "submit")',
-  'goaly runs the frozen success contract above for you AUTOMATICALLY after this turn ends, and gives',
-  'you the result on the next turn. You do NOT need to run the verification command to submit your',
-  'work — your job each turn is to EDIT the code toward the goal. Running your own quick checks is',
-  'fine, but if a command is unavailable or blocked in this environment, do NOT get stuck on it:',
-  'make your best-effort code changes and end the turn. A turn that changes no files makes no progress.',
-].join('\n');
-
-/**
- * The bootstrap instruction prepended to the first prompt when required tools are missing and goaly is
- * delegating their install to the agent (the default `--install-missing-tools` path). goaly skipped its
- * own one-time setup (it would only fail on the absent toolchain), so the agent must install the tools
- * AND run the project setup itself before the verification can pass. Empty when nothing is missing.
- */
-function buildBootstrapSection(
-  contract: CompiledContract,
-  installTools?: readonly string[],
-): string {
-  if (installTools === undefined || installTools.length === 0) return '';
-  const setupNote =
-    contract.setup !== undefined
-      ? ` Then run the project's one-time setup: \`${contract.setup}\`.`
-      : '';
-  return [
-    '# Bootstrap required first',
-    `The verification needs these tools, which are NOT installed on PATH: ${installTools.join(', ')}.`,
-    `Install them first (you have shell access; use the standard installer and make sure each ends up on PATH).${setupNote}`,
-    'Only then implement the goal — the verification cannot pass until the toolchain is present.',
-    '',
-  ].join('\n');
-}
-
-/**
- * The setup note prepended to the first prompt when a COMPILER-AUTHORED setup command failed and the
- * prepare phase degraded to best-effort proceed (Fix A). It tells the agent the bootstrap was attempted,
- * presupposes scaffolding that does not exist yet, and must be scaffolded + run by the agent. Empty when
- * there is no such hint (setup ran clean, was absent, or was a fatal user `--setup-cmd`).
- */
-function buildSetupNoteSection(setupHint?: string): string {
-  if (setupHint === undefined || setupHint.length === 0) return '';
-  return ['# Setup note', setupHint, ''].join('\n');
-}
-
-function buildLoopPrompt(
-  contract: CompiledContract,
-  feedback: string,
-  runStatus?: HarnessRunResult['status'],
-): string {
-  const statusNote =
-    runStatus !== undefined && runStatus !== 'completed'
-      ? `Note: your previous run ended as '${runStatus}' (it did not finish cleanly) — pick up where it left off.\n\n`
-      : '';
-  return [
-    '# Goal',
-    contract.goal,
-    '',
-    '# The contract is not yet satisfied',
-    `${statusNote}Feedback from verification:`,
-    feedback,
-    '',
-    'Continue working toward the goal. Do not modify the success contract or its tests.',
-    '',
-    VERIFICATION_DIVISION_OF_LABOR,
-  ].join('\n');
 }
 
 function invalidTransition(stateTag: string, event: OrchestratorEvent): Error {

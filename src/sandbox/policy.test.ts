@@ -184,6 +184,18 @@ describe('constants', () => {
     expect(DENIED_HOME_SECRETS).toContain('.aws');
   });
 
+  /**
+   * Cluster B' — `~/.goaly` holds the defect corpus AND the HMAC key that signs it. Under
+   * `--sandbox none` the agent shares goaly's uid and can read that key whatever its file mode; an
+   * ACTIVE policy is the only thing that can actually put it out of the agent seam's reach, and it
+   * only does so if the path is masked. Pinned so the mask cannot be dropped silently.
+   */
+  it("masks goaly's own cross-run state (the defect corpus and its signing key)", () => {
+    expect(DENIED_HOME_SECRETS).toContain('.goaly');
+    const p = resolveProfile('none', { workspace: '/ws', home: '/home/me' });
+    expect(p.denyDirs).toContain('/home/me/.goaly');
+  });
+
   it('has sane container defaults', () => {
     expect(DEFAULT_CONTAINER_IMAGE.length).toBeGreaterThan(0);
     expect(DEFAULT_CONTAINER_RUNTIME).toBe('docker');

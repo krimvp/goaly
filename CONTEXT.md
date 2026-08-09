@@ -95,6 +95,21 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
   reason-specific excuse off `kind` (a `no-diff` abort is excused by a fresh, unseen Sign-off veto —
   the in-flight half it holds the verdict for). _avoid:_ a normal failure (that's FAILED); putting the
   fresh-veto excuse inside `detectStuck` (it needs the verdict, so it lives in DECIDE).
+- **Contract-fault adjudication / `CONTRACT_DEFECTIVE`** — the ONE detour off a stuck abort: a
+  `repeat` streak whose signature names a FROZEN authored file, on a tree the worker demonstrably
+  populated, buys one read-only LLM call asking whether ANY implementation could satisfy that check
+  (soundness is otherwise judged only at t=0, on an empty tree, where the answer is unknowable).
+  A confident "no" relabels the abort `CONTRACT_DEFECTIVE` ("the bar is broken — keep your tree");
+  everything else keeps today's abort byte-for-byte. Bounded once per run as replayable ctx state.
+  _avoid:_ letting it continue the loop, re-author the contract, or ever produce a green — it is
+  diagnosis only; recovery is a NEW run.
+- **Re-contract / successor run (`--recontract`)** — that NEW run, made first-class: `goaly --from-run
+  <id> --recontract` keeps the predecessor's tree, inherits its frozen goal, re-authors the bar with
+  the defect report as compile feedback, and freezes a NEW contract under a NEW runId; the header
+  records `predecessorRunId` / `predecessorContractHash` / the verdict / the chain depth. _avoid:_
+  calling it "editing the contract" (nothing is ever mutated — it is a chain); reaching it from
+  anything but a `defective: true` adjudication EVENT; feeding worker text into the re-authoring;
+  counting the `--max-recontracts` cap per process instead of across the chain.
 - **Autonomous** — the flag that moves **Seal only** (auto-accept). It skips the human pause,
   never the freeze. _avoid:_ "the agent rewrites its own test"; skipping verification.
 - **Command** — data describing an effect the Driver must perform. Never persisted.

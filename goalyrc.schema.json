@@ -303,6 +303,34 @@
         }
       ]
     },
+    "defect-corpus": {
+      "description": "Default for the --defect-corpus flag. Explicit CLI flags always override.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "no-defect-corpus": {
+      "description": "Default for the --no-defect-corpus flag. Explicit CLI flags always override.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
     "smoke": {
       "description": "Default for the --smoke flag. Explicit CLI flags always override.",
       "anyOf": [
@@ -431,6 +459,20 @@
     },
     "stuck-unevaluable-threshold": {
       "description": "Default for the --stuck-unevaluable-threshold flag. Explicit CLI flags always override.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "stuck-timeout-no-diff-threshold": {
+      "description": "Default for the --stuck-timeout-no-diff-threshold flag. Explicit CLI flags always override.",
       "anyOf": [
         {
           "type": "string"
@@ -641,6 +683,34 @@
     },
     "adversarial-refuters": {
       "description": "Default for the --adversarial-refuters flag. Explicit CLI flags always override.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "no-satisfiability-critic": {
+      "description": "Default for the --no-satisfiability-critic flag. Explicit CLI flags always override.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "contract-dry-run": {
+      "description": "Default for the --contract-dry-run flag. Explicit CLI flags always override.",
       "anyOf": [
         {
           "type": "string"
@@ -1371,6 +1441,34 @@
               }
             ]
           },
+          "defect-corpus": {
+            "description": "Default for the --defect-corpus flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "no-defect-corpus": {
+            "description": "Default for the --no-defect-corpus flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
           "smoke": {
             "description": "Default for the --smoke flag. Explicit CLI flags always override.",
             "anyOf": [
@@ -1499,6 +1597,20 @@
           },
           "stuck-unevaluable-threshold": {
             "description": "Default for the --stuck-unevaluable-threshold flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "stuck-timeout-no-diff-threshold": {
+            "description": "Default for the --stuck-timeout-no-diff-threshold flag. Explicit CLI flags always override.",
             "anyOf": [
               {
                 "type": "string"
@@ -1709,6 +1821,34 @@
           },
           "adversarial-refuters": {
             "description": "Default for the --adversarial-refuters flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "no-satisfiability-critic": {
+            "description": "Default for the --no-satisfiability-critic flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "contract-dry-run": {
+            "description": "Default for the --contract-dry-run flag. Explicit CLI flags always override.",
             "anyOf": [
               {
                 "type": "string"

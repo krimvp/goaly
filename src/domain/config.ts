@@ -53,6 +53,16 @@ export const StuckPolicy = z.object({
    */
   unevaluableThreshold: z.number().int().min(2).default(2),
   /**
+   * Abort after this many consecutive iterations that BOTH were killed by the harness wall-clock
+   * timeout AND left the working tree unchanged (issue #119). Such a turn is excused as "ran out of
+   * time, not out of ideas" (issue #54) — but the excuse used to be unbounded, so a worker that
+   * timed out every iteration burned the whole `maxIterations` budget in ten-minute no-ops with
+   * nothing flagged. This threshold is BOTH the abort point (a typed `STUCK_TIMEOUT_NO_DIFF`) and
+   * the cap on the excuse: at most `threshold - 1` consecutive timeout-driven no-diffs are forgiven,
+   * so the default (2) is exactly issue #54's single excused turn. Mirrors `harnessCrashThreshold`.
+   */
+  timeoutNoDiffThreshold: z.number().int().min(2).default(2),
+  /**
    * Opt-in bounded self-recovery (`--auto-remediate-stuck`, improvement plan 4.2). When true, the
    * pure reducer remediates each REMEDIABLE stuck condition ONCE per run (a no-diff turn gets a
    * canned try-something-different hint and its burned iteration back; a repeat-failure /
@@ -255,6 +265,30 @@ export const RunConfig = z.object({
       contractCritiqueRounds: z.number().int().min(0).default(1),
       /** Refuter votes on a green ladder. 0 skips the refuter rung even when enabled. */
       refuters: z.number().int().min(0).default(3),
+      /**
+       * FALSE-RED satisfiability critic (issue #118) — the ONLY member of this block that is ON by
+       * default and INDEPENDENT of `enabled`. One extra compile-time LLM call asks whether a
+       * CORRECT, COMPLETE implementation could still FAIL the authored bar (the mirror of the four
+       * false-green lenses). It runs only under `--generate` and only once the contract actually
+       * authored verification files; `--no-satisfiability-critic` opts out. Default-on because the
+       * asymmetry is extreme: a false red burns the WHOLE run against an unsatisfiable bar, while
+       * the guard costs one call before the freeze. Still advisory — a broken critic passes the
+       * contract through, and the Seal gate stands behind it.
+       */
+      satisfiabilityCritic: z.boolean().default(true),
+      /**
+       * COMPILE-TIME POSITIVE CONTROL (issue #115) — like {@link satisfiabilityCritic}, ON by
+       * default and INDEPENDENT of `enabled`. Before the freeze, the compiler also authors a
+       * THROWAWAY reference implementation, materializes it in a scratch copy of the workspace
+       * alongside the authored verification files, and runs the contract's DETERMINISTIC rungs
+       * there. Green ⇒ the bar is satisfiable, freeze as normal; red ⇒ refuse the freeze and feed
+       * the failure into the bounded re-author loop like a `COMPILE_FAILED`. It runs only under
+       * `--generate` and only once the contract actually authored files; `--contract-dry-run false`
+       * opts out. The reference implementation NEVER touches the real workspace, the run diff, or a
+       * worker prompt. Fail-OPEN on any infrastructure error (no LLM, scratch failure, timeout):
+       * the contract freezes exactly as it does today, so this can never block a legitimate run.
+       */
+      contractDryRun: z.boolean().default(true),
     })
     .default({}),
   /**
@@ -382,6 +416,7 @@ export const CliInput = z.object({
   stuckOscillation: z.boolean().optional(),
   stuckCrashThreshold: z.coerce.number().int().min(2).optional(),
   stuckUnevaluableThreshold: z.coerce.number().int().min(2).optional(),
+  stuckTimeoutNoDiffThreshold: z.coerce.number().int().min(2).optional(),
   /** Opt-in bounded stuck self-recovery (`--auto-remediate-stuck`); the CLI pre-parses the boolean. */
   autoRemediateStuck: z.boolean().optional(),
   /** Sign-off approver panel (issue #84): a positive-int reviewer quorum (default 1). */
@@ -399,6 +434,18 @@ export const CliInput = z.object({
   adversarialPlanCritics: z.coerce.number().int().min(0).optional(),
   adversarialContractCritics: z.coerce.number().int().min(0).optional(),
   adversarialRefuters: z.coerce.number().int().min(0).optional(),
+  /**
+   * FALSE-RED satisfiability critic (issue #118), default ON under `--generate`. A plain (never
+   * coerced) boolean: `--no-satisfiability-critic` must be able to turn it OFF, and `z.coerce.boolean`
+   * would read the string "false" as true.
+   */
+  satisfiabilityCritic: z.boolean().optional(),
+  /**
+   * Compile-time positive control (issue #115), default ON under `--generate`. Like
+   * `satisfiabilityCritic` a plain (never coerced) boolean, so `--contract-dry-run false` can turn
+   * it OFF — `z.coerce.boolean` would read the string "false" as true.
+   */
+  contractDryRun: z.boolean().optional(),
 });
 export type CliInput = z.infer<typeof CliInput>;
 
@@ -433,6 +480,8 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     stuckPolicy.harnessCrashThreshold = input.stuckCrashThreshold;
   if (input.stuckUnevaluableThreshold !== undefined)
     stuckPolicy.unevaluableThreshold = input.stuckUnevaluableThreshold;
+  if (input.stuckTimeoutNoDiffThreshold !== undefined)
+    stuckPolicy.timeoutNoDiffThreshold = input.stuckTimeoutNoDiffThreshold;
   if (input.autoRemediateStuck !== undefined) stuckPolicy.autoRemediate = input.autoRemediateStuck;
 
   // Sign-off approver panel (issue #84): override only the fields the user set; the rest keep their
@@ -455,6 +504,8 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
     planCritics?: number;
     contractCritics?: number;
     refuters?: number;
+    satisfiabilityCritic?: boolean;
+    contractDryRun?: boolean;
   } = {};
   if (input.adversarial !== undefined) adversarial.enabled = input.adversarial;
   if (input.adversarialPlanCritics !== undefined)
@@ -462,6 +513,10 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
   if (input.adversarialContractCritics !== undefined)
     adversarial.contractCritics = input.adversarialContractCritics;
   if (input.adversarialRefuters !== undefined) adversarial.refuters = input.adversarialRefuters;
+  // Default-ON and independent of `--adversarial`: only an explicit opt-out changes it.
+  if (input.satisfiabilityCritic !== undefined)
+    adversarial.satisfiabilityCritic = input.satisfiabilityCritic;
+  if (input.contractDryRun !== undefined) adversarial.contractDryRun = input.contractDryRun;
 
   return RunConfig.parse({
     goal: input.goal,

@@ -113,6 +113,37 @@ describe('DECIDE truth table', () => {
     expect(d).toEqual({ kind: 'CONTINUE', feedback: 'still red', source: 'verifier' });
   });
 
+  it('a repeated timeout + no-diff streak ABORTS typed instead of continuing (issue #119)', () => {
+    // The excuse above is bounded: a SECOND consecutive cut-off, empty-handed turn is terminal, and
+    // the reason names the harness timeout flags rather than blaming the agent for not editing.
+    const ctx = makeCtx({
+      iteration: 3,
+      lastNoDiff: true,
+      lastRunStatus: 'timeout',
+      runStatusHistory: ['completed', 'timeout', 'timeout'],
+      diffHashHistory: dh('a', 'a', 'a'),
+    });
+    const d = decide(ctx, failVerdict('still red'), null);
+    expect(d.kind).toBe('ABORTED');
+    if (d.kind === 'ABORTED') {
+      expect(d.reason).toContain('STUCK_TIMEOUT_NO_DIFF');
+      expect(d.reason).toContain('--harness-idle-timeout-ms');
+    }
+  });
+
+  it('a FRESH veto does not excuse a timeout-no-diff abort (only plain no-diff is excusable)', () => {
+    const ctx = makeCtx({
+      iteration: 3,
+      lastNoDiff: true,
+      lastRunStatus: 'timeout',
+      runStatusHistory: ['completed', 'timeout', 'timeout'],
+      diffHashHistory: dh('a', 'a', 'a'),
+      feedbackSource: 'verifier',
+    });
+    const d = decide(ctx, passVerdict(), veto('needs a nicer API'));
+    expect(d.kind).toBe('ABORTED');
+  });
+
   it('stuck (oscillation) → ABORTED', () => {
     const ctx = makeCtx({ diffHashHistory: dh('a', 'b', 'a', 'b'), lastNoDiff: false });
     const d = decide(ctx, failVerdict(), null);

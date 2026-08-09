@@ -14,6 +14,7 @@ import {
   ManualBudgetMeter,
   InMemoryRunLog,
   makeFakeContract,
+  makeFakePlan,
   makeConfig,
   passVerdict,
   failVerdict,
@@ -220,6 +221,70 @@ describe('replay()', () => {
     });
     const { baseline } = replay(makeConfig(), [mk('b'.repeat(40)), mk('c'.repeat(40))]);
     expect(baseline).toBe('c'.repeat(40));
+  });
+});
+
+// ---- phased DAG resume (issue #123) ----------------------------------------
+
+describe('replay() — the phase FRONTIER is reconstructed from the log (issue #123)', () => {
+  /** A: root. B: root. C: needs A+B. D: needs only A. */
+  const dag = makeFakePlan({
+    phases: [
+      { goal: 'A', id: 'a', dependsOn: [] },
+      { goal: 'B', id: 'b', dependsOn: [] },
+      { goal: 'C', id: 'c', dependsOn: ['a', 'b'] },
+      { goal: 'D', id: 'd', dependsOn: ['a'] },
+    ],
+  });
+  const tree = DiffHash.parse('0'.repeat(40));
+  const phasedConfig = makeConfig({ phased: true, parallelPhases: true, autonomous: true });
+
+  const mk = (event: OrchestratorEvent): RunLogEntry => ({
+    runId,
+    seq: 0,
+    ts: 0,
+    contractHash: null,
+    event,
+    stateTagAfter: 'RUNNING_WAVE',
+  });
+
+  it('resumes on the NEXT frontier and repeats no completed phase', () => {
+    const { state, plan } = replay(phasedConfig, [
+      mk({ tag: 'PLAN_COMPILED', plan: dag }),
+      mk({ tag: 'PLAN_SEAL_DECIDED', decision: { kind: 'approve' } }),
+      mk({
+        tag: 'WAVE_RAN',
+        outcomes: [
+          { kind: 'merged', index: 0 },
+          { kind: 'merged', index: 1 },
+        ],
+        tree,
+      }),
+    ]);
+    expect(plan?.planHash).toBe(dag.planHash);
+    expect(state.tag).toBe('RUNNING_WAVE');
+    // The completed roots are NOT re-offered; the frontier is exactly the newly-unblocked phases.
+    if (state.tag === 'RUNNING_WAVE') expect(state.indices).toEqual([2, 3]);
+  });
+
+  it('a partially-merged frontier resumes on the unmerged member alone', () => {
+    const { state } = replay(phasedConfig, [
+      mk({ tag: 'PLAN_COMPILED', plan: dag }),
+      mk({ tag: 'PLAN_SEAL_DECIDED', decision: { kind: 'approve' } }),
+      mk({
+        tag: 'WAVE_RAN',
+        outcomes: [
+          { kind: 'merged', index: 0 },
+          { kind: 'unmerged', index: 1, reason: 'merge conflict' },
+        ],
+        tree,
+      }),
+    ]);
+    expect(state.tag).toBe('COMPILING');
+    if (state.tag === 'COMPILING') {
+      expect(state.config.goal).toBe('B');
+      expect(state.phase).toMatchObject({ index: 1, skip: [0] });
+    }
   });
 });
 
@@ -445,5 +510,109 @@ describe('resumeStreakRelief', () => {
     // The frozen contract is untouched — an extension can only move operational knobs.
     expect(extended.goal).toBe(config.goal);
     expect(extended.verifier).toEqual(config.verifier);
+  });
+});
+
+/**
+ * Replay compatibility for the timeout-no-diff detector (issue #119). The detector converts a
+ * decision that PREVIOUSLY returned CONTINUE into a terminal ABORTED, so a run log written before
+ * it existed — one that recorded a timeout+no-diff streak mid-log and then kept iterating — would
+ * fold to ABORTED in the middle and then THROW on the next entry ("step() called on terminal state
+ * ABORTED"), permanently bricking `--resume` and `runs show/list` for that run.
+ *
+ * The fix is tail-sensitivity: a mid-log fold keeps the pre-#119 semantics (the timeout no-diff
+ * excuse stays unbounded), and only the LAST folded decision can trip the abort — which is exactly
+ * where a post-#119 log records it, since the trip is terminal.
+ */
+describe('replay() — the timeout-no-diff trip is TAIL-SENSITIVE (issue #119 back-compat)', () => {
+  const config = makeConfig({ goal: 'g', maxIterations: 20 });
+  const dh = (h: string): DiffHash => DiffHash.parse(h.padStart(7, '0'));
+
+  function e(seq: number, event: OrchestratorEvent, stateTagAfter = 'RUNNING_AGENT'): RunLogEntry {
+    return { runId, seq, ts: 1_700_000_000_000 + seq, contractHash: contract.contractHash, event, stateTagAfter };
+  }
+
+  /** One agent turn: `status`, moving the tree from `prev` to `post` (equal ⇒ no-diff). */
+  const ran = (status: 'completed' | 'timeout', prev: string, post: string): OrchestratorEvent => ({
+    tag: 'AGENT_RAN',
+    run: { output: 'out', sessionId: SessionId.parse('s-1'), status },
+    prevDiffHash: dh(prev),
+    diffHash: dh(post),
+    budget: { exceeded: false },
+  });
+  const verified = (detail: string): OrchestratorEvent => ({
+    tag: 'VERIFIED',
+    verdict: { pass: false, confidence: 1, detail },
+  });
+
+  /** Compile + Seal, then N iterations of (AGENT_RAN, VERIFIED). */
+  function log(turns: readonly { status: 'completed' | 'timeout'; prev: string; post: string }[]) {
+    const entries: RunLogEntry[] = [
+      e(1, { tag: 'CONTRACT_COMPILED', contract }, 'AWAIT_SEAL'),
+      e(2, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }),
+    ];
+    turns.forEach((t, i) => {
+      entries.push(e(entries.length + 1, ran(t.status, t.prev, t.post), 'VERIFYING'));
+      entries.push(e(entries.length + 1, verified(`red ${i + 1}`), 'RUNNING_AGENT'));
+    });
+    return entries;
+  }
+
+  /**
+   * The pre-branch log the finding describes: iterations 3 and 4 both timed out with an unchanged
+   * tree (a 2-long timeout-no-diff streak at the default threshold), and the run then CONTINUED to
+   * iteration 5. Folding it must not blow up mid-log — the run stays resumable.
+   */
+  const preBranchLog = log([
+    { status: 'completed', prev: '0', post: '1' },
+    { status: 'completed', prev: '1', post: '2' },
+    { status: 'timeout', prev: '2', post: '2' },
+    { status: 'timeout', prev: '2', post: '2' },
+    { status: 'completed', prev: '2', post: '3' },
+  ]);
+
+  it('replays a pre-branch log with a MID-LOG timeout+no-diff streak instead of throwing', () => {
+    const result = replay(config, preBranchLog);
+    // Neither a throw nor a bogus terminal state: the run is mid-loop and resumable.
+    expect(result.state.tag).toBe('RUNNING_AGENT');
+    expect(result.commands[0]?.tag).toBe('RUN_AGENT');
+  });
+
+  it('a resumed run keeps the live threshold — the streak still aborts at the TAIL', () => {
+    // The same history, but the log ENDS on the second timeout+no-diff iteration: that decision IS
+    // the tail, so the detector must still fire (issue #119 is not weakened).
+    const tailLog = log([
+      { status: 'completed', prev: '0', post: '1' },
+      { status: 'completed', prev: '1', post: '2' },
+      { status: 'timeout', prev: '2', post: '2' },
+      { status: 'timeout', prev: '2', post: '2' },
+    ]);
+    const result = replay(config, tailLog);
+    expect(result.state.tag).toBe('ABORTED');
+    if (result.state.tag === 'ABORTED') {
+      expect(result.state.reason).toContain('STUCK_TIMEOUT_NO_DIFF');
+    }
+  });
+
+  it('leaves the resumed ctx carrying the REAL threshold (relief is fold-local, not persisted)', () => {
+    const result = replay(config, preBranchLog);
+    if (result.state.tag !== 'RUNNING_AGENT') throw new Error('expected RUNNING_AGENT');
+    expect(result.state.ctx.config.stuckPolicy.timeoutNoDiffThreshold).toBe(
+      config.stuckPolicy.timeoutNoDiffThreshold,
+    );
+  });
+
+  it('still honours a RUN_EXTENDED overlay of the threshold at the tail', () => {
+    const raised = [
+      ...log([
+        { status: 'completed', prev: '0', post: '1' },
+        { status: 'completed', prev: '1', post: '2' },
+        { status: 'timeout', prev: '2', post: '2' },
+        { status: 'timeout', prev: '2', post: '2' },
+      ]),
+    ];
+    const withOverlay = [extensionEntry(0, { stuck: { timeoutNoDiffThreshold: 3 } }), ...raised];
+    // A raised threshold means the 2-long streak no longer trips — the run continues.
+    expect(replay(config, withOverlay).state.tag).toBe('RUNNING_AGENT');
   });
 });

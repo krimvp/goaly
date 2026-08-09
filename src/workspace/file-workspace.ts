@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join, resolve, relative } from 'node:path';
 import { DiffHash } from '../domain/ids';
+import { errorMessage } from '../util/errors';
 import { sha256Hex } from '../util/hash';
 import { realExec, type ExecFn } from './git-workspace';
 import type { CommandResult, Workspace } from './workspace';
@@ -17,6 +18,9 @@ import type { CommandResult, Workspace } from './workspace';
 
 /** Conventional `timeout(1)` exit code; surfaced when we kill a command for exceeding `timeoutMs`. */
 const TIMEOUT_EXIT_CODE = 124;
+
+/** Exit code reported when the spawn itself threw — the command never ran (matches `GitWorkspace`). */
+const SPAWN_FAILED_EXIT_CODE = 127;
 
 /** Manifest entry: the sha256 of a file's UTF-8 content. */
 type Manifest = ReadonlyMap<string, string>;
@@ -219,16 +223,32 @@ export class FileWorkspace implements Workspace {
   }
 
   async run(command: string, opts?: { timeoutMs?: number }): Promise<CommandResult> {
-    const r = await this.#exec('sh', ['-c', command], {
-      cwd: this.#root,
-      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-    });
-    return {
-      exitCode: r.code,
-      stdout: r.stdout,
-      stderr: r.stderr,
-      ...(r.timedOut ? { timedOut: true } : {}),
-    };
+    // Honor the Workspace "never rejects" contract even if the injected exec throws.
+    try {
+      const r = await this.#exec('sh', ['-c', command], {
+        cwd: this.#root,
+        ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      });
+      return {
+        exitCode: r.code,
+        stdout: r.stdout,
+        stderr: r.stderr,
+        // The same could-not-evaluate facts `GitWorkspace.run` propagates — this is the SECOND
+        // implementation of one seam and the verifier cannot tell which one it called. Both flags
+        // are things goaly KILLED the command for, and both leave an ordinary-looking non-zero exit
+        // behind: dropping either turns a could-not-evaluate outcome into a bogus code red.
+        ...(r.timedOut === true ? { timedOut: true } : {}),
+        ...(r.outputCapped === true ? { outputCapped: true } : {}),
+      };
+    } catch (e) {
+      // The spawn itself threw — goaly could not even start the command (it never ran).
+      return {
+        exitCode: SPAWN_FAILED_EXIT_CODE,
+        stdout: '',
+        stderr: errorMessage(e),
+        spawnFailed: true,
+      };
+    }
   }
 
   async fileHash(relPath: string): Promise<string | null> {

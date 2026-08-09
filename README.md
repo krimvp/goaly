@@ -27,6 +27,11 @@ goaly "add a /health endpoint returning 200"
 # Keep a human at the gates instead — approve the frozen contract once at Seal:
 goaly --mode review "add a /health endpoint returning 200"
 
+# With one model available, the agent, the judge rung and the Sign-off approver are the same
+# model — that run is labelled SELF-JUDGED (degraded) in its summary and `goaly runs show`.
+# Give the second key its own model to make the two keys independent in fact:
+goaly "add a /health endpoint returning 200" --approver-model <a-different-model>
+
 # Or point at a check you already have:
 goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
 ```
@@ -54,17 +59,45 @@ COMPILE ──► SEAL ──► setup + pre-flight ──► ┌─────
   **fail-closed** — a malformed grader is never a green.
 - **Two keys for DONE**: the frozen ladder passes *and* the independent Sign-off approver — which
   runs only on a green and is **veto-only** — doesn't veto. "Tests pass" is not "done".
+- **The second key is kept independent, and labelled when it can't be.** `--model X` picks the
+  *agent's* model; the approver defaults to a **different** one wherever the provider offers it. If
+  the agent, the judge rung and the approver still collapse onto one model, the run is recorded as
+  a typed `SELF-JUDGED` degraded mode in the run header, the terminal summary and `goaly runs show`
+  — so a DONE nobody independently reviewed is labelled everywhere it is reported. When only the
+  approver collapses onto the agent's model (the judge rung differs), that is labelled too, as
+  `SELF-APPROVED`: the second key was the model that wrote the code. And when goaly
+  cannot *resolve* the approver's model to compare it at all (the provider's own default), the run is
+  labelled `INDEPENDENCE-UNVERIFIED` rather than passed off as independent.
 - **The control flow has zero LLM calls.** A pure reducer owns all policy; everything stochastic
   hides behind narrow interfaces at four seams.
 - **Every run is crash-safe and resumable.** A write-ahead log under `.goaly/<runId>/` makes runs
   replayable, `--resume`-able, and inspectable (`goaly runs list` / `show` / `watch`, or
   `goaly ui` in the browser).
 - **Stuck detection bails early with a typed reason** (no-diff, repeated failure, oscillation,
-  harness crash, unevaluable contract, budget) instead of burning iterations.
+  harness crash, unevaluable contract, repeated timeout-with-no-diff, budget) instead of burning
+  iterations.
 
 Under `--generate` (the default), the compiler also authors a one-time **setup** command and a
 **pre-flight** proves the frozen verification can actually run — an unsound contract aborts before
-any worker token is spent.
+any worker token is spent. And because that pre-flight happens at t=0, on a tree with no
+implementation in it, goaly asks once more when the evidence finally exists: a repeat-failure
+streak that keeps tripping a frozen authored check is re-adjudicated read-only, and an
+unsatisfiable bar aborts as **`CONTRACT_DEFECTIVE`** — "the contract is broken, keep your tree" —
+instead of blaming the worker. And that abort prints the way out:
+`goaly --from-run <id> --recontract` keeps the tree, re-authors the bar from the defect report, and
+freezes a **new** contract under a **new** run id with the predecessor recorded in its header. No
+contract is ever mutated — "the bar was wrong" becomes an auditable chain, not an in-place softening.
+
+And once a bar has been adjudicated defective, goaly **remembers across runs**: the adjudicator's
+generalized anti-pattern (never your source, never the diff) is appended to `~/.goaly/defects.jsonl`
+and injected into future contract authoring as *"known false-red patterns — do not author these"*.
+It is filtered to your language/runner, capped, logged, and fail-open. What keeps it from becoming a
+weakening channel is that a hint is **untrusted data all the way in** — fenced with a random nonce,
+framed as *impossibility*, and still facing the critics, Seal, the frozen ladder and both keys. On
+top of that: only an adjudicated `CONTRACT_DEFECTIVE` verdict can write a record, every record is
+HMAC-signed and nonce'd so a hand-added, edited, copied-in or **replayed** line is dropped on read,
+and the record schema has no field for "this was hard". `goaly config defects list` shows what it
+learned; `--no-defect-corpus` opts out.
 
 ## Features
 
@@ -74,16 +107,19 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | --- | --- | --- |
 | [Generated verification](docs/reference.md#seal-the-contract-gate) | `--generate` | The LLM authors the check + setup; pinned by hash, guarded against tampering. |
 | [Your own bar](docs/reference.md#the-verifier-ladder) | `--verify-cmd`, `--smoke` | Any command as the deterministic rung; `--smoke` runs the built artifact. |
-| [Phased goals](docs/reference.md#phased-goals---phased) | `--phased` | A frozen plan of small sub-goals + cumulative acceptance on the original goal. |
+| [Phased goals](docs/reference.md#phased-goals---phased) | `--phased` | A frozen plan (a DAG) of small sub-goals + cumulative acceptance on the original goal. |
 | [Best-of-N worker](docs/reference.md#best-of-n-parallel-worker---candidates) | `--candidates N` | N isolated attempts per iteration; the frozen ladder picks the winner. Or just say *"use 4 subagents"*. |
-| [Parallel waves](docs/reference.md#cooperative-parallel-waves---parallel-phases-experimental) | `--parallel-phases` | Independent phases run concurrently, merge with git plumbing, re-verify. Experimental. |
+| [Parallel waves](docs/reference.md#cooperative-parallel-waves---parallel-phases-experimental) | `--parallel-phases` | Phases declare `dependsOn`; each topological frontier runs concurrently, merges with git plumbing, re-verifies. Experimental. |
 | [Worktrees](docs/reference.md#worktrees---worktree) | `--worktree <name>` | The whole run in an isolated checkout; merge back with plain git. |
 | [Harness autonomy](docs/reference.md#harness-autonomy---harness-autonomy) | `--harness-autonomy` | Let the agent install & build for a from-scratch goal; a refusal names the fix, and the reviewed diff auto-pins to the run-start commit so agent commits stay visible. |
 | [Autonomy profiles](docs/reference.md#autonomy-profiles---mode) | `--mode` | `review` / `hands-off` / `aggressive` bundle the right flag combinations; explicit flags override, loudly. |
 | [Named presets](docs/reference.md#named-presets---preset) | `--preset` | Flag bundles selected by name — a language-neutral `default` ships built in, and `.goalyrc` (`"presets"`) defines or redefines your own; `"preset"` applies one on every run. One word instead of N flags. |
 | [Dry run](docs/reference.md#dry-run---dry-run) | `--dry-run` | Validate the flags + `.goalyrc` and print the resolved config. Writes nothing, spends nothing. |
 | [Adversarial review](docs/reference.md#hardening-against-reward-hacking) | `--adversarial` | Critics attack the contract before Seal; refuters attack every green before Sign-off. |
+| [Satisfiability critic](docs/reference.md#the-satisfiability-critic-false-red-guard) | on by default; `--no-satisfiability-critic` | The mirror of red-teaming: one call before the freeze asks whether a **correct** implementation could still FAIL the authored bar — an unsatisfiable frozen bar costs the whole run. |
+| [Contract dry run](docs/reference.md#the-contract-dry-run-compile-time-positive-control) | on by default; `--contract-dry-run false` | The positive control, by **execution** rather than opinion: before the freeze, a throwaway reference implementation runs against the authored bar in a scratch copy. Red ⇒ the bar is refused and re-authored (the author is told the exit code and **which** frozen rung failed, and nothing else — the rung's stdout/stderr are never read, because the reference writes to those same streams). The reference never touches your tree, and the scratch obeys `--sandbox` and runs credential-scrubbed like the verifier. |
 | [Approver panels](docs/reference.md#hardening-against-reward-hacking) | `--approver-quorum`, `--approver-models` | Sign-off as a refute-first multi-vote panel, optionally across distinct models. |
+| [Key independence](docs/reference.md#the-sign-off-approver-does-not-inherit---model) | `--approver-model` | The approver never inherits the agent's `--model` where a distinct one exists; an irreducible collapse is labelled `SELF-JUDGED`, and an unresolvable one `INDEPENDENCE-UNVERIFIED`, in the header, summary and `runs show`. |
 | [Sandboxing](docs/reference.md#sandboxing) | `--sandbox`, `--sandbox-net` | OS-jail the agent and verifier (bwrap / firejail / container), with egress allowlists. |
 | [Operator control](docs/reference.md#operator-control-watch-steer-extend) | `--resume`, `--note` | Watch live, steer with notes, raise caps mid-run — never the frozen bar. |
 | [Follow-ups](docs/reference.md#following-up-after-a-run-ends---from-run) | `--from-run` | A new re-verified goal that knows what the last run did. |
@@ -92,7 +128,11 @@ Everything below is documented in depth in the **[reference](docs/reference.md)*
 | [Observability](docs/reference.md#observability) | `--stream`, `--explain`, `--log-level` | Live agent turns, durable transcripts, plain-language narration. |
 | [Onboarding](docs/reference.md#onboarding-goaly-doctor--goaly-init) | `goaly doctor`, `goaly init` | A read-only environment report (Node, git, harness CLIs, config validity), and a starter `.goalyrc` written interactively or headless. |
 | [Reliability](docs/reference.md#reliability) | *(defaults)* | Preflight, bounded retries (contract *and* plan), safe Ctrl-C, fsync'd write-ahead log. |
+| [Stuck detection](docs/reference.md#stuck-detection) | `--stuck-*` | Typed early aborts — no-diff, repeat-failure, oscillation, harness crash, unevaluable contract, and repeated timeout-with-no-diff — each naming the flag that fixes it. |
 | [Stuck self-recovery](docs/reference.md#automatic-remediation---auto-remediate-stuck) | `--auto-remediate-stuck` | Opt-in: up to 3 bounded self-recoveries (no-diff hint, one extra repeat/crash attempt) before stopping for the operator. |
+| [Contract-fault adjudication](docs/reference.md#in-loop-contract-fault-adjudication-contract_defective) | *(defaults)* | A repeat-failure streak on a frozen authored file is re-adjudicated once, read-only, against the tree that now HAS an implementation: a `CONTRACT_DEFECTIVE` abort says the bar is broken and your tree is worth keeping. Fail-closed to today's abort. |
+| [Re-contract successor run](docs/reference.md#re-contracting-a-defective-bar---recontract) | `--recontract`, `--max-recontracts` | Recover from a `CONTRACT_DEFECTIVE` bar without discarding a correct tree: a NEW run, NEW contractHash, defect report as authoring feedback, predecessor recorded in the header. No contract is ever mutated. |
+| [Defect corpus](docs/reference.md#the-defect-corpus-cross-run-learning) | on by default; `--no-defect-corpus`, `--defect-corpus <path>`, `goaly config defects` | The one cross-run feedback loop: an adjudicated `CONTRACT_DEFECTIVE` verdict appends a generalized anti-pattern to `~/.goaly/defects.jsonl`, and future authoring gets a bounded, language-filtered "do not author these" section. Only that verdict can write; no worker text reaches a record; the schema cannot express difficulty. Fail-open. |
 
 ## Usage
 
@@ -191,7 +231,8 @@ const stream = await readStreamTranscript('.goaly', runId);
 - [`DESIGN.md`](DESIGN.md) — what & why · [`ARCHITECTURE.md`](ARCHITECTURE.md) — how
 - [`CONTEXT.md`](CONTEXT.md) — the ubiquitous-language glossary
   ([plain-language version](docs/reference.md#glossary))
-- [`docs/adr/`](docs/adr) — decision records · [`docs/adding-a-harness.md`](docs/adding-a-harness.md)
+- [`docs/adr/`](docs/adr/README.md) — decision records ([index](docs/adr/README.md)) ·
+  [`docs/adding-a-harness.md`](docs/adding-a-harness.md)
 
 ## License
 

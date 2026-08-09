@@ -21,6 +21,7 @@ rationale in [`DESIGN.md`](../DESIGN.md) and [`docs/adr/`](adr/), the terse cont
 - [The verifier ladder](#the-verifier-ladder)
 - [Stuck detection](#stuck-detection)
 - [Diff baselines](#diff-baselines---baseline-and---delta-verify)
+- [Workspace mode](#workspace-mode---workspace-mode)
 - [Best-of-N parallel worker](#best-of-n-parallel-worker---candidates)
 - [Phased goals](#phased-goals---phased)
 - [Cooperative parallel waves](#cooperative-parallel-waves---parallel-phases-experimental)
@@ -29,6 +30,8 @@ rationale in [`DESIGN.md`](../DESIGN.md) and [`docs/adr/`](adr/), the terse cont
 - [Operator control](#operator-control-watch-steer-extend)
 - [Inspecting past runs](#inspecting-past-runs)
 - [Following up](#following-up-after-a-run-ends---from-run)
+- [Re-contracting a defective bar](#re-contracting-a-defective-bar---recontract)
+- [The defect corpus](#the-defect-corpus-cross-run-learning)
 - [Web UI](#web-ui-goaly-ui)
 - [Observability](#observability)
 - [Spend report & budgets](#spend-report--budgets)
@@ -295,7 +298,11 @@ goaly run --goal "..." --generate --phased --dry-run
 
 It prints the fully-merged, fully-validated configuration — resolved verifier intent, harness and
 autonomy, provider and every model, budgets, per-step timeouts, stuck thresholds, baseline, sandbox,
-and which config files contributed — then exits `0`.
+and which config files contributed — then exits `0`. That includes what the **second key** will run
+on (`sign-off model (2nd key)`, including `independence UNVERIFIED` when the approver's model cannot
+be compared) and a `degraded mode` row when the approver collapses onto the coding agent's
+model (with the judge rung, or on its own) — or may have; see
+[degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified).
 
 It runs **after** every read-only check a real run performs (config merge, `--cost-table`,
 `--baseline` resolution, `--resume` / `--from-run` log reads, the preflight) and **before** the first
@@ -344,8 +351,8 @@ A file may also carry a `"presets"` block (named bundles of the same keys, selec
 
 **Every documented `goaly run` flag is settable from a file**, except the per-invocation ones, which
 are deliberately excluded and enumerated: `--resume`, `--from-run`, `--inherit-session`,
-`--workspace`, `--worktree`, `--config` itself, `--note`, `--dry-run`, the `--*-file` input-source
-selectors, and the `--defaults` alias. Because the schema is strict, that list is the whole
+`--recontract`, `--max-recontracts`, `--workspace`, `--worktree`, `--config` itself, `--note`,
+`--dry-run`, the `--*-file` input-source selectors, and the `--defaults` alias. Because the schema is strict, that list is the whole
 difference — and a test enforces it, so a newly added flag cannot quietly become unpersistable.
 
 ### Validating and editing configs
@@ -355,6 +362,8 @@ uses and reports the verdict (exit `0` valid / `1` invalid / `2` unreadable) —
 validates" and "a run accepts this file" are one fact. It reports the presets a file defines
 alongside its settings. `goaly config presets [--names] [--workspace <dir>]` lists the named
 presets exactly as a run would resolve them across all layers.
+`goaly config defects list|clear [--defect-corpus <path>]` inspects or resets the cross-run
+[defect corpus](#the-defect-corpus-cross-run-learning).
 
 For editor auto-completion and inline validation, a JSON Schema is generated from the same Zod
 shape (`npm run gen:schema`) and ships as `goalyrc.schema.json` at the package root and in
@@ -386,10 +395,119 @@ Model selection is pure wiring — it never enters the frozen contract.
 | `--judge-model`, `--approver-model`, `--compiler-model`, `--critic-model`, `--explain-model` | one step each |
 | `--llm-provider` | which CLI/provider runs the LLM steps (`claude` / `codex` / `droid` / `pi` / `openai`) |
 
-Precedence per LLM step: per-step flag → `--llm-model` → `--model` → the tool's own default.
+Precedence per LLM step: per-step flag → `--llm-model` → `--model` → the tool's own default — with
+one deliberate exception for the Sign-off approver, [below](#the-sign-off-approver-does-not-inherit---model).
 `--llm-provider` **follows `--harness`** by default (`codex` → `codex`, `goaly-code` → `openai`),
 so the compiler that authors a `--generate` bar runs on the tool you picked; pass the flag to split
 the LLM steps onto a different provider than the worker.
+
+### The Sign-off approver does not inherit `--model`
+
+One deliberate exception to the cascade: `--model X` picks the **coding agent's** model, so letting
+the second key inherit it would collapse the agent, the judge rung and the approver onto one
+distribution — invariant 3 satisfied mechanically while defeated statistically. Where the
+environment permits it, goaly therefore defaults the approver to a model **distinct** from the
+agent's:
+
+| Wiring | Approver model |
+| --- | --- |
+| `--model X` (provider has its own default model) | the provider's own default — **not** `X`; announced in the log |
+| `--model X --llm-provider openai` | `X` (that provider has no default model of its own; changing it would refuse to start) |
+| `--llm-model L` | `L` — an explicit choice for the LLM steps is always obeyed |
+| `--approver-model A` / `--approver-models …` | `A` / the panel — always wins |
+| no `--model` at all | the tool default (only one model is available — see the degraded-mode label below) |
+
+It is **non-blocking and best-effort**: goaly compares the models it was *asked* for and cannot
+resolve a CLI's own default model id, so a `--model` that happens to name that same default is not
+detectable. To restore the old inheriting behavior explicitly, pass `--approver-model <the same
+model>`; to choose the skeptic yourself, pass a different one.
+
+Because that limit is real, the row-1 wiring is **never reported as independent**. Asking for the
+provider's default is a *request* for a distinct second key, not proof of one: if the provider's own
+default happens to be `X`, all three roles are one model again. goaly says exactly that — an
+`INDEPENDENCE UNVERIFIED` startup warning per collapsed pair, `independence UNVERIFIED` on the
+`--dry-run` sign-off row, and the [`INDEPENDENCE-UNVERIFIED` degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified)
+in the run header. Passing `--approver-model` (or `--approver-models`) on a model you know differs is
+what makes the second key *verifiable*.
+
+### Degraded mode: `SELF-JUDGED`, `SELF-APPROVED` and `INDEPENDENCE-UNVERIFIED`
+
+When the coding agent, the LLM judge rung **and** the Sign-off approver all still resolve to one
+model — the zero-config default run, where only one model is available — the run is recorded as a
+typed **degraded mode** (`kind: "self-judged"`) in the run-log header, alongside whether the bar was
+`--generate`-authored and whether Seal was `--autonomous`. It is surfaced wherever the run is
+reported:
+
+```
+── goaly run run-… ──
+status:      DONE
+degraded:    SELF-JUDGED — the coding agent, the LLM judge rung and the Sign-off approver all ran on
+             one model (the tool default) (--generate --autonomous) — the two keys are not
+             independent, so treat this run with the corresponding suspicion. Pass
+             --approver-model <other-model> (or --approver-models) for an independent second key.
+```
+
+The same line appears in `goaly runs show <id>` (and the header field is readable by any downstream
+consumer — CI, the UI), so a DONE that nobody independently reviewed is *labelled* as such rather
+than only warned about at startup — a warning nobody is present to read is a record, not a control.
+
+A second kind, `SELF-APPROVED` (`kind: "self-approved"`), covers the *partial* collapse that still
+lands on the second key: the Sign-off approver resolves to the **coding agent's own model** while the
+LLM judge rung resolves to a different one. It is reachable without asking for it — e.g.
+`--harness goaly-code --llm-provider openai --model gpt-5 --judge-model gpt-5-mini`, where the
+provider has no default model of its own, so the [approver-independence
+default](#the-sign-off-approver-does-not-inherit---model) is skipped and the approver inherits
+`--model`:
+
+```
+degraded:    SELF-APPROVED — the Sign-off approver — the SECOND KEY for DONE — ran the same model as
+             the coding agent that wrote the code (gpt-5) (--generate --autonomous); only the LLM
+             judge rung ran a different one. The skeptic and the author are one distribution, so the
+             second key adds little independent evidence. …
+```
+
+The mirror-image partial collapse — judge↔approver on one model with the **worker** on another — is
+*not* labelled: there the second key genuinely is a different model than the one that wrote the code,
+so it stays an advisory startup warning only.
+
+A third kind, `INDEPENDENCE-UNVERIFIED` (`kind: "independence-unverified"`), covers the wiring goaly
+**cannot** decide: `--model X` where the approver was defaulted to the provider's own model. The
+agent and the judge rung run on `X`; the approver runs on a model id goaly has no way to resolve, so
+it can neither confirm nor rule out that all three are `X`. That is *not* independence, and it is not
+an observed collapse either — it is an unverifiable claim, and it is reported as one:
+
+```
+degraded:    INDEPENDENCE-UNVERIFIED — the coding agent and the LLM judge rung ran on X
+             (--generate --autonomous), and the Sign-off approver ran on the LLM provider's OWN
+             DEFAULT model, whose id goaly cannot resolve — so it could not confirm the second key
+             is a different model. …
+```
+
+All three kinds are exactly that: a **label**. None weakens or strengthens a gate — the frozen ladder
+and the veto-only approver still both have to turn for DONE — and none enters the frozen contract.
+Setting `--approver-model` (or `--approver-models`) on a model that differs from the agent's removes
+them.
+
+**On `--resume`, the label is reconciled — it is not left at what the first invocation resolved.**
+Model flags are *not* part of the frozen contract or of the resumed config overlay, so a resume with
+different (or simply omitted) `--model` / `--approver-model` flags genuinely changes which keys run
+for the remaining iterations. The run as a whole is therefore labelled with the **more severe** of
+the recorded label and the resumed invocation's (`self-judged` > `self-approved` >
+`independence-unverified` > none):
+a resume that collapses the keys further **upgrades** the label, and a resume that repairs the
+wiring does **not** erase the iterations that already ran degraded. Any difference at all is WARNed
+("this invocation's key wiring differs from the one the run started with"), and the same reconciled
+value is what the terminal summary prints — so the summary and `goaly runs show <id>` can never
+report two different labels for one run.
+
+The upgrade is recorded by **appending** a `DEGRADED_ESCALATED` marker event to the write-ahead log
+(the same Driver-side marker pattern as `RUN_EXTENDED`; `goaly runs watch` prints it as
+`degraded mode escalated to …`), never by rewriting the run header in place. The header is written
+exactly once, at run start: rewriting it would mean truncating and refilling `header.json`, and a
+crash inside that window would leave an otherwise-resumable run with an unreadable header — the
+whole run traded for a label. Readers derive the effective label as *header ∨ every marker*, so
+older logs (which have no markers) are unaffected. Like every other marker it is never fed to the
+reducer.
 
 Approver-panel flags (`--approver-quorum`, `--approver-models`, `--approver-lenses`,
 `--approver-diversity-temp`) are covered under
@@ -467,7 +585,9 @@ fail-closed could-not-evaluate — never a green.
 actively-editing turn keeps resetting the heartbeat; a stalled one is still reaped. When both are
 set, the wall-clock cap remains the absolute backstop. Setting an idle timeout auto-enables the
 CLI's per-turn streaming so the heartbeat actually sees progress (displaying it is still opt-in via
-`--stream`).
+`--stream`). If you leave it off and turns keep getting cut short with nothing to show, the
+[`timeout-no-diff`](#stuck-detection) detector stops the run and points you back here instead of
+letting it burn the iteration budget.
 
 **Heavy `--generate` authoring may need a larger `--llm-timeout-ms`.** The compiler authors the
 whole contract in one call; a timeout there surfaces as a `COMPILE_FAILED` with a hint naming this
@@ -496,6 +616,14 @@ Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject:
 `--autonomous` skips the pause, never the freeze — the contract is still frozen and loudly logged.
 Piping the goal via stdin (`--goal -`) consumes stdin, so there's nothing left for the prompt —
 use `--autonomous` or `--goal-file`.
+
+**What the banner shows.** The goal, the `contractHash`, any frozen `setup` and `requiredTools`, the
+rubric **once**, then the ladder *as it will actually run* — including the built-in
+[generated-files integrity guard](#the-verifier-ladder) as rung `[0]` whenever the
+compiler authored verification files (it is part of the ladder, never part of the `contractHash`).
+A judge rung whose rubric is identical to the contract rubric points back at it instead of repeating
+it. So the rung numbers you read at Seal line up with the `rungsPassed`/`rungsTotal` reported in
+every verdict.
 
 **Authoring is resilient, not one-shot.** A `COMPILE_FAILED` (a correctable authoring mistake)
 re-authors the verification with the error fed back, up to `--max-compile-retries` (default 2;
@@ -553,8 +681,10 @@ mirror** is caught too: an authored verifier that *already passes* on a from-scr
 compiler authored the solution itself into the frozen set, or the bar is vacuous — a second
 read-only call classifies a confident `CONTRACT_UNSOUND` before any worker token. Both directions
 **fail open** on any uncertainty (no LLM / an error / a "sound" verdict all proceed) — a genuinely
-broken frozen verifier is also caught at runtime by repeat-failure stuck detection. A plain
-`--verify-cmd` run with no authored files skips the soundness check.
+broken frozen verifier is also caught at runtime by repeat-failure stuck detection, which can
+itself re-adjudicate the contract in-loop (`CONTRACT_DEFECTIVE`, see
+[below](#in-loop-contract-fault-adjudication-contract_defective)). A plain `--verify-cmd` run with
+no authored files skips the soundness check.
 
 ## The verifier ladder
 
@@ -564,7 +694,9 @@ is fail-closed — a malformed grader is never a green.
 
 - **Guard rung (built-in, `--generate`).** Files goaly authors are pinned by content hash inside
   the frozen contract; an integrity guard runs first every iteration and fails closed if any
-  authored file changed since the contract froze.
+  authored file changed since the contract froze. It is printed as rung `[0]` in the
+  [Seal banner](#seal-the-contract-gate) and counted in each verdict's `rungsTotal`, so the ladder
+  you approve is the ladder that runs.
 - **Deterministic rungs.** Your `--verify-cmd` (or the authored command): `pass = exit 0`.
 - **Smoke rung (`--smoke "<cmd>"`).** An extra deterministic rung that *executes* the built
   artifact — a headless-browser script, a server probe, a CLI smoke — for goals whose correctness
@@ -596,6 +728,7 @@ The loop bails before `--max-iterations` with a typed reason when it's making no
 | oscillation | period-N cycling between tree states | `--stuck-oscillation` |
 | harness-crash | the agent CLI exited abnormally N times in a row (`STUCK_HARNESS_CRASH`) | `--stuck-crash-threshold` |
 | contract-unevaluable | the frozen ladder could not be *evaluated* N times in a row (`CONTRACT_UNEVALUABLE`) | `--stuck-unevaluable-threshold` |
+| timeout-no-diff | N iterations in a row both hit the harness wall-clock timeout **and** changed nothing (`STUCK_TIMEOUT_NO_DIFF`) | `--stuck-timeout-no-diff-threshold`, `--harness-timeout-ms`, `--harness-idle-timeout-ms` |
 | budget | `--budget-tokens` / `--budget-wall-ms` exhausted | the budget flags |
 
 ### Automatic remediation (`--auto-remediate-stuck`)
@@ -625,7 +758,8 @@ Details that make these accurate rather than trigger-happy:
   unrelated files while the same error repeats is still caught, and the abort names the repeated
   signature.
 - **Contract-unevaluable** distinguishes a verification-*environment* failure (verify command timed
-  out / couldn't start, judge errored) from a real red: the tree may be correct-but-unverified, so
+  out / couldn't start / was killed by goaly for exceeding its 16 MB captured-output cap, judge
+  errored) from a real red: the tree may be correct-but-unverified, so
   it's never blamed on the code — still fail-closed, never a green. It keys only on facts goaly
   owns, never exit-code/error-string guessing.
 - **Ephemeral verifier artifacts don't count as progress.** A conservative default set is excluded
@@ -636,6 +770,17 @@ Details that make these accurate rather than trigger-happy:
 - **A no-diff iteration is excused** when the agent never had a fair chance to act: the previous
   turn timed out, crashed, or was truncated, or the ladder is green and a fresh Sign-off veto is
   the only blocker. A perpetually truncated run still terminates at `--max-iterations` / budget.
+- **…but the timeout excuse is bounded** (`timeout-no-diff`). A worker that is killed by the
+  wall-clock cap *every* iteration used to be excused every iteration, so it burned the whole
+  `--max-iterations` budget in silent ten-minute no-ops. The excuse now lasts
+  `--stuck-timeout-no-diff-threshold - 1` consecutive turns (default 2 ⇒ exactly one excused turn,
+  the original intent), and the threshold-th one aborts with a typed `STUCK_TIMEOUT_NO_DIFF` that
+  names the real fix: more room per turn via `--harness-timeout-ms` and/or
+  `--harness-idle-timeout-ms`. A timed-out turn that *did* change the tree was progressing and does
+  not count toward the streak. This detector is deliberately **not** silenced by
+  `--stuck-no-diff false` — that toggle is about a worker that stops editing, not about one that
+  keeps being guillotined — and it is never auto-remediated, since another attempt at the same cap
+  just buys another full-length no-op.
 - **A harness that REFUSED is not a harness that crashed.** When the agent CLI names an actionable
   fix in its own failure output — droid's "insufficient permission to proceed / re-run with `--auto`
   medium" being the canonical case — the codec recognises it and `STUCK_HARNESS_CRASH` carries that
@@ -644,6 +789,7 @@ Details that make these accurate rather than trigger-happy:
   fail-closed `crashed`, still typed the same way. Only the guidance differs. Per-CLI string
   matching lives in the codec, never in the reducer, so the stuck detectors still key purely on
   facts goaly owns.
+- **A repeat-failure streak may be re-adjudicated as a *contract* fault** — see below.
 
 **Streak relief on `--resume`.** The counted streaks are not stored — they are re-derived by the
 replay-fold — so a run that aborted at the crash threshold used to hit it again on the very first
@@ -655,6 +801,89 @@ repeat-failure), is measured off the run's original thresholds so repeated resum
 than compound, is recorded as an ordinary `RUN_EXTENDED` marker (auditable in the log), and any
 explicit `--stuck-*` on the resume command line still wins. `no-diff` is a toggle rather than a
 counter, so it is not relieved — pass `--stuck-no-diff false` for that resume.
+`timeout-no-diff` is not relieved automatically either — relief would just buy more full-length
+no-ops. Be clear about what that means for the resume: the timeout flags are **not** `RunExtension`
+fields, so a resume carrying only `--harness-timeout-ms` / `--harness-idle-timeout-ms` produces no
+extension at all, the fold re-trips timeout-no-diff at the tail, and the run lands straight back in
+the identical terminal `ABORTED` with zero harness turns run. The flag that **un-terminates** such a
+run is `--stuck-timeout-no-diff-threshold` (which is in `RunExtension.stuck`); the timeout flags are
+what make the extra turns worth having. Pass both:
+`goaly --resume <id> --stuck-timeout-no-diff-threshold 4 --harness-timeout-ms 1800000 --harness-idle-timeout-ms 300000`,
+which is exactly what the abort's `next:` hint now prints.
+
+**Old run logs stay replayable.** `timeout-no-diff` is the one detector that turned a decision which
+previously continued into a terminal abort, so a log written *before* it existed can contain a
+timeout+no-diff streak that the run simply kept going past. Replaying such a log is
+**tail-sensitive**: only the *last* folded decision can trip that detector, so a mid-log streak
+folds with the old semantics and `--resume` / `goaly runs show` keep working on the run instead of
+reporting it corrupt. Nothing is weakened for a log written since — the trip is terminal, so it is
+always the last entry, and that fold uses the run's real (or `RUN_EXTENDED`-overlaid) threshold.
+
+### In-loop contract-fault adjudication (`CONTRACT_DEFECTIVE`)
+
+Contract soundness is otherwise classified exactly once, at t=0, on a tree with no implementation
+in it (the pre-flight soundness check above) — the moment of *least* evidence. For
+one defect class that timing isn't unlucky, it's undecidable: when a frozen assertion is impossible
+for any implementation to satisfy, its t=0 failure is byte-identical to an honest "not written
+yet" red, because nothing exists either way. The evidence that settles it — *a real implementation
+now exists and the same assertion still reds* — only appears several iterations later, exactly when
+the repeat-failure detector fires.
+
+So goaly asks again, then. When a `repeat-failure` streak is about to abort **and** the repeated
+signature names one of the contract's frozen authored files (by path or basename) **and** the
+worker has demonstrably changed the tree during the run, the run makes **one read-only LLM call**
+asking: *given this implementation, could any correct implementation pass this frozen check, or is
+the check itself unsatisfiable?*
+
+- `defective: false` → the run aborts with a **`CONTRACT_ADJUDICATED_SOUND`** marker, followed by
+  **today's repeat-failure reason** as `Original stuck condition:` context. The diagnosis is
+  unchanged, and the marker leads so it sits in goaly's own words rather than behind the quoted
+  (worker-authored) failure signature — the CLI's next-step hint reads only that leading part, so a
+  crafted test name can never select the hint. The marker is there because
+  the two aborts are not equally *continuable*. A plain repeat abort ends on a re-derived detector
+  trip, so `--resume <id> --stuck-repeat-threshold N` genuinely continues it. An adjudicated one
+  ends on a **recorded** `CONTRACT_ADJUDICATED` event: replay folds that event to `ABORTED` whatever
+  the thresholds say, so no `--resume` extension un-terminates it. While the texts were identical,
+  goaly's own `next:` hint pointed such a run at that inert flag, and the resume warning pointed it
+  at `--recontract`, which [`planRecontract` refuses](#re-contracting-a-defective-bar---recontract)
+  for a sound verdict — every documented exit was a dead end. The route that exists is
+  `goaly "<goal>" --from-run <id>`: the bar is satisfiable, so keep the tree and carry the goal
+  forward. That is what both the hint and the warning name now.
+- `defective: true` → the run aborts with a typed **`CONTRACT_DEFECTIVE`** reason that names the
+  frozen file, says plainly that your implementation may be correct and the **tree is worth
+  keeping**, and points at a corrected bar rather than at `--stuck-repeat-threshold` (which cannot
+  help against an unsatisfiable assertion).
+
+Guarantees, all of them structural:
+
+- **Diagnosis only.** This path can only reach `ABORTED`. It can never produce a `DONE`, a green,
+  another iteration, or a re-authored contract — the freeze (invariant #2) is untouched, and
+  recovery is a *new run*: the abort prints the exact successor command
+  ([`--recontract`](#re-contracting-a-defective-bar---recontract)), which keeps your tree.
+- **Fail-closed to today's behavior.** No adjudicator wired, an LLM error, a timeout, an
+  unparseable reply, a schema miss, or any uncertainty all land on the unchanged repeat-failure
+  abort. Only a confident positive relabels it.
+- **Bounded to once per run**, as replayable reducer state — so a `--resume` that re-trips the
+  streak can't buy a second call.
+- **Replay-safe.** The verdict is a Zod-parsed, write-ahead-logged `CONTRACT_ADJUDICATED` event, so
+  `--resume` and `goaly runs show` reuse the recorded answer and never re-call the model. Resume's
+  automatic streak relief is suppressed for a run that adjudicated — for **either** verdict, and for
+  a structural reason rather than a judgement about satisfiability: the abort came from a recorded
+  event, so relief could not continue the run, only bank an inert `RUN_EXTENDED` marker and print a
+  promise goaly cannot keep. A recorded verdict is a fact the replay reproduces: raising
+  `--stuck-repeat-threshold` by hand does **not** un-trip the repeat that led to it, so the run stays
+  resumable-as-terminal instead of dying on an invalid transition. Pass the flag anyway and goaly
+  says so, and names the route that exists for your verdict —
+  [`--recontract`](#re-contracting-a-defective-bar---recontract) for `defective: true`,
+  `goaly "<goal>" --from-run <id>` for `defective: false` (which `--recontract` refuses).
+- **The reducer stays pure.** DECIDE only emits an `ADJUDICATE_CONTRACT` command; the driver
+  performs the read-only call and feeds the event back (invariant #1). Its spend is metered against
+  `--budget-tokens` under the verifier layer.
+
+The adjudicator runs on the **judge** model (the same read-only provider the pre-flight uses), not
+the compiler model that authored the bar. Recovery from a condemned bar is a
+[`--recontract` successor run](#re-contracting-a-defective-bar---recontract), and the anti-pattern it
+learned is remembered across runs in the [defect corpus](#the-defect-corpus-cross-run-learning).
 
 ## Diff baselines (`--baseline` and `--delta-verify`)
 
@@ -698,6 +927,11 @@ directory without `git init`.
 - `--workspace-mode file` — explicit file-system manifest mode.
 - `--workspace-mode auto` — pick `git` when the workspace is inside a git work tree, otherwise `file`.
   This is the default.
+
+File mode runs the verify command through the same seam git mode does, so the *could-not-evaluate*
+facts goaly owns about its own kill travel identically: a verify command it timed out, could not
+start, or killed for blowing the 16 MB captured-output cap is classified `CONTRACT_UNEVALUABLE`
+(still fail-closed, never a green) rather than read as an honest code red.
 
 File mode supports the full two-key loop, stuck detection, checkpoints, and resume. It does **not**
 support worktrees, best-of-N (`--candidates > 1`), or parallel phases, because those features need git
@@ -762,7 +996,8 @@ overlay on the `RUN_EXTENDED` marker — an operational knob; the frozen contrac
 ## Phased goals (`--phased`)
 
 A big goal produces a big diff — costly to judge and easy to half-finish. `--phased` turns one goal
-into a **frozen, ordered plan of small sub-goals**, runs each as its own frozen two-key contract,
+into a **frozen plan of small sub-goals** (a dependency DAG, listed dependencies-first), runs each
+as its own frozen two-key contract,
 and finishes with a **cumulative acceptance** contract on the original goal — so decomposition
 can't green a goal whose parts pass but whole doesn't.
 
@@ -778,9 +1013,18 @@ ACCEPT (a cumulative contract on the ORIGINAL goal) ──both keys──► DON
 
 - **Planner seam (read-only, like the compiler).** An LLM authors the ordered phases
   (`--planner-model` picks its model), or `--plan-file <p>` supplies one:
-  `{ "phases": [{ "goal", "intent"?, "rubric"? }] }`. The plan is parsed fail-closed and frozen
-  (`planHash`, logged loudly); a planner error, bad plan, or more than `--max-phases` (default 10)
-  is a typed `PLAN_FAILED`, never a skipped decomposition.
+  `{ "phases": [{ "goal", "intent"?, "rubric"?, "id"?, "dependsOn"? }] }`. The plan is parsed
+  fail-closed and frozen (`planHash`, logged loudly); a planner error, bad plan, or more than
+  `--max-phases` (default 10) is a typed `PLAN_FAILED`, never a skipped decomposition.
+- **The plan is a DAG** ([issue #123](https://github.com/krimvp/goaly/issues/123)). A phase may name
+  itself with `"id"` and declare exactly what it needs with `"dependsOn": ["<id>", …]`
+  (`[]` = a root, no prerequisites). Phases are still *listed* in a topological order — dependencies
+  come first — and everything about the graph is checked at parse time, **fail-closed**: an unknown
+  id, a self-reference, a duplicate id, a cycle, or a forward edge is a typed `PLAN_FAILED` with the
+  offending phase named. A silently linearized plan is never produced. A phase with no `dependsOn`
+  keeps the conservative default (it depends on everything before it), so a plan that declares
+  nothing is exactly the classic linear plan. The edges are part of the canonical plan string and
+  therefore of `planHash` — frozen like everything else, so no transition can re-shuffle the graph.
 - **The plan is frozen too.** Re-planning is only the bounded, human-gated plan-Seal revise path —
   never an automatic "make phase 3 easier".
 - **Each phase is a normal run** (compiler, ladder, Sign-off, DECIDE unchanged), scoped to its
@@ -796,8 +1040,9 @@ ACCEPT (a cumulative contract on the ORIGINAL goal) ──both keys──► DON
 ## Cooperative parallel waves (`--parallel-phases`, EXPERIMENTAL)
 
 Sequential phases leave wall-clock on the table when sub-goals are independent. With
-`--parallel-phases` (opt-in), consecutive plan phases sharing a `group` value form a **wave** that
-executes concurrently, then merges — without weakening a guarantee. End-to-end:
+`--parallel-phases` (opt-in), every phase whose dependencies have all completed — the plan DAG's
+current **topological frontier** — forms a **wave** that executes concurrently, then merges, without
+weakening a guarantee. End-to-end:
 
 ```bash
 goaly run --goal-file ./BIG_GOAL.md --verify-cmd "npm test" \
@@ -806,7 +1051,25 @@ goaly run --goal-file ./BIG_GOAL.md --verify-cmd "npm test" \
 
 It requires `--autonomous` (wave children seal their frozen contracts concurrently — an
 interactive gate cannot pause K children at once; the CLI refuses the combination otherwise,
-fail-closed), and a plan whose waves you mark with `group`:
+fail-closed), and a plan that says which phases are independent:
+
+```jsonc
+// plan.json — parser + formatter are one frontier; the CLI wiring needs both, the docs need only the parser
+{ "phases": [
+  { "id": "parser",    "goal": "implement the parser",    "dependsOn": [] },
+  { "id": "formatter", "goal": "implement the formatter", "dependsOn": [] },
+  { "id": "cli",       "goal": "wire parser + formatter into the CLI", "dependsOn": ["parser", "formatter"] },
+  { "id": "docs",      "goal": "document the parser grammar",          "dependsOn": ["parser"] }
+] }
+```
+
+Independence is **declared and validated**, not inferred from position: reordering the list can no
+longer silently change what runs concurrently, and "`cli` needs both, `docs` needs only the parser"
+is expressible. The frontier is recomputed after each wave (here: `parser`+`formatter`, then
+`cli`+`docs`), and a `--resume` recomputes it from the log, so no completed phase is repeated.
+
+The legacy `group` sugar still works and means exactly what it always did — a *contiguous* band of
+same-`group` phases, each depending on everything before the band:
 
 ```jsonc
 // plan.json — phases 1+2 are one wave; phase 3 runs after the merged result
@@ -827,10 +1090,13 @@ fail-closed), and a plan whose waves you mark with `group`:
 - **Fail-closed to sequential.** A conflict, a red re-verify, a crashed child, or a missing wave
   executor all downgrade that phase to the classic sequential run on the merged tree, under a fresh
   frozen contract for the same sub-goal. The cumulative acceptance contract still gates the whole.
-- **v1 limits:** requires `--autonomous` and a `--plan-file` with `group` fields (the LLM planner
-  doesn't author groups yet); a crash mid-wave re-runs the whole wave on `--resume`; wave-child
-  spend reports under the parent's `harness` layer. Grouped plans run strictly sequentially without
-  the flag; the grouping is frozen into `planHash`.
+- **Scheduling is pure.** The frontier is a pure function of `(frozen plan, completed phases)`
+  computed inside the reducer — no clock, no IO, no LLM (invariant #1), and identical on replay.
+- **v1 limits:** requires `--autonomous`; a crash mid-wave re-runs the whole wave on `--resume`;
+  wave-child spend reports under the parent's `harness` layer. A DAG (or grouped) plan runs strictly
+  sequentially without the flag — the list order is a valid topological order, so the result is the
+  same, only slower. The graph is frozen into `planHash`. The LLM planner may author `id`/`dependsOn`
+  (it is told the shape); a `--plan-file` is still the reliable way to get exactly the graph you want.
 
 ## Worktrees (`--worktree`)
 
@@ -887,7 +1153,40 @@ kill an hours-long run. All defaults, no flags needed
   `--budget-tokens`. (The wall-clock budget restarts per process — the crash-to-resume gap is idle
   time, not spend.)
 - **Terminal outcomes tell you the next step.** A failed/aborted run prints a one-line `next:`
-  hint — what the reason means and the exact `--resume` / `runs show` command.
+  hint — what the reason means and the exact command: `--resume` with the flag that actually
+  un-terminates the run (`--stuck-timeout-no-diff-threshold`, alongside the `--harness-timeout-ms`
+  that makes the extra turns useful, for a `STUCK_TIMEOUT_NO_DIFF`; `--harness-autonomy` for a
+  harness that *refused* rather than crashed), `goaly runs show`, or — for a
+  [`CONTRACT_DEFECTIVE`](#in-loop-contract-fault-adjudication-contract_defective) bar — the
+  [`--recontract`](#re-contracting-a-defective-bar---recontract) successor command that keeps your
+  tree.
+- **The `next:` hint reads only goaly's own words.** A terminal reason quotes evidence the worker can
+  reach — a verifier failure signature, the harness's last stderr, a setup command's output, an
+  adjudicator's prose — and every such quote begins at a fixed lead-in (`Repeated failure signature:`,
+  `Last harness output:`, `Last verifier output:`, `Missing tools:`, `Setup output:`, `Pre-flight
+  output:`, `Adjudicator:`, `Original stuck condition:`, `Driver error:`, `Authoring error:`,
+  `Phase context:`), with
+  goaly's typed marker always ahead of the first one. The hint matches only the text before the
+  earliest lead-in, so a test named
+  `handles no-diff` cannot select the hint and point you at a flag that would not continue your run.
+  Under `--phased` the phase position is *appended* behind `Phase context:` (e.g. `… Phase context:
+  phase 2/5 (add the retry loop)`) rather than prefixed: the sub-goal title is your planner's prose,
+  not goaly's words, so a title containing a lead-in or a hint keyword must not be able to move the
+  boundary or pick the remediation.
+  The boundary covers the **driver's** own terminal aborts too — a bootstrap throw or its last-resort
+  catch reads `DRIVER_ERROR: … Driver error: <the exception>` — because that catch also wraps the
+  `--phased` between-phase checkpoint, which runs *after* worker turns. Likewise a terminal
+  `COMPILE_FAILED`/`PLAN_FAILED` quotes the authoring message behind `Authoring error:`: under
+  `--phased` the next phase's contract is compiled *after* the previous phase's worker turns, over
+  the tree that worker wrote, so that text is not pre-loop.
+  A codec's crash remediation is likewise a closed kind (e.g. the `--harness-autonomy` advice for a
+  refusal) whose sentence goaly authors, not text the CLI printed. Two honest caveats: a run logged
+  *before* this ordering rule can still have its bracketed `CONTRACT_ADJUDICATED_SOUND` marker
+  honored from the whole reason — the worst case is a milder hint (it names no threshold), and a
+  reason whose trusted prefix already carries a typed marker of its own is excluded from that rescue
+  entirely — and one
+  reason is still passed through whole rather than built — your own Seal/plan-Seal rejection text —
+  so it has no lead-in and is read entire.
 
 ## Operator control (watch, steer, extend)
 
@@ -923,11 +1222,21 @@ re-run nothing:
 
 ```bash
 goaly runs list                  # one row per run: id, status, iterations, tokens, goal
-goaly runs show run-<id>         # frozen contract + hash, Seal outcome, every verdict, totals
+goaly runs show run-<id>         # frozen contract + hash, Seal outcome, every verdict, totals,
+                                 # and any degraded-mode label (e.g. SELF-JUDGED)
 goaly runs watch run-<id>        # follow a LIVE run from another terminal
 goaly runs resume-cmd run-<id>   # how to continue the run's CLI session interactively
 goaly runs list --workspace ./myrepo
 ```
+
+Beyond the contract and the verdicts, `runs show` reports the run's *provenance and labels* — the
+things a `DONE`/`ABORTED` line alone cannot tell you:
+
+| Line | Meaning |
+| --- | --- |
+| `degraded:` | a typed [degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified) — `SELF-JUDGED` (every role on one model), `SELF-APPROVED` (the approver on the coding agent's model, the judge rung on another) or `INDEPENDENCE-UNVERIFIED` (goaly could not compare them) |
+| `adjudicated:` | this run's [contract-fault verdict](#in-loop-contract-fault-adjudication-contract_defective) (SOUND or DEFECTIVE, with the generalized anti-pattern), and for a defective one the exact `--recontract` command that recovers without discarding the tree |
+| `successor of:` | this run's [re-contract provenance](#re-contracting-a-defective-bar---recontract): the predecessor run + its frozen `contractHash`, the verdict that justified the successor, and the depth in the chain |
 
 `resume-cmd` prints the command to continue the underlying CLI session in its own interactive mode
 (`claude --resume <id>`, `codex resume <id>`, `droid --resume <id>`, `pi --continue`), recovered
@@ -947,15 +1256,225 @@ goaly "now also handle empty input" --from-run run-<id> --inherit-session  # kee
 ```
 
 `--from-run` runs in the same workspace (the prior outcome is already on disk), seeds the new
-contract's authoring with a concise, deterministic **compaction** of the prior run (its goal, the
-frozen bar it met, how it ended), and then compiles its **own** frozen two-key contract — every
-invariant preserved by construction. It composes with every other flag.
+contract's authoring with a concise **compaction** of the prior run (its goal, the frozen bar it met,
+how it ended), and then compiles its **own** frozen two-key contract — every invariant preserved by
+construction. It composes with every other flag.
+
+**The compaction's worker-authored fields are fenced.** Most of the digest is goaly's own or your
+words — the goal, and the frozen (compiler-authored) contract. Three fields are not: the ladder's
+failure detail (raw verifier output), the approver's veto reason, and the terminal abort reason
+(which quotes that output). Those are wrapped in a random-nonce `UNTRUSTED PRIOR RUN OUTPUT` fence,
+with goaly's framing kept outside it, and the compiler's system prompt restates that anything inside
+such a fence is data, never instructions — the same treatment the judge, the approver and
+`--recontract`'s repair brief give worker-influenced text. So a worker that prints authoring
+directions into its own test output cannot steer the *next* run's frozen bar. (The fence delimiters
+carry a fresh random nonce per build, so the seed text is deterministic only up to those nonces.)
 
 This is distinct from `--resume`, which re-enters an *incomplete* run's loop. `--inherit-session`
 additionally resumes the prior harness session on the first turn so the agent keeps its working
 memory — the new frozen contract still solely governs DONE. Valid only with the same `--harness` as
 the prior run; ignored under `--phased`. The end-of-run banner prints a "Continue this session:"
 hint with the same mapping as `runs resume-cmd`.
+
+**Resuming a follow-up keeps its compaction.** `--from-run` cannot be combined with `--resume`, so
+the seed can never arrive from the command line on a resume — the predecessor run id and the
+compaction itself are recorded write-ahead in the run-log header instead. It matters whenever a
+resume still has to *compile* (a crash before the freeze, or a Seal "revise" round): without it that
+re-author ran with zero prior-run context, silently. A log written before the header carried it
+cannot be rebuilt, and goaly says so and points at a fresh `--from-run` rather than degrading
+quietly. Past the freeze nothing re-authors, so the seed is inert there.
+
+## Re-contracting a defective bar (`--recontract`)
+
+When goaly's own adjudicator condemns a frozen bar
+([`CONTRACT_DEFECTIVE`](#in-loop-contract-fault-adjudication-contract_defective)), the implementation
+in your tree may be perfectly correct — only the bar was wrong. Recovery used to mean one of three
+bad options: hand-edit a frozen file the anti-tamper machinery deliberately git-excluded and pinned,
+throw away a correct tree and start from zero, or `--resume` with a raised
+`--stuck-repeat-threshold` (more iterations against an unsatisfiable bar are still unsatisfiable).
+
+A **successor run** is the fourth option, and the abort prints it verbatim:
+
+```bash
+goaly --from-run run-<id> --recontract          # keep the tree, repair the bar
+goaly --from-run run-<id> --recontract --max-recontracts 2
+```
+
+It **keeps the predecessor's working tree**, inherits its **frozen goal** (a repair changes the bar,
+not the goal — a goal passed on the command line is ignored, loudly), and re-runs COMPILE with the
+**defect report as authoring feedback** — the same free-text channel a Seal "revise" round uses. The
+result is a **new** contract with a **new** `contractHash` under a **new** `runId`.
+
+**No contract is ever mutated.** Invariant #2 is *strengthened*: one run owns exactly one frozen
+contract for its whole life, and evolution happens *between* runs, in the open, with provenance. The
+successor's log header records `predecessorRunId`, `predecessorContractHash`, the adjudication
+verdict, and the chain depth; `goaly runs show` prints them:
+
+```
+successor of: run-a1b2  (re-contract #1 in this chain)
+  predecessor contract: 9f3c…  — adjudicated DEFECTIVE, never reused
+  verdict:   the frozen assertion requires a call the goal never implies
+```
+
+Five guards keep this from becoming a weakening channel:
+
+- **Only a `CONTRACT_DEFECTIVE` adjudication can reach it.** Eligibility keys off the write-ahead,
+  Zod-parsed `CONTRACT_ADJUDICATED` **event** — goaly's own read-only adjudicator — not off the
+  abort reason string (which carries the repeated verifier failure as context). A worker that prints
+  `CONTRACT_DEFECTIVE:` into its own output can never open the door; any other outcome is refused
+  with exit 2 before anything is written.
+- **No worker-supplied text feeds the re-authoring.** The seed is built only from the frozen
+  contract (compiler-authored), the goal (yours), and the adjudicator's verdict — which is itself
+  fenced as untrusted data, since it was written after reading worker-influenced output.
+- **The new bar still faces the negative control — with the evidence to judge it.** A re-authored
+  bar that already *passes* on the inherited tree is put to a fail-open pre-flight classifier before
+  a worker token is spent: either the implementation really was correct (proceed — the expected
+  happy ending of a re-contract) or the repair softened the bar into vacuity (`CONTRACT_UNSOUND`,
+  abort). Because that question is unanswerable from filenames and a "3 passed" summary, the
+  classifier is shown the material a human would need: the **re-authored rungs and rubric**, the
+  **contents of the re-authored verification files** (read off the inherited tree), the
+  **predecessor's bar** (carried in the successor's run header), and the **adjudicated defect** —
+  the one thing the repair was licensed to change. Everything supplied is wrapped in an untrusted
+  fence, and every failure of that channel degrades gracefully: an unreadable file drops from the
+  prompt only, and an LLM error, an unparseable reply, missing evidence, or any uncertainty all
+  proceed. The control applies **whether or not the re-authored bar generated any verification
+  files** — a successor whose "repair" is a bare `--verify-cmd` is precisely the softening shape it
+  exists to catch — and **whatever the inherited tree contains**: if the tree holds no implementation
+  source at all, the green cannot be explained by a correct implementation on disk, so that fact is
+  handed to the classifier as *evidence* rather than used to skip it. It is **not unconditional**,
+  and every case where it *cannot* run is logged loudly (`--recontract anti-softening negative
+  control could not run — …`) rather than skipped silently. It fires only on a bar that already
+  **passes** before the first turn, so it does not run when: the re-authored bar has **no
+  deterministic rung** to execute then; a rung **errored** instead of producing a verdict; a
+  `requiredTools` program is **missing**, so the bar cannot be executed at all (goaly delegates the
+  install to the agent and skips its own pre-flight); or — being a model judgement — **no
+  `--llm-provider` is wired**. All four proceed (fail-open) and say so. The remaining exits from the
+  prepare phase are aborts (`TOOLS_MISSING`, `SETUP_FAILED`, `CONTRACT_UNSOUND`), where no worker
+  turn follows, or a **red** bar, where the control's precondition is simply absent.
+- **The chain is bounded.** `--max-recontracts` (default 1) caps how many re-contracts a chain may
+  contain. The depth lives in the run log header, so the cap holds **across the chain, not per
+  process** — a second `--recontract` off a successor is refused even from a fresh shell.
+- **It is an ordinary run in every other respect.** It Seals (auto-accepted under `--autonomous`,
+  still frozen and logged loudly; reviewable with `--mode review`), freezes, and needs both keys for
+  DONE. A failed re-compile is a normal `COMPILE_FAILED`.
+
+`--recontract` requires `--from-run`; `--max-recontracts` requires `--recontract`. Both are
+per-invocation only (never settable from a config file) — a persisted re-contract would re-point
+every run in the tree at one predecessor's defective contract.
+
+**Resuming a successor keeps its successor-ness.** `--from-run` cannot be combined with `--resume`,
+so a resumed successor gets none of that wiring from the command line — it comes back off the run-log
+header, which recorded it write-ahead at run start. Two things ride on that: the pre-flight negative
+control above still runs (with the same predecessor bar + defect as evidence), and a resume that has
+not yet frozen its contract — a crash before the freeze, or a Seal "revise" round — re-authors with
+the **repair brief** rather than a blank authoring pass. The brief is rebuilt from the header, so it
+carries the header's clipped copy of the predecessor bar and verdict; a log written before that field
+existed cannot be rebuilt at all, and goaly says so and points at a fresh
+`goaly --from-run <predecessor> --recontract` instead of silently degrading.
+
+## The defect corpus (cross-run learning)
+
+Every other feedback channel in goaly is *intra-run*: the verifier's failure reaches the worker, the
+veto reaches the worker, a red-team finding reaches the compiler — and then the run ends and all of
+it is gone. Author an unsatisfiable bar today and the same compiler authors it again tomorrow, in
+another project, forever.
+
+The **defect corpus** closes that loop, and it is the only cross-run state goaly keeps:
+
+1. When a run's in-loop adjudication rules a frozen bar
+   [`CONTRACT_DEFECTIVE`](#in-loop-contract-fault-adjudication-contract_defective), goaly appends
+   **one compact record** to `~/.goaly/defects.jsonl` — the adjudicator's *generalized* anti-pattern,
+   the *generalized* shape of the offending assertion, the language/test-runner derived from the
+   frozen contract, and the `contractHash` + `runId` for provenance. Never the source, never the
+   diff, never the failure text. Each record carries a per-record nonce and is **HMAC-signed** with a
+   key minted on first use next to the corpus (`~/.goaly/defects.key`, owner-only permissions).
+2. Later `--generate` runs read it, **drop every line whose signature does not verify**, collapse
+   replayed copies, keep the entries relevant to **this** workspace's language/runner, cap them, and
+   inject them into the contract-authoring prompt as a **"known false-red patterns — do not author
+   these"** section — fenced as untrusted data, like the diff at every other model-text seam. Every
+   injected pattern is logged, so a run says out loud which local state shaped its bar — together
+   with a `trust` line saying how much that provenance is worth on this run (see the threat model
+   below).
+
+```bash
+goaly config defects list                    # what has been learned, with provenance
+goaly config defects clear                   # reset it
+goaly config defects list --defect-corpus ./team-defects.jsonl
+
+goaly --no-defect-corpus "…"                 # opt out entirely for this run
+goaly --defect-corpus ./team-defects.jsonl "…"   # use a different corpus file
+```
+
+`--defect-corpus <path>` and `--no-defect-corpus` are settable from a config file like other wiring
+flags; passing both is a usage error.
+
+**It cannot become a weakening channel.** The defenses are listed strongest-first, because the order
+matters and the signature is easy to over-read:
+
+- **The injected lines are data, not instructions — this is the primary defense.** A pattern is
+  model-authored text crossing into another model's prompt, so the section is wrapped in a
+  random-nonce UNTRUSTED fence and the compiler's system prompt restates the rule — the same
+  treatment the diff gets at the judge, approver, adversarial rung, pre-flight, and dry-run seams.
+  goaly's own framing stays outside the fence and is the only authoritative part. This is what
+  contains a hostile record whether or not its provenance is genuine. Downstream, a corpus-shaped
+  contract still faces the critics, Seal, the [pre-flight negative
+  control](#setup-preflight--soundness), the frozen ladder and both keys for DONE.
+- **No worker-supplied text can reach a record.** The record builder has no parameter for the
+  failure signature, the diff, harness output, or file contents; everything but the adjudicator's
+  own two generalized sentences is derived from the frozen contract, and the language/runner fields
+  are closed enums.
+- **Only an adjudicated `CONTRACT_DEFECTIVE` verdict can write** — through goaly's own code. The
+  append takes a record type that only the adjudication path can mint, so no other code path even
+  compiles against it; a `defective: false` verdict, an unparseable one, or a positive one with no
+  generalized pattern writes nothing.
+- **The record *shape* cannot say "this was hard".** The schema is strict and has no iteration
+  count, repeat count, duration, token spend, or severity field — difficulty can never turn into
+  "author an easier bar" as *data*. The free text is held to a weaker standard: a `pattern` or
+  assertion shape using the **effort vocabulary** (hard, difficult, effort, iterations, attempts,
+  time, expensive, tokens, complex, "too many") is refused on mint *and* on read. That word list is a
+  **speed bump, not a filter** — it catches the honest "this bar was too hard for the agent" and is
+  trivially paraphrased around ("do not author a bar that demands the agent get every edge case right
+  in one go" passes it). It is kept because it is free and catches the likely case; the section's
+  *impossibility* framing and the fence above are what actually hold.
+- **Signing: what it buys, precisely.** Every record is signed (HMAC-SHA256) with
+  `~/.goaly/defects.key`, minted on first use with owner-only permissions, and carries a per-record
+  nonce inside the signed bytes. **Any line whose signature is missing, wrong, or made with another
+  key is dropped on read**, and any line that merely repeats a record already read — a replayed copy
+  — is collapsed rather than counted again (see the next bullet). So signing closes: hand-typed and
+  hand-edited lines, lines whose text was altered after the fact, lines copied in from another
+  machine or a shared/checked-in corpus, and replays. **It does not close the coding agent.** Under
+  the default `--sandbox none`, the agent is a subprocess with goaly's own uid, so reading
+  `defects.key` is exactly as available to it as appending to the corpus was; mode 0600 excludes
+  other *users*, not a same-uid process, and an HMAC key readable by the party you are
+  authenticating authenticates nothing about that party. Two things narrow that, and neither is the
+  signature: the **untrusted fence** above (what actually contains a planted line), and an active
+  **`--sandbox` policy**, which masks `$HOME/.goaly` — key and default corpus both — from the agent
+  seam. That mask covers the **default location only**: `--defect-corpus <path>` keeps its key beside
+  the corpus, so a corpus relocated into the workspace (or anywhere else outside `$HOME/.goaly`)
+  leaves its key inside the tree the agent is given read-write — a jail changes nothing there. The
+  injection log states which of the **three** situations the run is in, in a `trust` field, so you
+  never have to infer it: sandboxed with the key masked, sandboxed but relocated out of the mask, or
+  un-sandboxed — and the last two say plainly that the fence, not the signature, is the containment. No key ⇒ nothing is verifiable ⇒ no hints; this is fail-closed on
+  *provenance* and still fail-open for the *run*. (A corpus written before signing or before the
+  nonce existed verifies as empty — `goaly config defects clear` resets it; it re-learns from the
+  next adjudication.)
+- **Replay is not influence.** A valid signature says a line was minted by an adjudication; it does
+  not say the line is there once. Appending 40 copies of a genuine line used to count as 40
+  occurrences, and the occurrence count is the second ranking key behind the five-hint cap — enough
+  copies pinned one pattern to the top and pushed every other hint out, without touching the key. So
+  a read now de-duplicates on the record's nonce **and** on `(contractHash, runId, pattern, assertion
+  shape)`, and caps how many records any single `(contractHash, runId)` may contribute (3; a run
+  legitimately adjudicates at most once). An occurrence count is therefore a count of *distinct
+  adjudications*.
+- **Bounded prompt.** Filtering + a cap mean a corpus of any size produces the same small section.
+- **Fail-open, never a gate.** A missing, unreadable, corrupt, or partly unparseable corpus degrades
+  to exactly the pre-corpus behavior (bad lines are dropped on read, Zod-parsed); a failed write is
+  logged and dropped. Every way the key can fail — absent, empty, non-hex, wrong length, a directory,
+  unreadable — reads as no records and never throws or blocks a run. It shapes an authoring prompt
+  *before* the freeze and nothing else — Seal, the
+  critics, the [pre-flight negative control](#setup-preflight--soundness), the frozen ladder, and the
+  two keys for DONE all apply to a corpus-influenced contract exactly as before.
+- **Local only.** Nothing is uploaded, shared, or fetched.
 
 ## Web UI (`goaly ui`)
 
@@ -1120,7 +1639,12 @@ so it never blocks a legitimate run.
 model (e.g. a bare `--model X`). Under `--generate --autonomous` the warning escalates when the
 agent, judge, and approver all resolve to one model — the self-author + self-judge case. Prefer
 `--approver-model` (and/or `--judge-model`) on a different model/provider so the second key is a
-genuinely independent skeptic.
+genuinely independent skeptic. Beyond the warning, goaly acts on it: the approver
+[does not inherit `--model`](#the-sign-off-approver-does-not-inherit---model) where a distinct model
+is available, and an irreducible collapse is recorded as the typed
+[`SELF-JUDGED` degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified) in the run
+header, the terminal summary and `goaly runs show` — `SELF-APPROVED` when only the approver runs the
+coding agent's model, and `INDEPENDENCE-UNVERIFIED` for the wiring goaly cannot compare at all.
 
 **The second key can be a multi-vote panel.**
 
@@ -1138,7 +1662,10 @@ genuinely independent skeptic.
 - `--approver-models m1,m2,…` runs the panel across **distinct models** (reviewer *i* → model *i*,
   cycled). With it, the quorum defaults to the model count, and ≥2 distinct models make the panel
   a genuinely independent second key (the collapse warnings are suppressed). A quorum on one model
-  is variance reduction, not independence — goaly warns about that too.
+  is variance reduction, not independence — goaly warns about that too. A list naming ONE distinct
+  model (`--approver-models B`, or `B,B`) is the single-model approver **on that model**: it is
+  judged for independence exactly like `--approver-model B`, so it collapses only when `B` is the
+  agent's or the judge's model.
 - **Cost:** a panel multiplies approver spend ~quorum× (metered against `--budget-tokens`).
   Mitigations: the panel stops polling once the outcome is mathematically decided, and reviewers
   share a cached prompt prefix (the lens rides the prompt tail). A small panel (≈3–5) is the
@@ -1149,8 +1676,8 @@ veto/feedback-shaped, never a third key that can promote a red:
 
 - **Contract red-team (before Seal).** A lensed critic panel (`--adversarial-contract-critics`,
   default 2) attacks each compiled `--generate` contract — gaming/vacuity, rubric-command mismatch,
-  tamper/hard-code surface, reproducibility. Critical findings trigger a bounded re-author round.
-  Skipped for `--verify-cmd` (your own bar isn't second-guessed).
+  tamper/hard-code surface, reproducibility, and false-red/satisfiability. Critical findings trigger
+  a bounded re-author round. Skipped for `--verify-cmd` (your own bar isn't second-guessed).
 - **Plan critique (before the plan Seal, `--phased`).** The same shape
   (`--adversarial-plan-critics`, default 2) attacks the authored plan; a `--plan-file` plan is
   never critiqued.
@@ -1166,7 +1693,156 @@ veto/feedback-shaped, never a third key that can promote a red:
   `--critic-model` picks one model for all critics/refuters. Panels short-circuit once decided and
   share cached prompt prefixes. Without the flag, a run is byte-for-byte unchanged.
 
-**The verify command runs with a credential-scrubbed environment.** Credential-looking variables
+### The satisfiability critic (false-red guard)
+
+Flag: `--no-satisfiability-critic` (the critic itself is ON by default under `--generate`).
+
+
+Everything above attacks a **false green** — could a lazy worker pass this bar without meeting the
+goal? The mirror failure is a **false red**: a frozen bar that *no* correct implementation can pass.
+That one costs the entire run — every iteration reds, the worker keeps "fixing" already-correct
+code, and the loop ends at `maxIterations` or the budget with a good tree thrown away.
+
+So goaly runs one extra critic **before the freeze**, under a fifth lens — `FALSE-RED /
+SATISFIABILITY`: *could a correct, complete implementation still FAIL this bar?* It looks for
+
+- assertions no implementation can satisfy — above all a spy/mock **call-count assertion made after
+  the spy was restored or reset** (vitest `mockRestore()`/`mockReset()`/`restoreAllMocks()` and jest
+  `restoreAllMocks()` clear `mock.calls`, so a later `expect(spy).toHaveBeenCalled()` reds a perfect
+  implementation), or an assertion on state the test itself already tore down;
+- bars over-coupled to one import graph, file layout, or internal structure instead of the
+  observable behavior the goal names;
+- assertions on nondeterministic values (wall-clock timing, iteration order, generated ids, exact
+  float equality) or on the environment (locale, timezone, CPU count, absolute paths).
+
+Details that matter:
+
+- **On by default** — the only pre-Seal review step that is. The asymmetry justifies it: a false red
+  burns a whole run; the guard is *one* LLM call at compile time. It is **independent of
+  `--adversarial`**, which stays off by default.
+- **One call per re-author round**, and only when `--generate` actually authored verification files
+  (nothing authored ⇒ nothing to check; `--verify-cmd` is never checked at all).
+- **Never softening.** A finding is "critical" only if the critic can *name* a correct implementation
+  the bar would still red. The re-author feedback says **make this bar satisfiable by a correct
+  implementation — never make it easier**: no assertion a correct implementation would already pass
+  may be deleted or loosened, and the re-authored bar must still be **red on the current tree**
+  (the soundness pre-flight is the backstop that enforces it).
+- **Advisory and fail-open**, like the other pre-Seal critics: a critic that errors or returns
+  unparseable output drops its findings and the contract proceeds to Seal. It can never weaken a rung.
+- **Metered** under the compile phase against `--budget-tokens`, and it uses `--critic-model` like
+  the other critics.
+- The compiler's own authoring prompt carries the matching "do not author these" rule, naming the
+  post-`mockRestore` call-count assertion explicitly — the critic is defense in depth, not the only
+  guard.
+
+Opt out with `--no-satisfiability-critic` (config-file key `no-satisfiability-critic`). With
+`--adversarial` on, the same lens is also cycled as the fifth member of the contract red-team panel.
+
+### The contract dry run (compile-time positive control)
+
+Flag: `--contract-dry-run true|false` (ON by default under `--generate`).
+
+Every guard above — the red-team lenses, the satisfiability critic, the soundness pre-flight — is an
+LLM **opinion** about the bar. This one is an **execution**.
+
+The frozen bar already gets a *negative* control: the pre-flight runs the deterministic rung(s) once
+and requires them to be **red** on the current tree, and a bar that is already green there is caught
+as `CONTRACT_UNSOUND`. That proves the bar discriminates against nothing. Nothing proved the other
+half — that the bar can **ever** go green. A bar no implementation can satisfy passes pre-flight (its
+red looks exactly like an honest "implementation missing" red) and the run is unwinnable from that
+moment on.
+
+So, strictly **before the freeze**:
+
+1. after the compiler authors the verification files, it also authors a **throwaway reference
+   implementation** of the goal;
+2. that reference is materialized in a **scratch copy** of the workspace, next to the authored
+   verification files;
+3. the contract's one-time `setup` (if any) and its **deterministic rungs** run there — judge rungs
+   are out of scope, since an LLM rubric cannot be positively controlled by execution;
+4. **green** ⇒ the bar is satisfiable: the scratch copy is destroyed and the contract freezes
+   unchanged. **red** ⇒ the bar is defective: the freeze is **refused** and the failure feeds the
+   same bounded re-author loop as a compile failure (`--max-compile-retries`).
+
+Details that matter:
+
+- **The reference implementation never leaves the scratch copy.** It is written only there, the copy
+  is destroyed on every exit path (green, red, or error), and it appears in neither your workspace,
+  the run diff, nor any worker prompt. It is not reused as a hint, a seed, or a fallback — handing
+  the worker the solution would defeat the run and recreate exactly the deadlock the vacuous-contract
+  check exists to catch. A reference file whose path collides with an authored verification file is
+  discarded, so the control can never rewrite the bar it measures — over the same canonical path form
+  the scratch copy's own write resolves, so a path can never be treated as unfrozen when it is
+  written and land on the frozen file anyway.
+- **The refusal carries no runner output at all.** A test runner reds by printing the *source* of the
+  code under test — and on a red, the code under test is the reference. The failing rung's stdout and
+  stderr are therefore **never read**: not filtered, not summarized, not sampled. What the author
+  receives is built only from data goaly owns —
+  1. the **exit code** the OS reported,
+  2. **which** rung of the frozen contract failed (its position, its label, its command),
+  3. the fact that a reference implementation authored for this goal could not clear it,
+  4. a note saying why nothing is quoted, so the omission is not read as an oversight.
+
+  This is the removal of a channel, not a stricter filter. Four earlier versions *did* filter that
+  output — a per-line blacklist, a structured summary, a path check, a positive/frame-context
+  whitelist — and each was defeated in turn, because `stdout`/`stderr` are the streams **the
+  reference implementation writes to**. Runner text and reference text are interleaved in one
+  adversary-writable stream, so provenance is not recoverable from shape: a reference can print
+  plain prose, raw source, marker-shaped lines (`E   ValueError: …`, `FAILED <frozen path>::<test>`),
+  `\r`-merged lines, or lines ending in the frozen file's own path, and be indistinguishable from
+  the runner. A runner marker only ever proved the runner *printed* a line, never that it *authored*
+  the content — which is the gap every round was defeated through.
+
+  The cost is smaller than it looks, because **the compiler already has the frozen verification
+  files — it authored them.** It does not need a runner to tell it what its own assertions say; it
+  needs to know which bar failed, and that it failed. That is exactly what survives. (What is
+  genuinely lost: a *runtime* fact the author could not derive from its own files — an import error,
+  a missing fixture, the concrete mismatched value. See the re-authoring note below.)
+- **The scratch copy is isolated from your tree.** Symlinks are never duplicated into it (a linked
+  `node_modules`, a linked `src` — the pnpm/monorepo/`npm link` shapes — would be a path straight
+  back into your real workspace, so a scratch `npm ci` would mutate it), and every write is checked
+  against the copy's *real* path, not just its path string. A `setup` that relied on a linked
+  `node_modules` simply fails there, and the dry run fails open. A reference file whose path
+  *resolves* onto an authored verification file is dropped, not written — the collision test
+  canonicalizes exactly as the write does, so `verify/./check.test.mjs` cannot rewrite the bar it is
+  measured against.
+- **Re-authoring with the reduced refusal.** The author is asked to re-author the rung it is told
+  failed, holding the files it wrote. That is enough for the failure class this guard exists for —
+  a bar no implementation can satisfy (issue #114's post-`mockRestore` call-count assertion is
+  re-derivable from the test source alone). It is *weaker* when the red came from something outside
+  the authored files (a wrong import path, a missing fixture, a toolchain quirk): the author must
+  re-read its own file and reason about it rather than being handed the runner's diagnosis, so a
+  re-author round can be spent narrowing down what a stack trace would have named outright. That is
+  the accepted price: a leaked solution is a **wrong green at t=0**, an extra re-author round is a
+  bounded cost paid before the loop starts.
+- **Scratch commands run credential-scrubbed**, exactly like the verify command (see below): the
+  same `*_TOKEN` / `*_KEY` / `*SECRET*` / `AWS_*` / `GITHUB_*` variables are stripped before the
+  contract's `setup` and its rungs execute, because that tree holds model-authored code.
+- **Fail-open on infrastructure.** No LLM, an unparseable reference, a scratch-copy failure (including
+  a workspace too large to copy cheaply), a `setup` that cannot run there, a rung that timed out,
+  could not be started, or that goaly itself killed for blowing its captured-output cap (16 MB of
+  stdout+stderr — a live outcome when a chatty reference implementation meets a verbose runner) —
+  each logs and freezes exactly as it does today. Every one of those is a *could-not-evaluate*
+  outcome, classified only from facts goaly owns about its own kill, never from the command's text or
+  exit code. The dry run can only *reject* a contract or step aside; it can never turn a red bar
+  green or relax a rung.
+- **`--generate` only**, and only once the contract actually authored verification files. A
+  user-supplied `--verify-cmd` is your own bar and is never dry-run.
+- **It obeys `--sandbox`.** The scratch runs the contract's `setup` and its deterministic rungs —
+  the same untrusted commands as the verifier seam, over a tree that also holds LLM-authored code —
+  so they run under the **same jail and network policy** as the verifier (see
+  [Sandboxing](#sandboxing)), never bare on the host. Under `--sandbox-net none` a `setup` that
+  needs the network fails there and the dry run fails open, exactly like a verify command that needs
+  egress.
+- **Cost:** one extra authoring call plus one verification run per compile attempt, metered under the
+  compile phase against `--budget-tokens`, using `--compiler-model`. Weigh it against the run it
+  prevents — the motivating incident burned ~39 min and ~2M tokens against a single unsatisfiable
+  assertion.
+
+Opt out with `--contract-dry-run false` (config-file key `contract-dry-run`).
+
+**The verify command runs with a credential-scrubbed environment** — as do the contract dry run's
+scratch commands. Credential-looking variables
 (`*_TOKEN`, `*_KEY`, `*SECRET*`, `AWS_*`, `GITHUB_*`, …) are stripped so they can't be exfiltrated
 through a check; PATH/HOME and the toolchain env are kept. This narrows but does not eliminate the
 host trust boundary — only run `--autonomous` against repositories you trust, or pass `--sandbox`.
@@ -1175,7 +1851,9 @@ host trust boundary — only run `--autonomous` against repositories you trust, 
 
 `--sandbox` (opt-in OS isolation, [ADR 0007](adr/0007-sandboxing-model.md)) jails the two
 untrusted-code execs — the coding agent and the verify command. Off by default: without the flag,
-behavior is byte-for-byte unchanged and the caller owns isolation (CI/container).
+behavior is byte-for-byte unchanged and the caller owns isolation (CI/container). The verifier
+profile also covers the [contract dry run](#the-contract-dry-run-compile-time-positive-control)'s
+scratch commands, which are the same untrusted `setup`/rung commands run one compile step earlier.
 
 | Flag | Meaning |
 | --- | --- |
@@ -1199,7 +1877,13 @@ once: hosts may be bare names, subdomain wildcards, or pin a port. Traffic route
 loopback egress proxy goaly starts; every other egress is denied (HTTP 403 / refused CONNECT) and
 denied attempts are summarized after the run. Because both seams are constrained, the agent's
 model-API host must be on the list too. In both seams, `$HOME` credential locations (`~/.ssh`,
-`~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.docker`, `~/.kube`, `~/.npmrc`) are denied.
+`~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.docker`, `~/.kube`, `~/.npmrc`) are denied — along
+with `~/.goaly`, which holds goaly's own cross-run state: the [defect
+corpus](#the-defect-corpus-cross-run-learning) and the key that signs it. That mask is the only
+thing that actually puts the signing key out of the agent's reach; with `--sandbox none` the agent
+runs as goaly's own uid and can read it whatever its file mode. (It covers the default location, not
+a corpus moved elsewhere with `--defect-corpus <path>`. The *workspace's* `.goaly` run-log directory
+is unaffected.)
 
 A verify command that needs the network (e.g. an `npm test` that installs) fails under the default
 `--sandbox-net none` — pass `--sandbox-net allow` deliberately. The container path mirrors the
@@ -1273,8 +1957,11 @@ contributor *"one term, one meaning"* reference, see [`CONTEXT.md`](../CONTEXT.m
 - **Sign-off / Approver** — the result gate: an independent, veto-only reviewer run every green
   iteration. It can block a green, never promote a red.
 - **Compiler** — the read-only LLM step that authors the verification under `--generate`.
-- **Phased / `planHash`** — `--phased` decomposes a goal into a frozen, ordered plan of sub-goals,
-  each its own two-key contract, ending in cumulative acceptance on the original goal.
+- **Phased / `planHash`** — `--phased` decomposes a goal into a frozen plan of sub-goals (a DAG,
+  listed dependencies-first), each its own two-key contract, ending in cumulative acceptance on the
+  original goal.
+- **Frontier** — the phases of a frozen plan whose dependencies have all completed: what
+  `--parallel-phases` runs concurrently, recomputed after every wave and on `--resume`.
 
 ### Verification
 
@@ -1301,11 +1988,28 @@ contributor *"one term, one meaning"* reference, see [`CONTEXT.md`](../CONTEXT.m
   itself defective: it can't run, or it already passes vacuously on a from-scratch tree.
 - **From-scratch** — a tree with no implementation source yet; the bar is red by definition, so
   soundness biases toward "honest red, proceed".
+- **`CONTRACT_DEFECTIVE`** — the in-loop sibling of `CONTRACT_UNSOUND`: a repeat-failure streak
+  re-adjudicated (once per run, read-only) against a tree that now HAS an implementation, and found
+  to be failing an assertion no implementation could satisfy. Relabels an abort that was already
+  happening; the tree is worth keeping. See
+  [In-loop contract-fault adjudication](#in-loop-contract-fault-adjudication-contract_defective).
+- **`CONTRACT_ADJUDICATED_SOUND`** — the other verdict of the same adjudication: the frozen bar CAN
+  be met, the implementation simply has not met it yet. Carries the unchanged repeat-failure text as
+  trailing context;
+  the marker exists because the recorded verdict makes this abort uncontinuable by any `--resume`
+  extension, so the next step is `goaly "<goal>" --from-run <id>`, not a threshold flag.
+- <a id="g-recontract"></a>**Re-contract / successor run** — the recovery from a `CONTRACT_DEFECTIVE`
+  verdict: `goaly --from-run <id> --recontract` keeps the tree, re-authors the bar from the defect
+  report, and freezes a NEW contract under a NEW run id, recording `predecessorRunId` /
+  `predecessorContractHash` / the verdict in its header. No contract is ever mutated — "the bar was
+  wrong" becomes an auditable chain of frozen contracts. See
+  [Re-contracting a defective bar](#re-contracting-a-defective-bar---recontract).
 
 ### Failure & stuck
 
 - <a id="g-stuck"></a>**Stuck detection** — bailing before `--max-iterations` with a typed reason:
-  no-diff, repeat-failure, oscillation, harness-crash, contract-unevaluable, or budget. See
+  no-diff, repeat-failure, oscillation, harness-crash, contract-unevaluable, timeout-no-diff, or
+  budget — one of which (repeat-failure) may be re-adjudicated as `CONTRACT_DEFECTIVE`. See
   [Stuck detection](#stuck-detection).
 - **Terminal statuses** — DONE (both keys), FAILED (typed failure), ABORTED (Seal-reject / stuck /
   driver error), INCOMPLETE (never finished — shown in `runs list`).

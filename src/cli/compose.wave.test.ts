@@ -32,6 +32,7 @@ const routedLlm: LlmProvider = {
     if (p.includes('"command": string')) {
       if (p.includes('a.txt')) return { text: '{"command":"test -f a.txt","rubric":""}' };
       if (p.includes('b.txt')) return { text: '{"command":"test -f b.txt","rubric":""}' };
+      if (p.includes('c.txt')) return { text: '{"command":"test -f c.txt","rubric":""}' };
       return { text: '{"command":"true","rubric":""}' };
     }
     throw new Error(`unrouted LLM prompt: ${p.slice(0, 160)}`);
@@ -46,6 +47,7 @@ function scriptedWriter(root: string): HarnessAdapter {
       const id = sessionId ?? coerceSessionId('scripted', 'scripted');
       if (prompt.includes('a.txt')) await writeFile(path.join(root, 'a.txt'), 'alpha\n');
       if (prompt.includes('b.txt')) await writeFile(path.join(root, 'b.txt'), 'beta\n');
+      if (prompt.includes('c.txt')) await writeFile(path.join(root, 'c.txt'), 'gamma\n');
       return { output: 'did the work', sessionId: id, status: 'completed' as const };
     },
   };
@@ -119,6 +121,53 @@ describe('parallel waves END TO END (compose + drive, real git, routed fake LLM)
     // No stray worktrees left behind.
     const wt = await runProcess('git', ['-C', dir, 'worktree', 'list']);
     expect(wt.stdout.trim().split('\n')).toHaveLength(1);
+  });
+
+  it('runs a DECLARED dependency DAG: the frontier waves, the joining phase waits (issue #123)', async () => {
+    dir = await initRepo();
+    // a and b are roots; c needs BOTH. Positional `group` bands cannot express "wait for exactly
+    // these two" — declared edges can, and the scheduler runs [a,b] as one wave, then c.
+    await writeFile(
+      path.join(dir, 'plan.json'),
+      JSON.stringify({
+        phases: [
+          { id: 'a', goal: 'create a file a.txt containing alpha', dependsOn: [] },
+          { id: 'b', goal: 'create a file b.txt containing beta', dependsOn: [] },
+          { id: 'c', goal: 'create a file c.txt containing gamma', dependsOn: ['a', 'b'] },
+        ],
+      }),
+    );
+    const config = makeConfig({
+      goal: 'produce all three fixture files',
+      verifier: { kind: 'existing', ref: 'test -f a.txt && test -f b.txt && test -f c.txt' },
+      autonomous: true,
+      phased: true,
+      parallelPhases: true,
+    });
+    const runId = asRunId('run-wave-dag-e2e');
+    const deps = composeDeps(config, {
+      harness: 'fake',
+      harnessFactory: scriptedWriter,
+      workspaceRoot: dir,
+      runId,
+      noLogConsole: true,
+      llm: routedLlm,
+      planFile: path.join(dir, 'plan.json'),
+    });
+
+    const outcome = await drive(deps, config, runId);
+
+    expect(outcome.status).toBe('DONE');
+    expect(await readFile(path.join(dir, 'c.txt'), 'utf8')).toBe('gamma\n');
+    const stored = await deps.runlog.read();
+    // Exactly ONE wave — the two roots. `c` joined them sequentially, after both had merged.
+    const waves = (stored?.entries ?? []).filter((e) => e.event.tag === 'WAVE_RAN');
+    expect(waves).toHaveLength(1);
+    const wave = waves[0]!.event;
+    if (wave.tag === 'WAVE_RAN') {
+      expect(wave.outcomes.map((o) => o.index)).toEqual([0, 1]);
+      expect(wave.outcomes.map((o) => o.kind)).toEqual(['merged', 'merged']);
+    }
   });
 
   it('a conflicting wave member downgrades to the classic sequential phase and the run still finishes', async () => {

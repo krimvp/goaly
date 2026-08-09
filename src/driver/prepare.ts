@@ -3,8 +3,15 @@ import type { PreparedOutcome } from '../domain/events';
 import type { Verdict } from '../domain/verdict';
 import type { Workspace } from '../workspace/workspace';
 import type { LlmProvider } from '../llm/provider';
+import type { RunProvenance } from '../runlog/runlog';
 import { DeterministicVerifier } from '../verify/deterministic';
-import { classifyPreflightSoundness, classifyVacuousContract } from './preflight-soundness';
+import {
+  classifyPreflightSoundness,
+  classifyRecontractedBar,
+  classifyVacuousContract,
+  type RecontractEvidence,
+  type RecontractFile,
+} from './preflight-soundness';
 import { isProbeSafe } from '../compile/required-tools';
 import { noopLogger, type Logger } from '../log/logger';
 import { errorMessage } from '../util/errors';
@@ -46,9 +53,60 @@ export type PrepareDeps = {
    * real configuration error and must fail closed.
    */
   setupAuthored?: boolean;
+  /**
+   * True on a `--recontract` successor run (issue #117). Pure wiring from the run header's
+   * provenance — never the contract. It widens the GREEN negative control below: the bar was just
+   * RE-AUTHORED with a defect report in hand, so a bar that already passes is as suspicious as one
+   * passing on a from-scratch tree, and is put to {@link classifyRecontractedBar} (fail-open) before
+   * any worker token is spent — whether or not the new bar authored files, and whatever the inherited
+   * tree contains (an inherited tree with no implementation source makes a green MORE suspicious, so
+   * that signal is evidence for the classifier, not a gate).
+   */
+  recontract?: boolean;
+  /**
+   * The PREDECESSOR-side half of the evidence that control needs: the bar being repaired and the
+   * adjudicated defect the repair was authored against (both from the successor's run header, both
+   * fenced as untrusted data downstream). The re-authored files are read here, off the tree. Absent
+   * ⇒ the control still runs, just with less to compare — it is fail-open, never fail-closed.
+   *
+   * `files` and `emptyOfSource` are excluded on purpose: both are observed HERE, off the tree, and
+   * would be overwritten — a caller must not be able to hand in a stale copy of either.
+   */
+  recontractEvidence?: Omit<RecontractEvidence, 'files' | 'emptyOfSource'>;
+  /**
+   * Reads an authored verification file (workspace-relative path) so the re-contract negative
+   * control can attack its actual CONTENT, not just its name — the same dependency
+   * `CritiquedCompiler`/`ContractDryRunCompiler` take for the same reason. Defaults to the
+   * workspace's own path-guarded reader; a read failure (or `null`) drops that file from the prompt
+   * only, never the run.
+   */
+  readFile?: (rel: string) => Promise<string | null>;
 };
 
 export type PrepareResult = { prepared: PreparedOutcome; setupRan: boolean };
+
+/**
+ * Project a successor run's header provenance onto the prepare-phase wiring the RE-CONTRACT negative
+ * control needs (issue #117): the widening flag PLUS the predecessor-side evidence — the bar being
+ * repaired and the adjudicated defect the repair was authored against. Without those the control is
+ * asked "was this bar softened?" while being shown neither bar.
+ *
+ * Pure and total: `undefined` provenance ⇒ `{}` (an ordinary run, unchanged in every respect).
+ */
+export function recontractPrepareDeps(
+  provenance: RunProvenance | undefined,
+): Pick<PrepareDeps, 'recontract' | 'recontractEvidence'> {
+  if (provenance === undefined) return {};
+  return {
+    recontract: true,
+    recontractEvidence: {
+      defect: provenance.verdict,
+      ...(provenance.predecessorBar !== undefined
+        ? { predecessorBar: provenance.predecessorBar }
+        : {}),
+    },
+  };
+}
 
 /**
  * The one-time prepare phase the Driver performs between SEAL approval and the first agent turn
@@ -76,6 +134,8 @@ export async function prepareWorkspace(
   const missing = await checkMissingTools(deps.workspace, contract.requiredTools, log);
   if (missing.length > 0) {
     if (deps.installMissingTools === false) {
+      // An ABORT, not a skip: no worker turn ever runs, so the re-contract control has nothing to
+      // protect here — a bar that never governs an agent cannot be a softening channel.
       log.error('required tools missing and --install-missing-tools is off (→ TOOLS_MISSING)', {
         missing: missing.join(', '),
       });
@@ -86,6 +146,16 @@ export async function prepareWorkspace(
     log.info('required tools missing — delegating install to the agent (default)', {
       missing: missing.join(', '),
     });
+    // This one DOES reach a worker turn, so the skipped control is a real hole in a guarantee the
+    // docs state — say it out loud rather than proceed in silence. The control genuinely cannot run:
+    // executing the re-authored bar at t=0 is what it judges, and the toolchain to execute it is absent.
+    if (deps.recontract === true) {
+      logControlUnapplied(
+        log,
+        `the verification's required tools (${missing.join(', ')}) are not installed, so the ` +
+          're-authored bar cannot be executed at t=0 (the install is delegated to the agent)',
+      );
+    }
     return { prepared: { status: 'proceed', installTools: missing }, setupRan: false };
   }
 
@@ -107,7 +177,9 @@ export async function prepareWorkspace(
         });
         setupHint = buildSetupHint(contract.setup);
       } else {
-        // User `--setup-cmd` (or unknown provenance): keep the fatal, fail-closed behavior.
+        // User `--setup-cmd` (or unknown provenance): keep the fatal, fail-closed behavior. Like
+        // `tools-missing` above this is an ABORT, so the re-contract control is not skipped past —
+        // the run ends here and the re-authored bar never governs a worker turn.
         return { prepared: setupFailure, setupRan };
       }
     }
@@ -223,7 +295,15 @@ async function preflightDeterministic(
   log: Logger,
 ): Promise<PreparedOutcome> {
   const deterministic = contract.rungs.filter((r) => r.kind === 'deterministic');
-  if (deterministic.length === 0) return { status: 'proceed' };
+  if (deterministic.length === 0) {
+    // One of the two residual inapplicabilities of the re-contract anti-softening control, and it is
+    // STATED rather than skipped in silence: the control fires on a bar that ALREADY PASSES at t=0,
+    // so with no deterministic rung there is nothing to run before the first worker turn.
+    if (deps.recontract === true) {
+      logControlUnapplied(log, 'the re-authored bar has no deterministic rung to execute at t=0');
+    }
+    return { status: 'proceed' };
+  }
   const verifyMs = deps.timeouts?.verifyMs;
 
   // Fix B1 (revised — issue #78): is this a FROM-SCRATCH tree (no implementation source yet)? On such a
@@ -248,6 +328,16 @@ async function preflightDeterministic(
       log.warn('pre-flight check errored (advisory only) — proceeding to the worker loop', {
         reason: errorMessage(e),
       });
+      // Advisory for an ordinary run, but for a re-contract it is the third way the anti-softening
+      // control can be skipped on the way to a worker turn: the bar's t=0 state is now unknown, so
+      // there is no green to judge. Fail-open as always — but stated, not silent.
+      if (deps.recontract === true) {
+        logControlUnapplied(
+          log,
+          'a deterministic rung errored instead of producing a verdict at t=0 ' +
+            `(${errorMessage(e)}), so the re-authored bar's starting state is unknown`,
+        );
+      }
       return { status: 'proceed' };
     }
     if (verdict.pass) {
@@ -259,6 +349,10 @@ async function preflightDeterministic(
     // checks), or is this an honest red because the implementation is simply missing? Only a contract
     // with authored, frozen verification files can be "unsound" in a way the agent can't fix, and the
     // classification needs the LLM — without either, a red is treated as an honest red and proceeds.
+    //
+    // These two returns are NOT a skipped anti-softening control and are not logged as one: the
+    // control judges a bar that ALREADY PASSES at t=0, and this bar is RED. Its precondition is
+    // absent, not defeated — there is no green here to have been softened into.
     if (contract.generatedFiles.length === 0 || deps.llm === undefined) {
       log.info('pre-flight: deterministic rung is red — proceeding (no authored verifier / no classifier)', {});
       return { status: 'proceed' };
@@ -278,49 +372,186 @@ async function preflightDeterministic(
     return { status: 'proceed' };
   }
 
-  // Every deterministic rung already PASSED before the first agent turn. On a FROM-SCRATCH tree with an
-  // AUTHORED verifier (generatedFiles) that is the compiler-authored-the-solution deadlock: the bar can
-  // only be green because the implementation was authored INTO the frozen verification set (the
-  // anti-tamper guard then pins it, and the worker's real edits register as no-diff → a spurious abort),
-  // or the bar is vacuous. Catch it here, before any worker token is spent, as a typed CONTRACT_UNSOUND.
-  //
-  // FAIL-OPEN by construction — it must NEVER abort a legitimate run (a file that is simply not created
-  // yet stays an honest red, handled above; it can never reach this branch). It fires ONLY on the
-  // high-confidence positive signal AND an LLM confirmation: an authored verifier + a confidently
-  // from-scratch tree (`isEmptyOfSource` fail-safes to FALSE on any git error, so an existing or
-  // undetectable tree proceeds) + a model that, asked to rule in "the goal is genuinely already
-  // satisfied", confidently judges the contract unsound instead. No LLM, an LLM error, an unparseable
-  // verdict, or any "sound"/uncertain answer all PROCEED. So neither a not-yet-created nor an
-  // undetected file can ever become a failure here — only an authored bar that passes off nothing.
-  if (contract.generatedFiles.length > 0 && emptyOfSource && deps.llm !== undefined) {
-    const green = await classifyVacuousContract(
-      { llm: deps.llm, ...(deps.logger !== undefined ? { logger: deps.logger } : {}) },
-      contract,
-      lastPassDetail,
-    );
-    if (green.broken) {
-      log.error(
-        'pre-flight: an authored verifier already passes on a from-scratch tree before the first agent ' +
-          'turn (→ CONTRACT_UNSOUND) — the compiler likely authored the implementation into the frozen ' +
-          'verification set, or the bar is vacuous',
-        {},
-      );
-      const reason = green.reason.length > 0 ? `${green.reason}\n\n` : '';
-      const remedy =
-        'The frozen verifier passes on a from-scratch tree before the worker wrote anything, so it is not ' +
-        'actually testing the goal — the compiler likely authored the implementation into the frozen ' +
-        'verification set (the anti-tamper guard then pins it, deadlocking the worker), or the bar is ' +
-        'vacuous. Re-author with a stronger --compiler-model, review/revise the contract at Seal (avoid ' +
-        '--autonomous with a weak authoring model), or supply your own --verify-cmd so you own the bar.';
-      return { status: 'contract-unsound', detail: `${reason}${remedy}`.slice(0, DETAIL_LIMIT) };
-    }
-    log.info(
-      'pre-flight: bar passes on a from-scratch tree but the classifier judged the goal already ' +
-        'satisfied — proceeding',
-      {},
-    );
-  }
-
+  const green = await greenNegativeControl(deps, contract, lastPassDetail, emptyOfSource, log);
+  if (green !== null) return green;
   log.info('pre-flight: deterministic checks already pass before the first agent turn — proceeding', {});
   return { status: 'proceed' };
 }
+
+/**
+ * The GREEN-case negative control, run when every deterministic rung ALREADY PASSED before the first
+ * agent turn. Two trees make that suspicious, each with its own classifier and the same fail-open shape:
+ *
+ *  - FROM-SCRATCH with an AUTHORED verifier (`generatedFiles`) — the compiler-authored-the-solution
+ *    deadlock: the bar can only be green because the implementation was authored INTO the frozen
+ *    verification set (the anti-tamper guard then pins it, and the worker's real edits register as
+ *    no-diff → a spurious abort), or the bar is vacuous.
+ *  - A `--recontract` successor (issue #117) — the bar was just RE-AUTHORED off a defect report, so
+ *    "the repair softened it" is a live risk on ANY tree. This is the negative control that keeps a
+ *    re-contract from becoming a weakening channel, so it is given the EVIDENCE to answer that by
+ *    comparison: the re-authored files are read off the inherited tree here and combined with the
+ *    predecessor's bar + the adjudicated defect carried in the run header
+ *    ({@link gatherRecontractEvidence}). A control shown only filenames and a pass count cannot detect
+ *    softening at all — and, failing open, would wave it through.
+ *
+ * The two arms have DIFFERENT preconditions, and conflating them is what twice made the re-contract arm
+ * silently inapplicable. The vacuous arm needs BOTH an AUTHORED verifier (`generatedFiles`) and a
+ * from-scratch tree (`emptyOfSource`) — its whole hypothesis is that the implementation was authored
+ * into the frozen file set of an otherwise empty tree. The re-contract arm needs NEITHER:
+ *   - no `generatedFiles`: a successor whose re-authored bar declares NO files and is a bare
+ *     `--verify-cmd` is the most softened bar a repair can produce, so it is precisely what the
+ *     control must judge;
+ *   - no tree precondition: the classic case is an inherited tree carrying the predecessor's
+ *     implementation, but an inherited tree with NO implementation source makes a green MORE
+ *     suspicious, not less (nothing on disk can be making it pass). `emptyOfSource` is therefore
+ *     handed to the classifier as evidence, never used as a gate.
+ *
+ * FAIL-OPEN by construction — it must NEVER abort a legitimate run (a file that is simply not created
+ * yet stays an honest red, handled by the caller; it can never reach here). It fires ONLY on the
+ * high-confidence positive signal AND an LLM confirmation: one of the two cases above
+ * (`isEmptyOfSource` fail-safes to FALSE on any git error) + a model that, asked to rule IN the
+ * legitimate case, confidently judges the contract unsound instead. An LLM error, an unparseable
+ * verdict, or any "sound"/uncertain answer all PROCEED.
+ *
+ * The re-contract arm is NOT unconditional, and every way it can be missed on the way to a worker turn
+ * is LOGGED via {@link logControlUnapplied} rather than skipped in silence: no LLM provider is wired
+ * (there is no classifier to ask — here); the re-authored bar has no deterministic rung to execute at
+ * t=0, or a rung errored instead of producing a verdict, or a `requiredTools` program is missing so the
+ * bar cannot be executed at all (the three in {@link preflightDeterministic}/{@link prepareWorkspace}).
+ * The remaining paths out of the prepare phase are ABORTS (`tools-missing`, a fatal user `setup`, a red
+ * classified `contract-unsound`) — no worker turn follows them — or a RED bar, where the control's
+ * precondition (a bar that already passes) is simply absent.
+ *
+ * Returns a typed abort, or `null` to proceed (including whenever the control does not apply).
+ */
+async function greenNegativeControl(
+  deps: PrepareDeps,
+  contract: CompiledContract,
+  lastPassDetail: string,
+  emptyOfSource: boolean,
+  log: Logger,
+): Promise<PreparedOutcome | null> {
+  // A re-contract takes the re-contract arm on EVERY green, with no tree precondition at all. The
+  // two gates below belong to the VACUOUS mirror only:
+  //  - `generatedFiles` — that mirror's hypothesis is a compiler that authored the solution INTO the
+  //    frozen file set, so it is meaningless without one; the re-contract arm's worst case is the
+  //    opposite (a "repaired" bar that authored nothing and is a bare `--verify-cmd`).
+  //  - `emptyOfSource` — a from-scratch tree is the only tree on which an ORDINARY green is
+  //    interpretable. A re-contract green is suspicious on ANY tree: usually the predecessor's
+  //    implementation is on disk (the classic case), but an inherited tree that holds no
+  //    implementation source is MORE damning, not less — a bar that passes there cannot be passing
+  //    off a correct implementation. Requiring `!emptyOfSource` therefore silently disabled the
+  //    control on the very tree where a green proves least. It is now passed to the classifier as
+  //    evidence instead of used as a gate.
+  const recontract = deps.recontract === true;
+  if (!recontract && (contract.generatedFiles.length === 0 || !emptyOfSource)) return null;
+  if (deps.llm === undefined) {
+    // Stated, not silent: the control is a model judgement, so without a read-only LLM provider
+    // there is nothing to ask. Fail-open as always — it can only ever refuse a run, never green one.
+    if (recontract) {
+      logControlUnapplied(
+        log,
+        'the re-authored bar already passes on the inherited tree, but no LLM provider is wired to judge it (--llm-provider)',
+      );
+    }
+    return null;
+  }
+  const classifyDeps = { llm: deps.llm, ...(deps.logger !== undefined ? { logger: deps.logger } : {}) };
+  const green = recontract
+    ? await classifyRecontractedBar(
+        classifyDeps,
+        contract,
+        lastPassDetail,
+        await gatherRecontractEvidence(deps, contract, emptyOfSource, log),
+      )
+    : await classifyVacuousContract(classifyDeps, contract, lastPassDetail);
+  if (!green.broken) {
+    log.info(
+      'pre-flight: the bar already passes before the first agent turn, but the negative control judged ' +
+        'it legitimate — proceeding',
+      { recontract },
+    );
+    return null;
+  }
+  log.error(
+    'pre-flight: the frozen bar passes before the first agent turn and the negative control judged it ' +
+      'unsound (→ CONTRACT_UNSOUND)',
+    { recontract },
+  );
+  const reason = green.reason.length > 0 ? `${green.reason}\n\n` : '';
+  return {
+    status: 'contract-unsound',
+    detail: `${reason}${recontract ? RECONTRACT_REMEDY : VACUOUS_REMEDY}`.slice(0, DETAIL_LIMIT),
+  };
+}
+
+/**
+ * Say out loud that the `--recontract` anti-softening negative control could not be applied. The
+ * control is fail-open, so an inapplicability can only ever be a silent hole in a guarantee the docs
+ * state — which is why it is logged with the reason rather than skipped quietly.
+ */
+function logControlUnapplied(log: Logger, why: string): void {
+  log.warn(
+    `pre-flight: --recontract anti-softening negative control could not run — ${why}. Proceeding unchecked (fail-open).`,
+    {},
+  );
+}
+
+/** Per-file / total caps on the re-authored verification content folded into the control's prompt. */
+const MAX_EVIDENCE_FILE_CHARS = 8000;
+const MAX_EVIDENCE_TOTAL_CHARS = 32_000;
+
+/**
+ * Read the RE-AUTHORED verification files off the inherited tree and combine them with the
+ * predecessor-side evidence from the run header, so the negative control can compare old bar vs new
+ * bar instead of guessing from filenames and a pass count.
+ *
+ * FAIL-OPEN at the finest grain the finding allows: a file that is missing, unreadable, empty, or
+ * whose read throws is dropped from the prompt ONLY — never an error, never an abort. Bounded per
+ * file and in total so a huge authored test cannot blow up the one classifier call.
+ */
+async function gatherRecontractEvidence(
+  deps: PrepareDeps,
+  contract: CompiledContract,
+  emptyOfSource: boolean,
+  log: Logger,
+): Promise<RecontractEvidence> {
+  const read = deps.readFile ?? ((rel: string) => deps.workspace.readFile(rel));
+  const files: RecontractFile[] = [];
+  let budget = MAX_EVIDENCE_TOTAL_CHARS;
+  for (const file of contract.generatedFiles) {
+    if (budget <= 0) break;
+    let content: string | null;
+    try {
+      content = await read(file.path);
+    } catch (e) {
+      log.warn('re-contract control: could not read a re-authored verification file — omitting it', {
+        path: file.path,
+        reason: errorMessage(e),
+      });
+      continue;
+    }
+    if (content === null || content.length === 0) continue;
+    const clipped = content.slice(0, Math.min(MAX_EVIDENCE_FILE_CHARS, budget));
+    budget -= clipped.length;
+    files.push({ path: file.path, content: clipped });
+  }
+  // `emptyOfSource` is evidence, never a gate (see `greenNegativeControl`): on an inherited tree with
+  // no implementation source, "the implementation on disk is correct" cannot explain the green.
+  return { ...(deps.recontractEvidence ?? {}), files, emptyOfSource };
+}
+
+/** Remedy for a bar that passes on a from-scratch tree (the compiler likely authored the solution). */
+const VACUOUS_REMEDY =
+  'The frozen verifier passes on a from-scratch tree before the worker wrote anything, so it is not ' +
+  'actually testing the goal — the compiler likely authored the implementation into the frozen ' +
+  'verification set (the anti-tamper guard then pins it, deadlocking the worker), or the bar is ' +
+  'vacuous. Re-author with a stronger --compiler-model, review/revise the contract at Seal (avoid ' +
+  '--autonomous with a weak authoring model), or supply your own --verify-cmd so you own the bar.';
+
+/** Remedy for a RE-CONTRACTED bar (issue #117) the negative control judged weakened. */
+const RECONTRACT_REMEDY =
+  'The re-contracted bar passes on the inherited tree before the worker did anything, and the negative ' +
+  'control judged it WEAKER than the goal — repairing a defective bar must not soften it. Re-run the ' +
+  're-contract with a stronger --compiler-model, review it at Seal (--mode review), or supply your own ' +
+  '--verify-cmd so you own the bar.';

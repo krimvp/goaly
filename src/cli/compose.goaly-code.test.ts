@@ -118,6 +118,18 @@ describe('composeDeps — OpenAI LLM provider wiring', () => {
     ).not.toThrow();
   });
 
+  it('never applies the issue #125 approver-independence default to openai (it has no default model)', () => {
+    // The approver falling back to "the provider's own model" is only sound where one exists;
+    // for `openai` that would be a missing model ⇒ EndpointConfigError, i.e. a wiring that works
+    // today turned into a refused run. Pinned: --model alone still composes every step.
+    expect(() =>
+      composeDeps(
+        makeConfig(),
+        base({ llmProvider: 'openai', baseUrl: 'https://api.openai.com/v1', models: { model: 'only-model' } }),
+      ),
+    ).not.toThrow();
+  });
+
   it('fails closed when --llm-provider openai has no base url', () => {
     expect(() =>
       composeDeps(makeConfig(), base({ llmProvider: 'openai', models: { model: 'gpt-x' } })),

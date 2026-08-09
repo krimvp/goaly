@@ -25,6 +25,7 @@ const detail = (runId: string): RunDetail => ({
   stateTag: 'DONE',
   reason: undefined,
   harness: 'fake',
+  degraded: undefined,
   sessionId: undefined,
   startedAt: 1,
   endedAt: 2,
@@ -47,6 +48,8 @@ const detail = (runId: string): RunDetail => ({
   compileFailures: [],
   seal: [],
   prepare: undefined,
+  adjudication: undefined,
+  provenance: undefined,
   iterationsDetail: [],
 });
 

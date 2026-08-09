@@ -43,6 +43,32 @@ describe('renderResolvedConfig', () => {
     expect(raised).toMatch(/harness-autonomy\s+medium/);
   });
 
+  it('shows what the SECOND KEY runs on, and labels a collapsed one (issue #125)', async () => {
+    // Only one model available: agent = judge = approver, so the dry run says so before any spend.
+    const collapsed = await render(['run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'claude']);
+    expect(collapsed).toMatch(/sign-off model \(2nd key\)\s+\(the provider's own default\)/);
+    expect(collapsed).toMatch(/degraded mode\s+SELF-JUDGED/);
+    expect(collapsed).toContain('--approver-model <other>');
+
+    // --model names the AGENT's model; the approver declines to inherit it — but it lands on the
+    // provider's own default, whose id goaly cannot resolve, so the row says UNVERIFIED (never
+    // "independent") and the run is labelled INDEPENDENCE-UNVERIFIED rather than silently clean.
+    const unverified = await render([
+      'run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'claude', '--model', 'big-model',
+    ]);
+    expect(unverified).toContain("declined to inherit the agent's --model big-model");
+    expect(unverified).toContain('independence UNVERIFIED');
+    expect(unverified).not.toContain('kept INDEPENDENT');
+    expect(unverified).toMatch(/degraded mode\s+INDEPENDENCE-UNVERIFIED/);
+
+    // An explicit second-key model is shown as-is.
+    const explicit = await render([
+      'run', '--goal', 'g', '--verify-cmd', 'true', '--approver-model', 'other-model',
+    ]);
+    expect(explicit).toMatch(/sign-off model \(2nd key\)\s+other-model/);
+    expect(explicit).not.toContain('degraded mode');
+  });
+
   it('shows the stuck thresholds a run would actually use', async () => {
     const out = await render([
       'run', '--goal', 'g', '--verify-cmd', 'true', '--stuck-crash-threshold', '4',

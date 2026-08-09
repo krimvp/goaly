@@ -14,8 +14,11 @@ import type { StuckReason } from './stuck';
  *                  attempt after the driver-level retry was already exhausted.
  *
  * NEVER remediated: `unevaluable` (a verification-ENVIRONMENT failure — retrying cannot fix a
- * missing tool), `budget` (an operator cap), and `oscillation` (a cycle a canned hint has already
- * demonstrably failed to break). Those abort exactly as without the flag.
+ * missing tool), `budget` (an operator cap), `oscillation` (a cycle a canned hint has already
+ * demonstrably failed to break), and `timeout-no-diff` (issue #119 — the turn is running out of
+ * wall-clock TIME, so one more attempt at the same cap buys another full-length no-op; the fix is a
+ * bigger `--harness-timeout-ms` / an idle timeout, which the reducer cannot grant itself). Those
+ * abort exactly as without the flag.
  */
 
 /** Hard per-run cap on remediations (one per remediable kind — the cap makes the bound explicit). */

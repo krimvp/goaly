@@ -86,8 +86,8 @@
   const PIPE_DETAIL = {
     compile: {
       t: "COMPILE — author & freeze",
-      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. Vacuous or un-runnable bars are refused at compile, and with --adversarial a red-team panel attacks the authored bar before Seal.",
-      pills: ['<span class="pill pass">→ contractHash</span>', '<span class="pill fail">--adversarial red-team</span>'],
+      d: "The agent finds or writes the verification and emits a runnable check + rubric. It's hashed and <b>frozen</b> — no later step can rewrite it. Vacuous or un-runnable bars are refused at compile. Two guards run before the freeze, both ON by default: a <b>satisfiability critic</b> asks whether a CORRECT implementation could still FAIL this bar (the mirror of red-teaming — findings make the bar satisfiable, never easier), and a <b>positive control</b> answers the same question by execution — a throwaway reference implementation is run against the bar in a scratch copy, and a bar even that cannot green is refused and re-authored (--no-satisfiability-critic / --contract-dry-run false opt out). With --adversarial a red-team panel attacks the authored bar as well.",
+      pills: ['<span class="pill pass">→ contractHash</span>', '<span class="pill violet">--contract-dry-run</span>', '<span class="pill violet">satisfiability critic</span>', '<span class="pill fail">--adversarial red-team</span>'],
     },
     seal: {
       t: "SEAL — lock the bar",
@@ -106,18 +106,18 @@
     },
     ladder: {
       t: "Verify — deterministic first",
-      d: "Checks run cheapest-and-hardest-to-game first (tests / exit codes before any LLM judge) and short-circuit on the first fail. Fail-closed: a malformed grader is never a green. With --adversarial a refute-first skeptic panel runs last and can only fail a candidate green.",
-      pills: ['<span class="pill pass">exit codes</span>', '<span class="pill violet">LLM judge</span>', '<span class="pill fail">--adversarial refuters</span>'],
+      d: "Checks run cheapest-and-hardest-to-game first (tests / exit codes before any LLM judge) and short-circuit on the first fail. Under --generate a built-in integrity guard is rung [0]: every file goaly authored must still match the hash frozen into the contract, so the ladder you approved at Seal is the ladder that runs. Fail-closed: a malformed grader is never a green. With --adversarial a refute-first skeptic panel runs last and can only fail a candidate green.",
+      pills: ['<span class="pill pass">[0] integrity guard</span>', '<span class="pill pass">exit codes</span>', '<span class="pill violet">LLM judge</span>', '<span class="pill fail">--adversarial refuters</span>'],
     },
     signoff: {
       t: "SIGN-OFF — veto-only",
-      d: "Runs only on a green check. An independent reviewer can veto, never promote a red — the second key for DONE.",
-      pills: ['<span class="pill fail">veto-only</span>'],
+      d: "Runs only on a green check. An independent reviewer can veto, never promote a red — the second key for DONE. Independence is wired, not assumed: the approver does not inherit the agent's --model where the provider offers another one, a run whose agent, judge rung and approver still collapse onto one model is labelled SELF-JUDGED (degraded) in the run header, the terminal summary and `goaly runs show`, and one where that comparison is impossible (the approver on the provider's own unresolvable default) is labelled INDEPENDENCE-UNVERIFIED rather than reported as independent.",
+      pills: ['<span class="pill fail">veto-only</span>', '<span class="pill violet">--approver-model</span>'],
     },
     decide: {
       t: "DECIDE — pure truth table",
-      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop with a typed reason on STUCK / budget / iteration cap. A no-diff turn is excused when the run was cut short, and a checker that itself can't run is a CONTRACT_UNEVALUABLE — correct-but-unverified, never blamed on the tree, never a green.",
-      pills: ['<span class="pill pass">two keys → DONE</span>'],
+      d: "Zero-LLM. DONE needs two keys; otherwise loop back, or stop with a typed reason on STUCK / budget / iteration cap. A no-diff turn is excused when the run was cut short — but only once: repeated timeout-with-no-diff turns stop the run as STUCK_TIMEOUT_NO_DIFF instead of burning the iteration budget. A checker that itself can't run is a CONTRACT_UNEVALUABLE — correct-but-unverified, never blamed on the tree, never a green. And a repeat-failure streak that keeps tripping a FROZEN authored check takes one detour first: DECIDE emits ADJUDICATE_CONTRACT, the Driver makes ONE read-only call (the reducer stays pure), and an unsatisfiable bar aborts as CONTRACT_DEFECTIVE — your tree may be correct, so keep it, and the abort prints the successor command (--from-run <id> --recontract) that re-authors the bar and freezes a NEW contract under a NEW run id. Anything less than a confident verdict keeps today's abort, byte for byte.",
+      pills: ['<span class="pill pass">two keys → DONE</span>', '<span class="pill fail">CONTRACT_DEFECTIVE</span>'],
     },
   };
 

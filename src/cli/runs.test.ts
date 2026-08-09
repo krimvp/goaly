@@ -80,6 +80,7 @@ describe('renderRunDetail', () => {
       stateTag: 'DONE',
       reason: undefined,
       harness: undefined,
+      degraded: undefined,
       sessionId: undefined,
       startedAt: 1_700_000_000_000,
       endedAt: 1_700_000_050_000,
@@ -102,6 +103,8 @@ describe('renderRunDetail', () => {
       compileFailures: [],
       seal: [{ kind: 'approve' }],
       prepare: undefined,
+      adjudication: undefined,
+      provenance: undefined,
       iterationsDetail: [
         { index: 1, runStatus: 'completed', changed: true, tokensSpent: 10, sessionId: SessionId.parse('s1'), verdict: failVerdict('red'), signoff: undefined, phase: undefined },
         { index: 2, runStatus: 'completed', changed: true, tokensSpent: 25, sessionId: SessionId.parse('s1'), verdict: passVerdict('green'), signoff: approve(), phase: undefined },
@@ -127,6 +130,30 @@ describe('renderRunDetail', () => {
     expect(text).toContain('plan-seal: approve');
     expect(text).toContain('phase=1'); // iteration 1 → phase 0 (1-based render)
     expect(text).toContain('phase=3'); // iteration 2 → acceptance phase (index 2, 1-based 3)
+  });
+
+  it('labels a self-judged run right under the status (issue #125)', () => {
+    const text = renderRunDetail(
+      detail({ degraded: { kind: 'self-judged', model: 'one-model', generate: true, autonomous: true } }),
+    );
+    expect(text).toContain('degraded:    SELF-JUDGED');
+    expect(text).toContain('one-model');
+    expect(text).toContain('--generate --autonomous');
+    expect(text).toContain('--approver-model');
+    // The label rides WITH a DONE — that is the whole point (a DONE nobody independently reviewed).
+    expect(text).toContain('status:      DONE');
+  });
+
+  it('says "the tool default" when the collapsed model was never named', () => {
+    const text = renderRunDetail(
+      detail({ degraded: { kind: 'self-judged', generate: true, autonomous: true } }),
+    );
+    expect(text).toContain('degraded:    SELF-JUDGED');
+    expect(text).toContain('the tool default');
+  });
+
+  it('prints no degraded line for a run with independent keys (and for pre-#125 logs)', () => {
+    expect(renderRunDetail(detail())).not.toContain('degraded:');
   });
 
   it('shows status, the frozen contract hash, Seal, and per-iteration ladder + Sign-off', () => {

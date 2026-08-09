@@ -2,6 +2,7 @@ import type { RunLogEntry } from '../../runlog/runlog';
 import type { StreamTranscriptEntry } from '../../runlog/stream-transcript';
 import type { CompiledContract } from '../../domain/contract';
 import type { SealEditPatch } from '../../domain/verdict';
+import { degradedModeTag } from '../../domain/degraded';
 
 /**
  * Pure presentation helpers for the browser (no DOM, no node imports — unit-testable in vitest).
@@ -56,6 +57,11 @@ export function feedLine(entry: RunLogEntry, iteration: number): FeedLine | null
       return e.verdict.pass
         ? { at, text: `iter ${iteration}: verify PASS ✓`, tone: 'pass' }
         : { at, text: `iter ${iteration}: verify FAIL ✗ — ${truncate(e.verdict.detail, 160)}`, tone: 'fail' };
+    case 'CONTRACT_ADJUDICATED':
+      // Issue #116: the in-loop re-adjudication of the frozen bar (at most once per run).
+      return e.defective
+        ? { at, text: `contract adjudicated DEFECTIVE — ${truncate(e.reason, 160)}`, tone: 'fail' }
+        : plain('contract adjudicated sound (the repeat-failure abort stands)');
     case 'SIGNOFF_DECIDED':
       return e.approval.veto
         ? { at, text: `iter ${iteration}: sign-off VETO — ${truncate(e.approval.reason ?? '', 160)}`, tone: 'fail' }
@@ -80,6 +86,13 @@ export function feedLine(entry: RunLogEntry, iteration: number): FeedLine | null
       const text = `wave: ${merged}/${e.outcomes.length} phase(s) merged + re-verified${fallback > 0 ? `, ${fallback} downgraded to sequential` : ''}`;
       return { at, text, tone: fallback > 0 ? 'plain' : 'pass' };
     }
+    case 'DEGRADED_ESCALATED':
+      // Issue #125: a resume whose key wiring is more collapsed than the run's own. Not plumbing.
+      return {
+        at,
+        text: `degraded mode escalated to ${degradedModeTag(e.degraded)} (resumed wiring)`,
+        tone: 'fail',
+      };
     case 'CHECKPOINTED':
       return null; // internal diff-baseline plumbing — noise for a human
   }

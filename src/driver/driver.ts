@@ -1,21 +1,25 @@
 import type { Command, OrchestratorEvent, RunExtension, RunOutcome } from '../domain/events';
 import { OrchestratorEvent as OrchestratorEventSchema } from '../domain/events';
-import type { RunLogEntry } from '../runlog/runlog';
+import {
+  freshRunHeader,
+  type RunFollowup,
+  type RunLogEntry,
+  type RunLogHeader,
+  type RunProvenance,
+} from '../runlog/runlog';
 import type { RunConfig } from '../domain/config';
+import type { DegradedMode } from '../domain/degraded';
+import { reconcileDegraded } from './degraded-header';
+import { resume, type Resumed } from './resume';
 import type { CompiledContract } from '../domain/contract';
 import type { ContractHash, RunId, SessionId } from '../domain/ids';
 import { DiffHash, coerceSessionId } from '../domain/ids';
 import type { Verdict } from '../domain/verdict';
 import type { TokenUsage, UsageReport } from '../domain/usage';
-import { isTerminal, iterationCount, type LoopCtx, type OrchestratorState } from '../orchestrator/state';
+import { isTerminal, iterationCount, remediationsTotal, type OrchestratorState } from '../orchestrator/state';
 import { MAX_STUCK_REMEDIATIONS } from '../orchestrator/remediate';
 import { initial, step } from '../orchestrator/step';
-
-/** The remediation spend banked in a state's loop context, when the state carries one (plan 4.2). */
-function remediationsTotal(state: OrchestratorState): number | undefined {
-  const ctx = (state as { ctx?: LoopCtx }).ctx;
-  return ctx?.remediations.total;
-}
+import { bootstrapFailedReason, driverErrorReason } from '../orchestrator/reason-quote';
 import { performRefreeze } from './refreeze';
 import { replay } from '../runlog/replay';
 import type { VerifierCompiler } from '../compile/compiler';
@@ -40,8 +44,12 @@ import type { PhasedStreamSink } from '../agent-cli/stream';
 import type { Observer } from '../observe/observer';
 import { errorMessage } from '../util/errors';
 import { noopTelemetry, type Telemetry, type TelemetryEvent } from '../telemetry/telemetry';
-import { prepareWorkspace, type PrepareTimeouts } from './prepare';
+import { prepareWorkspace, recontractPrepareDeps, type PrepareTimeouts } from './prepare';
+import { classifyContractFault } from './preflight-soundness';
+import { appendAdjudicatedDefect, type DefectCorpus } from '../defects/corpus';
 import { Baseline, recordCheckpoint, type CheckpointDeps } from './baseline';
+import { logEvent } from './log-event';
+import { buildOutcome } from './outcome';
 
 // Re-exported from {@link ./baseline} (the checkpoint primitive + the Baseline diff-scope module live
 // there now); kept on the Driver's public surface for embedders and the existing index.ts exports.
@@ -135,6 +143,12 @@ export type DriverDeps = {
    */
   prepareLlm?: LlmProvider;
   /**
+   * The cross-run DEFECT CORPUS (issue #122), written from EXACTLY ONE place: a `CONTRACT_DEFECTIVE`
+   * adjudication (below). Advisory and fail-open, and unable to influence THIS run — the record is
+   * minted after the run has already decided to abort. Absent (`--no-defect-corpus`) ⇒ no writes.
+   */
+  defectCorpus?: DefectCorpus;
+  /**
    * Diagnostic logger (the Driver is the orchestration choke-point: it sees every Command, Event,
    * verdict and decision). Optional and defaults to a no-op so logging never affects control flow,
    * never touches the filesystem in tests, and is pure wiring — it has no bearing on the contract,
@@ -179,11 +193,30 @@ export type DriveOptions = {
    */
   harness?: string;
   /**
+   * Typed degraded-mode label for the header (issue #125) — e.g. a fully self-judged model wiring,
+   * so that DONE is labelled wherever reported. Wiring like {@link harness}: never contract/gate.
+   */
+  degraded?: DegradedMode;
+  /**
    * Operator extension/steering for THIS resume (ADR 0012). Ignored on a fresh run and on a log
    * that doesn't exist yet. Appended as a RUN_EXTENDED marker BEFORE the resume fold, so a raised
    * cap un-terminates a FAILED-at-cap / budget-ABORTED run and a `note` reaches the next prompt.
    */
   extend?: RunExtension;
+  /**
+   * Successor provenance (`--recontract`, issue #117): this run re-authors the bar of a predecessor
+   * whose contract was adjudicated DEFECTIVE, over the tree that run left behind. Recorded once in
+   * the log header (never in the contract, never fed to the reducer) and used to widen the pre-flight
+   * NEGATIVE CONTROL — a re-authored bar that already passes is exactly as suspicious as one that
+   * passes on a from-scratch tree. Absent ⇒ an ordinary run, unchanged in every respect.
+   */
+  provenance?: RunProvenance;
+  /**
+   * Follow-up provenance (`--from-run`, Capability C): the predecessor run + the bounded prior-run
+   * compaction that seeded authoring. Header-only wiring (never contract, never reducer) so a resume
+   * that must still COMPILE can rebuild the seed instead of re-authoring with no prior context.
+   */
+  followup?: RunFollowup;
 };
 
 /**
@@ -203,6 +236,8 @@ export async function drive(
   let ladder: Verifier | null = null;
   let contractHash: ContractHash | null = null;
   let pendingNote: string | null = null;
+  /** The run's EFFECTIVE successor provenance — see {@link Bootstrapped.provenance}. */
+  let provenance: RunProvenance | undefined;
   const log = deps.logger ?? noopLogger;
   const llmMeter = deps.llmMeter ?? new LlmTokenMeter();
   // Telemetry (pure observability seam): a fire-and-forget sink for lifecycle datapoints. Strictly
@@ -263,14 +298,14 @@ export async function drive(
   // ABORTED like every other seam — a disk-full/corrupt-log throw here used to escape `drive()`
   // entirely (the only rejection path left), reaching the caller as a raw stack trace.
   try {
-    ({ state, commands, seq, contractHash, ladder, pendingNote } = await bootstrap(
+    ({ state, commands, seq, contractHash, ladder, pendingNote, provenance } = await bootstrap(
       deps, config, runId, options, baseline, log,
     ));
   } catch (e) {
     log.error('run bootstrap failed (fail-closed → ABORTED)', { reason: errorMessage(e) });
     const outcome: RunOutcome = {
       status: 'ABORTED',
-      reason: `run bootstrap failed: ${errorMessage(e)}`,
+      reason: bootstrapFailedReason(errorMessage(e)),
       iterations: 0,
       contractHash: null,
       runId,
@@ -352,7 +387,7 @@ export async function drive(
               seq,
               config.resumeBestOfIncomplete,
             )
-          : await perform(command, deps, ladder, llmMeter, baseline);
+          : await perform(command, deps, ladder, llmMeter, baseline, runId, provenance);
       if (performed.seq !== undefined) seq = performed.seq;
       const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge
       if (performed.ladder !== undefined) ladder = performed.ladder;
@@ -417,12 +452,15 @@ export async function drive(
   } catch (e) {
     // Last-resort safety net: every effectful seam is individually fail-closed, but an unexpected
     // throw (corrupt log on append, invalid transition) must still resolve to a terminal outcome
-    // rather than reject — so the caller always gets a RunOutcome.
+    // rather than reject — so the caller always gets a RunOutcome. The message is QUOTED behind a
+    // lead-in, never claimed as goaly's own words: this catch wraps CHECKPOINT_AND_ADVANCE, a
+    // --phased between-phase checkpoint that runs AFTER worker turns, so the exception text can
+    // carry tree-authored content (see `src/orchestrator/reason-quote.ts`).
     log.error('driver error (fail-closed → ABORTED)', { reason: errorMessage(e) });
     const extras = await buildOutcomeExtras(deps);
     const outcome: RunOutcome = {
       status: 'ABORTED',
-      reason: `driver error: ${errorMessage(e)}`,
+      reason: driverErrorReason(errorMessage(e)),
       iterations: iterationCount(state),
       contractHash: contractHash ?? null,
       runId,
@@ -493,90 +531,6 @@ async function buildOutcomeExtras(
   }
 }
 
-/**
- * Translate a performed Event into leveled diagnostics. Content that may carry repo text or
- * secrets (prompts, harness output, verifier detail, the diff) is kept at `debug` only — `info`
- * stays content-free (statuses, counts, hashes, decisions).
- */
-function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void {
-  switch (event.tag) {
-    case 'PLAN_COMPILED':
-      // Log the frozen plan LOUDLY so the decomposition is auditable (the plan-level analogue of the
-      // CONTRACT_COMPILED audit line). Phase goals may carry repo text — keep them at debug.
-      log.info('plan compiled', {
-        planHash: event.plan.planHash,
-        phases: event.plan.phases.length,
-        ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
-      });
-      log.debug('plan phases', { goals: event.plan.phases.map((p) => p.goal) });
-      return;
-    case 'PLAN_FAILED':
-      log.error('plan failed', { reason: event.reason });
-      return;
-    case 'PLAN_SEAL_DECIDED':
-      log.info('plan seal decided', { decision: event.decision.kind });
-      return;
-    case 'PHASE_ADVANCED':
-      log.info('phase advanced (checkpoint taken)', { tree: event.tree });
-      return;
-    case 'CONTRACT_COMPILED':
-      log.info('contract compiled', {
-        contractHash: event.contract.contractHash,
-        rungs: event.contract.rungs.length,
-        ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
-      });
-      return;
-    case 'COMPILE_FAILED':
-      log.error('compile failed', { reason: event.reason });
-      return;
-    case 'SEAL_DECIDED':
-      log.info('seal decided', { decision: event.decision.kind });
-      return;
-    case 'WORKSPACE_PREPARED':
-      log.info('workspace prepared', {
-        status: event.prepared.status,
-        setupRan: event.setupRan,
-        ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
-      });
-      // The detail of a fail-closed outcome may carry repo text / tool output — keep it at debug.
-      if (event.prepared.status !== 'proceed') {
-        log.debug('prepare detail', { detail: event.prepared.detail });
-      }
-      return;
-    case 'AGENT_RAN':
-      log.info('agent ran', {
-        status: event.run.status,
-        changed: event.prevDiffHash !== event.diffHash,
-        ...(event.budget.tokensSpent !== undefined ? { tokensSpent: event.budget.tokensSpent } : {}),
-        ...(event.budget.tokensEstimated !== undefined
-          ? { tokensEstimated: event.budget.tokensEstimated }
-          : {}),
-        ...(event.budget.tokensUnknown === true ? { tokensUnknown: true } : {}),
-        budgetExceeded: event.budget.exceeded,
-      });
-      if (command.tag === 'RUN_AGENT') {
-        // Prompt CONTENT stays out of logs; its size is a safe diagnostic signal.
-        log.debug('agent prompt', { promptChars: command.prompt.length });
-      }
-      return;
-    case 'VERIFIED':
-      log.info('verified', {
-        pass: event.verdict.pass,
-        confidence: event.verdict.confidence,
-        ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
-      });
-      log.debug('verdict detail', { detail: event.verdict.detail });
-      return;
-    case 'SIGNOFF_DECIDED':
-      log.info('sign-off decided', {
-        veto: event.approval.veto,
-        ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
-        ...(event.approval.reason !== undefined ? { reason: event.approval.reason } : {}),
-      });
-      return;
-  }
-}
-
 type Performed = {
   event: OrchestratorEvent;
   ladder?: Verifier;
@@ -595,6 +549,10 @@ async function perform(
    * diff — so the choice of what the approver reviews lives in one place, not threaded by hand here.
    */
   baseline: Baseline,
+  /** Provenance for a defect-corpus record (issue #122); never used for control flow. */
+  runId: RunId,
+  /** Successor provenance (`--recontract`, issue #117): widens AND FEEDS the pre-flight control. */
+  provenance?: RunProvenance,
 ): Promise<Performed> {
   const log = deps.logger ?? noopLogger;
 
@@ -756,6 +714,7 @@ async function perform(
           ...(deps.logger !== undefined ? { logger: deps.logger } : {}),
           ...(deps.prepareTimeouts !== undefined ? { timeouts: deps.prepareTimeouts } : {}),
           ...(deps.prepareLlm !== undefined ? { llm: deps.prepareLlm } : {}),
+          ...recontractPrepareDeps(provenance),
         },
         command.contract,
       );
@@ -882,6 +841,66 @@ async function perform(
       }
     }
 
+    case 'ADJUDICATE_CONTRACT': {
+      // In-loop contract-fault adjudication (issue #116): ONE read-only LLM call, at most once per
+      // run, asking whether the frozen bar the worker keeps failing is itself unsatisfiable. The run
+      // is already terminating, so EVERY failure mode here fail-closes to `defective: false` — which
+      // the reducer folds into today's repeat-failure abort text, marked CONTRACT_ADJUDICATED_SOUND.
+      //
+      // Provider: the already-wired `prepareLlm` — the JUDGE model, deliberately not the compiler
+      // model that authored the (possibly defective) bar, so the review is not purely self-review.
+      if (deps.prepareLlm === undefined) {
+        return {
+          event: {
+            tag: 'CONTRACT_ADJUDICATED',
+            defective: false,
+            reason: 'no adjudicator configured',
+          },
+        };
+      }
+      let diff = '';
+      try {
+        diff = await baseline.approverDiff();
+      } catch (e) {
+        // Advisory input only: a diff we cannot read weakens the prompt, it must never fail the run.
+        log.debug('contract adjudication: could not read the diff (proceeding without it)', {
+          reason: errorMessage(e),
+        });
+      }
+      const verdict = await classifyContractFault(
+        { llm: deps.prepareLlm, ...(deps.logger !== undefined ? { logger: deps.logger } : {}) },
+        command.contract,
+        command.signature,
+        diff,
+        command.repeatCount,
+      );
+      const llm = meterStep('adjudicate');
+      // The ONE sanctioned write to the cross-run defect corpus (issue #122): a positive
+      // adjudication, and nothing else, teaches the compiler. Everything recorded is goaly's own
+      // (the adjudicator's generalized pattern + facts derived from the FROZEN contract) and the
+      // helper never throws, so this can neither fail a run nor carry worker text.
+      if (deps.defectCorpus !== undefined) {
+        await appendAdjudicatedDefect(
+          deps.defectCorpus,
+          verdict,
+          { contract: command.contract, runId, now: deps.clock.now() },
+          deps.logger,
+        );
+      }
+      return {
+        event: {
+          tag: 'CONTRACT_ADJUDICATED',
+          defective: verdict.defective,
+          reason: verdict.reason,
+          ...(verdict.pattern !== undefined ? { pattern: verdict.pattern } : {}),
+          ...(verdict.assertionShape !== undefined
+            ? { assertionShape: verdict.assertionShape }
+            : {}),
+          ...(llm !== undefined ? { llm } : {}),
+        },
+      };
+    }
+
     case 'RUN_AGENT_BEST_OF':
       // Best-of-N is performed in the main loop (it appends its own write-ahead markers + advances
       // seq), never here. Reaching `perform` with it is a wiring bug — fail closed loudly.
@@ -913,13 +932,25 @@ type Bootstrapped = {
   ladder: Verifier | null;
   /** Un-consumed operator note (ADR 0012) to append to the NEXT agent turn's prompt; null if none. */
   pendingNote: string | null;
+  /**
+   * The successor provenance this run ACTUALLY has (issue #117): `options` on a fresh run, re-read
+   * from the header on `--resume` (see {@link bootstrap}). Everything after bootstrap must use THIS,
+   * never `options.provenance`, or a resumed successor loses its pre-flight negative control.
+   */
+  provenance: RunProvenance | undefined;
 };
 
 /**
- * The pre-loop IO in one guarded place: on `--resume`, fold the log, rebuild the ladder, re-point
- * the baselines, and re-arm the budget meter with prior spend; on a fresh run, write the header.
- * Called inside `drive()`'s bootstrap try/catch so any throw here (corrupt log, disk full) resolves
- * to a typed ABORTED rather than the last remaining rejection path out of `drive()`.
+ * The pre-loop IO in one guarded place: on `--resume`, fold the log, rebuild the ladder, re-point the
+ * baselines, re-arm the budget meter with prior spend, and RE-ADOPT the successor provenance from the
+ * header; on a fresh run, write the header. Called inside `drive()`'s bootstrap try/catch so any throw
+ * here (corrupt log, disk full) resolves to a typed ABORTED rather than a rejection out of `drive()`.
+ *
+ * Successor provenance (issue #117) can ONLY arrive from a fresh `--from-run … --recontract` (the CLI
+ * rejects `--from-run` with `--resume`), but it IS in the header — so, like the `baseline` pin below,
+ * a resume reads it back from there. Without that, a resumed re-contract reached `PREPARE_WORKSPACE`
+ * with no provenance and the GREEN negative control (what keeps a re-contract from becoming a
+ * weakening channel) returned early without running anything and without saying so.
  */
 async function bootstrap(
   deps: DriverDeps,
@@ -931,22 +962,32 @@ async function bootstrap(
 ): Promise<Bootstrapped> {
   if (options.resume !== true) {
     const [state, commands] = initial(config);
-    // Record the run-start review baseline (an explicit `--baseline` or the raised-autonomy
-    // auto-pin, applied by compose before drive()) so `--resume` can re-adopt the pin. The `HEAD`
-    // default is deliberately NOT recorded: re-adopting a symbolic HEAD is a no-op, and omitting it
-    // keeps old-log parity.
+    // The run-start review baseline (an explicit `--baseline` or the raised-autonomy auto-pin,
+    // applied by compose before drive()) and the compose-time wiring labels (harness, degraded
+    // mode) ride into the header — `freshRunHeader` owns which of them are recorded.
+    const startedAt = deps.clock.now();
     const runStartBaseline = deps.workspace.currentBaseline();
-    await deps.runlog.writeHeader({
-      runId,
-      startedAt: deps.clock.now(),
-      config,
-      ...(options.harness !== undefined ? { harness: options.harness } : {}),
-      ...(runStartBaseline !== 'HEAD' ? { baseline: runStartBaseline } : {}),
-    });
-    return { state, commands, seq: 0, contractHash: null, ladder: null, pendingNote: null };
+    await deps.runlog.writeHeader(freshRunHeader(runId, startedAt, config, runStartBaseline, options));
+    const fresh = { seq: 0, contractHash: null, ladder: null, pendingNote: null };
+    return { state, commands, ...fresh, provenance: options.provenance };
   }
 
   const resumed = await resume(deps, config, runId, options.extend);
+  // Keep the run's degraded-mode label truthful across resumes (issue #125). Recorded as an APPENDED
+  // marker, so it advances `seq` like any other write-ahead entry — never as a header rewrite.
+  const escalations = await reconcileDegraded(
+    deps.runlog,
+    resumed.header,
+    options.degraded,
+    log,
+    {
+      runId,
+      seq: resumed.seq,
+      contractHash: resumed.contractHash,
+      stateTag: resumed.state.tag,
+      now: deps.clock.now(),
+    },
+  );
   // An extension that did not un-terminate the run (e.g. a note on a stuck abort whose tripping
   // detector was not raised) is loud, not silent — the outcome will still be the terminal one.
   if (options.extend !== undefined && isTerminal(resumed.state)) {
@@ -986,13 +1027,24 @@ async function bootstrap(
         : {}),
     });
   }
+  // Re-adopt the successor provenance the header recorded (issue #117). An `options` provenance still
+  // wins (the log is the FALLBACK, not an override), though the CLI can never supply one on a resume.
+  // Logged loudly — the re-contract negative control is a real gate, so its wiring is never silent.
+  const provenance = options.provenance ?? resumed.provenance;
+  if (options.provenance === undefined && resumed.provenance !== undefined) {
+    log.info('resume: re-adopted the successor (--recontract) provenance from the run log header', {
+      predecessorRunId: resumed.provenance.predecessorRunId,
+      recontracts: resumed.provenance.recontracts,
+    });
+  }
   return {
     state: resumed.state,
     commands: resumed.commands,
-    seq: resumed.seq,
+    seq: resumed.seq + escalations,
     contractHash: resumed.contractHash,
     ladder: resumed.contract !== null ? deps.makeLadder(resumed.contract) : null,
     pendingNote: resumed.pendingNote,
+    provenance,
   };
 }
 
@@ -1004,149 +1056,4 @@ async function bootstrap(
 function withOperatorNote(command: Command, note: string): Command {
   if (command.tag !== 'RUN_AGENT' && command.tag !== 'RUN_AGENT_BEST_OF') return command;
   return { ...command, prompt: `${command.prompt}\n\n# Operator note (added at resume)\n${note}` };
-}
-
-// ---- resume / replay ------------------------------------------------------
-
-type Resumed = {
-  state: OrchestratorState;
-  commands: Command[];
-  seq: number;
-  contractHash: ContractHash | null;
-  contract: CompiledContract | null;
-  /** The latest internal checkpoint's tree SHA (issue #47), or null when none was taken. */
-  baseline: DiffHash | null;
-  /** The current phase's start tree SHA (last PHASE_ADVANCED), for re-pinning the approver (#49). */
-  phaseBaseline: DiffHash | null;
-  /**
-   * The run-start review baseline recorded in the header (`--baseline` / the raised-autonomy
-   * auto-pin), or null for the `HEAD` default and for logs that predate the field.
-   */
-  headerBaseline: string | null;
-  /**
-   * The prior run's TOTAL token spend folded from the log, so `drive()` can re-arm the LIVE budget
-   * meter. Without this a resumed run restarted `--budget-tokens` from zero — a run resumed near
-   * its cap got a whole fresh budget, and repeated resumes could overshoot it arbitrarily. Null on
-   * a fresh/unreadable log. (Wall-clock deliberately restarts per process: the gap between crash
-   * and resume is idle time, not spend — see ADR 0011.)
-   */
-  priorSpend: TokenUsage | null;
-  /** Un-consumed operator note from the replay fold (ADR 0012); null when none is pending. */
-  pendingNote: string | null;
-};
-
-/**
- * Reconstruct state by folding the pure reducer over the persisted event stream, then
- * continue. No completed iteration is repeated — replay applies `step` only, never `perform`.
- */
-async function resume(
-  deps: DriverDeps,
-  config: RunConfig,
-  runId: RunId,
-  extend?: RunExtension,
-): Promise<Resumed> {
-  const stored = await deps.runlog.read();
-  if (stored === null) {
-    const [state, commands] = initial(config);
-    return {
-      state,
-      commands,
-      seq: 0,
-      contractHash: null,
-      contract: null,
-      baseline: null,
-      phaseBaseline: null,
-      headerBaseline: null,
-      priorSpend: null,
-      pendingNote: null,
-    };
-  }
-
-  // Operator extension (ADR 0012): validate + persist the RUN_EXTENDED marker write-ahead FIRST,
-  // so the fold below (and every later replay / `runs show` / watch) sees the same effective config.
-  let entries = stored.entries;
-  if (extend !== undefined && hasExtension(extend)) {
-    const event = OrchestratorEventSchema.parse({ tag: 'RUN_EXTENDED', ...extend });
-    // The marker never feeds the reducer, so folding a draft entry first is safe — its
-    // `stateTagAfter` is derived from the fold WITH the extension applied.
-    const draft: RunLogEntry[] = [
-      ...entries,
-      {
-        runId,
-        seq: entries.length + 1,
-        ts: deps.clock.now(),
-        contractHash: entries[entries.length - 1]?.contractHash ?? null,
-        event,
-        stateTagAfter: 'COMPILING', // placeholder — replaced below from the fold
-      },
-    ];
-    const folded = replay(stored.header.config, draft);
-    const entry: RunLogEntry = { ...draft[draft.length - 1]!, stateTagAfter: folded.state.tag };
-    await deps.runlog.append(entry);
-    entries = [...stored.entries, entry];
-  }
-
-  // Same replay-fold the read-only `runs` inspection uses — a single source of truth so an
-  // inspected run's state matches exactly what resume reconstructs here.
-  const { state, commands, contract, contractHash, baseline, phaseBaseline, pendingNote } = replay(
-    stored.header.config,
-    entries,
-  );
-  const priorSpend = summarizeUsage(
-    entries.map((entry) => entry.event),
-    stored.header.config.budget,
-  ).total;
-  return {
-    state,
-    commands,
-    seq: entries.length,
-    contractHash,
-    contract,
-    baseline,
-    phaseBaseline,
-    headerBaseline: stored.header.baseline ?? null,
-    priorSpend,
-    pendingNote,
-  };
-}
-
-/** Does this extension actually carry anything to persist? An empty object is a no-op resume. */
-function hasExtension(x: RunExtension): boolean {
-  return (
-    x.maxIterations !== undefined ||
-    x.budgetTokens !== undefined ||
-    x.budgetWallMs !== undefined ||
-    (x.stuck !== undefined && Object.keys(x.stuck).length > 0) ||
-    x.note !== undefined
-  );
-}
-
-function buildOutcome(state: OrchestratorState, runId: RunId): RunOutcome {
-  switch (state.tag) {
-    case 'DONE':
-      return {
-        status: 'DONE',
-        iterations: state.iterations,
-        contractHash: state.contractHash,
-        runId,
-      };
-    case 'FAILED':
-      return {
-        status: 'FAILED',
-        reason: state.reason,
-        iterations: state.iterations,
-        contractHash: state.contractHash ?? null,
-        runId,
-      };
-    case 'ABORTED':
-      return {
-        status: 'ABORTED',
-        reason: state.reason,
-        iterations: state.iterations,
-        contractHash: state.contractHash ?? null,
-        runId,
-      };
-    default:
-      throw new Error(`buildOutcome called on non-terminal state ${state.tag}`);
-  }
 }

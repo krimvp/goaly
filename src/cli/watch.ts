@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { FileRunLog } from '../runlog/file-runlog';
 import type { RunLogEntry } from '../runlog/runlog';
 import { runLockActive } from '../runlog/lock';
+import { degradedModeTag } from '../domain/degraded';
 
 /**
  * `goaly runs watch <runId>` — attach to a run from ANOTHER terminal and follow it live (operator
@@ -120,6 +121,12 @@ export function renderWatchEvent(entry: RunLogEntry, iteration: number): string 
       const mark = e.verdict.pass ? 'PASS ✓' : 'FAIL ✗';
       return `${at}  iter ${iteration}: verify ${mark}${e.verdict.pass ? '' : ` — ${truncate(e.verdict.detail, 120)}`}`;
     }
+    case 'CONTRACT_ADJUDICATED':
+      // Issue #116: the one-shot in-loop re-adjudication of the FROZEN bar. A `defective` verdict is
+      // the headline of the run's abort, so it is never silently plumbing.
+      return e.defective
+        ? `${at}  contract adjudicated DEFECTIVE — ${truncate(e.reason, 120)}`
+        : `${at}  contract adjudicated sound (the repeat-failure abort stands)`;
     case 'SIGNOFF_DECIDED':
       return e.approval.veto
         ? `${at}  iter ${iteration}: sign-off VETO — ${truncate(e.approval.reason ?? '', 120)}`
@@ -144,6 +151,10 @@ export function renderWatchEvent(entry: RunLogEntry, iteration: number): string 
       const tail = fallback > 0 ? `, ${fallback} downgraded to sequential` : '';
       return `${at}  wave: ${merged}/${e.outcomes.length} phase(s) merged + re-verified${tail}`;
     }
+    case 'DEGRADED_ESCALATED':
+      // Issue #125: this resume's key wiring is more collapsed than the one the run started with.
+      // Never plumbing — it says a DONE from here on is even less independently reviewed.
+      return `${at}  degraded mode escalated to ${degradedModeTag(e.degraded)} (resumed wiring)`;
     case 'CHECKPOINTED':
       return null; // internal diff-baseline plumbing — noise for a human watcher
   }

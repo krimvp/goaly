@@ -17,7 +17,6 @@ const LIMIT = 800;
 const GRANDFATHERED = new Map([
   ['src/driver/driver.ts', 1152],
   ['src/cli/compose.ts', 1009],
-  ['src/orchestrator/step.ts', 837],
 ]);
 
 function* walk(dir) {

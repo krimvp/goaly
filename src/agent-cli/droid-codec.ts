@@ -46,6 +46,7 @@
 import { parseAgentOutput, flatExtractor, isRecord, type FieldExtractor } from './output';
 import { usageEventFromBlock, type AgentStreamEvent, type StreamEventExtractor } from './stream';
 import { classifyFlatRun, type AgentCliCodec } from './codec';
+import type { HarnessRemediation } from '../domain/events';
 
 /** Autonomy tiers `droid exec` accepts via `--auto`. */
 export type AutonomyLevel = 'low' | 'medium' | 'high';
@@ -89,26 +90,25 @@ const PERMISSION_GATE_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
- * Recognise droid's autonomy refusal and name the actual fix. Without this the run reads as a
- * generic harness crash and `STUCK_HARNESS_CRASH` tells the operator to check that the CLI is
- * installed, authenticated and runnable — all of which are true, and none of which is the problem.
- * The refusal is fatal-by-construction for a from-scratch goal: at `low` the agent cannot run
- * `npm install` or a build, so a contract requiring a populated tree can never go green.
+ * Recognise droid's autonomy refusal and name the KIND of remediation it calls for. Without this the
+ * run reads as a generic harness crash and `STUCK_HARNESS_CRASH` tells the operator to check that
+ * the CLI is installed, authenticated and runnable — all of which are true, and none of which is the
+ * problem. The refusal is fatal-by-construction for a from-scratch goal: at `low` the agent cannot
+ * run `npm install` or a build, so a contract requiring a populated tree can never go green.
  *
- * Advice only — the run stays `crashed`. Never throws.
+ * Returns only the kind — the operator-facing sentence (naming `--harness-autonomy`) is authored by
+ * goaly in `REMEDIATION_ADVICE` (`src/orchestrator/stuck.ts`), so no droid output can reach the
+ * goaly-authored part of the abort reason. Advice only — the run stays `crashed`. Never throws.
  */
-const diagnose = (input: { stdout: string; stderr: string; code: number | null }): string | undefined => {
+const diagnose = (input: {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+}): HarnessRemediation | undefined => {
   if (input.code === 0) return undefined;
   const haystack = `${input.stdout}\n${input.stderr}`;
   if (!PERMISSION_GATE_PATTERNS.some((p) => p.test(haystack))) return undefined;
-  return (
-    'droid REFUSED an action at its current autonomy level — this is a permission gate, not a ' +
-    'broken install or a bad login. At the default `--auto low` the agent may edit files but may ' +
-    'NOT run git, package installs, or builds, so a from-scratch goal (npm install / build / test) ' +
-    'is unreachable by construction. Re-run with `--harness-autonomy medium` (or `high`). Above ' +
-    '`low` the agent can also `git commit`, so goaly auto-pins the reviewed diff to the run-start ' +
-    'commit — override with `--baseline <ref>` if you want a different base.'
-  );
+  return 'autonomy-refused';
 };
 
 /** droid's native stream-json mapping onto the canonical {@link AgentStreamEvent} taxonomy. */

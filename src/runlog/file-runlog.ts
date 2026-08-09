@@ -1,14 +1,26 @@
-import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RunLogHeader, RunLogEntry, type RunLog } from './runlog';
 
 const HEADER_FILE = 'header.json';
+/**
+ * Staging file for the atomic header write. It is renamed away on the happy path; a crash can leave
+ * one behind, which is harmless — nothing reads it, and the next `writeHeader` truncates it.
+ */
+const TMP_HEADER_FILE = 'header.json.tmp';
 const LOG_FILE = 'log.jsonl';
 
 /**
- * Filesystem-backed, write-ahead JSONL run log. The header is written once; each entry is
- * appended as a single fsync'd JSON line. On read, the log is UNTRUSTED — every terminated line
- * is re-validated with the frozen Zod schema and a corrupt line throws.
+ * Filesystem-backed, write-ahead JSONL run log. The header is written once — at the start of a fresh
+ * run, before any entry exists — and every later fact about the run is an APPENDED entry, including
+ * facts about compose-time wiring (see the `DEGRADED_ESCALATED` marker). Each entry is appended as a
+ * single fsync'd JSON line. On read, the log is UNTRUSTED — every terminated line is re-validated
+ * with the frozen Zod schema and a corrupt line throws.
+ *
+ * `writeHeader` is nonetheless ATOMIC (write `header.json.tmp`, fsync, rename over `header.json`,
+ * fsync the directory) rather than a truncate-then-refill, so a crash mid-write can only leave the
+ * header absent or complete — never truncated. That keeps the once-only rule an invariant of the
+ * CALLERS rather than the thing the file format depends on for its integrity.
  *
  * Torn-tail tolerance: the appender always terminates a committed entry with `\n` BEFORE its
  * fsync returns, so an UNTERMINATED final line can only be the torn remnant of an append that a
@@ -31,15 +43,19 @@ export class FileRunLog implements RunLog {
   async writeHeader(header: RunLogHeader): Promise<void> {
     await mkdir(this.#dir, { recursive: true });
     const path = join(this.#dir, HEADER_FILE);
-    await writeFile(path, JSON.stringify(header), 'utf8');
-    // fsync the header so it survives a crash before the first entry lands.
-    const handle = await open(path, 'r');
+    const tmp = join(this.#dir, TMP_HEADER_FILE);
+    // Serialize + fsync into a TEMP file first, then rename over the real one. `rename(2)` is atomic
+    // within a directory, so a reader (and a crash) sees either the old header or the new one, never
+    // a truncated one — the failure a plain `writeFile` (truncate to 0, then refill) would leave.
+    const handle = await open(tmp, 'w');
     try {
+      await handle.write(JSON.stringify(header));
       await handle.sync();
     } finally {
       await handle.close();
     }
-    // fsync the directory so the new file's name is durable too.
+    await rename(tmp, path);
+    // fsync the directory so the rename (the new file's name) is durable too.
     await this.#fsyncDir();
   }
 

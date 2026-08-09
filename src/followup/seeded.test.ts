@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { SeededCompiler, SeededPlanner, combineFeedback } from './seeded';
 import { FakeCompiler, FakePlanner, makeConfig, makeFakeContract, makeFakePlan } from '../testing/fakes';
+import { AgentCompiler } from '../compile/agent-compiler';
+import { AgentPlanner } from '../plan/agent-planner';
+import { FakeLlm } from '../llm/provider';
+import { UNTRUSTED_SYSTEM_CLAUSE } from '../verify/prompt-safety';
 
 describe('combineFeedback', () => {
   it('uses the seed alone when no command feedback is present', () => {
@@ -33,5 +37,29 @@ describe('SeededPlanner', () => {
     const inner = new FakePlanner(makeFakePlan());
     await new SeededPlanner(inner, 'SEED').plan(makeConfig({ phased: true }));
     expect(inner.feedbacks).toEqual(['SEED']);
+  });
+});
+
+/**
+ * The seed carries worker-authored text under a random-nonce UNTRUSTED fence (`compactRun`). A
+ * fence only works if the key reading it has been told the rule, so BOTH consumers of this
+ * channel — the contract compiler and (under `--phased`) the planner — must restate it in their
+ * system prompt, exactly like the judge / approver / adversarial rung do.
+ */
+describe('the keys that consume the follow-up seed restate the untrusted-fence rule', () => {
+  it("the contract compiler's system prompt carries the clause", async () => {
+    const llm = new FakeLlm([
+      JSON.stringify({ command: 'npx --no-install vitest run t.test.ts', rubric: 'r' }),
+    ]);
+    await new SeededCompiler(new AgentCompiler({ llm }), 'SEED').compile(
+      makeConfig({ verifier: { kind: 'generate', intent: undefined } }),
+    );
+    expect(llm.requests[0]?.system).toContain(UNTRUSTED_SYSTEM_CLAUSE);
+  });
+
+  it("the planner's system prompt carries the clause", async () => {
+    const llm = new FakeLlm([JSON.stringify({ phases: [{ goal: 'do the first bit' }] })]);
+    await new SeededPlanner(new AgentPlanner({ llm }), 'SEED').plan(makeConfig({ phased: true }));
+    expect(llm.requests[0]?.system).toContain(UNTRUSTED_SYSTEM_CLAUSE);
   });
 });

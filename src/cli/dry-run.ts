@@ -1,5 +1,9 @@
 import type { RunConfig } from '../domain/config';
 import type { ParsedArgs } from './args';
+import { degradedModeTag, type DegradedMode } from '../domain/degraded';
+import { degradedMode } from './independence';
+import { resolveModels } from './models';
+import { defaultDefectCorpusPath } from '../defects/corpus';
 
 /**
  * `--dry-run`: resolve everything, run nothing.
@@ -27,6 +31,13 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
         ['setup', describeSetup(config)],
         ['install-missing-tools', String(config.installMissingTools)],
         ...opt('verify-dir', parsed.verifyDir),
+        // The corpus is hidden local state that shapes authoring, so --dry-run names it (issue #122).
+        [
+          'defect-corpus',
+          parsed.defects.enabled
+            ? (parsed.defects.path ?? defaultDefectCorpusPath())
+            : 'off (--no-defect-corpus)',
+        ],
         ['autonomous (Seal)', String(config.autonomous)],
       ],
     },
@@ -38,6 +49,7 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
         ['llm-provider', parsed.llmProvider],
         ...opt('base-url', parsed.baseUrl),
         ...modelRows(parsed),
+        ...keyIndependenceRows(parsed, config),
       ],
     },
     {
@@ -58,6 +70,8 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
         ['max-seal-revisions', String(config.maxSealRevisions)],
         ['max-compile-retries', String(config.maxCompileRetries)],
         ['adversarial', describeAdversarial(config)],
+        ['satisfiability-critic', describeSatisfiabilityCritic(config)],
+        ['contract-dry-run', describeContractDryRun(config)],
       ],
     },
     {
@@ -89,6 +103,7 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
         ['repeat-failure threshold', String(config.stuckPolicy.repeatFailureThreshold)],
         ['crash threshold', String(config.stuckPolicy.harnessCrashThreshold)],
         ['unevaluable threshold', String(config.stuckPolicy.unevaluableThreshold)],
+        ['timeout-no-diff threshold', String(config.stuckPolicy.timeoutNoDiffThreshold)],
         ['diff-ignore', config.diffIgnore.length > 0 ? config.diffIgnore.join(', ') : '(defaults only)'],
       ],
     },
@@ -105,6 +120,12 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
         ],
         ...opt('resume', parsed.resumeRunId),
         ...opt('from-run', parsed.fromRunId),
+        ...opt(
+          'recontract',
+          parsed.recontract === undefined
+            ? undefined
+            : `successor run (max-recontracts ${parsed.recontract.maxRecontracts})`,
+        ),
       ],
     },
   ];
@@ -154,6 +175,26 @@ function describeAdversarial(config: RunConfig): string {
   return `on (plan critics ${a.planCritics}, contract critics ${a.contractCritics}, refuters ${a.refuters})`;
 }
 
+/**
+ * The FALSE-RED critic (issue #118) is ON by default and INDEPENDENT of `--adversarial`, so it gets
+ * its own row — and says when it is on-but-inert (an `existing` verifier authored no bar to check).
+ */
+function describeSatisfiabilityCritic(config: RunConfig): string {
+  if (!config.adversarial.satisfiabilityCritic) return 'off (--no-satisfiability-critic)';
+  return config.verifier.kind === 'generate' ? 'on' : 'on (n/a: --verify-cmd authored no bar)';
+}
+
+/**
+ * The compile-time POSITIVE control (issue #115): also default-on, also `--generate`-only, and the
+ * one pre-Seal guard that answers by EXECUTION — so it earns its own row next to the critic's.
+ */
+function describeContractDryRun(config: RunConfig): string {
+  if (!config.adversarial.contractDryRun) return 'off (--contract-dry-run false)';
+  return config.verifier.kind === 'generate'
+    ? 'on (reference implementation vs. the deterministic rungs, in a scratch copy)'
+    : 'on (n/a: --verify-cmd authored no bar)';
+}
+
 function modelRows(parsed: ParsedArgs): Row[] {
   const m = parsed.models;
   return [
@@ -166,6 +207,57 @@ function modelRows(parsed: ParsedArgs): Row[] {
     ...opt('planner-model', m.plannerModel),
     ...opt('critic-model', m.criticModel),
     ...opt('explain-model', m.explainModel),
+  ];
+}
+
+/**
+ * What the SECOND KEY actually runs on (issue #125) — the thing a dry run should surface before a
+ * token is spent. Shows the resolved Sign-off model, says so when the approver declined to inherit
+ * the agent's `--model`, and names the degraded mode when all three roles still collapse onto one.
+ */
+/** One clause per degraded kind — exhaustive, so a new kind cannot silently reuse another's wording. */
+function degradedRowReason(kind: DegradedMode['kind']): string {
+  switch (kind) {
+    case 'independence-unverified':
+      return "the approver's model could not be compared to the agent's/judge's";
+    case 'self-approved':
+      return 'the approver runs the SAME model as the coding agent (the judge rung differs)';
+    case 'self-judged':
+      return 'agent, judge rung and approver share one model';
+  }
+}
+
+function keyIndependenceRows(parsed: ParsedArgs, config: RunConfig): Row[] {
+  const models = resolveModels(parsed.models, { llmProvider: parsed.llmProvider });
+  const degraded = degradedMode(models, parsed.harness, parsed.llmProvider, {
+    generate: config.verifier.kind === 'generate',
+    autonomous: config.autonomous,
+    approverQuorum: config.approver.quorum,
+    ...(models.approverModels !== undefined ? { approverModels: models.approverModels } : {}),
+  });
+  // Honest wording: declining to inherit `--model X` is a REQUEST for a distinct second key, not a
+  // confirmed one — goaly cannot resolve the provider's own default model id, so it must not print
+  // "kept INDEPENDENT" for a pair it never compared.
+  const approver =
+    models.approverModels !== undefined
+      ? `panel: ${models.approverModels.join(', ')}`
+      : (models.approver ?? "(the provider's own default)") +
+        (models.approverIndependentFrom !== undefined
+          ? ` — declined to inherit the agent's --model ${models.approverIndependentFrom}; ` +
+            'independence UNVERIFIED (goaly cannot resolve the provider default)'
+          : '');
+  return [
+    ['sign-off model (2nd key)', approver],
+    ...(degraded === undefined
+      ? []
+      : ([
+          [
+            'degraded mode',
+            `${degradedModeTag(degraded)} — ${degradedRowReason(
+              degraded.kind,
+            )}; pass --approver-model <other> for an independent second key`,
+          ],
+        ] as Row[])),
   ];
 }
 

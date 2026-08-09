@@ -1,5 +1,56 @@
+import { z } from 'zod';
 import { LogLevel } from '../../log/logger';
-import { UsageError } from './tokens';
+import { DEFAULT_MAX_RECONTRACTS } from '../../followup/recontract';
+import type { DefectCorpusOptions } from '../../defects/wiring';
+import { boolFlag, str, UsageError, type RawFlags } from './tokens';
+
+/**
+ * `--recontract` (issue #117): with `--from-run <runId>`, start a SUCCESSOR run over the predecessor's
+ * KEPT tree — re-author the bar its `CONTRACT_DEFECTIVE` adjudication condemned, freeze a NEW contract
+ * under a NEW run id, and record the provenance. `--max-recontracts` bounds the chain (default
+ * {@link DEFAULT_MAX_RECONTRACTS}); the depth lives in the run log, so the cap holds across the chain
+ * rather than per process.
+ */
+export type RecontractRequest = { readonly maxRecontracts: number };
+
+/**
+ * Parse the `--recontract` / `--max-recontracts` pair. Fails closed: a cap without the flag it bounds
+ * is a usage error rather than a silently ignored setting. Both are per-invocation only (never
+ * config-file settable) — a persisted re-contract request would re-point every run in the tree.
+ */
+export function parseRecontract(flags: RawFlags): RecontractRequest | undefined {
+  const max = str(flags, 'max-recontracts');
+  if (flags['recontract'] === undefined) {
+    if (max !== undefined) {
+      throw new UsageError('--max-recontracts requires --recontract (with --from-run <runId>)');
+    }
+    return undefined;
+  }
+  if (max === undefined) return { maxRecontracts: DEFAULT_MAX_RECONTRACTS };
+  const parsed = z.coerce.number().int().positive().safeParse(max);
+  if (!parsed.success) {
+    throw new UsageError(`--max-recontracts: expected a positive integer, got '${max}'`);
+  }
+  return { maxRecontracts: parsed.data };
+}
+
+/**
+ * Parse the cross-run defect-corpus flags (issue #122): `--no-defect-corpus` turns the whole
+ * channel off (nothing is read, injected, or recorded), `--defect-corpus <path>` moves the file off
+ * `~/.goaly/defects.jsonl`. Fails closed on the contradictory pair rather than silently picking one
+ * — an operator who passed both meant something the CLI cannot infer.
+ */
+export function parseDefectCorpus(flags: RawFlags): DefectCorpusOptions {
+  const disabled = boolFlag(flags, 'no-defect-corpus') ?? false;
+  const path = str(flags, 'defect-corpus');
+  if (disabled && path !== undefined) {
+    throw new UsageError(
+      '--defect-corpus <path> and --no-defect-corpus contradict each other — pass one or neither',
+    );
+  }
+  if (disabled) return { enabled: false };
+  return { enabled: true, ...(path !== undefined ? { path } : {}) };
+}
 
 /** Validate --log-level at the seam (fails closed on an unknown level). Default `info`. */
 export function parseLogLevel(value: string | undefined): LogLevel {

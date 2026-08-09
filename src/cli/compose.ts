@@ -17,12 +17,16 @@ import { GeneratedFilesGuard } from '../verify/generated-guard';
 import { JudgeVerifier } from '../verify/judge';
 import { AgentApprover } from '../verify/agent-approver';
 import { AgentCompiler } from '../compile/agent-compiler';
-import { CritiquedCompiler } from '../compile/critiqued-compiler';
 import { classifyUsageShape } from '../compile/usage-gate';
-import { SeededCompiler, SeededPlanner } from '../followup/seeded';
+import {
+  critiqueCompiler,
+  critiquePlanner,
+  dryRunCompiler,
+  seedCompiler,
+  seedPlanner,
+} from './compose-authoring';
 import { AutoSealGate, HumanSealGate } from '../compile/seal-gates';
 import { AgentPlanner } from '../plan/agent-planner';
-import { CritiquedPlanner } from '../plan/critiqued-planner';
 import { StaticPlanner } from '../plan/static-planner';
 import { AutoPlanGate, HumanPlanGate } from '../plan/plan-gates';
 import type { Planner } from '../plan/planner';
@@ -33,6 +37,8 @@ import { FileWorkspace } from '../workspace/file-workspace';
 import { GitWorktreeHost } from '../workspace/git-worktree-host';
 import { writeVerificationFile } from '../workspace/workspace-files';
 import { detectWorkspaceFacts, type WorkspaceFacts } from '../workspace/workspace-facts';
+import { resolveDefectCorpus, type DefectCorpusOptions } from '../defects/wiring';
+import { DEFAULT_DEFECT_HINT_CAP } from '../defects/select';
 import { FileRunLog } from '../runlog/file-runlog';
 import { StreamTranscriptSink, STREAM_FILE } from '../runlog/stream-transcript';
 import { AgentCliHarness } from '../harness/agent-cli-harness';
@@ -129,6 +135,14 @@ export type ComposeOptions = {
    * idiomatic location. Authored files are registered in `.git/info/exclude` either way.
    */
   verifyDir?: string;
+  /**
+   * The cross-run DEFECT CORPUS (issue #122): `--no-defect-corpus` / `--defect-corpus <path>`.
+   * Absent ⇒ enabled at `~/.goaly/defects.jsonl`. Both ends are wired from ONE resolution below —
+   * the writer the Driver hands to a `CONTRACT_DEFECTIVE` adjudication, and the bounded
+   * "do not author these" section the compiler injects. Fail-open: a missing/corrupt corpus
+   * degrades to exactly today's behavior.
+   */
+  defects?: DefectCorpusOptions;
   /**
    * Phased decomposition (issue #48): the `--plan-file <path>` that sources a structured plan instead
    * of authoring one with the LLM. When set (and `config.phased`), a {@link StaticPlanner} reads it;
@@ -265,66 +279,6 @@ function defaultPolicy(): SandboxPolicy {
   return { mode: 'none', network: 'none' };
 }
 
-/** Wrap the compiler with the follow-up seed (Capability C) when present; identity otherwise. */
-function seedCompiler(inner: VerifierCompiler, seed: string | undefined): VerifierCompiler {
-  return seed !== undefined ? new SeededCompiler(inner, seed) : inner;
-}
-
-/**
- * Wrap the compiler with the `--adversarial` contract red-team when enabled; identity otherwise
- * (a default run builds NO critic provider and pays nothing). Wraps the INNER compiler so the
- * follow-up seed (outermost) still reaches the first authoring attempt. The panel's provider is
- * metered under the `'compile'` phase — critique spend is part of authoring the contract, not a
- * new spend category (mirrors how the usage-shape classifier rides the compiler's phase).
- */
-function critiqueCompiler(
-  inner: VerifierCompiler,
-  config: RunConfig,
-  makeLlm: () => LlmProvider,
-  workspaceRoot: string,
-  logger: Logger,
-  facts: WorkspaceFacts | undefined,
-): VerifierCompiler {
-  const adv = config.adversarial;
-  if (!adv.enabled || adv.contractCritics <= 0 || adv.contractCritiqueRounds <= 0) return inner;
-  return new CritiquedCompiler({
-    inner,
-    llm: makeLlm(),
-    critics: adv.contractCritics,
-    rounds: adv.contractCritiqueRounds,
-    readFile: (rel) => readFile(path.join(workspaceRoot, rel), 'utf8'),
-    ...(facts !== undefined ? { facts: facts.summary } : {}),
-    logger,
-  });
-}
-
-/** Wrap the planner with the follow-up seed (Capability C) when present; identity otherwise. */
-function seedPlanner(inner: Planner, seed: string | undefined): Planner {
-  return seed !== undefined ? new SeededPlanner(inner, seed) : inner;
-}
-
-/**
- * Wrap the planner with the `--adversarial` plan critique when enabled; identity otherwise. Only
- * the LLM AgentPlanner is ever passed here — a `--plan-file` StaticPlanner is the user's explicit
- * plan and is never critiqued (the caller routes around this wrapper). Critic spend meters under
- * the `'plan'` phase — critique is part of authoring the plan, not a new spend category.
- */
-function critiquePlanner(
-  inner: Planner,
-  config: RunConfig,
-  makeLlm: () => LlmProvider,
-  logger: Logger,
-): Planner {
-  const adv = config.adversarial;
-  if (!adv.enabled || adv.planCritics <= 0 || adv.planCritiqueRounds <= 0) return inner;
-  return new CritiquedPlanner({
-    inner,
-    llm: makeLlm(),
-    critics: adv.planCritics,
-    rounds: adv.planCritiqueRounds,
-    logger,
-  });
-}
 
 /**
  * Build the sandbox launcher ONCE from the policy (issue #9). A directly-injected launcher (tests)
@@ -351,11 +305,11 @@ function refuseIfUnavailable(launcher: SandboxLauncher): void {
 /**
  * The composition root: assemble a fully-wired {@link DriverDeps} from validated config. This
  * is the only place that knows which concrete adapter/verifier/gate backs each seam, and the
- * only place that turns the frozen contract's rungs into a runnable Ladder.
+ * only place that turns the frozen contract's rungs into a runnable Ladder. Models resolve WITH the provider, so the approver can stay independent of the agent's `--model` (issue #125).
  */
 export function composeDeps(config: RunConfig, options: ComposeOptions): DriverDeps {
-  const models = resolveModels(options.models ?? {});
   const provider = options.llmProvider ?? defaultLlmProvider(options.harness);
+  const models = resolveModels(options.models ?? {}, { llmProvider: provider });
   // The verify command gets a DEFAULT kill-timeout (matching the harness/LLM 10-min default): a
   // verify command that hangs (a test awaiting the network, a server that never exits) must never
   // hang the whole run unboundedly. A hit is a fail-closed could-not-evaluate — the unevaluable
@@ -507,6 +461,21 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   // detected, never assumed — a non-code workspace yields `undefined` and nothing is injected.
   const workspaceFacts = detectWorkspaceFacts(options.workspaceRoot);
 
+  // The cross-run defect corpus (issue #122), resolved ONCE: `section` is injected into contract
+  // authoring (bounded + filtered to this workspace's ecosystem, and logged so the hidden local
+  // state that shaped the bar is named in the run's diagnostics); `corpus` is the writer only a
+  // CONTRACT_DEFECTIVE adjudication can use. Fail-open — an absent corpus changes nothing. The
+  // launcher is threaded in so the injection log can say plainly whether the corpus's HMAC means
+  // anything against the AGENT on this run (only a real jail masks `$HOME/.goaly`; under the
+  // default identity passthrough the agent shares goaly's uid and can read the signing key).
+  const defects = resolveDefectCorpus(
+    options.defects,
+    options.workspaceRoot,
+    logger,
+    DEFAULT_DEFECT_HINT_CAP,
+    !launcher.identity,
+  );
+
   // ONE budget meter for the whole run — hoisted so EXPERIMENTAL parallel-wave children share it
   // (the `--budget-tokens` cap governs the fan-out, not each child separately).
   const budget = new SystemBudgetMeter(config.budget, clock);
@@ -542,24 +511,39 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
 
   return {
     compiler: seedCompiler(
-      critiqueCompiler(
-        new AgentCompiler({
-          llm: llmFor(models.compiler, 'compile'),
-          writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
-          ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
-          ...(workspaceFacts !== undefined ? { facts: workspaceFacts } : {}),
-          // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered like
-          // the authoring call) arms the gate on a confident build-and-use goal so a bar that a parallel
-          // reimplementation could green is refused at compile (COMPILE_FAILED → re-authored with a usage
-          // assertion). Fail-open, so it never blocks a non-build-and-use run.
-          classifyShape: (goal, intent) =>
-            classifyUsageShape(llmFor(models.compiler, 'compile'), goal, intent),
-        }),
+      // The compile-time POSITIVE control (issue #115) wraps the critics: what it executes is the
+      // contract the critics already accepted, and a red there refuses the freeze (→ COMPILE_FAILED
+      // → the same bounded re-author loop). Fail-open, so it can only reject or step aside.
+      dryRunCompiler(
+        critiqueCompiler(
+          new AgentCompiler({
+            llm: llmFor(models.compiler, 'compile'),
+            writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
+            ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
+            ...(workspaceFacts !== undefined ? { facts: workspaceFacts } : {}),
+            ...(defects.section.length > 0 ? { defectSection: defects.section } : {}),
+            // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered
+            // like the authoring call) arms the gate on a confident build-and-use goal so a bar that a
+            // parallel reimplementation could green is refused at compile (COMPILE_FAILED → re-authored
+            // with a usage assertion). Fail-open, so it never blocks a non-build-and-use run.
+            classifyShape: (goal, intent) =>
+              classifyUsageShape(llmFor(models.compiler, 'compile'), goal, intent),
+          }),
+          config,
+          () => llmFor(models.critic, 'compile'),
+          options.workspaceRoot,
+          logger,
+          workspaceFacts,
+        ),
         config,
-        () => llmFor(models.critic, 'compile'),
+        () => llmFor(models.compiler, 'compile'),
         options.workspaceRoot,
+        timeouts.verifyMs,
         logger,
         workspaceFacts,
+        // The scratch executes the contract's setup + rungs, so it goes through the SAME jail as
+        // the verifier seam — never bare on the host under an active `--sandbox` policy.
+        runLauncher,
       ),
       seed,
     ),
@@ -617,6 +601,9 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     // deterministic pre-flight rung is a broken frozen verifier or an honest red. Reuses the judge
     // model — it is a verification judgment — and is metered through the same shared meter.
     prepareLlm: llmFor(models.judge, 'preflight'),
+    // The corpus WRITER (issue #122). Handed to the Driver, which appends only from an adjudicated
+    // CONTRACT_DEFECTIVE verdict; absent under `--no-defect-corpus`, so nothing can be recorded.
+    ...(defects.corpus !== undefined ? { defectCorpus: defects.corpus } : {}),
     workspace,
     ...(worktrees !== undefined ? { worktrees } : {}),
     ...(wave !== undefined ? { wave } : {}),

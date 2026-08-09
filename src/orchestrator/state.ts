@@ -2,7 +2,7 @@ import type { RunConfig } from '../domain/config';
 import type { CompiledContract } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
 import type { ContractHash, SessionId, DiffHash } from '../domain/ids';
-import type { Verdict, BudgetSnapshot, HarnessRunResult } from '../domain';
+import type { Verdict, BudgetSnapshot, HarnessRemediation, HarnessRunResult } from '../domain';
 
 /**
  * The position of one phase within a frozen plan (issue #48). Threaded through the per-phase states
@@ -69,13 +69,15 @@ export type LoopCtx = {
   /** Output of the most recent agent run — surfaced verbatim when a crash streak aborts the run. */
   readonly lastRunOutput: string | undefined;
   /**
-   * The codec-recognised remediation for the most recent agent run, when its CLI named an
+   * The codec-recognised remediation KIND for the most recent agent run, when its CLI named an
    * actionable fix in its own failure output (see {@link HarnessRunResult.hint}) — e.g. droid
-   * refusing an action at its `--auto` tier. Used ONLY to replace the generic remediation text of a
-   * `STUCK_HARNESS_CRASH` abort; it never affects any classification or transition. The reducer
-   * carries the string, it never derives it (invariant #8: per-CLI string matching lives in the codec).
+   * refusing an action at its `--auto` tier. Used ONLY to select which goaly-authored sentence a
+   * `STUCK_HARNESS_CRASH` abort carries; it never affects any classification or transition. A closed
+   * enum, not prose: the reducer renders the text itself, so nothing a CLI printed can land in the
+   * goaly-authored prefix of the abort reason (`./reason-quote`). The reducer carries the kind, it
+   * never derives it (invariant #8: per-CLI string matching lives in the codec).
    */
-  readonly lastRunHint: string | undefined;
+  readonly lastRunHint: HarnessRemediation | undefined;
   readonly lastBudget: BudgetSnapshot | undefined;
   /** The ladder verdict of the current iteration (set in VERIFYING, read at Sign-off). */
   readonly lastVerdict: Verdict | undefined;
@@ -103,6 +105,13 @@ export type LoopCtx = {
    * `CONTINUE` decision carrying a remediation, so replaying the log reproduces it exactly.
    */
   readonly remediations: RemediationLedger;
+  /**
+   * Whether this run has already spent its ONE in-loop contract adjudication (issue #116). The
+   * structural "bounded once per run": it is pure, folded from the log by the ADJUDICATE transition
+   * exactly as `remediations` rides a CONTINUE, so a `--resume` that re-trips the repeat detector
+   * can never buy a second LLM call.
+   */
+  readonly adjudicated: boolean;
 };
 
 /** Per-kind remediation spend (each kind is remediated at most once; see `planRemediation`). */
@@ -194,6 +203,22 @@ export type OrchestratorState =
   | { readonly tag: 'RUNNING_AGENT'; readonly ctx: LoopCtx }
   | { readonly tag: 'VERIFYING'; readonly ctx: LoopCtx }
   | { readonly tag: 'AWAIT_SIGNOFF'; readonly ctx: LoopCtx }
+  | {
+      /**
+       * In-loop contract-fault adjudication (issue #116): a repeat-failure streak whose signature
+       * names a frozen `generatedFiles` path, on a tree the worker demonstrably populated. The Driver
+       * is making ONE read-only classification call; resolved by exactly one `CONTRACT_ADJUDICATED`.
+       *
+       * The run is ALREADY terminating when this state is entered — it exists only to choose the
+       * abort's LABEL. `fallbackReason` carries TODAY's repeat-failure abort text (kept verbatim in both
+       * branches; the sound branch appends a CONTRACT_ADJUDICATED_SOUND marker),
+       * computed at trip time, so a `defective: false` verdict (and every failure mode that
+       * fail-closes to it) is a pure relabel-nothing passthrough.
+       */
+      readonly tag: 'ADJUDICATING';
+      readonly ctx: LoopCtx;
+      readonly fallbackReason: string;
+    }
   | { readonly tag: 'DONE'; readonly iterations: number; readonly contractHash: ContractHash }
   | {
       readonly tag: 'FAILED';
@@ -226,6 +251,7 @@ export function iterationCount(state: OrchestratorState): number {
     case 'RUNNING_AGENT':
     case 'VERIFYING':
     case 'AWAIT_SIGNOFF':
+    case 'ADJUDICATING':
       return state.ctx.iteration;
     case 'DONE':
     case 'FAILED':
@@ -276,5 +302,15 @@ export function initialCtx(
     feedbackSource: undefined,
     phase,
     remediations: NO_REMEDIATIONS,
+    adjudicated: false,
   };
+}
+
+/**
+ * The remediation spend banked in a state's loop context, when the state carries one (plan 4.2).
+ * Pure and total: the terminal states carry no `LoopCtx`, so they simply answer `undefined`.
+ */
+export function remediationsTotal(state: OrchestratorState): number | undefined {
+  const ctx = (state as { ctx?: LoopCtx }).ctx;
+  return ctx?.remediations.total;
 }

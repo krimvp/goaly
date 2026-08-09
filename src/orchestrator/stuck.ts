@@ -1,3 +1,12 @@
+import type { HarnessRemediation } from '../domain/events';
+import type { DiffHash } from '../domain/ids';
+import {
+  ADJUDICATOR_QUOTE,
+  HARNESS_OUTPUT_QUOTE,
+  NESTED_REASON_QUOTE,
+  SIGNATURE_QUOTE,
+  VERIFIER_OUTPUT_QUOTE,
+} from './reason-quote';
 import type { LoopCtx } from './state';
 
 /**
@@ -7,7 +16,14 @@ import type { LoopCtx } from './state';
  */
 
 /** The kind of stuck condition, so DECIDE can apply reason-specific policy (e.g. excuse a no-diff). */
-export type StuckKind = 'budget' | 'crash' | 'unevaluable' | 'no-diff' | 'oscillation' | 'repeat';
+export type StuckKind =
+  | 'budget'
+  | 'crash'
+  | 'unevaluable'
+  | 'no-diff'
+  | 'timeout-no-diff'
+  | 'oscillation'
+  | 'repeat';
 
 /**
  * A detected stuck condition: a typed `kind` + the human-readable `message` (the audit / feedback
@@ -66,13 +82,49 @@ export function normalizeDetail(detail: string): string {
  * `LoopCtx`. The OTHER half of the excuse — a green ladder blocked only by a FRESH Sign-off veto —
  * needs the in-flight verdict/approval and so lives in DECIDE (`decide.ts`), which holds them; this
  * keeps `detectStuck` purely history-driven.
+ *
+ * Issue #119 — the excuse is now BOUNDED for the timeout case. `crashed` (already governed by the
+ * harness-crash streak) and `truncated` (a per-run turn cap, not a wall-clock kill — follow-on F's
+ * documented maxIterations/budget backstop still applies) keep the unbounded excuse; a `timeout` is
+ * excused only while the timeout-no-diff streak is still SHORT of its threshold, so the typed
+ * `timeout-no-diff` abort below takes over exactly where the excuse ends. At the default threshold
+ * (2) that is issue #54's single excused turn.
  */
 function noDiffExcusedByRun(ctx: LoopCtx): boolean {
-  return (
-    ctx.lastRunStatus === 'timeout' ||
-    ctx.lastRunStatus === 'crashed' ||
-    ctx.lastRunStatus === 'truncated'
-  );
+  if (ctx.lastRunStatus === 'crashed' || ctx.lastRunStatus === 'truncated') return true;
+  if (ctx.lastRunStatus !== 'timeout') return false;
+  return timeoutNoDiffStreak(ctx) < ctx.config.stuckPolicy.timeoutNoDiffThreshold;
+}
+
+/**
+ * How many of the most recent iterations BOTH timed out and left the working tree unchanged
+ * (issue #119) — the single fact behind both the capped no-diff excuse and the typed
+ * `timeout-no-diff` abort, so the excuse ends exactly where the abort begins.
+ *
+ * Pure over `LoopCtx`. The CURRENT iteration is read from `lastRunStatus`/`lastNoDiff` (the
+ * authoritative pair the reducer just recorded); earlier iterations are folded off the parallel
+ * `runStatusHistory` + `diffHashHistory` (an iteration changed nothing iff its post-run hash equals
+ * the previous iteration's). The walk stops at index 0 because iteration 1's no-diff is unknowable
+ * from the histories — the pre-run baseline hash is not in them — which is the conservative
+ * direction: it can only DELAY the abort by one iteration, never fire it early.
+ */
+function timeoutNoDiffStreak(ctx: LoopCtx): number {
+  if (ctx.lastRunStatus !== 'timeout' || !ctx.lastNoDiff) return 0;
+  const statuses = ctx.runStatusHistory;
+  const hashes = ctx.diffHashHistory;
+  let streak = 1;
+  for (let i = statuses.length - 2; i >= 1; i -= 1) {
+    if (statuses[i] !== 'timeout') break;
+    if (!unchangedAt(hashes, i)) break;
+    streak += 1;
+  }
+  return streak;
+}
+
+/** True when the iteration at `idx` left the tree exactly as the previous iteration did. */
+function unchangedAt(hashes: readonly DiffHash[], idx: number): boolean {
+  const hash = hashes[idx];
+  return hash !== undefined && hash === hashes[idx - 1];
 }
 
 export function detectStuck(ctx: LoopCtx): StuckReason | null {
@@ -109,6 +161,18 @@ export function detectStuck(ctx: LoopCtx): StuckReason | null {
       kind: 'unevaluable',
       message: contractUnevaluableReason(unevalThreshold, ctx.lastVerdict?.detail ?? ''),
     };
+  }
+
+  // Timeout + no-diff streak (issue #119) — the last `timeoutNoDiffThreshold` iterations were ALL
+  // killed by the harness wall-clock cap AND all left the tree unchanged. Checked BEFORE the generic
+  // no-diff (which the capped excuse would otherwise trip with a message blaming the agent) because
+  // this is a harness/budget-shape failure like the crash streak: the turn is running out of TIME,
+  // not out of ideas, so the abort names the two timeout flags instead of "the agent stopped editing".
+  // Deliberately NOT gated on `stuckPolicy.noDiff` — that toggle exists to let a worker keep going
+  // when it makes no edits, and must not silently re-open the unbounded ten-minute burn.
+  const timeoutThreshold = ctx.config.stuckPolicy.timeoutNoDiffThreshold;
+  if (timeoutNoDiffStreak(ctx) >= timeoutThreshold) {
+    return { kind: 'timeout-no-diff', message: timeoutNoDiffReason(timeoutThreshold) };
   }
 
   // No-diff — the most recent iteration left the working tree unchanged. Excused once (issue #54) by
@@ -154,27 +218,54 @@ const CRASH_OUTPUT_LIMIT = 500;
  * the code or the frozen contract — so the message points the user at the harness, not at a downstream
  * verifier red, and surfaces the harness's own error output verbatim so the real cause is visible.
  *
- * `hint` is a codec-recognised remediation the CLI named in its OWN output (see
- * {@link HarnessRunResult.hint}) — e.g. droid refusing an action at its `--auto` tier. When present
- * it REPLACES the generic install/auth advice, which in that situation is three dead ends: the CLI
- * is installed, authenticated and runnable, and the real fix was already in the log. The abort kind
- * and the fail-closed outcome are identical either way — only the guidance changes.
+ * `hint` is a codec-recognised remediation KIND (see {@link HarnessRemediation}) — e.g. droid
+ * refusing an action at its `--auto` tier. It selects one of the goaly-authored sentences in
+ * {@link REMEDIATION_ADVICE} instead of the generic install/auth advice, which in that situation is
+ * three dead ends: the CLI is installed, authenticated and runnable, and the real fix was already in
+ * the log. The codec supplies only the kind — never prose — so the remediation the operator reads
+ * (and the hint table matches on) stays goaly's own words, ahead of the quoted harness output. The
+ * abort kind and the fail-closed outcome are identical either way; only the guidance changes.
  */
-function harnessCrashReason(threshold: number, output: string, hint?: string): string {
+function harnessCrashReason(
+  threshold: number,
+  output: string,
+  hint?: HarnessRemediation | undefined,
+): string {
   const trimmed = output.trim();
   const snippet =
     trimmed.length > CRASH_OUTPUT_LIMIT ? `${trimmed.slice(0, CRASH_OUTPUT_LIMIT)}…` : trimmed;
-  const tail = snippet.length > 0 ? ` Last harness output: ${snippet}` : '';
+  const tail = snippet.length > 0 ? ` ${HARNESS_OUTPUT_QUOTE}${snippet}` : '';
   const head =
     `STUCK_HARNESS_CRASH: the coding-agent harness exited abnormally ${threshold} times in a row — ` +
     'it never completed a turn, so this is not a problem with your code or the frozen contract. ';
-  const advice =
-    hint !== undefined && hint.length > 0
-      ? hint
-      : 'Check that the agent CLI is installed, authenticated, and runnable in this directory (try ' +
-        'invoking it directly), then re-run — optionally with a different --harness.';
+  const advice = hint !== undefined ? REMEDIATION_ADVICE[hint] : GENERIC_CRASH_ADVICE;
   return `${head}${advice}${tail}`;
 }
+
+/** What to tell the operator when no codec recognised anything in the CLI's output. */
+const GENERIC_CRASH_ADVICE =
+  'Check that the agent CLI is installed, authenticated, and runnable in this directory (try ' +
+  'invoking it directly), then re-run — optionally with a different --harness.';
+
+/**
+ * The goaly-authored remediation for each {@link HarnessRemediation} kind a codec can report. The
+ * prose lives HERE, not in the codec, so a third-party codec cannot put its CLI's output into the
+ * goaly-authored prefix of an abort reason (the boundary owned by `./reason-quote`); a codec only
+ * ever names one of these closed kinds.
+ */
+const REMEDIATION_ADVICE: Record<HarnessRemediation, string> = {
+  'autonomy-refused':
+    'The harness REFUSED an action at its current autonomy level — a permission gate, not a broken ' +
+    'install or a bad login, so the generic checks below would all pass. Raise the tier and re-run: ' +
+    '--harness-autonomy medium (or high).',
+  'auth-required':
+    'The harness reported that it is NOT AUTHENTICATED — run the agent CLI once by hand and ' +
+    'complete its login, then re-run. Raising a threshold cannot help until it can start a session.',
+  'rate-limited':
+    'The harness reported a RATE LIMIT or an exhausted quota — this is an account/provider limit, ' +
+    'not a code or contract problem. Wait for the window to reset, switch --model, or use a ' +
+    'different --harness, then re-run.',
+};
 
 /** True when the last `threshold` harness runs all crashed (a consecutive crash streak). */
 function isCrashStreak(history: readonly string[], threshold: number): boolean {
@@ -209,7 +300,7 @@ function contractUnevaluableReason(threshold: number, detail: string): string {
   const trimmed = detail.trim();
   const snippet =
     trimmed.length > CRASH_OUTPUT_LIMIT ? `${trimmed.slice(0, CRASH_OUTPUT_LIMIT)}…` : trimmed;
-  const tail = snippet.length > 0 ? ` Last verifier output: ${snippet}` : '';
+  const tail = snippet.length > 0 ? ` ${VERIFIER_OUTPUT_QUOTE}${snippet}` : '';
   return (
     `CONTRACT_UNEVALUABLE: the frozen verifier ladder could not be evaluated to a real pass/fail ` +
     `${threshold} times in a row — the check itself failed to RUN (a missing tool, a network / ` +
@@ -218,6 +309,35 @@ function contractUnevaluableReason(threshold: number, detail: string): string {
     'may in fact satisfy the goal but is UNVERIFIED. Fix the verification environment (install the ' +
     'missing tool, allow network for the verify command, raise --verify-timeout-ms, or shrink the ' +
     `judge input with --delta-verify) and re-run, or run the frozen verify command yourself.${tail}`
+  );
+}
+
+/**
+ * The timeout-no-diff abort reason (issue #119): `threshold` consecutive iterations were killed by
+ * the harness wall-clock cap and each left the working tree untouched. That is a RESOURCE-shape
+ * failure, not evidence the code or the contract is wrong — the worker keeps being guillotined
+ * mid-turn, so every further iteration costs a full timeout for nothing.
+ *
+ * The message names BOTH halves of the fix, in the order they matter on a resume. The timeout flags
+ * (`--harness-timeout-ms`, and `--harness-idle-timeout-ms` which only kills a turn once it has gone
+ * QUIET) are what give a turn room — but they are compose-time flags, NOT `RunExtension` fields, so
+ * a `--resume` carrying only them produces no extension, the fold re-trips this detector at the tail
+ * and the run re-terminates before a single turn. `--stuck-timeout-no-diff-threshold` IS in
+ * `RunExtension.stuck`, so it is the flag that actually un-terminates the run; it is named FIRST for
+ * that reason, not as an afterthought. Still fail-closed: a cut-off turn is a `timeout` run and the
+ * run aborts — never a green.
+ */
+function timeoutNoDiffReason(threshold: number): string {
+  return (
+    `STUCK_TIMEOUT_NO_DIFF: the harness was killed by its wall-clock timeout ${threshold} times in ` +
+    'a row and every one of those iterations left the working tree UNCHANGED — the agent is running ' +
+    'out of TIME, not out of ideas, so more iterations at the same cap would burn the budget for ' +
+    'nothing. To CONTINUE this run you must raise --stuck-timeout-no-diff-threshold on the resume: ' +
+    'it is the only one of these that a --resume extension can apply, so a resume without it just ' +
+    'replays back into this same abort. Pair it with more room per turn — raise ' +
+    '--harness-timeout-ms (the hard cap), and/or set --harness-idle-timeout-ms so a ' +
+    'still-progressing turn is only killed after it goes quiet — or the extra turns will be cut ' +
+    'off the same way.'
   );
 }
 
@@ -231,7 +351,7 @@ const SIGNATURE_REASON_LIMIT = 500;
  * keeps editing unrelated files while the same error repeats is told to look at the file in the error,
  * the contract, or the setup, rather than churning on.
  */
-function repeatFailureReason(threshold: number, signature: string): string {
+export function repeatFailureReason(threshold: number, signature: string): string {
   const sig =
     signature.length > SIGNATURE_REASON_LIMIT
       ? `${signature.slice(0, SIGNATURE_REASON_LIMIT)}…`
@@ -239,7 +359,90 @@ function repeatFailureReason(threshold: number, signature: string): string {
   return (
     `repeat-failure (STUCK_REPEATED_FAILURE): the same verifier error has repeated ${threshold} ` +
     'times in a row despite code changes — the fix likely lies in the file named in the error, or in ' +
-    `the contract/setup, not in churning unrelated files. Repeated failure signature: ${sig}`
+    `the contract/setup, not in churning unrelated files. ${SIGNATURE_QUOTE}${sig}`
+  );
+}
+
+/**
+ * The typed marker opening a contract-defective abort (issue #116). Exported so the CLI's next-step
+ * hint, the docs' outcome tables, and tests all key off ONE string rather than re-typing it.
+ */
+export const CONTRACT_DEFECTIVE_MARKER = 'CONTRACT_DEFECTIVE';
+
+/**
+ * The typed marker closing a repeat-failure abort that WAS adjudicated in-loop and came back SOUND
+ * (issue #116's other branch — including every fail-closed path: no adjudicator, an LLM throw, an
+ * unparseable verdict).
+ *
+ * It exists because the two aborts are NOT equally continuable, and their text used to be
+ * byte-identical. A plain repeat abort ends on a re-derived detector trip, so `--resume <id>
+ * --stuck-repeat-threshold N` genuinely un-terminates it. An adjudicated one ends on a RECORDED
+ * `CONTRACT_ADJUDICATED` event: replay folds that event and lands on ABORTED whatever the
+ * thresholds say, so the same flag — which goaly's own next-step hint printed — does nothing at all.
+ * Naming the difference is what lets the hint point at a route that exists.
+ */
+export const CONTRACT_SOUND_MARKER = 'CONTRACT_ADJUDICATED_SOUND';
+
+/**
+ * The abort reason for a sound in-loop adjudication: the one fact the operator needs — this run
+ * cannot be continued by raising a threshold, because the adjudication is on the record — plus
+ * today's repeat-failure text as context. The bar is satisfiable, so the tree is the thing that has
+ * not caught up yet; carry the work forward as a follow-up rather than re-contracting (which
+ * `planRecontract` refuses for a sound verdict).
+ *
+ * The marker leads and the quoted repeat-failure text (which ends in the WORKER-authored failure
+ * signature) trails, per the ordering rule in `./reason-quote`: a reader keying off the marker must
+ * be able to find it in the goaly-authored prefix, not behind text the worker steers. It used to be
+ * the other way round, which is what let a crafted signature outrank the marker in the CLI's
+ * next-step hint table.
+ */
+export function contractSoundReason(fallbackReason: string): string {
+  return (
+    `[${CONTRACT_SOUND_MARKER}] The frozen bar was re-adjudicated in-loop and ` +
+    'found SATISFIABLE — the assertion CAN be met, the implementation simply has not met it yet. ' +
+    'That adjudication is recorded, so this run ends here: replay folds the recorded verdict and a ' +
+    'raised --stuck-repeat-threshold cannot un-terminate it. Carry the tree forward into a fresh ' +
+    `run instead. ${NESTED_REASON_QUOTE}${fallbackReason}`
+  );
+}
+
+/**
+ * The contract-defective abort reason (issue #116) — the sibling of {@link contractUnevaluableReason}.
+ * That one means "the checker could not RUN"; this one means "the checker ran fine and is WRONG": an
+ * adjudicator, given a tree that now contains a real implementation, judged that NO implementation
+ * could satisfy the frozen assertion the worker keeps failing.
+ *
+ * The run was already terminating on a repeat-failure streak, so this only changes the LABEL — but
+ * the label is the whole point: today's text tells the operator to raise `--stuck-repeat-threshold`,
+ * which cannot possibly help against an unsatisfiable bar, and implies the (possibly correct) tree is
+ * worthless. So the message names the frozen file(s) the signature pointed at, states plainly that
+ * the implementation may be correct and the tree is worth keeping, and carries the original
+ * repeat-failure text as context. It deliberately does NOT name a successor command: the reducer has
+ * no `runId` (that is Driver identity, not loop state) — the CLI's next-step hint owns that.
+ *
+ * `paths` are the FROZEN contract's authored files, so naming them ahead of the first lead-in is
+ * deliberate: they were compiled and sealed before the loop began and the worker cannot change them
+ * mid-run. The adjudicator's prose and the nested stuck reason are both quoted (`./reason-quote`).
+ */
+export function contractDefectiveReason(
+  paths: readonly string[],
+  verdictReason: string,
+  fallbackReason: string,
+): string {
+  const named = paths.length > 0 ? paths.join(', ') : 'the frozen authored verification';
+  const trimmed = verdictReason.trim();
+  const why =
+    trimmed.length > SIGNATURE_REASON_LIMIT
+      ? `${trimmed.slice(0, SIGNATURE_REASON_LIMIT)}…`
+      : trimmed;
+  return (
+    `${CONTRACT_DEFECTIVE_MARKER}: the frozen verification is DEFECTIVE — re-adjudicated in-loop ` +
+    'against a tree that now contains a real implementation, the same assertion still reds, and no ' +
+    `implementation could satisfy it. The defect is in ${named}, which is frozen, so the worker can ` +
+    'never fix it. Your implementation may well be correct: KEEP the working tree — it was not ' +
+    'rejected on its merits. Re-run with a corrected bar (an explicit --verify-cmd, or a refined ' +
+    `goal) rather than more iterations against this one.${why.length > 0 ? ` ${ADJUDICATOR_QUOTE}${why}` : ''}` +
+    ` ${NESTED_REASON_QUOTE}${fallbackReason}`
   );
 }
 

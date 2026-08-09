@@ -4,7 +4,25 @@ import { CompiledContract } from './contract';
 import { PhasePlan } from './plan';
 import { Verdict, ApprovalVerdict, SealDecision, type SealEditPatch } from './verdict';
 import { RunConfig, StuckPolicy } from './config';
+import { DegradedMode } from './degraded';
 import { TokenUsage, TokenBreakdown, UsageReport } from './usage';
+
+/**
+ * The closed set of remediations a codec may report for a failed harness run (see
+ * {@link HarnessRunResult.hint}). A codec names the KIND it recognised in its CLI's output; the
+ * operator-facing sentence is authored by goaly (`REMEDIATION_ADVICE` in
+ * `src/orchestrator/stuck.ts`), so no CLI text can reach the goaly-authored part of an abort reason.
+ *
+ *  - `autonomy-refused` — the CLI refused an action at its current permission/autonomy tier.
+ *  - `auth-required`    — the CLI reported it is not logged in / has no usable credentials.
+ *  - `rate-limited`     — the CLI reported a rate limit or an exhausted quota.
+ *
+ * Unrecognised values are DROPPED on parse (`.catch(undefined)`), not rejected: a run log written
+ * before this was an enum carries free-text advice, and a resume of it must still replay — it simply
+ * falls back to the generic guidance.
+ */
+export const HarnessRemediation = z.enum(['autonomy-refused', 'auth-required', 'rate-limited']);
+export type HarnessRemediation = z.infer<typeof HarnessRemediation>;
 
 /** What a harness adapter returns. `diffHash` is computed by the Workspace, not here. */
 export const HarnessRunResult = z.object({
@@ -24,15 +42,20 @@ export const HarnessRunResult = z.object({
    */
   tokenBreakdown: TokenBreakdown.optional(),
   /**
-   * An ACTIONABLE remediation the CODEC recognised in this CLI's own failure output — e.g. droid
-   * refusing an action at its current `--auto` tier. Advice only: it never changes the `status`
-   * above (which stays classified from facts goaly owns — its own timeout, the exit code — per
-   * invariant #8), it only replaces the generic "check your install/auth" guidance in the
-   * `STUCK_HARNESS_CRASH` abort with the fix the harness itself named. Per-CLI string knowledge
-   * lives in the codec (`AgentCliCodec.diagnose`), never in the reducer; the reducer only ever
-   * carries this string through. Absent ⇒ nothing recognised.
+   * The remediation KIND the CODEC recognised in this CLI's own failure output — e.g. droid refusing
+   * an action at its current `--auto` tier. Advice only: it never changes the `status` above (which
+   * stays classified from facts goaly owns — its own timeout, the exit code — per invariant #8), it
+   * only selects which goaly-authored sentence replaces the generic "check your install/auth"
+   * guidance in the `STUCK_HARNESS_CRASH` abort. Per-CLI string knowledge lives in the codec
+   * (`AgentCliCodec.diagnose`), never in the reducer. Absent ⇒ nothing recognised.
+   *
+   * It is a CLOSED enum, not free text, because the reason it feeds is read back by the CLI's
+   * next-step hint: prose supplied by a third-party codec (which may echo the CLI's output) would
+   * land inside the goaly-authored prefix of that reason and could steer the hint. See
+   * `src/orchestrator/reason-quote.ts` for the boundary and `REMEDIATION_ADVICE` in
+   * `src/orchestrator/stuck.ts` for the prose each kind renders as.
    */
-  hint: z.string().min(1).optional(),
+  hint: HarnessRemediation.optional().catch(undefined),
 });
 export type HarnessRunResult = z.infer<typeof HarnessRunResult>;
 
@@ -85,6 +108,35 @@ export const PreparedOutcome = z.discriminatedUnion('status', [
   z.object({ status: z.literal('tools-missing'), detail: z.string() }),
 ]);
 export type PreparedOutcome = z.infer<typeof PreparedOutcome>;
+
+/**
+ * The PAYLOAD of a RUN_EXTENDED marker (ADR 0012) — every operator-extendable field, and the ONE
+ * definition of that field set. The marker itself is this schema plus its `tag` (see the union
+ * below), and {@link RUN_EXTENSION_FIELDS} enumerates it, so code that must react to "any field is
+ * present" (the resume path's decision to write a marker at all) derives the list from here instead
+ * of restating it. A restated list silently drops a newly-added field's override while still
+ * reporting it as accepted.
+ */
+const RunExtensionPayload = z.object({
+  /** New iteration cap (replaces the config's `maxIterations`). */
+  maxIterations: z.number().int().positive().optional(),
+  /** New token budget cap (replaces `budget.tokens`; past snapshots are re-judged against it). */
+  budgetTokens: z.number().int().positive().optional(),
+  /** New wall-clock budget cap (replaces `budget.wallClockMs`). */
+  budgetWallMs: z.number().int().positive().optional(),
+  /** Stuck-policy overrides (each field replaces its counterpart; absent fields keep the prior). */
+  stuck: StuckPolicy.partial().optional(),
+  /**
+   * Best-of-N candidates override (issue #85): raise/lower the per-iteration parallel fan-out
+   * mid-run — an OPERATIONAL loop knob like `maxIterations`, never the frozen contract. Capped at
+   * 16 like the config seam (each candidate is a full concurrent worker + worktree). Typically
+   * set from an explicit `--candidates` at resume or a natural-language `--note` directive
+   * ("try 4 parallel attempts" — see `src/cli/delegation.ts`).
+   */
+  candidates: z.number().int().positive().max(16).optional(),
+  /** Operator guidance appended to the NEXT agent prompt (worker steering, never the contract). */
+  note: z.string().min(1).optional(),
+});
 
 /**
  * EVENTS — the only things fed to the pure reducer. Each is the already-resolved result
@@ -200,6 +252,34 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     llm: TokenUsage.optional(),
   }),
   /**
+   * The in-loop contract-fault adjudication resolved (issue #116). A repeat-failure streak whose
+   * signature names a FROZEN authored verification file is the first moment the question "can any
+   * implementation satisfy this assertion?" is answerable — at t=0 (the pre-flight soundness check)
+   * the tree was empty, so an unsatisfiable frozen assertion and an honest implementation-missing red
+   * look identical. The Driver performs ONE read-only classification and feeds the verdict back here.
+   *
+   * A real reducer transition (unlike CHECKPOINTED / CANDIDATE_* / RUN_EXTENDED): replay folds it, so
+   * a resumed run reuses the recorded verdict and never re-calls the LLM. It can only ever relabel an
+   * ABORT that was already happening — never a DONE, never a green (invariants #3/#4).
+   */
+  z.object({
+    tag: z.literal('CONTRACT_ADJUDICATED'),
+    /** True ⇒ no implementation can satisfy the frozen bar (→ a typed CONTRACT_DEFECTIVE abort). */
+    defective: z.boolean(),
+    /** The adjudicator's own justification (or why it could not run — then `defective` is false). */
+    reason: z.string(),
+    /**
+     * The GENERALIZED anti-pattern the adjudicator named, when it named one. It never influences
+     * this run's outcome; it is what the cross-run DEFECT CORPUS (issue #122) records, so the
+     * compiler stops re-authoring this defect on FUTURE runs.
+     */
+    pattern: z.string().optional(),
+    /** The generalized SHAPE of the offending assertion, when named. Corpus input, like `pattern`. */
+    assertionShape: z.string().optional(),
+    /** LLM spend of the adjudication (absent when no adjudicator ran). */
+    llm: TokenUsage.optional(),
+  }),
+  /**
    * An internal workspace checkpoint (issue #47): the Driver snapshotted the working tree into a git
    * TREE object (no user-visible commit, no HEAD/branch move) and adopted it as the new diff baseline.
    * It is a baseline MARKER, not a reducer transition — it is NEVER fed to `step()` (replay skips it);
@@ -210,6 +290,27 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     tag: z.literal('CHECKPOINTED'),
     /** The git tree SHA snapshotted as the new diff baseline. */
     tree: DiffHash,
+  }),
+  /**
+   * The run's typed DEGRADED-MODE label (issue #125) was ESCALATED by a `--resume` whose key wiring
+   * is more collapsed than the one the run started with (e.g. a run recorded
+   * `independence-unverified` whose resume ran fully self-judged). The header records the label the
+   * FIRST invocation resolved, but the models a run uses are re-resolved from EVERY invocation's
+   * flags, so the record has to be able to move.
+   *
+   * It moves by APPEND, never by rewriting the header (ADR 0012's RUN_EXTENDED pattern): the header
+   * is written exactly once, and a crash during an in-place `header.json` rewrite would have left an
+   * otherwise-resumable run unreadable — trading the whole run for a label. Readers derive the
+   * effective label with `effectiveDegraded` (header ∨ every marker, most-degraded wins).
+   *
+   * Like CHECKPOINTED / CANDIDATE_* / RUN_EXTENDED this is a Driver-side MARKER, NEVER fed to
+   * `step()` (replay skips it): the label gates nothing, never enters the frozen contract, and never
+   * reaches the reducer (invariant #1).
+   */
+  z.object({
+    tag: z.literal('DEGRADED_ESCALATED'),
+    /** The run's effective label after this escalation (already the more severe of the two). */
+    degraded: DegradedMode,
   }),
   /**
    * One best-of-N candidate finished (issue #85). When `--candidates N` (N>1), the Driver fans out K
@@ -269,27 +370,7 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
    * frozen (invariant #2), and both keys still gate DONE. Appended write-ahead at resume time so the
    * extension is auditable and every later replay/inspection folds with the same effective config.
    */
-  z.object({
-    tag: z.literal('RUN_EXTENDED'),
-    /** New iteration cap (replaces the config's `maxIterations`). */
-    maxIterations: z.number().int().positive().optional(),
-    /** New token budget cap (replaces `budget.tokens`; past snapshots are re-judged against it). */
-    budgetTokens: z.number().int().positive().optional(),
-    /** New wall-clock budget cap (replaces `budget.wallClockMs`). */
-    budgetWallMs: z.number().int().positive().optional(),
-    /** Stuck-policy overrides (each field replaces its counterpart; absent fields keep the prior). */
-    stuck: StuckPolicy.partial().optional(),
-    /**
-     * Best-of-N candidates override (issue #85): raise/lower the per-iteration parallel fan-out
-     * mid-run — an OPERATIONAL loop knob like `maxIterations`, never the frozen contract. Capped at
-     * 16 like the config seam (each candidate is a full concurrent worker + worktree). Typically
-     * set from an explicit `--candidates` at resume or a natural-language `--note` directive
-     * ("try 4 parallel attempts" — see `src/cli/delegation.ts`).
-     */
-    candidates: z.number().int().positive().max(16).optional(),
-    /** Operator guidance appended to the NEXT agent prompt (worker steering, never the contract). */
-    note: z.string().min(1).optional(),
-  }),
+  RunExtensionPayload.extend({ tag: z.literal('RUN_EXTENDED') }),
 ]);
 export type OrchestratorEvent = z.infer<typeof OrchestratorEvent>;
 
@@ -299,6 +380,18 @@ export type OrchestratorEvent = z.infer<typeof OrchestratorEvent>;
  * note only; the frozen contract fields are unrepresentable here by construction (invariant #2).
  */
 export type RunExtension = Omit<Extract<OrchestratorEvent, { tag: 'RUN_EXTENDED' }>, 'tag'>;
+
+/**
+ * Every field a {@link RunExtension} can carry, read off the schema itself — NOT a hand-maintained
+ * list. Consumers that must ask "does this extension carry anything?" (`hasExtension` on the resume
+ * path, which gates whether the RUN_EXTENDED marker is written at all) iterate this, so a field
+ * added to {@link RunExtensionPayload} is covered the moment it exists. Restating the field set by
+ * hand is what made a `--candidates`-only resume produce no marker: the override was discarded
+ * while the CLI still reported it as accepted.
+ */
+export const RUN_EXTENSION_FIELDS: readonly (keyof RunExtension)[] = Object.keys(
+  RunExtensionPayload.shape,
+) as (keyof RunExtension)[];
 
 /** Inputs the Driver must gather (workspace diff) before running the approver. */
 export type ApprovalInput = {
@@ -353,6 +446,22 @@ export type Command =
    */
   | { tag: 'RUN_AGENT_BEST_OF'; prompt: string; sessionId: SessionId | undefined; candidates: number }
   | { tag: 'RUN_VERIFIER'; contract: CompiledContract }
+  /**
+   * In-loop contract-fault adjudication (issue #116): ask, ONCE per run, whether the frozen bar the
+   * worker keeps failing is itself defective. Emitted by DECIDE when a repeat-failure streak's
+   * signature names one of the contract's frozen `generatedFiles` and the worker has demonstrably
+   * populated the tree — i.e. the moment the evidence finally exists. The Driver performs a READ-ONLY
+   * LLM call and feeds back `CONTRACT_ADJUDICATED`. The reducer holds no LLM and performs nothing
+   * (invariant #1); the contract is passed by reference and never rewritten (invariant #2).
+   */
+  | {
+      tag: 'ADJUDICATE_CONTRACT';
+      contract: CompiledContract;
+      /** The already-normalized repeated signature from `ctx.verifierDetailHistory`. */
+      signature: string;
+      /** The threshold that tripped — context for the prompt, never a policy input. */
+      repeatCount: number;
+    }
   | { tag: 'REQUEST_SIGNOFF'; goal: string; rubric: string; verdicts: Verdict[] }
   /**
    * EXPERIMENTAL — run a cooperative parallel WAVE (`--parallel-phases`): the consecutive grouped

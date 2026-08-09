@@ -142,6 +142,27 @@ describe('decide with auto-remediation', () => {
     expect(second.kind).toBe('ABORTED');
   });
 
+  it('STUCK_TIMEOUT_NO_DIFF aborts even with remediation enabled (issue #119)', () => {
+    // One more attempt at the SAME wall-clock cap just buys another full-length no-op turn — the
+    // fix is a bigger --harness-timeout-ms, which the pure reducer cannot grant itself.
+    const config = remediateConfig();
+    const decision = decide(
+      makeCtx({
+        config,
+        iteration: 3,
+        lastNoDiff: true,
+        lastRunStatus: 'timeout',
+        runStatusHistory: ['completed', 'timeout', 'timeout'],
+        diffHashHistory: dh('a', 'a', 'a'),
+      }),
+      failVerdict('still red'),
+      null,
+    );
+    expect(decision.kind).toBe('ABORTED');
+    if (decision.kind !== 'ABORTED') throw new Error('unreachable');
+    expect(decision.reason).toContain('STUCK_TIMEOUT_NO_DIFF');
+  });
+
   it('CONTRACT_UNEVALUABLE aborts even with remediation enabled', () => {
     const config = remediateConfig();
     const threshold = config.stuckPolicy.unevaluableThreshold;

@@ -118,7 +118,9 @@ export function applyImpliedDefault(
     notes.push(
       `the implied '${DEFAULT_PRESET}' preset runs with no human at the gates — set ` +
         '--approver-model (or --approver-models) on a DIFFERENT model so the Sign-off key stays ' +
-        'independent, or choose --mode review for a human Seal',
+        'independent, or choose --mode review for a human Seal. Without one, goaly keeps the ' +
+        "approver off the agent's --model where the provider allows it, and otherwise records the " +
+        'run as SELF-JUDGED (degraded) in the run header, the end-of-run summary and `goaly runs show`',
     );
   }
   return { overlay, notes };

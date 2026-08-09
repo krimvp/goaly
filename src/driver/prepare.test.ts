@@ -489,3 +489,68 @@ describe('prepareWorkspace — green pre-flight on a from-scratch tree (compiler
     expect(llm.requests).toHaveLength(0);
   });
 });
+
+describe('prepareWorkspace — the RE-CONTRACT negative control (issue #117)', () => {
+  const generatedFiles = [{ path: 'verify/db.test.js', sha256: 'a'.repeat(64) }];
+  const barContract = makeFakeContract({
+    goal: 'add a createDatabase bootstrap',
+    rungs: [{ kind: 'deterministic', command: 'node test.js' }],
+    generatedFiles,
+  });
+  const greenLlm = (unsound: boolean, reason = ''): FakeLlm =>
+    new FakeLlm([JSON.stringify({ unsound, reason })]);
+
+  it('a re-authored bar that already passes on the INHERITED tree is put to the control', async () => {
+    const ws = new ScriptedWorkspace([ok]); // green before the first worker turn; NOT from-scratch
+    const llm = greenLlm(true, 'the new bar asserts far less than the goal requires');
+    const result = await prepareWorkspace({ workspace: ws, llm, recontract: true }, barContract);
+
+    expect(result.prepared.status).toBe('contract-unsound');
+    if (result.prepared.status === 'contract-unsound') {
+      expect(result.prepared.detail).toContain('asserts far less');
+      expect(result.prepared.detail).toMatch(/must not soften/);
+    }
+    expect(ws.commands).toEqual(['node test.js']); // the bar WAS run against the inherited tree
+    expect(llm.requests).toHaveLength(1);
+    expect(llm.requests[0]?.prompt).toMatch(/RE-CONTRACT/);
+    expect(llm.requests[0]?.prompt).toMatch(/INHERITED TREE/);
+  });
+
+  it('FAIL-OPEN: the control rules the pass legitimate (the implementation really was correct) → proceed', async () => {
+    const ws = new ScriptedWorkspace([ok]);
+    const result = await prepareWorkspace(
+      { workspace: ws, llm: greenLlm(false, 'the bar is real; the tree meets it'), recontract: true },
+      barContract,
+    );
+    expect(result.prepared.status).toBe('proceed');
+  });
+
+  it.each([
+    ['no classifier is wired', undefined],
+    ['the classifier answers with prose', new FakeLlm(['looks fine to me'])],
+    ['the classifier returns the wrong shape', new FakeLlm([JSON.stringify({ broken: true })])],
+  ])('FAIL-OPEN: proceeds when %s', async (_label, llm) => {
+    const ws = new ScriptedWorkspace([ok]);
+    const result = await prepareWorkspace(
+      { workspace: ws, recontract: true, ...(llm !== undefined ? { llm } : {}) },
+      barContract,
+    );
+    expect(result.prepared.status).toBe('proceed');
+  });
+
+  it('an ORDINARY run on the same tree is untouched — the control is not consulted at all', async () => {
+    const ws = new ScriptedWorkspace([ok]);
+    const llm = greenLlm(true); // would say unsound, but must not be asked
+    const result = await prepareWorkspace({ workspace: ws, llm }, barContract);
+    expect(result.prepared.status).toBe('proceed');
+    expect(llm.requests).toHaveLength(0);
+  });
+
+  it('a RED re-contracted bar keeps the ordinary red classification (an honest red proceeds)', async () => {
+    const ws = new ScriptedWorkspace([{ exitCode: 1, stdout: 'assertion failed', stderr: '' }]);
+    const llm = new FakeLlm([JSON.stringify({ brokenVerification: false, reason: 'not written yet' })]);
+    const result = await prepareWorkspace({ workspace: ws, llm, recontract: true }, barContract);
+    expect(result.prepared.status).toBe('proceed');
+    expect(llm.requests[0]?.prompt).toMatch(/it failed/);
+  });
+});

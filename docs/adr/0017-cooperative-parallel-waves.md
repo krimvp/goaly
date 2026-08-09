@@ -68,3 +68,25 @@ that resolves conflicts with an LLM would put unverified writes on the DONE path
 - **Deferred:** planner-authored groups (and the natural-language "split this across N subagents"
   directive mapping onto them), durable child logs for fine-grained wave resume, LLM-judge re-runs
   on the merged tree.
+
+## Amendment (issue #123 — the wave is a topological frontier)
+
+The v1 wave was a *contiguous band of same-`group` phases*: independence was inferred from
+adjacency. Issue #123 replaced the encoding, not the mechanism. A plan is now a dependency DAG —
+`SubGoal.id` names a phase, `SubGoal.dependsOn` declares what it needs — validated fail-closed at
+every plan seam (duplicate id, unknown id, self-reference, cycle, forward edge → typed
+`PLAN_FAILED`), and frozen into `planHash` exactly as `group` was.
+
+`group` is kept as **sugar** that lowers to the same edges (a contiguous band ⇒ every member
+depends on everything before the band), so pre-#123 frozen plans keep byte-identical semantics —
+pinned by a test that replays the old scheduler as an oracle over every index of every legacy plan
+shape.
+
+What a wave *is* changed accordingly: it is the plan's current **topological frontier** (every
+phase whose dependencies have all completed), computed by a pure `(frozen plan, completed set) →
+ready frontier` function in `src/domain/plan-graph.ts` and recomputed after every merge and on
+`--resume`. Everything downstream — `RUN_WAVE`/`WAVE_RAN`, the merge, the fail-closed re-verify,
+the sequential downgrade, and the cumulative acceptance phase — is unchanged. The phase list must
+be a topological order (dependencies first), which is what keeps the sequential walk and the
+sequential downgrade sound: by the time a phase runs, its prerequisites have completed, so "a
+phase whose dependencies can never complete" is unreachable rather than a hang.

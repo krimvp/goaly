@@ -13,12 +13,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an `npm audit --audit-level moderate` step to CI so new advisories fail the build.
 
 ### Fixed
+- **Defect-corpus signatures no longer replay, and the threat model is stated honestly.** A valid
+  HMAC proved a corpus line came from an adjudication, but not that it was there *once*: appending
+  40 copies of one genuine line made `read()` return 41 records, and because the occurrence count is
+  the second ranking key behind the five-hint cap, an append-only adversary could pin any pattern to
+  the top of the authoring prompt and push every other hint out — without touching the key. Records
+  now carry a per-record nonce inside the signed payload, and a read de-duplicates on that nonce and
+  on `(contractHash, runId, pattern, assertion shape)` and caps any single run's contribution at 3,
+  so an occurrence count is a count of *distinct adjudications* (record schema `v2`; a pre-v2 corpus
+  reads as empty — clear it and it re-learns). Separately, the module claimed the signature closed
+  the *coding agent*: it does not. The agent runs as goaly's own uid, so `~/.goaly/defects.key`
+  (mode 0600) is exactly as readable to it as the corpus was writable — 0600 excludes other users,
+  not a subprocess of ours. Every such claim is narrowed to what signing actually buys (hand-edited,
+  altered, copied-in, foreign-key and replayed lines), the **untrusted fence** around the injected
+  section is documented as the primary defense, the effort word list is described as a speed bump
+  rather than a guarantee, `$HOME/.goaly` joins the sandbox's denied-home-secrets set so an active
+  `--sandbox` policy really does put the key out of the agent seam's reach, and the injection log
+  now carries a `trust` field saying which of the two situations a run is in.
+- The **contract dry run's refusal is now a structured summary**, not filtered runner output
+  (issue #115 follow-up). The previous per-line filter kept any line that named no file, which real
+  runners exploit: pytest prints traceback source with no filename on the line, jest marks the
+  offending line `> 5 | …` (defeating a gutter anchor), and a multi-line `Error(fn.toString())`
+  message renders as plain lines — each delivered reference-implementation source to the contract
+  author. The refusal now carries only the exit code, the failing rung's identity, lines whose every
+  file-ish token names a **frozen** verification file, and at most **one** assertion line (single
+  line, truncated, dropped if it lexically parses as code). ANSI escapes are stripped before
+  matching, and an unrecognized runner format over-drops to a withheld-output notice instead of
+  guessing. The collision drop that keeps a reference file out of the scratch copy now uses the
+  **same** path predicate as the output filter, so a path can no longer be treated as unfrozen when
+  written and frozen when printed. Both output streams are filtered, not just the first non-empty one.
 - A harness crash (after the Driver's retry is exhausted) no longer consumes an iteration under
   `--max-iterations`. Stuck detection still records the crash streak, and the budget still accounts
   for the abandoned attempt, but a transient crash cannot single-handedly exhaust a tight iteration
   cap.
 
 ### Added
+- A **real dependency DAG for phased plans** (issue #123). A `SubGoal` may now name itself with a
+  stable, plan-local `id` and declare exactly what it needs with `dependsOn`, so "C needs A and B,
+  D needs only A" is expressible — previously independence was positional (`--parallel-phases`
+  grouped *consecutive* phases sharing a `group` number), so reordering a plan silently changed its
+  concurrency semantics. The graph is validated at parse time and **fail-closed** at every plan seam
+  (planner, `--plan-file`, freeze, run-log read): a duplicate id, an unknown id, a self-reference, a
+  cycle, or a forward edge is a typed plan-parse failure, never a silently linearized plan. Phases
+  are listed dependencies-first (a topological order), which keeps the sequential walk and the
+  unmerged-wave downgrade sound by construction. Scheduling is a new PURE function —
+  `(frozen plan, completed phases) -> ready frontier` (`src/domain/plan-graph.ts`) — so the wave
+  machinery now fans out the plan's current **topological frontier**, recomputed after every merge
+  and reconstructed from the log on `--resume` (no completed phase repeats). `group` is kept as
+  sugar that lowers to the same edges (a contiguous band ⇒ each member depends on everything before
+  the band), and a test proves pre-existing frozen plans keep byte-identical semantics and their
+  exact `planHash`. `id`/`dependsOn` join `canonicalPlanString` — and therefore `planHash` — only
+  when set, so the graph is frozen like the rest of the plan. The final cumulative-acceptance phase
+  on the ORIGINAL goal still runs after all phases, unchanged.
+- The **defect corpus** — goaly's first CROSS-RUN feedback loop (issue #122). When a run's in-loop
+  adjudication rules a frozen bar `CONTRACT_DEFECTIVE`, one compact, Zod-schema'd record is appended
+  to `~/.goaly/defects.jsonl` (overridable with `--defect-corpus <path>`): the adjudicator's
+  GENERALIZED anti-pattern and assertion shape, the language/test-runner derived from the FROZEN
+  contract, and `contractHash` + `runId` for provenance — never source, never the diff, never the
+  failure text. Later `--generate` runs inject the entries relevant to that workspace's
+  language/runner into the contract-authoring prompt as a bounded "known false-red patterns — do not
+  author these" section, and log which patterns were injected. The safeguards are STRUCTURAL: only an
+  adjudicated defective verdict can mint an appendable record (nothing else type-checks against the
+  append), the record builder has no input through which worker-supplied text could arrive, and the
+  strict schema has NO field for iterations, duration, spend or severity — so "this was hard" can
+  never arrive as data and become "author an easier bar". Every record is HMAC-signed and nonce'd, so
+  a hand-edited, copied-in, foreign-key or replayed line is dropped or collapsed on read; that closes
+  the file as a channel from elsewhere, NOT the coding agent, which runs as goaly's own uid and can
+  read the signing key — what contains a planted record is the untrusted fence around the injected
+  section. Fail-OPEN in every direction (a
+  missing/corrupt/unparseable corpus, or a failed write, degrades to exactly the previous behavior),
+  and a corpus-influenced contract still faces the critics, Seal, the pre-flight negative control,
+  the frozen ladder and both keys. `goaly config defects list|clear` inspects/resets it;
+  `--no-defect-corpus` opts out. Local only — nothing is uploaded or fetched.
+- `--recontract` successor runs (issue #117): recovery from a `CONTRACT_DEFECTIVE` bar that keeps the
+  tree. `goaly --from-run <runId> --recontract` — printed verbatim by the abort — starts a NEW run
+  over the predecessor's working tree, inherits its FROZEN goal, and re-runs COMPILE with the defect
+  report as authoring feedback (the same free-text channel a Seal "revise" uses), then freezes a NEW
+  contract with a NEW `contractHash` under a NEW `runId`. No contract is ever mutated: invariant #2
+  is strengthened — one run owns exactly one bar for its whole life and evolution happens BETWEEN
+  runs, with provenance (`predecessorRunId`, `predecessorContractHash`, the adjudication verdict and
+  the chain depth) recorded in the successor's log header and rendered by `goaly runs show`.
+  Guarded: only a write-ahead, Zod-parsed `CONTRACT_ADJUDICATED { defective: true }` event can reach
+  it (so the worker can never trigger it, and no worker-supplied text feeds the re-authoring — the
+  adjudicator's report is itself fenced as untrusted data); a re-authored bar that ALREADY passes on
+  the inherited tree faces a new fail-open pre-flight negative control before a worker token is spent
+  (a weakened bar aborts `CONTRACT_UNSOUND`); and `--max-recontracts` (default 1) bounds the chain
+  from the run log, so the cap holds across the chain rather than per process.
+- In-loop contract-fault adjudication (`CONTRACT_DEFECTIVE`, issue #116). Contract soundness was
+  otherwise classified exactly once, at t=0, on a tree with no implementation in it — the moment of
+  least evidence, where an unsatisfiable frozen assertion and an honest "not written yet" red are
+  indistinguishable. Now, when a `repeat-failure` streak is about to abort AND the repeated
+  signature names one of the contract's frozen authored files AND the worker has demonstrably
+  changed the tree, the run makes ONE read-only LLM call asking whether any correct implementation
+  could pass that check. A confident "no" relabels the abort as `CONTRACT_DEFECTIVE` — naming the
+  frozen file and stating that the implementation may be correct and the tree is worth keeping —
+  instead of pointing at `--stuck-repeat-threshold`, which cannot help. Everything else (no
+  adjudicator, an LLM error, an unparseable verdict, any uncertainty) keeps today's repeat-failure
+  abort byte-for-byte. Bounded to once per run, write-ahead logged as a Zod-parsed
+  `CONTRACT_ADJUDICATED` event so `--resume` reuses the verdict and never re-calls the model, and
+  metered against `--budget-tokens`. Diagnosis only: the path can never reach DONE, never produces
+  a green, and never re-authors the frozen contract. The reducer stays pure — DECIDE emits an
+  `ADJUDICATE_CONTRACT` command and the Driver performs the call.
+- Compile-time positive control (`--contract-dry-run`, on by default under `--generate`): before the
+  contract is frozen, the compiler also authors a throwaway reference implementation, materializes
+  it in a scratch copy of the workspace beside the authored verification files, and runs the
+  contract's deterministic rungs there. Green freezes the contract unchanged; red refuses the freeze
+  and feeds the failure into the existing bounded re-author loop (`--max-compile-retries`). The
+  reference implementation is written only to the scratch copy, which is destroyed on every exit
+  path — it never reaches the workspace, the run diff, or any worker prompt, and never appears in
+  the re-author feedback. Fail-open on any infrastructure error (no LLM, scratch failure, a setup
+  that cannot run there, a timed-out or unstartable rung), so it can only reject a defective bar or
+  step aside. Judge rungs are out of scope; a user-supplied `--verify-cmd` is never dry-run.
 - Named presets: a `"presets"` block in any config layer defines your own flag bundles, selected
   per run with `--preset <name>` or persistently via a top-level `"preset"` selection (announced
   on every run; `--preset none` disables it for one invocation). One language- and

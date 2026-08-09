@@ -4,17 +4,36 @@ import type { SealGate } from './seal';
 
 const HUMAN_REJECT_REASON = 'rejected by human at Seal';
 
-/** Render a rung as a single human-readable line for the contract banner. */
-function describeRung(rung: Rung, index: number): string {
+/** Pointer used when a judge rung's rubric is byte-identical to the contract rubric printed above. */
+const SAME_RUBRIC = '(same as the contract rubric above)';
+
+/**
+ * Render a rung as a human-readable block for the contract banner. `contractRubric` is the
+ * top-level rubric already printed above: a judge rung whose rubric is identical points at it
+ * instead of repeating it (issue #120 — the rubric is the largest block of the banner, and
+ * printing it twice pushed the command/setup/files an operator needs off screen). A rung-specific
+ * rubric — the schema allows one — is still spelled out in full.
+ */
+function describeRung(rung: Rung, index: number, contractRubric: string): string {
+  const label = rung.label !== undefined ? ` (${rung.label})` : '';
   if (rung.kind === 'deterministic') {
-    const label = rung.label !== undefined ? ` (${rung.label})` : '';
     return `  [${index}] deterministic${label}: ${rung.command}`;
   }
-  const label = rung.label !== undefined ? ` (${rung.label})` : '';
+  const rubric = rung.rubric === contractRubric ? SAME_RUBRIC : rung.rubric;
   return (
     `  [${index}] judge${label}: quorum=${rung.quorum} floor=${rung.confidenceFloor}\n` +
-    `      rubric: ${rung.rubric}`
+    `      rubric: ${rubric}`
   );
+}
+
+/**
+ * Render the generated-files integrity guard the ladder prepends when the contract pins authored
+ * verification files (`buildLadder`, `src/cli/compose.ts`). It is a real rung that can red the
+ * ladder, so it is shown here — otherwise the printed count undercounts the `rungsTotal` every
+ * verdict reports (issue #120).
+ */
+function describeGuardRung(fileCount: number, index: number): string {
+  return `  [${index}] guard (built-in, not part of contractHash): generated-files integrity — ${fileCount} authored file(s) must match their frozen hash`;
 }
 
 /** Build the full, multi-line contract banner shared by both gates. */
@@ -29,12 +48,16 @@ function renderContract(contract: CompiledContract): string {
   if (contract.requiredTools.length > 0) {
     lines.push(`requiredTools (must be on PATH; installed by the agent if missing): ${contract.requiredTools.join(', ')}`);
   }
-  lines.push('rungs:');
-  contract.rungs.forEach((rung, i) => {
-    lines.push(describeRung(rung, i));
-  });
+  // The rubric is printed ONCE, before the ladder, so judge rungs can point back at it.
   lines.push(`rubric: ${contract.rubric.length > 0 ? contract.rubric : '(none)'}`);
-  if (contract.generatedFiles.length > 0) {
+  lines.push('rungs:');
+  const guarded = contract.generatedFiles.length > 0;
+  if (guarded) lines.push(describeGuardRung(contract.generatedFiles.length, 0));
+  const offset = guarded ? 1 : 0;
+  contract.rungs.forEach((rung, i) => {
+    lines.push(describeRung(rung, i + offset, contract.rubric));
+  });
+  if (guarded) {
     lines.push(`generatedFiles: ${contract.generatedFiles.map((f) => f.path).join(', ')}`);
   }
   lines.push('==========================================================');

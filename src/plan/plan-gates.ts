@@ -11,9 +11,13 @@ function renderPlan(plan: PhasePlan): string {
   lines.push(`planHash: ${plan.planHash}`);
   lines.push(`phases: ${plan.phases.length} (+ 1 cumulative acceptance on the original goal)`);
   plan.phases.forEach((p, i) => {
-    lines.push(`  [${i + 1}] ${p.goal}`);
+    lines.push(`  [${i + 1}] ${p.goal}${p.id !== undefined ? ` (id: ${p.id})` : ''}`);
     if (p.intent !== undefined) lines.push(`      intent: ${p.intent}`);
     if (p.rubric !== undefined) lines.push(`      rubric: ${p.rubric}`);
+    // The frozen dependency graph is part of the plan a human is approving (issue #123).
+    if (p.dependsOn !== undefined) {
+      lines.push(`      dependsOn: ${p.dependsOn.length > 0 ? p.dependsOn.join(', ') : '(none)'}`);
+    }
   });
   lines.push('==========================================================');
   return lines.join('\n');

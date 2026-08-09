@@ -152,9 +152,34 @@ if !ladderPass                      → continue (feed verifier detail back)
 if ladderPass && signoff.veto         → continue (feed veto reason back)
 if ladderPass && signoff.approve      → DONE          (two keys turned)
 if iteration >= maxIterations       → FAILED
-if detectStuck(ctx) !== null        → ABORTED (no-diff | repeat-failure | oscillation | harness-crash | budget)
+if detectStuck(ctx) !== null        → ABORTED (no-diff | timeout-no-diff | repeat-failure | oscillation | harness-crash | unevaluable | budget)
+   └ repeat-failure naming a FROZEN authored file, on a populated tree, once per run
+                                    → ADJUDICATE (emit ADJUDICATE_CONTRACT; the Driver's ONE
+                                      read-only call comes back as CONTRACT_ADJUDICATED, which
+                                      relabels the SAME abort as CONTRACT_DEFECTIVE — or, on any
+                                      uncertainty/failure, leaves it byte-identical)
 else                                → continue
 ```
+
+The adjudication branch is why the state union also carries `{ tag: 'ADJUDICATING'; ctx;
+fallbackReason }`: the run is already terminating, and that state exists only to choose the abort's
+LABEL. It has no edge to DONE, to a green, or back into the loop — the freeze is untouched. Recovery
+is a **successor run** (`--from-run <id> --recontract`, issue #117), composed at the CLI edge: it
+keeps the tree, re-authors the bar from the defect report, and freezes a NEW contract under a NEW
+runId with the predecessor recorded in the log header. The reducer never learns it happened.
+
+That same positive verdict is also the ONLY writer of the **defect corpus** (`src/defects/`, issue
+#122) — the one piece of state that outlives a run. The Driver appends a compact, Zod-schema'd
+record (the adjudicator's generalized anti-pattern + language/runner derived from the FROZEN
+contract + provenance) to `~/.goaly/defects.jsonl`, and a LATER run's compiler receives the
+relevant, capped subset as a "do not author these" prompt section. It is structurally write-gated (a
+phantom-branded record type only the adjudication path can mint), free of any input for
+worker-supplied text, and its schema has no field in which difficulty could be expressed. Records
+are HMAC-signed and nonced, so a line typed, altered, copied in from elsewhere or *replayed* is
+dropped or collapsed on read — but the key is readable by any same-uid process, so that closes the
+file as a channel from elsewhere and NOT the coding agent; what contains a planted record is the
+untrusted fence the section is injected behind. Fail-open by design — it is an advisory prior on
+AUTHORING, strictly before the freeze, never a gate.
 
 **Zero-LLM is structural, not disciplinary:** `step` returns no `Promise` and is handed no
 adapters — only data. It *cannot* call an LLM. All fuzziness already happened in the Driver
@@ -227,8 +252,12 @@ to *drive* each from the CLI, see the [`README`](README.md); this section is the
   legitimate red still proceeds.
 
 - **Phased: a frozen plan of frozen contracts (`--phased`).** A read-only **planner** seam
-  (`src/plan/`) decomposes the goal into an ordered plan of sub-goals; the plan is frozen, hashed and
-  logged like a contract (re-planning is only the bounded, human-gated plan-Seal revise path). Each
+  (`src/plan/`) decomposes the goal into a plan of sub-goals — a dependency DAG (`id`/`dependsOn`,
+  issue #123) carried as a topologically ordered list, whose graph is parsed fail-closed (a cycle,
+  dangling reference or forward edge is a typed `PLAN_FAILED`) and scheduled by a PURE
+  `(frozen plan, completed) -> ready frontier` function (`src/domain/plan-graph.ts`); the plan is
+  frozen, hashed and logged like a contract (re-planning is only the bounded, human-gated plan-Seal
+  revise path). Each
   phase runs as its own normal frozen, two-key contract with an internal checkpoint between phases, and
   the run finishes with a **cumulative ACCEPT** contract on the *original* goal — so decomposition can't
   green a goal whose parts pass but whole doesn't.
@@ -302,7 +331,10 @@ Rubric, Verdict, Ladder, Seal / Sign-off, Two Keys, Harness, Adapter, Driver, Or
 DECIDE, diffHash, Stuck, Autonomous** (each with an "avoid:" list, e.g. Harness ≠
 model/agent).
 
-These ADRs are recorded in [`docs/adr/`](docs/adr) (each hard-to-reverse, surprising, a real trade-off):
+These ADRs are recorded in [`docs/adr/`](docs/adr) (each hard-to-reverse, surprising, a real
+trade-off). The list below is the original design-time set; the **current, complete index** —
+including the later decisions (prepare/reliability/operator control, the UI, the symmetric threat
+model, the external observer) — lives in [`docs/adr/README.md`](docs/adr/README.md):
 
 - **0001** Wrapper over hooks (portable headless `run()`; hooks are an in-adapter optimization).
 - **0002** Compile-once-then-freeze the Contract (the anti-reward-hacking core).
@@ -315,7 +347,8 @@ These ADRs are recorded in [`docs/adr/`](docs/adr) (each hard-to-reverse, surpri
 ## Verification (how we'll know it works)
 
 - **Unit/table tests** (`vitest`): DECIDE truth table and each stuck detector (no-diff,
-  repeat-failure, oscillation, harness-crash, budget) over hand-built `LoopCtx` — pure, instant.
+  timeout-no-diff, repeat-failure, oscillation, harness-crash, budget) over hand-built `LoopCtx` —
+  pure, instant.
 - **End-to-end loop tests with fakes, zero IO**: scripted harness/verifier/approver drive
   the Driver through full runs — assert DONE/FAILED/ABORTED, iteration counts, and that the
   run log shows the `contractHash` unchanged every iteration (proves the bar never moved).

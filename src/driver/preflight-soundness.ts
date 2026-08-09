@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { CompiledContract } from '../domain/contract';
 import type { LlmProvider } from '../llm/provider';
+import { describeRungs } from '../orchestrator/prompts';
 import { extractJson } from '../util/json-extract';
 import { UNTRUSTED_SYSTEM_CLAUSE, wrapUntrusted } from '../verify/prompt-safety';
 import { errorMessage } from '../util/errors';
@@ -219,4 +220,314 @@ export async function classifyVacuousContract(
   }
 
   return { broken: parsed.data.unsound, reason: parsed.data.reason ?? '' };
+}
+
+/**
+ * The NEGATIVE CONTROL for a `--recontract` successor run (issue #117) — the same question
+ * {@link classifyVacuousContract} asks, asked on the one other tree where a green at t=0 is
+ * suspicious rather than impossible to interpret.
+ *
+ * A successor run inherits the predecessor's tree, so it is usually NOT from-scratch and the green
+ * mirror above deliberately never fires. But a re-contract is precisely the moment a bar can get
+ * weakened: it was just re-authored with a defect report in hand, on a tree whose implementation is
+ * visible. A bar that already passes there is either (a) legitimate — the implementation really was
+ * correct and only the bar was wrong, which is the whole reason this recovery exists — or (b) a bar
+ * softened into vacuity / shaped around whatever the tree happens to do. Only the model can tell those
+ * apart, so it is asked BEFORE a worker token is spent. It is asked on EVERY re-contract green,
+ * including the rarer case of an inherited tree with no implementation source in it — there (a) cannot
+ * explain the green at all, so {@link RecontractEvidence.emptyOfSource} is threaded into the prompt as
+ * evidence rather than used by the caller as a precondition.
+ *
+ * A negative control is worthless if it cannot see what it is judging, so it is shown the EVIDENCE a
+ * human would need to answer "was this softened?": the re-authored rungs/rubric, the CONTENTS of the
+ * re-authored verification files ({@link RecontractEvidence.files}), the PREDECESSOR's bar, and the
+ * adjudicated defect the repair was authored against. Everything supplied is fenced with
+ * {@link wrapUntrusted} — file contents are model-authored text and the verdict was written after
+ * reading worker-influenced output. Missing evidence only weakens the control (the prompt says so
+ * explicitly); it never aborts.
+ *
+ * Fail-OPEN like both pre-flight siblings, and for the same reason: case (a) is common and a wrong
+ * "unsound" would abort the legitimate recovery at zero iterations. No LLM, an LLM error, an
+ * unparseable reply, or any uncertainty all PROCEED; only a confident `unsound: true` aborts
+ * (CONTRACT_UNSOUND). It can never produce a green — the frozen ladder + veto-only approver still
+ * gate DONE every iteration.
+ */
+const RECONTRACT_SYSTEM_PROMPT = [
+  'You are a pre-flight soundness checker in an automated goal-orchestration loop.',
+  'A previous run\'s frozen contract was judged DEFECTIVE (no correct implementation could satisfy',
+  'it), so a SUCCESSOR run has just RE-AUTHORED the bar for the SAME goal, over the same working',
+  'tree — the previous run\'s implementation is still on disk. The new frozen verification was run',
+  'ONCE, before the worker took a turn, and it PASSED. Decide, choosing exactly one:',
+  ' - unsound=true: the re-authored bar was WEAKENED — it is vacuous, trivially true, asserts far',
+  '   less than the goal requires, or was shaped around whatever the tree already does rather than',
+  '   around the goal. Repairing a defective bar must not soften it.',
+  ' - unsound=false: the bar genuinely exercises the goal and passes because the implementation',
+  '   already on disk is CORRECT — the previous run\'s bar was the broken part. This is the expected,',
+  '   successful outcome of a re-contract.',
+  'You are given the EVIDENCE to answer this by comparison rather than by guesswork: the re-authored',
+  'rungs/rubric, the CONTENTS of the re-authored verification files, the PREDECESSOR\'s bar (the one',
+  'being repaired), and the adjudicated defect — the ONLY thing the repair was licensed to change.',
+  'Read the re-authored assertions. A repair that drops, relaxes or hollows out a check the defect',
+  'report never named (an assertion replaced by a tautology, a case deleted, a comparison loosened,',
+  'coverage narrowed to what the tree already does) is a WEAKENING even though the bar still passes.',
+  'A repair that changes ONLY what the defect names, and still asserts the goal\'s observable',
+  'behavior, is sound.',
+  'Evidence that is missing or unreadable is NOT evidence of weakening: judge only what you can see,',
+  'and if you cannot see enough to point at a specific softened check, answer false.',
+  'When in doubt, answer false: a correct implementation meeting a corrected bar is exactly what this',
+  'recovery is for. Reserve true for a bar you can point at and call weaker than the goal.',
+  'Respond with ONLY a single JSON object {"unsound": boolean, "reason": string}. No prose, no markdown.',
+  UNTRUSTED_SYSTEM_CLAUSE,
+].join(' ');
+
+/** One re-authored verification file, read off the inherited tree for the negative control. */
+export type RecontractFile = { readonly path: string; readonly content: string };
+
+/**
+ * What the re-contract negative control needs to actually COMPARE the new bar with the old one.
+ * Every field is optional and every one of them is fenced as untrusted data in the prompt: the
+ * control is fail-open, so missing evidence must degrade its confidence, never abort a run.
+ */
+export type RecontractEvidence = {
+  /** Contents of the RE-AUTHORED verification files. An unreadable file is simply absent. */
+  readonly files?: readonly RecontractFile[];
+  /** Rendering of the PREDECESSOR's frozen rubric + rungs — the bar the repair must not soften. */
+  readonly predecessorBar?: string;
+  /** The adjudicated defect the repair was authored against (the one licensed change). */
+  readonly defect?: string;
+  /**
+   * Whether the INHERITED tree holds no implementation source (the caller's `isEmptyOfSource`, which
+   * fail-safes to false). Evidence, not a gate: a re-contract green is suspicious on any tree, but on
+   * a tree with nothing in it the legitimate explanation — "the implementation on disk is correct" —
+   * is unavailable, so the prompt says so. Absent ⇒ the ordinary inherited-tree framing.
+   */
+  readonly emptyOfSource?: boolean;
+};
+
+/** Cap one authored file folded into the control's prompt, so a huge test file cannot blow the call. */
+const MAX_EVIDENCE_FILE_CHARS = 8000;
+
+/** The evidence sections of the re-contract prompt — each fenced, each omitted when absent. */
+function recontractEvidenceSections(evidence: RecontractEvidence): string[] {
+  const parts: string[] = [];
+  if (evidence.predecessorBar !== undefined && evidence.predecessorBar.trim().length > 0) {
+    parts.push(
+      'THE PREDECESSOR\'S BAR — the bar being repaired. The new bar must not be weaker than this ' +
+        `except where the defect below required a change:\n${wrapUntrusted(evidence.predecessorBar, {
+          label: 'PREDECESSOR BAR',
+        })}`,
+    );
+  }
+  if (evidence.defect !== undefined && evidence.defect.trim().length > 0) {
+    parts.push(
+      'THE ADJUDICATED DEFECT the repair was authored against — the ONLY thing that was licensed to ' +
+        `change:\n${wrapUntrusted(evidence.defect, { label: 'ADJUDICATION' })}`,
+    );
+  }
+  for (const file of evidence.files ?? []) {
+    parts.push(
+      `RE-AUTHORED VERIFICATION FILE ${file.path} (frozen; its assertions ARE the new bar):\n` +
+        wrapUntrusted(file.content.slice(0, MAX_EVIDENCE_FILE_CHARS), { label: 'AUTHORED FILE' }),
+    );
+  }
+  return parts;
+}
+
+function buildRecontractPrompt(
+  contract: CompiledContract,
+  detail: string,
+  evidence: RecontractEvidence,
+): string {
+  const paths = contract.generatedFiles.map((f) => `  - ${f.path}`).join('\n');
+  return [
+    `GOAL:\n${contract.goal}`,
+    `RE-AUTHORED VERIFIER LADDER (frozen, in execution order):\n${describeRungs(contract.rungs)}`,
+    `RE-AUTHORED RUBRIC (frozen):\n${contract.rubric.trim().length > 0 ? contract.rubric : '(empty)'}`,
+    `RE-AUTHORED VERIFICATION FILES (frozen — the worker cannot change these):\n${
+      paths.length > 0 ? paths : '  (none)'
+    }`,
+    evidence.emptyOfSource === true
+      ? 'CONTEXT: this is a RE-CONTRACT. The predecessor run\'s bar was adjudicated defective, and ' +
+        'the inherited tree is EMPTY OF IMPLEMENTATION SOURCE — the predecessor left no implementation ' +
+        'behind, so the usual legitimate explanation ("the implementation already on disk is correct") ' +
+        'does NOT apply here. A bar that genuinely exercises the goal should be RED on such a tree. ' +
+        'The one remaining legitimate reading is that the goal is genuinely already satisfied without ' +
+        'any implementation of it; if you cannot see that, a green means the re-authored bar is ' +
+        'vacuous or asserts less than the goal requires.'
+      : 'CONTEXT: this is a RE-CONTRACT. The predecessor run\'s bar was adjudicated defective and its ' +
+        'implementation is still on disk, so the new bar passing may be legitimate — or may mean the ' +
+        'repair weakened it.',
+    ...recontractEvidenceSections(evidence),
+    `VERIFICATION OUTPUT ON THE INHERITED TREE (it PASSED):\n${wrapUntrusted(detail, { label: 'OUTPUT' })}`,
+    'Compare the re-authored bar above with the predecessor\'s bar and the adjudicated defect. Was ' +
+      'the re-authored bar weakened (vacuous / hollowed out / shaped around the existing tree), or ' +
+      'does it genuinely exercise the goal that the existing implementation already meets?',
+    'Reply with ONLY the JSON {"unsound": boolean, "reason": string}.',
+  ].join('\n\n');
+}
+
+/**
+ * Ask the model whether a RE-AUTHORED bar that already passes on the inherited tree is a weakened
+ * bar (→ CONTRACT_UNSOUND) or the legitimate success of a re-contract. Reuses {@link SoundnessVerdict}
+ * (`broken` = unsound) and fails OPEN on every failure mode — see the doc above. `evidence` carries
+ * the re-authored assertions, the predecessor's bar and the adjudicated defect; it defaults to empty
+ * (the control then judges from the ladder/rubric alone) so a caller that cannot read the tree still
+ * gets today's behavior rather than an abort.
+ */
+export async function classifyRecontractedBar(
+  deps: ClassifyDeps,
+  contract: CompiledContract,
+  detail: string,
+  evidence: RecontractEvidence = {},
+): Promise<SoundnessVerdict> {
+  const log = deps.logger ?? noopLogger;
+  const prompt = buildRecontractPrompt(contract, detail, evidence);
+  let raw: string;
+  try {
+    raw = (await deps.llm.complete({ system: RECONTRACT_SYSTEM_PROMPT, prompt, temperature: 0 })).text;
+  } catch (e) {
+    log.warn('pre-flight re-contract control: LLM call failed — proceeding (assumed sound)', {
+      reason: errorMessage(e),
+    });
+    return { broken: false, reason: `re-contract control could not run: ${errorMessage(e)}` };
+  }
+  const extracted = extractJson(raw);
+  const parsed = extracted === null ? null : GreenClassification.safeParse(extracted);
+  if (parsed === null || !parsed.success) {
+    log.warn('pre-flight re-contract control: unparseable response — proceeding (assumed sound)', {});
+    return { broken: false, reason: 're-contract control produced no parseable verdict' };
+  }
+  return { broken: parsed.data.unsound, reason: parsed.data.reason ?? '' };
+}
+
+/**
+ * IN-LOOP contract-fault adjudication (issue #116) — the third sibling, and the only one that runs
+ * with evidence instead of without it.
+ *
+ * Both classifiers above are asked at t=0, against a tree with no implementation in it. For one
+ * defect class that timing is not unlucky but UNDECIDABLE: when a frozen assertion is impossible to
+ * satisfy, its t=0 failure is byte-identical to an honest "not written yet" red — nothing exists
+ * either way. The evidence that settles it ("a real implementation now exists and the same assertion
+ * still reds") only comes into being several iterations later, exactly when the repeat-failure
+ * detector fires. This asks the question THEN.
+ *
+ * Fail-CLOSED to `defective: false`, the INVERSE of its two pre-flight siblings — and for the same
+ * underlying reason (never let a classifier make things worse). There, a wrong verdict would ABORT a
+ * legitimate run at zero iterations, so uncertainty must proceed. Here the run is ALREADY aborting on
+ * the repeat streak, so the conservative answer is today's abort: an LLM error, an unparseable reply,
+ * a schema miss, or any uncertainty all leave the pre-#116 output untouched. Only a confident
+ * `defective: true` relabels it. Read-only in every sense — nothing here can produce a green.
+ */
+const FAULT_SYSTEM_PROMPT = [
+  'You are adjudicating a FROZEN, auto-authored success contract in an automated coding loop.',
+  'A coding agent has been working for several iterations. The working tree now contains a real,',
+  'substantially complete implementation — the agent has repeatedly changed it. Yet the SAME frozen',
+  'check has produced the SAME failure every iteration. The check files are FROZEN: the agent cannot',
+  'edit them. Decide, choosing exactly one:',
+  ' - defective=true: the frozen assertion is IMPOSSIBLE to satisfy — NO correct implementation of',
+  '   the stated goal could make it pass. For example it asserts on a function/parameter/message the',
+  '   goal never implies, requires a side effect the goal forbids, contradicts another rung, or',
+  '   depends on something outside any implementation\'s control.',
+  ' - defective=false: the assertion IS satisfiable by some correct implementation — the agent simply',
+  '   has not written that implementation yet, or is failing for an ordinary reason (a bug, a missing',
+  '   case, an environment problem). This is the normal meaning of a repeated failure.',
+  'When in doubt, answer FALSE. A repeated failure is USUALLY the implementation\'s fault; reserve',
+  'true for a defect you can point to IN THE FROZEN CHECK and justify as unsatisfiable in principle.',
+  'When (and only when) you answer true, also give "pattern": a ONE-SENTENCE GENERALIZED description',
+  'of the authoring anti-pattern — no file contents, no identifiers from this repo, no mention of how',
+  'hard the agent found the work — and "assertionShape": a SHORT GENERALIZED description of the',
+  'offending assertion\'s SHAPE (e.g. "call-count assertion on a spy after it was restored"), again',
+  'with no repo identifiers and no quoted source. Both are stored as reusable anti-patterns for',
+  'FUTURE contract authoring, so they must be about unsatisfiability — never about effort.',
+  'Respond with ONLY a single JSON object {"defective": boolean, "reason": string, "pattern": string,',
+  '"assertionShape": string}.',
+  'No prose, no markdown, no code fences — JSON only.',
+  UNTRUSTED_SYSTEM_CLAUSE,
+].join(' ');
+
+const FaultClassification = z.object({
+  defective: z.boolean(),
+  reason: z.string().optional(),
+  pattern: z.string().optional(),
+  assertionShape: z.string().optional(),
+});
+
+/** The adjudicator's verdict. `defective: true` relabels the abort as CONTRACT_DEFECTIVE. */
+export type ContractFaultVerdict = {
+  defective: boolean;
+  reason: string;
+  pattern?: string;
+  /** Generalized shape of the offending assertion; carried into the defect corpus (issue #122). */
+  assertionShape?: string;
+};
+
+function buildFaultPrompt(
+  contract: CompiledContract,
+  signature: string,
+  diffSummary: string,
+  repeatCount: number,
+): string {
+  const authored = contract.generatedFiles.map((f) => `  - ${f.path}`).join('\n');
+  return [
+    `GOAL:\n${contract.goal}`,
+    `FROZEN VERIFICATION FILES (the agent cannot change these):\n${authored}`,
+    `THE FAILURE, REPEATED IDENTICALLY ${repeatCount} ITERATIONS IN A ROW:\n` +
+      wrapUntrusted(signature, { label: 'FAILURE' }),
+    `THE IMPLEMENTATION THE AGENT HAS WRITTEN SO FAR:\n${wrapUntrusted(diffSummary, { label: 'DIFF' })}`,
+    'Given this implementation: could ANY correct implementation of the goal make that frozen check ' +
+      'pass, or is the frozen check itself defective (unsatisfiable in principle)?',
+    'Reply with ONLY the JSON {"defective": boolean, "reason": string, "pattern": string, ' +
+      '"assertionShape": string}.',
+  ].join('\n\n');
+}
+
+/**
+ * Ask the model whether the frozen bar a repeat-failure streak keeps tripping is itself defective.
+ * Fail-closed to `{ defective: false }` on EVERY failure mode (see the doc above), so the caller's
+ * behavior is unchanged unless a confident positive comes back. `signature` and `diffSummary` are
+ * model/tool text, so both are wrapped as untrusted input.
+ */
+export async function classifyContractFault(
+  deps: ClassifyDeps,
+  contract: CompiledContract,
+  signature: string,
+  diffSummary: string,
+  repeatCount: number,
+): Promise<ContractFaultVerdict> {
+  const log = deps.logger ?? noopLogger;
+  let raw: string;
+  try {
+    raw = (
+      await deps.llm.complete({
+        system: FAULT_SYSTEM_PROMPT,
+        prompt: buildFaultPrompt(contract, signature, diffSummary, repeatCount),
+        temperature: 0,
+      })
+    ).text;
+  } catch (e) {
+    log.warn('contract-fault adjudication: LLM call failed — keeping the repeat-failure abort', {
+      reason: errorMessage(e),
+    });
+    return { defective: false, reason: `adjudication could not run: ${errorMessage(e)}` };
+  }
+
+  const extracted = extractJson(raw);
+  const parsed = extracted === null ? null : FaultClassification.safeParse(extracted);
+  if (parsed === null || !parsed.success) {
+    log.warn('contract-fault adjudication: unparseable response — keeping the repeat-failure abort', {});
+    return { defective: false, reason: 'adjudication produced no parseable verdict' };
+  }
+
+  const { defective, reason, pattern, assertionShape } = parsed.data;
+  return {
+    defective,
+    reason: reason ?? '',
+    // The generalized anti-pattern (and the assertion shape that goes with it) is only meaningful
+    // for a positive verdict; never carry either out of a "sound" answer, where it would be a stray
+    // description of a bar that is fine — and, via the corpus, a lesson learned from nothing.
+    ...(defective && pattern !== undefined && pattern.length > 0 ? { pattern } : {}),
+    ...(defective && assertionShape !== undefined && assertionShape.length > 0
+      ? { assertionShape }
+      : {}),
+  };
 }

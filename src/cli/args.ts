@@ -6,6 +6,8 @@ import { ModelSelection } from './models';
 import { resolveInputSources, defaultReaders, type InputReaders } from './input-sources';
 import { loadConfig, type LoadedConfig } from './config-file';
 import { parseDelegationDirective } from './delegation';
+import { collectResumeExtension, type Delegation } from './flags/resume-extension';
+import type { DefectCorpusOptions } from '../defects/wiring';
 import type { AutonomyLevel } from '../agent-cli/droid-codec';
 import type { WorktreeCommand } from './worktree-cmd';
 import type { DoctorCommand } from './doctor';
@@ -31,11 +33,19 @@ import {
 import {
   parseAdversarialCount,
   parseApproverDiversityTemp,
+  parseContractDryRun,
   parseApproverLenses,
   parseApproverQuorum,
+  parseSatisfiabilityCritic,
 } from './flags/review-flags';
 import { parseSandbox } from './flags/sandbox-flags';
-import { parseLogLevel, parseWorkspaceMode } from './flags/misc-flags';
+import {
+  parseDefectCorpus,
+  parseLogLevel,
+  parseRecontract,
+  parseWorkspaceMode,
+  type RecontractRequest,
+} from './flags/misc-flags';
 import {
   parseConfigCommand,
   parseDoctorCommand,
@@ -163,6 +173,12 @@ export type ParsedArgs = {
    * with the same harness; ignored under `--phased`. Default false.
    */
   inheritSession: boolean;
+  /**
+   * `--recontract` (issue #117): with `--from-run`, a SUCCESSOR run over the predecessor's KEPT tree —
+   * re-author the bar its CONTRACT_DEFECTIVE adjudication condemned, freeze a NEW contract under a NEW
+   * run id, record provenance. Carries the chain cap (`--max-recontracts`). Absent ⇒ an ordinary run.
+   */
+  recontract: RecontractRequest | undefined;
   /** Minimum diagnostic log level (default `info`). Pure wiring — never enters the contract. */
   logLevel: LogLevel;
   /** Override the diagnostics file path (default `<workspace>/.goaly/<runId>/goaly.log`). */
@@ -228,90 +244,14 @@ export type ParsedArgs = {
    * clause is already stripped from `config.goal`; an explicit `--candidates` always wins (this is
    * then still set, with `overriddenByFlag: true`, so the log can say so). Undefined ⇒ no directive.
    */
-  delegation: { candidates: number; phrase: string; overriddenByFlag: boolean } | undefined;
+  delegation: Delegation | undefined;
+  /**
+   * The cross-run DEFECT CORPUS (issue #122): `--no-defect-corpus` disables it, `--defect-corpus
+   * <path>` moves it off `~/.goaly/defects.jsonl`. Pure wiring — it shapes the AUTHORING prompt
+   * before the freeze and can never relax the frozen bar or the two keys.
+   */
+  defects: DefectCorpusOptions;
 };
-
-/**
- * Collect the operator extension for a `--resume` (ADR 0012) from EXPLICITLY-passed CLI flags
- * (never the config-file overlay — an extension is a per-invocation operator act). The values are
- * read off the already-validated RunConfig (so every coercion/floor is applied once); only flags
- * actually present become part of the extension — absent ones keep whatever the run log's
- * effective config says. `--note` is resume-only: on a fresh run there is no next-turn boundary to
- * attach it to, so it fails closed with the fix.
- */
-function collectResumeExtension(
-  flags: RawFlags,
-  config: RunConfig,
-): { extension: RunExtension | undefined; delegation: ParsedArgs['delegation'] } {
-  const resuming = str(flags, 'resume') !== undefined;
-  let note = str(flags, 'note');
-  if (!resuming) {
-    if (note !== undefined) {
-      throw new UsageError(
-        '--note steers a RESUMED run (it is appended to the next agent prompt) — pair it with ' +
-          '--resume <runId>. To guide a fresh run, put the guidance in the goal or --intent.',
-      );
-    }
-    return { extension: undefined, delegation: undefined };
-  }
-  const has = (key: string): boolean => flags[key] !== undefined;
-  // Natural-language delegation in a resume note ("try 4 parallel attempts"): the steering intent
-  // is goaly's to ACT on (a `candidates` overlay on the extension), not the worker's to read — so
-  // the directive clause is stripped and any remaining guidance stays the note. The explicit
-  // `--candidates` / `--best-of` flag wins, exactly as on a fresh run.
-  const explicit = has('candidates') || has('best-of');
-  let delegation: ParsedArgs['delegation'];
-  if (note !== undefined) {
-    const directive = parseDelegationDirective(note);
-    if (directive !== null) {
-      if (directive.candidates > MAX_CANDIDATES) {
-        throw new UsageError(
-          `"${directive.phrase}": at most ${MAX_CANDIDATES} parallel candidates are supported ` +
-            `(each is a full concurrent worker + worktree) — ask for ${MAX_CANDIDATES} or fewer`,
-        );
-      }
-      delegation = {
-        candidates: directive.candidates,
-        phrase: directive.phrase,
-        overriddenByFlag: explicit,
-      };
-      note = directive.cleaned.length > 0 ? directive.cleaned : undefined;
-    }
-  }
-  const stuck = {
-    ...(has('stuck-no-diff') ? { noDiff: config.stuckPolicy.noDiff } : {}),
-    ...(has('stuck-repeat-threshold')
-      ? { repeatFailureThreshold: config.stuckPolicy.repeatFailureThreshold }
-      : {}),
-    ...(has('stuck-oscillation') ? { oscillation: config.stuckPolicy.oscillation } : {}),
-    ...(has('stuck-crash-threshold')
-      ? { harnessCrashThreshold: config.stuckPolicy.harnessCrashThreshold }
-      : {}),
-    ...(has('stuck-unevaluable-threshold')
-      ? { unevaluableThreshold: config.stuckPolicy.unevaluableThreshold }
-      : {}),
-  };
-  const extension: RunExtension = {
-    ...(has('max-iterations') ? { maxIterations: config.maxIterations } : {}),
-    ...(has('budget-tokens') && config.budget.tokens !== undefined
-      ? { budgetTokens: config.budget.tokens }
-      : {}),
-    ...(has('budget-wall-ms') && config.budget.wallClockMs !== undefined
-      ? { budgetWallMs: config.budget.wallClockMs }
-      : {}),
-    ...(Object.keys(stuck).length > 0 ? { stuck } : {}),
-    ...(explicit
-      ? { candidates: config.candidates }
-      : delegation !== undefined
-        ? { candidates: delegation.candidates }
-        : {}),
-    ...(note !== undefined ? { note } : {}),
-  };
-  return {
-    extension: Object.keys(extension).length > 0 ? extension : undefined,
-    delegation,
-  };
-}
 
 /** Fields that may be sourced inline / from a file / from stdin; a CLI source overrides config. */
 const MULTI_SOURCE_FIELDS = ['goal', 'intent', 'rubric'] as const;
@@ -321,7 +261,7 @@ const MULTI_SOURCE_FIELDS = ['goal', 'intent', 'rubric'] as const;
  * discarded — main.ts continues from the frozen run log's config — so the goal is never read; this only
  * satisfies `CliInput`'s non-empty-goal schema. It must never surface (a real resume overwrites it).
  */
-const RESUMED_GOAL_PLACEHOLDER = '(resumed run — goal is read from the frozen run log)';
+export const RESUMED_GOAL_PLACEHOLDER = '(resumed run — goal is read from the frozen run log)';
 
 export async function parseArgs(
   argv: string[],
@@ -476,8 +416,10 @@ export async function parseArgs(
   // So a goal is NOT required when resuming — synthesize a placeholder that will be overwritten. A
   // genuinely missing goal on a FRESH run is a clean usage error, not the raw ZodError that
   // `CliInput.parse({ goal: undefined })` would otherwise throw (which escapes as an ugly stack).
+  // A --recontract successor likewise INHERITS the predecessor's frozen goal (a repair changes the
+  // BAR, not the goal), so it needs none either; run-cmd substitutes the real one.
   const resuming = str(flags, 'resume') !== undefined;
-  if (resolved.goal === undefined && !resuming) {
+  if (resolved.goal === undefined && !resuming && flags['recontract'] === undefined) {
     throw new UsageError(
       'a goal is required — pass it positionally (goaly "<goal>"), or with --goal / --goal-file / ' +
         '--goal - (stdin)',
@@ -570,6 +512,9 @@ export async function parseArgs(
     ...(str(flags, 'stuck-unevaluable-threshold') !== undefined
       ? { stuckUnevaluableThreshold: str(flags, 'stuck-unevaluable-threshold') }
       : {}),
+    ...(str(flags, 'stuck-timeout-no-diff-threshold') !== undefined
+      ? { stuckTimeoutNoDiffThreshold: str(flags, 'stuck-timeout-no-diff-threshold') }
+      : {}),
     ...(boolFlag(flags, 'auto-remediate-stuck') !== undefined
       ? { autoRemediateStuck: boolFlag(flags, 'auto-remediate-stuck') }
       : {}),
@@ -600,19 +545,26 @@ export async function parseArgs(
     ...(parseAdversarialCount(flags, 'adversarial-refuters') !== undefined
       ? { adversarialRefuters: parseAdversarialCount(flags, 'adversarial-refuters') }
       : {}),
+    ...(parseSatisfiabilityCritic(flags) !== undefined
+      ? { satisfiabilityCritic: parseSatisfiabilityCritic(flags) }
+      : {}),
+    ...(parseContractDryRun(flags) !== undefined
+      ? { contractDryRun: parseContractDryRun(flags) }
+      : {}),
   });
 
   const harness = parseHarness(str(flags, 'harness'));
   const config = cliInputToRunConfig(cliInput);
 
-  // EXPERIMENTAL parallel waves: the fan-out only exists inside a phased plan (grouped sub-goals),
+  // EXPERIMENTAL parallel waves: the fan-out only exists inside a phased plan (independent sub-goals),
   // and wave children compile + Seal their contracts CONCURRENTLY — an interactive gate cannot pause
   // K children at once, so autonomy is required (the contracts are still frozen + logged loudly).
   if (config.parallelPhases && !resuming) {
     if (!config.phased) {
       throw new UsageError(
-        "--parallel-phases parallelizes a phased plan's grouped sub-goals — pair it with --phased " +
-          '(and mark consecutive phases with a shared "group" in the plan)',
+        "--parallel-phases parallelizes a phased plan's independent sub-goals — pair it with " +
+          '--phased (and declare the independence in the plan with "id"/"dependsOn", or the ' +
+          'legacy "group" sugar)',
       );
     }
     if (!config.autonomous) {
@@ -663,6 +615,7 @@ export async function parseArgs(
     workspaceMode: parseWorkspaceMode(str(flags, 'workspace-mode')),
     baseline: str(flags, 'baseline'),
     verifyDir: str(flags, 'verify-dir'),
+    defects: parseDefectCorpus(flags),
     planFile: str(flags, 'plan-file'),
     resumeRunId: str(flags, 'resume'),
     resumeExtend,
@@ -671,6 +624,7 @@ export async function parseArgs(
     delegation: delegation ?? resumed.delegation,
     fromRunId: str(flags, 'from-run'),
     inheritSession: flags['inherit-session'] !== undefined,
+    recontract: parseRecontract(flags),
     logLevel: parseLogLevel(str(flags, 'log-level')),
     logFile: str(flags, 'log-file'),
     noLogFile: flags['no-log-file'] !== undefined,
@@ -750,10 +704,12 @@ function baseArgs(
     workspaceMode: 'auto',
     baseline: undefined,
     verifyDir: undefined,
+    defects: { enabled: true },
     planFile: undefined,
     resumeRunId: undefined,
     fromRunId: undefined,
     inheritSession: false,
+    recontract: undefined,
     logLevel: 'info',
     logFile: undefined,
     noLogFile: false,

@@ -2,8 +2,9 @@ import type { RunConfig } from '../domain/config';
 import type { CompiledContract } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
 import type { Command, OrchestratorEvent, RunExtension } from '../domain/events';
+import { mostDegraded, type DegradedMode } from '../domain/degraded';
 import type { ContractHash, DiffHash } from '../domain/ids';
-import type { OrchestratorState } from '../orchestrator/state';
+import type { LoopCtx, OrchestratorState } from '../orchestrator/state';
 import { initial, step } from '../orchestrator/step';
 import { normalizeDetail } from '../orchestrator/stuck';
 import { isUnevaluable } from '../domain/verdict';
@@ -29,6 +30,18 @@ import type { RunLogEntry } from './runlog';
  *  - Only the counted detectors. `noDiff` is a TOGGLE, not a counter, so "relief" could only mean
  *    disabling it for the rest of the run — too blunt to do implicitly (it is also already excused
  *    when the previous turn crashed/timed out/was truncated). Pass `--stuck-no-diff false` for that.
+ *  - NOT `timeoutNoDiffThreshold` (issue #119) either, even though it IS a counter: relief there
+ *    would buy more ten-minute no-op turns at the same cap, which is the very waste that detector
+ *    exists to stop. What makes those turns worth having is more room — `--harness-timeout-ms` /
+ *    `--harness-idle-timeout-ms` — but be precise about what a resume can do with them: they are
+ *    compose-time flags, NOT `RunExtension` fields, so a resume carrying only them produces no
+ *    extension, this fold re-trips the detector at the tail, and the run re-terminates before a
+ *    single turn. Continuing such a run therefore REQUIRES an explicit
+ *    `--stuck-timeout-no-diff-threshold` on the resume (it is in `RunExtension.stuck`), which is
+ *    what the abort message names first. Its own fold-desynchronization hazard (a log predating the
+ *    detector can trip it MID-log, which relief here — tail-only by construction — could not cover
+ *    anyway) is handled where it belongs, in the fold itself: see
+ *    {@link TIMEOUT_NO_DIFF_UNREACHABLE}.
  *
  * It is not a weakening of stuck detection: the returned overlay is persisted as an ordinary
  * RUN_EXTENDED marker (ADR 0012 — operational knobs only, the frozen contract is unreachable
@@ -43,12 +56,50 @@ export function resumeStreakRelief(
   const base = config.stuckPolicy;
   const crash = trailingCrashStreak(entries);
   const uneval = trailingUnevaluableStreak(entries);
-  const repeat = trailingRepeatStreak(entries);
+  const repeat = adjudicated(entries) ? 0 : trailingRepeatStreak(entries);
   return {
     ...(crash > 0 ? { harnessCrashThreshold: base.harnessCrashThreshold + crash } : {}),
     ...(uneval > 0 ? { unevaluableThreshold: base.unevaluableThreshold + uneval } : {}),
     ...(repeat > 1 ? { repeatFailureThreshold: base.repeatFailureThreshold + repeat } : {}),
   };
+}
+
+/**
+ * Did this run adjudicate its contract in-loop (issue #116), and how did it come out?
+ * `'defective'` / `'sound'` / `undefined` (never adjudicated). The LAST verdict wins; a run
+ * adjudicates at most once in practice.
+ *
+ * Both verdicts suppress the repeat-failure relief above, and the reason is the SAME for both — but
+ * it is NOT the one the old comment gave ("more iterations against an unsatisfiable assertion are
+ * still unsatisfiable"), which is true only of `defective`. The real reason is structural: an
+ * adjudicated run's ABORTED comes from a RECORDED `CONTRACT_ADJUDICATED` event, and replay folds
+ * that event to ABORTED whatever the thresholds say. Raising the threshold — automatically here, or
+ * through the ADR-0012 operator door (`--resume <id> --stuck-repeat-threshold N`) — therefore cannot
+ * un-terminate the run in either case. Emitting relief for a `sound` verdict would not continue the
+ * run; it would only bank an inert RUN_EXTENDED marker and print a promise goaly cannot keep.
+ *
+ * That is a real dead end for a `sound` verdict, and it is closed by MESSAGING, not by relief: the
+ * abort carries `CONTRACT_ADJUDICATED_SOUND` (see `contractSoundReason`) so `nextStepHint` and the
+ * CLI's resume warning name `goaly "<goal>" --from-run <id>` — a route that exists — instead of a
+ * threshold flag that does nothing or a `--recontract` that `planRecontract` refuses for a sound bar.
+ *
+ * Suppression here is also deliberately NOT what keeps the fold in sync — the operator door reaches
+ * the same config anyway. The fold defends itself: see {@link adjudicationPrecursors}, which pins
+ * the historical threshold for BOTH verdicts.
+ */
+export function adjudicationVerdict(
+  entries: readonly RunLogEntry[],
+): 'defective' | 'sound' | undefined {
+  let verdict: 'defective' | 'sound' | undefined;
+  for (const e of entries) {
+    if (e.event.tag === 'CONTRACT_ADJUDICATED') verdict = e.event.defective ? 'defective' : 'sound';
+  }
+  return verdict;
+}
+
+/** True when the run adjudicated its contract in-loop, whatever the verdict. */
+export function adjudicated(entries: readonly RunLogEntry[]): boolean {
+  return adjudicationVerdict(entries) !== undefined;
 }
 
 /** How many of the most recent harness turns crashed, back-to-back. Mirrors `isCrashStreak`. */
@@ -137,6 +188,9 @@ export function applyRunExtension(cfg: RunConfig, x: RunExtension): RunConfig {
       ...(s.unevaluableThreshold !== undefined
         ? { unevaluableThreshold: s.unevaluableThreshold }
         : {}),
+      ...(s.timeoutNoDiffThreshold !== undefined
+        ? { timeoutNoDiffThreshold: s.timeoutNoDiffThreshold }
+        : {}),
     },
   };
 }
@@ -194,6 +248,168 @@ export type ReplayResult = {
 };
 
 /**
+ * Driver-side marker events: recorded in the log for replay fidelity but NEVER fed to `step()`
+ * (invariant #1 — the reducer never learns they existed). Shared by the fold below and by
+ * {@link lastFoldedIndex}, so "which entry is the last one the reducer sees" cannot drift from
+ * "which entries the reducer sees".
+ */
+const DRIVER_ONLY_TAGS: ReadonlySet<string> = new Set([
+  'CHECKPOINTED',
+  'CANDIDATE_RAN',
+  'CANDIDATE_SELECTED',
+  'RUN_EXTENDED',
+  'DEGRADED_ESCALATED',
+]);
+
+/**
+ * The run's effective DEGRADED-MODE label (issue #125): the header's label escalated by every
+ * `DEGRADED_ESCALATED` marker the log carries, most-degraded wins.
+ *
+ * The header is written ONCE, at run start, with the label the FIRST invocation's wiring resolved to
+ * — but the models a run uses are re-resolved from every invocation's flags, so a `--resume` with
+ * different (or absent) `--model` / `--approver-model` flags changes which keys actually run. That
+ * change is recorded as an APPENDED marker rather than an in-place header rewrite (a crash inside a
+ * truncate-then-refill of `header.json` would brick an otherwise-resumable run for the sake of a
+ * label), so every reader has to derive rather than read. Pure and total; a log with no marker
+ * returns the header value unchanged, so old logs are unaffected.
+ */
+export function effectiveDegraded(
+  headerDegraded: DegradedMode | undefined,
+  entries: readonly RunLogEntry[],
+): DegradedMode | undefined {
+  let effective = headerDegraded;
+  for (const entry of entries) {
+    if (entry.event.tag !== 'DEGRADED_ESCALATED') continue;
+    effective = mostDegraded(effective, entry.event.degraded);
+  }
+  return effective;
+}
+
+/** Index of the last entry the reducer actually folds, or -1 when there is none. */
+function lastFoldedIndex(entries: readonly RunLogEntry[]): number {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const tag = entries[i]?.event.tag;
+    if (tag !== undefined && !DRIVER_ONLY_TAGS.has(tag)) return i;
+  }
+  return -1;
+}
+
+/**
+ * An effectively unreachable timeout-no-diff threshold — the streak is bounded by the iteration
+ * count, so this DISABLES the detector for the fold it is applied to.
+ *
+ * Back-compat for the timeout-no-diff detector (issue #119) — the ONE detector that turned a
+ * decision which previously returned `CONTINUE` into a terminal `ABORTED`. A run log written
+ * BEFORE it existed can therefore contain a mid-log timeout+no-diff streak that the run simply
+ * continued past; folding such a log under the new binary would go terminal in the MIDDLE, and the
+ * next entry would hit `step() called on terminal state ABORTED` — permanently bricking `--resume`
+ * and `runs show/list` for a run whose tree may be perfectly fine.
+ *
+ * So the trip is made TAIL-SENSITIVE: every fold except the LAST one the reducer sees runs with the
+ * detector disabled, which is exactly the pre-#119 semantics (`noDiffExcusedByRun` reads the same
+ * threshold, so an unreachable value restores the unbounded timeout excuse too). Nothing is
+ * weakened for a log written after #119: the trip is terminal, so its VERIFIED entry IS the last
+ * folded entry, and the tail fold uses the real (possibly RUN_EXTENDED-overlaid) threshold.
+ *
+ * This is a REPLAY-side concern, not a reducer one (invariant #1/#8): `detectStuck` stays pure and
+ * purely history-driven — it is only ever handed a config, and here replay chooses which one.
+ */
+const TIMEOUT_NO_DIFF_UNREACHABLE = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Entry index → the repeat-failure threshold the fold MUST use, for every entry the log PROVES the
+ * repeat detector tripped at.
+ *
+ * `CONTRACT_ADJUDICATED` is only ever recorded out of `ADJUDICATING`, which `decide` enters ONLY on
+ * a `repeat` stuck trip (issue #116). So such an entry is proof that the repeat detector tripped at
+ * the folded entry just before it — a historical trip with a recorded downstream event, which no
+ * later relief may un-trip. The automatic resume relief already refuses to raise the threshold once
+ * a verdict is recorded, but the ADR-0012 OPERATOR extension reaches the same config through a
+ * different door (`--resume <id> --stuck-repeat-threshold N` — which goaly's own `nextStepHint`
+ * printed after a `defective:false` adjudication, whose abort text used to be identical to the pre-#116
+ * repeat abort). Whichever door it came through, applying it before the fold made that VERIFIED
+ * return CONTINUE and the very next entry throw
+ * `invalid transition: event CONTRACT_ADJUDICATED in state RUNNING_AGENT` — a run that cannot be
+ * continued at all.
+ *
+ * The threshold used is the one that was IN FORCE THERE: the header value plus every RUN_EXTENDED
+ * overlay recorded BEFORE that entry. An overlay recorded after it cannot have applied to it (a
+ * marker is only ever appended at the tail, and this entry already has a folded successor), and
+ * using the historical value reproduces the recorded transition exactly — the abort reason QUOTES
+ * the threshold, so a merely trip-forcing value would rewrite the run's own text.
+ */
+function adjudicationPrecursors(
+  config: RunConfig,
+  entries: readonly RunLogEntry[],
+): ReadonlyMap<number, number> {
+  const precursors = new Map<number, number>();
+  let previousFolded = -1;
+  let threshold = config.stuckPolicy.repeatFailureThreshold;
+  let previousThreshold = threshold;
+  for (let i = 0; i < entries.length; i += 1) {
+    const event = entries[i]?.event;
+    if (event === undefined) continue;
+    if (event.tag === 'RUN_EXTENDED') {
+      threshold = event.stuck?.repeatFailureThreshold ?? threshold;
+      continue;
+    }
+    if (DRIVER_ONLY_TAGS.has(event.tag)) continue;
+    if (event.tag === 'CONTRACT_ADJUDICATED' && previousFolded >= 0) {
+      precursors.set(previousFolded, previousThreshold);
+    }
+    previousFolded = i;
+    previousThreshold = threshold;
+  }
+  return precursors;
+}
+
+/**
+ * Rewrite the fold-local stuck thresholds on a state's `LoopCtx`. The two knobs replay overrides —
+ * `timeoutNoDiffThreshold` (see {@link TIMEOUT_NO_DIFF_UNREACHABLE}) and `repeatFailureThreshold`
+ * (see {@link adjudicationPrecursors}) — are both cases of the SAME rule: relief may only change
+ * whether a detector trips where the log recorded no outcome off that decision. Every fold sets
+ * both explicitly, so the previous fold's override can never leak forward.
+ *
+ * This is a REPLAY-side concern, not a reducer one (invariant #1/#8): `detectStuck` stays pure and
+ * purely history-driven — it is only ever handed a config, and here replay chooses which one.
+ */
+function withStuckThresholds(
+  state: OrchestratorState,
+  thresholds: { timeoutNoDiff?: number; repeat?: number },
+): OrchestratorState {
+  switch (state.tag) {
+    case 'RUNNING_AGENT':
+    case 'VERIFYING':
+    case 'AWAIT_SIGNOFF':
+    case 'ADJUDICATING': {
+      const { config } = state.ctx;
+      const timeoutNoDiff = thresholds.timeoutNoDiff ?? config.stuckPolicy.timeoutNoDiffThreshold;
+      const repeat = thresholds.repeat ?? config.stuckPolicy.repeatFailureThreshold;
+      if (
+        config.stuckPolicy.timeoutNoDiffThreshold === timeoutNoDiff &&
+        config.stuckPolicy.repeatFailureThreshold === repeat
+      ) {
+        return state;
+      }
+      const ctx: LoopCtx = {
+        ...state.ctx,
+        config: {
+          ...config,
+          stuckPolicy: {
+            ...config.stuckPolicy,
+            timeoutNoDiffThreshold: timeoutNoDiff,
+            repeatFailureThreshold: repeat,
+          },
+        },
+      };
+      return { ...state, ctx };
+    }
+    default:
+      return state;
+  }
+}
+
+/**
  * Replay = a pure fold of `step` over the event stream. This is the SINGLE source of truth for
  * "what state did this run reach": the Driver's `--resume` path and the read-only `runs`
  * inspection both call it, so an inspected run's status/iterations match exactly what the Driver
@@ -217,8 +433,18 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
   let phaseBaseline: DiffHash | null = null;
   let plan: PhasePlan | null = null;
   let pendingNotes: string[] = [];
+  // The last entry the reducer will fold — every earlier fold is a HISTORICAL decision the log has
+  // already recorded the outcome of, so the timeout-no-diff trip is suppressed there (see
+  // `TIMEOUT_NO_DIFF_UNREACHABLE`) and only the tail can go terminal on it.
+  const tailIndex = lastFoldedIndex(entries);
+  // Entries the log PROVES the repeat detector tripped at (a `CONTRACT_ADJUDICATED` was recorded off
+  // them). A raised threshold — from the automatic relief or from an operator `--stuck-repeat-threshold`
+  // — must not un-trip those, or the very next entry is an invalid transition.
+  const precursors = adjudicationPrecursors(config, entries);
 
-  for (const entry of entries) {
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (entry === undefined) continue;
     // A CHECKPOINTED entry is a diff-baseline marker, NOT a reducer transition: it is never fed to
     // `step()` (the reducer stays unaffected, invariant #1). We only remember the latest tree so the
     // Driver can re-point the baseline on resume.
@@ -233,6 +459,10 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
     if (entry.event.tag === 'CANDIDATE_RAN' || entry.event.tag === 'CANDIDATE_SELECTED') {
       continue;
     }
+    // A DEGRADED_ESCALATED entry is a wiring-LABEL marker (issue #125): like CHECKPOINTED it is a
+    // Driver-side record the reducer never sees. Readers derive the effective label from it with
+    // {@link effectiveDegraded}; the fold simply skips it.
+    if (entry.event.tag === 'DEGRADED_ESCALATED') continue;
     // A RUN_EXTENDED entry is an operator-control marker (ADR 0012): its config overlay was already
     // applied above; here we only track its note, which stays pending until a turn consumes it.
     if (entry.event.tag === 'RUN_EXTENDED') {
@@ -264,8 +494,24 @@ export function replay(config: RunConfig, entries: readonly RunLogEntry[]): Repl
     }
     // With extended budget caps, the persisted `exceeded` flags are re-judged against the new caps
     // (raw spent numbers stay the persisted facts) — else the fold would re-abort at the old cap.
-    [state, commands] = step(state, budgetExtended ? rejudgeBudget(entry.event, effective) : entry.event);
+    const folded = withStuckThresholds(state, {
+      timeoutNoDiff:
+        index === tailIndex
+          ? effective.stuckPolicy.timeoutNoDiffThreshold
+          : TIMEOUT_NO_DIFF_UNREACHABLE,
+      repeat: precursors.get(index) ?? effective.stuckPolicy.repeatFailureThreshold,
+    });
+    [state, commands] = step(
+      folded,
+      budgetExtended ? rejudgeBudget(entry.event, effective) : entry.event,
+    );
   }
+  // Hand the caller a state whose ctx carries the run's REAL thresholds: the overrides above are
+  // fold-local scaffolding, and the Driver continues the live run from this very state.
+  state = withStuckThresholds(state, {
+    timeoutNoDiff: effective.stuckPolicy.timeoutNoDiffThreshold,
+    repeat: effective.stuckPolicy.repeatFailureThreshold,
+  });
 
   return {
     state,

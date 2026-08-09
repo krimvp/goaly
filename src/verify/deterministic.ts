@@ -10,8 +10,9 @@ const DETAIL_OUTPUT_LIMIT = 2000;
  * produced a real pass/fail) rather than a genuine red (the command ran and the bar isn't met).
  *
  * Deliberately NOT a heuristic: we do not pattern-match exit codes or scrape error strings (those
- * rot and misfire). We classify only on facts goaly OWNS for certain — it imposed the timeout, and
- * it caught the spawn failure (see {@link import('../workspace/workspace').CommandResult}). Any other
+ * rot and misfire). We classify only on facts goaly OWNS for certain — it imposed the timeout, it
+ * imposed the captured-output cap and SIGKILLed the command over it, and it caught the spawn failure
+ * (see {@link import('../workspace/workspace').CommandResult}). Any other
  * non-zero exit is treated as a genuine, evaluable red. Other could-not-run causes are handled where
  * they actually belong, not by re-deriving them here: a missing toolchain is caught BEFORE the loop
  * by the `requiredTools` pre-flight (installed or a typed `TOOLS_MISSING` abort), and a verify
@@ -26,6 +27,9 @@ const DETAIL_OUTPUT_LIMIT = 2000;
 export function executionErrorReason(result: CommandResult): string | null {
   if (result.timedOut === true) return 'the verify command timed out before it could finish';
   if (result.spawnFailed === true) return 'the verify command could not be started';
+  if (result.outputCapped === true) {
+    return 'the verify command was killed for exceeding goaly’s captured-output cap, so it never finished';
+  }
   return null;
 }
 

@@ -320,10 +320,11 @@ describe('droid permission-gate diagnosis', () => {
   /** The real refusal droid emits when an action exceeds the run's --auto tier. */
   const refusal = 'Exec ended early: insufficient permission to proceed.\nRe-run with --auto medium or --auto high.';
 
-  it('recognises the refusal and names --harness-autonomy', () => {
-    const hint = droidDiagnose({ stdout: refusal, stderr: '', code: 1 });
-    expect(hint).toContain('--harness-autonomy medium');
-    expect(hint).toContain('permission gate');
+  it('recognises the refusal and names the autonomy-refused remediation KIND', () => {
+    // The codec reports a closed kind, never prose: the operator-facing sentence (which names
+    // --harness-autonomy) is authored by the reducer, so no droid output can reach the
+    // goaly-authored part of the abort reason. See src/orchestrator/reason-quote.ts.
+    expect(droidDiagnose({ stdout: refusal, stderr: '', code: 1 })).toBe('autonomy-refused');
   });
 
   it('reads the refusal from stderr too', () => {
@@ -339,7 +340,7 @@ describe('droid permission-gate diagnosis', () => {
   it('attaches the hint to the classified run without changing its status', () => {
     const run = droidCodec.classify({ stdout: refusal, stderr: '', code: 1 });
     expect(run.status).toBe('crashed'); // still fail-closed
-    expect(run.hint).toContain('--harness-autonomy');
+    expect(run.hint).toBe('autonomy-refused');
   });
 
   it('leaves a normal completed run with no hint', () => {

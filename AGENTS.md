@@ -77,7 +77,14 @@ These are the product. A change that violates one is wrong even if tests pass �
    (consecutive could-not-evaluate verdicts — the verify command timed out or could not be started, or
    the judge errored/overflowed — carried as `Verdict.evaluable === false` → typed
    `CONTRACT_UNEVALUABLE`, so a verification-environment failure is never mistaken for a code red and
-   never discards a possibly-correct tree behind a misleading no-diff/repeat abort — still fail-closed).
+   never discards a possibly-correct tree behind a misleading no-diff/repeat abort — still fail-closed),
+   timeout-no-diff (consecutive iterations that BOTH hit the harness wall-clock cap and changed nothing
+   → typed `STUCK_TIMEOUT_NO_DIFF`; it also BOUNDS the issue-#54 no-diff excuse, so a worker that times
+   out every turn can no longer burn `maxIterations` in silent no-ops — the abort names
+   `--stuck-timeout-no-diff-threshold` (the only flag that un-terminates the run: the timeout flags are
+   not `RunExtension` fields, so a resume carrying only them re-trips the detector at the tail) plus
+   `--harness-timeout-ms` / `--harness-idle-timeout-ms`, which make the extra turns useful; never
+   auto-remediated).
    Classified ONLY from facts goaly owns (its own timeout / spawn-failure; the judge's own error) —
    never heuristic exit-code/error-string guessing — and prevented at the source (the compiler authors
    offline verify commands; a missing toolchain is a pre-loop `requiredTools` abort), budget.
@@ -119,17 +126,24 @@ src/
   orchestrator/ state, step, decide, stuck              — PURE reducer (the spine)
   driver/      driver, clock, budget                    — effects + seam #4
   verify/      verifier, ladder, deterministic, judge, approver, agent-approver, adversarial-rung — seam #2/#3
-  compile/     compiler, agent-compiler, critiqued-compiler, required-tools, seal, seal-gates — Phase 1 + freeze + Seal
+  compile/     compiler, agent-compiler, critiqued-compiler, contract-dry-run, required-tools, seal, seal-gates — Phase 1 + freeze + Seal
   agent-cli/   codec, <tool>-codec, output, stream, estimate — one deep codec per CLI (seam-shared)
   harness/     adapter, agent-cli-harness, classify       — seam #1 (codec-backed adapter)
   goaly-code/ harness, loop, tools, edit, fs-host, session-store, prompt — the NON-codec adapter (seam #1)
   llm-client/  openai-client, schema                    — OpenAI-compatible HTTP transport (fetch + Zod)
-  workspace/   workspace, git-workspace, workspace-facts — harness-independent diff/run + detected facts
+  workspace/   workspace, git-workspace, workspace-facts, scratch-copy — harness-independent diff/run + facts + throwaway copies
   sandbox/     policy, launcher, bwrap, firejail, container, detect — opt-in OS isolation (seam)
   runlog/      runlog, file-runlog                      — write-ahead persistence + replay
   llm/         provider, agent-cli-provider, openai-provider, critic-panel — INTERNAL seam (judge/approver/compiler/critics)
   training/    trajectory, dataset, bench               — Slices 2–3: labeled-trajectory export + SFT dataset + eval bench
-  cli/         args, compose, main                      — composition root + CLI
+  defects/     corpus, context, select, wiring          — the CROSS-RUN defect corpus (issue #122):
+               written ONLY by an adjudicated CONTRACT_DEFECTIVE verdict, HMAC-signed + nonced on
+               write and verified on read (unsigned/tampered/foreign/replayed lines dropped), read
+               into the compiler's authoring prompt (bounded + filtered + untrusted-fenced),
+               fail-open everywhere. The signature closes lines from ELSEWHERE, not the same-uid
+               coding agent (which can read the key) — the untrusted fence is the real containment;
+               do not restate the signature as more than that
+  cli/         args, compose, compose-authoring, main    — composition root + CLI
   testing/     fakes                                    — fakes for every seam
 ```
 

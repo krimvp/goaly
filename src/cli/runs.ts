@@ -2,6 +2,7 @@ import type { RunsCommand } from './args';
 import type { CompiledContract, Rung } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
 import type { SealDecision } from '../domain/verdict';
+import { degradedModeDetail, degradedModeTag } from '../domain/degraded';
 import {
   listRuns,
   readRun,
@@ -10,6 +11,7 @@ import {
   type RunListItem,
   type RunSummary,
 } from '../runlog/inspect';
+import { recontractCommand } from '../followup/recontract';
 import { formatUsage } from './usage-format';
 import { resumeHint, renderResumeHint } from './resume-cmd';
 import { runsWatch } from './watch';
@@ -142,6 +144,9 @@ export function renderRunDetail(d: RunDetail): string {
     `tokens:      ${d.tokensSpent === undefined ? '-' : d.tokensSpent}`,
   ];
   if (d.reason !== undefined) lines.push(`reason:      ${d.reason}`);
+  lines.push(...renderDegraded(d.degraded));
+  lines.push(...renderProvenance(d.provenance));
+  lines.push(...renderAdjudication(d.adjudication, d.runId));
   lines.push(...renderPlan(d.plan, d.planSeal, d.planFailures));
   lines.push(...renderContract(d.contract));
   lines.push(...renderSeal(d.seal, d.compileFailures));
@@ -151,6 +156,44 @@ export function renderRunDetail(d: RunDetail): string {
   // cost pricing is a volatile print-time overlay applied only to a live run's `--cost-table`.
   lines.push('', ...formatUsage(d.usage));
   return lines.join('\n');
+}
+
+/**
+ * Render the run's typed degraded-mode label (issue #125) directly under the status, so a `DONE`
+ * whose two keys were one model is labelled here — not only in a startup WARN in a log nobody kept.
+ * Nothing for a run with no degraded mode (including logs written before the field existed).
+ */
+function renderDegraded(degraded: RunDetail['degraded']): string[] {
+  if (degraded === undefined) return [];
+  return [`degraded:    ${degradedModeTag(degraded)} — ${degradedModeDetail(degraded)}`];
+}
+
+/**
+ * Render a SUCCESSOR run's provenance (issue #117): which run and which frozen contract this one was
+ * re-contracted from, the adjudication verdict that justified it, and the chain depth. Nothing for an
+ * ordinary run. This is the audit trail that makes "the bar was wrong" a chain of frozen contracts
+ * rather than an invisible in-place softening — no contract is ever mutated.
+ */
+function renderProvenance(provenance: RunDetail['provenance']): string[] {
+  if (provenance === undefined) return [];
+  return [
+    `successor of: ${provenance.predecessorRunId}  (re-contract #${provenance.recontracts} in this chain)`,
+    `  predecessor contract: ${provenance.predecessorContractHash}  — adjudicated DEFECTIVE, never reused`,
+    `  verdict:   ${provenance.verdict}`,
+  ];
+}
+
+/**
+ * Render this run's OWN contract-fault verdict (issue #116) when it adjudicated, and — for a
+ * defective one — the exact successor command that recovers from it without discarding the tree.
+ */
+function renderAdjudication(adjudication: RunDetail['adjudication'], runId: string): string[] {
+  if (adjudication === undefined) return [];
+  if (!adjudication.defective) return [`adjudicated: contract SOUND — ${adjudication.reason}`];
+  const lines = [`adjudicated: contract DEFECTIVE — ${adjudication.reason}`];
+  if (adjudication.pattern !== undefined) lines.push(`  anti-pattern: ${adjudication.pattern}`);
+  lines.push(`  re-contract (keeps this tree): ${recontractCommand(runId)}`);
+  return lines;
 }
 
 /** Render the frozen decomposition plan (issue #48) when the run was phased; nothing otherwise. */

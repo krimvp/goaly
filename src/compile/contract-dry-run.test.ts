@@ -1,0 +1,672 @@
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ContractDryRunCompiler } from './contract-dry-run';
+import { SATISFIABILITY_GUARDRAIL } from './critiqued-compiler';
+import { FakeCompiler, FakeScratchHost, makeFakeContract } from '../testing/fakes';
+import { FakeLlm } from '../llm/provider';
+import { RunConfig } from '../domain/config';
+import { FsScratchHost } from '../workspace/scratch-copy';
+import { sha256Hex } from '../util/hash';
+
+const generateConfig = RunConfig.parse({ goal: 'build the widget', verifier: { kind: 'generate' } });
+const existingConfig = RunConfig.parse({
+  goal: 'build the widget',
+  verifier: { kind: 'existing', ref: 'npm test' },
+});
+
+/** A contract that authored one verification file and runs one deterministic rung. */
+function authoredContract(overrides: Parameters<typeof makeFakeContract>[0] = {}) {
+  return makeFakeContract({
+    rungs: [{ kind: 'deterministic', command: 'npm test' }],
+    generatedFiles: [{ path: 'verify/check.test.mjs', sha256: sha256Hex('assert(true)') }],
+    ...overrides,
+  });
+}
+
+const REFERENCE = JSON.stringify({
+  files: [{ path: 'src/widget.mjs', content: 'export const solution = 42;' }],
+});
+
+describe('ContractDryRunCompiler (compile-time positive control, issue #115)', () => {
+  it('freezes the contract unchanged when a reference implementation greens the bar', async () => {
+    const contract = authoredContract();
+    const inner = new FakeCompiler(contract);
+    const scratch = new FakeScratchHost({ results: [{ exitCode: 0, stdout: 'ok', stderr: '' }] });
+    const compiler = new ContractDryRunCompiler({
+      inner,
+      llm: new FakeLlm([REFERENCE]),
+      scratch,
+    });
+
+    const result = await compiler.compile(generateConfig);
+
+    expect(result.contractHash).toBe(contract.contractHash);
+    expect(scratch.written).toEqual([{ path: 'src/widget.mjs', content: 'export const solution = 42;' }]);
+    expect(scratch.ran).toEqual(['npm test']);
+    expect(scratch.destroyed).toBe(1);
+  });
+
+  it('refuses the freeze when the reference implementation cannot green the bar', async () => {
+    const inner = new FakeCompiler(authoredContract());
+    const scratch = new FakeScratchHost({
+      results: [{ exitCode: 1, stdout: '', stderr: 'expected spy to have been called' }],
+    });
+    const compiler = new ContractDryRunCompiler({
+      inner,
+      llm: new FakeLlm([REFERENCE]),
+      scratch,
+    });
+
+    await expect(compiler.compile(generateConfig)).rejects.toThrow(
+      /refusing to freeze an UNSATISFIABLE bar/,
+    );
+    // The refusal feeds the bounded re-author loop as a COMPILE_FAILED reason, fenced by the
+    // anti-softening rail so "make it satisfiable" is never read as "make it easier".
+    await expect(
+      new ContractDryRunCompiler({
+        inner: new FakeCompiler(authoredContract()),
+        llm: new FakeLlm([REFERENCE]),
+        scratch: new FakeScratchHost({
+          results: [{ exitCode: 1, stdout: '', stderr: 'expected spy to have been called' }],
+        }),
+      }).compile(generateConfig),
+    ).rejects.toThrow(SATISFIABILITY_GUARDRAIL.slice(0, 40));
+  });
+
+  it('never leaks the reference implementation into the refusal fed back to the author', async () => {
+    const secret = 'export function solve() { return "THE-ANSWER"; }';
+    const inner = new FakeCompiler(authoredContract());
+    const compiler = new ContractDryRunCompiler({
+      inner,
+      llm: new FakeLlm([JSON.stringify({ files: [{ path: 'src/solve.mjs', content: secret }] })]),
+      scratch: new FakeScratchHost({ results: [{ exitCode: 1, stdout: '', stderr: 'red' }] }),
+    });
+
+    const error = await compiler.compile(generateConfig).catch((e: unknown) => e as Error);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toContain('THE-ANSWER');
+    expect((error as Error).message).not.toContain(secret);
+  });
+
+  it('carries NO line of the failing rung output — not even the parts that look like the runner', async () => {
+    // A test runner reds by printing code frames and stack frames OF THE IMPLEMENTATION under test —
+    // and on a red, the implementation under test IS the reference. Both streams are therefore
+    // adversary-writable, so the refusal reads neither: even the runner-shaped lines are gone.
+    const runnerOutput = [
+      ' FAIL  verify/check.test.mjs > solve',
+      'AssertionError: expected 3 to be 4',
+      ' ❯ verify/check.test.mjs:5:3',
+      '      4|   expect(solve(1)).toBe(4)',
+      '        |                   ^',
+      ' ❯ solve src/widget.mjs:5:9',
+      '      5|   return MAGIC_ANSWER * 2;',
+    ].join('\n');
+    const compiler = new ContractDryRunCompiler({
+      inner: new FakeCompiler(authoredContract()),
+      llm: new FakeLlm([REFERENCE]),
+      scratch: new FakeScratchHost({ results: [{ exitCode: 1, stdout: '', stderr: runnerOutput }] }),
+    });
+
+    const error = (await compiler.compile(generateConfig).catch((e: unknown) => e)) as Error;
+
+    expect(error).toBeInstanceOf(Error);
+    for (const line of runnerOutput.split('\n')) {
+      expect(error.message).not.toContain(line.trim());
+    }
+    // …while everything the author actually needs — contract data goaly owns — survives.
+    expect(error.message).toContain('exit 1');
+    expect(error.message).toContain('failing rung: 1 of 1');
+    expect(error.message).toContain('npm test');
+  });
+
+  it('carries no line of a node-style location header block either, on stdout as on stderr', async () => {
+    const runnerOutput = [
+      '/tmp/goaly-dry-run-abc/src/widget.mjs:2',
+      '  const KEY = "LEAKED-SOLUTION";',
+      '        ^',
+      '',
+      'Error: boom',
+    ].join('\n');
+    const compiler = new ContractDryRunCompiler({
+      inner: new FakeCompiler(authoredContract()),
+      llm: new FakeLlm([REFERENCE]),
+      scratch: new FakeScratchHost({ results: [{ exitCode: 1, stdout: runnerOutput, stderr: '' }] }),
+    });
+
+    const error = (await compiler.compile(generateConfig).catch((e: unknown) => e)) as Error;
+
+    expect(error.message).not.toContain('LEAKED-SOLUTION');
+    expect(error.message).not.toContain('src/widget.mjs');
+    expect(error.message).not.toContain('Error: boom');
+  });
+
+  it('says WHY nothing is quoted, so the author does not read the omission as an oversight', async () => {
+    const compiler = new ContractDryRunCompiler({
+      inner: new FakeCompiler(authoredContract()),
+      llm: new FakeLlm([REFERENCE]),
+      scratch: new FakeScratchHost({
+        results: [
+          {
+            exitCode: 1,
+            stdout: '',
+            stderr: ' ❯ solve src/widget.mjs:5:9\n      5|   return MAGIC_ANSWER * 2;',
+          },
+        ],
+      }),
+    });
+
+    const error = (await compiler.compile(generateConfig).catch((e: unknown) => e)) as Error;
+
+    expect(error.message).not.toContain('MAGIC_ANSWER');
+    expect(error.message).toContain('exit 1');
+    expect(error.message).toContain('was not read at all');
+    expect(error.message).toContain('you AUTHORED the verification files');
+  });
+
+  it('names the failing rung by LABEL and position when the contract gave it one', async () => {
+    const contract = authoredContract({
+      rungs: [
+        { kind: 'deterministic', command: 'npm run lint', label: 'lint' },
+        { kind: 'deterministic', command: 'npm test', label: 'unit' },
+      ],
+    });
+    const compiler = new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: new FakeLlm([REFERENCE]),
+      scratch: new FakeScratchHost({
+        results: [
+          { exitCode: 0, stdout: '', stderr: '' },
+          { exitCode: 3, stdout: 'noise', stderr: 'noise' },
+        ],
+      }),
+    });
+
+    const error = (await compiler.compile(generateConfig).catch((e: unknown) => e)) as Error;
+
+    expect(error.message).toContain('exit 3');
+    expect(error.message).toContain('failing rung: 2 of 2 (unit) — `npm test`');
+    expect(error.message).not.toContain('noise');
+  });
+
+  it('writes the reference ONLY into the scratch copy and destroys it on every exit path', async () => {
+    const scratchGreen = new FakeScratchHost({ results: [{ exitCode: 0, stdout: '', stderr: '' }] });
+    const green = await new ContractDryRunCompiler({
+      inner: new FakeCompiler(authoredContract()),
+      llm: new FakeLlm([REFERENCE]),
+      scratch: scratchGreen,
+    }).compile(generateConfig);
+    // The frozen contract carries no trace of the reference implementation.
+    expect(green.generatedFiles.map((f) => f.path)).toEqual(['verify/check.test.mjs']);
+    expect(scratchGreen.destroyed).toBe(1);
+
+    const scratchRed = new FakeScratchHost({ results: [{ exitCode: 1, stdout: '', stderr: 'red' }] });
+    await expect(
+      new ContractDryRunCompiler({
+        inner: new FakeCompiler(authoredContract()),
+        llm: new FakeLlm([REFERENCE]),
+        scratch: scratchRed,
+      }).compile(generateConfig),
+    ).rejects.toThrow();
+    expect(scratchRed.destroyed).toBe(1);
+  });
+
+  it('discards reference files that collide with the frozen verification files', async () => {
+    const scratch = new FakeScratchHost({ results: [{ exitCode: 0, stdout: '', stderr: '' }] });
+    await new ContractDryRunCompiler({
+      inner: new FakeCompiler(authoredContract()),
+      llm: new FakeLlm([
+        JSON.stringify({
+          files: [
+            { path: './verify/check.test.mjs', content: 'assert(true) // rewritten bar' },
+            { path: 'src/widget.mjs', content: 'real work' },
+          ],
+        }),
+      ]),
+      scratch,
+    }).compile(generateConfig);
+
+    expect(scratch.written.map((f) => f.path)).toEqual(['src/widget.mjs']);
+  });
+
+  it('treats a reference file that SUFFIX-matches a frozen path as a collision, so the two path checks agree', async () => {
+    // The collision drop and the "is this frame frozen?" test must answer identically. When the
+    // drop compared exact paths and the frame test compared suffixes, `src/check.mjs` against a
+    // frozen `check.mjs` was BOTH written into the scratch AND treated as frozen in the output —
+    // so its frames (and its path) survived into the refusal fed to the author.
+    const contract = authoredContract({
+      generatedFiles: [{ path: 'check.mjs', sha256: sha256Hex('assert(true)') }],
+    });
+    const scratch = new FakeScratchHost({
+      results: [
+        {
+          exitCode: 1,
+          stdout: '',
+          stderr: ' ❯ solve src/check.mjs:5:9\nAssertionError: expected 3 to be 4',
+        },
+      ],
+    });
+    const error = (await new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: new FakeLlm([
+        JSON.stringify({
+          files: [
+            { path: 'src/check.mjs', content: 'export const SOLUTION = "LEAKED";' },
+            { path: 'src/widget.mjs', content: 'export const x = 1;' },
+          ],
+        }),
+      ]),
+      scratch,
+    })
+      .compile(generateConfig)
+      .catch((e: unknown) => e)) as Error;
+
+    expect(scratch.written.map((f) => f.path)).toEqual(['src/widget.mjs']);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).not.toContain('src/check.mjs');
+  });
+
+  it('runs the contract setup first, and only the DETERMINISTIC rungs (judge rungs are out of scope)', async () => {
+    const contract = authoredContract({
+      setup: 'npm ci',
+      rungs: [
+        { kind: 'deterministic', command: 'npm test' },
+        { kind: 'deterministic', command: 'node smoke.mjs', label: 'smoke' },
+        { kind: 'judge', rubric: 'is it good', quorum: 1, confidenceFloor: 0.5 },
+      ],
+    });
+    const scratch = new FakeScratchHost({
+      results: [
+        { exitCode: 0, stdout: '', stderr: '' },
+        { exitCode: 0, stdout: '', stderr: '' },
+        { exitCode: 0, stdout: '', stderr: '' },
+      ],
+    });
+    await new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: new FakeLlm([REFERENCE]),
+      scratch,
+    }).compile(generateConfig);
+
+    expect(scratch.ran).toEqual(['npm ci', 'npm test', 'node smoke.mjs']);
+  });
+
+  it('is inert for a user-supplied --verify-cmd and for a contract that authored no files', async () => {
+    const existingLlm = new FakeLlm([REFERENCE]);
+    const existingScratch = new FakeScratchHost();
+    const contract = makeFakeContract();
+    await new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: existingLlm,
+      scratch: existingScratch,
+    }).compile(existingConfig);
+    expect(existingLlm.requests).toHaveLength(0);
+    expect(existingScratch.destroyed).toBe(0);
+
+    const noFilesLlm = new FakeLlm([REFERENCE]);
+    await new ContractDryRunCompiler({
+      inner: new FakeCompiler(makeFakeContract()),
+      llm: noFilesLlm,
+      scratch: new FakeScratchHost(),
+    }).compile(generateConfig);
+    expect(noFilesLlm.requests).toHaveLength(0);
+  });
+
+  describe('fail-open: an infrastructure failure freezes exactly as today', () => {
+    it('no LLM answer', async () => {
+      const contract = authoredContract();
+      const llm = new FakeLlm([]);
+      llm.complete = async () => {
+        throw new Error('LLM CLI claude timed out');
+      };
+      const result = await new ContractDryRunCompiler({
+        inner: new FakeCompiler(contract),
+        llm,
+        scratch: new FakeScratchHost(),
+      }).compile(generateConfig);
+      expect(result.contractHash).toBe(contract.contractHash);
+    });
+
+    it('an unparseable reference implementation', async () => {
+      const contract = authoredContract();
+      const result = await new ContractDryRunCompiler({
+        inner: new FakeCompiler(contract),
+        llm: new FakeLlm(['sorry, I cannot do that']),
+        scratch: new FakeScratchHost(),
+      }).compile(generateConfig);
+      expect(result.contractHash).toBe(contract.contractHash);
+    });
+
+    it('a scratch-copy failure', async () => {
+      const contract = authoredContract();
+      const result = await new ContractDryRunCompiler({
+        inner: new FakeCompiler(contract),
+        llm: new FakeLlm([REFERENCE]),
+        scratch: new FakeScratchHost({ createError: new Error('ENOSPC') }),
+      }).compile(generateConfig);
+      expect(result.contractHash).toBe(contract.contractHash);
+    });
+
+    it('a rung that timed out (could not be evaluated) is never a red', async () => {
+      const contract = authoredContract();
+      const result = await new ContractDryRunCompiler({
+        inner: new FakeCompiler(contract),
+        llm: new FakeLlm([REFERENCE]),
+        scratch: new FakeScratchHost({
+          results: [{ exitCode: 124, stdout: '', stderr: 'killed', timedOut: true }],
+        }),
+      }).compile(generateConfig);
+      expect(result.contractHash).toBe(contract.contractHash);
+    });
+
+    it('a rung that could not be started is never a red', async () => {
+      const contract = authoredContract();
+      const result = await new ContractDryRunCompiler({
+        inner: new FakeCompiler(contract),
+        llm: new FakeLlm([REFERENCE]),
+        scratch: new FakeScratchHost({
+          results: [{ exitCode: 127, stdout: '', stderr: 'no shell', spawnFailed: true }],
+        }),
+      }).compile(generateConfig);
+      expect(result.contractHash).toBe(contract.contractHash);
+    });
+
+    it('a setup command that cannot run in the scratch copy', async () => {
+      const contract = authoredContract({ setup: 'npm ci' });
+      const scratch = new FakeScratchHost({ results: [{ exitCode: 1, stdout: '', stderr: 'no network' }] });
+      const result = await new ContractDryRunCompiler({
+        inner: new FakeCompiler(contract),
+        llm: new FakeLlm([REFERENCE]),
+        scratch,
+      }).compile(generateConfig);
+      expect(result.contractHash).toBe(contract.contractHash);
+      expect(scratch.ran).toEqual(['npm ci']); // the rungs never ran on an unprepared tree
+      expect(scratch.destroyed).toBe(1);
+    });
+
+    it('a reference implementation that only rewrites the frozen bar', async () => {
+      const contract = authoredContract();
+      const scratch = new FakeScratchHost();
+      const result = await new ContractDryRunCompiler({
+        inner: new FakeCompiler(contract),
+        llm: new FakeLlm([
+          JSON.stringify({ files: [{ path: 'verify/check.test.mjs', content: 'assert(true)' }] }),
+        ]),
+        scratch,
+      }).compile(generateConfig);
+      expect(result.contractHash).toBe(contract.contractHash);
+      expect(scratch.written).toEqual([]);
+    });
+  });
+});
+
+/**
+ * The leak, executed for real: a runner reports a red by printing the SOURCE of the code under test,
+ * and on a red the code under test is the reference implementation. The refusal becomes
+ * `COMPILE_FAILED.reason` and is fed to the contract author, so nothing the real subprocess printed
+ * may come back — not the reference's text, and not the runner's own framing around it, because the
+ * two share one stream and cannot be told apart inside it.
+ */
+describe('ContractDryRunCompiler — the refusal never carries the reference implementation source', () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true });
+  });
+
+  it('drops the code frame a real `node` run prints for the reference implementation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'goaly-dryrun-leak-'));
+    roots.push(root);
+    await mkdir(join(root, 'verify'), { recursive: true });
+    const bar = [
+      "import assert from 'node:assert/strict';",
+      "import { solve } from '../src/widget.mjs';",
+      "assert.equal(solve(), 4, 'solve must answer 4');",
+    ].join('\n');
+    await writeFile(join(root, 'verify', 'check.mjs'), bar, 'utf-8');
+
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: `"${process.execPath}" verify/check.mjs` }],
+      generatedFiles: [{ path: 'verify/check.mjs', sha256: sha256Hex(bar) }],
+    });
+    const reference = JSON.stringify({
+      files: [
+        {
+          path: 'src/widget.mjs',
+          content: [
+            'const LOOKUP_TABLE = { magic: "REFERENCE-ONLY-SECRET" };',
+            'export function solve() { throw new Error(`boom ${Object.keys(LOOKUP_TABLE).length}`); }',
+          ].join('\n'),
+        },
+      ],
+    });
+    const error = (await new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: new FakeLlm([reference]),
+      scratch: new FsScratchHost(root),
+      timeoutMs: 60_000,
+    })
+      .compile(generateConfig)
+      .catch((e: unknown) => e)) as Error;
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).not.toContain('REFERENCE-ONLY-SECRET');
+    expect(error.message).not.toContain('LOOKUP_TABLE');
+    expect(error.message).not.toContain('src/widget.mjs');
+    expect(error.message).not.toMatch(/boom/); // …and neither does the runner's own framing
+    // The failure still reaches the author, as the identity of the rung a correct implementation
+    // could not clear — which is contract data goaly froze, not something the subprocess printed.
+    expect(error.message).toContain('failing rung: 1 of 1');
+  });
+
+  it('drops a real multi-line `Error(fn.toString())` message in full, first line included', async () => {
+    // A reference that builds its error message out of its own source renders as a message whose
+    // CONTINUATION lines name no file — the shape that walked straight through a filter whose
+    // default was to keep such lines. The first line is no safer than the rest: the reference chose
+    // it too.
+    const root = await mkdtemp(join(tmpdir(), 'goaly-dryrun-msg-'));
+    roots.push(root);
+    await mkdir(join(root, 'verify'), { recursive: true });
+    const bar = [
+      "import { solve } from '../src/widget.mjs';",
+      'solve();',
+    ].join('\n');
+    await writeFile(join(root, 'verify', 'check.mjs'), bar, 'utf-8');
+
+    const contract = makeFakeContract({
+      rungs: [{ kind: 'deterministic', command: `"${process.execPath}" verify/check.mjs` }],
+      generatedFiles: [{ path: 'verify/check.mjs', sha256: sha256Hex(bar) }],
+    });
+    const reference = JSON.stringify({
+      files: [
+        {
+          path: 'src/widget.mjs',
+          content: [
+            'function impl(amount) {',
+            '  const LOOKUP_TABLE = { magic: "REFERENCE-ONLY-SECRET" };',
+            '  return LOOKUP_TABLE.magic.length + amount;',
+            '}',
+            "export function solve() { throw new Error('reference failed:\\n' + impl.toString()); }",
+          ].join('\n'),
+        },
+      ],
+    });
+
+    const error = (await new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: new FakeLlm([reference]),
+      scratch: new FsScratchHost(root),
+      timeoutMs: 60_000,
+    })
+      .compile(generateConfig)
+      .catch((e: unknown) => e)) as Error;
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).not.toContain('REFERENCE-ONLY-SECRET');
+    expect(error.message).not.toContain('LOOKUP_TABLE');
+    expect(error.message).not.toContain('function impl');
+    expect(error.message).not.toContain('reference failed:');
+  });
+});
+
+/**
+ * The issue #114 regression, executed for real: a frozen bar whose call-count assertion sits AFTER
+ * the spy was restored can never hold, no matter how correct the implementation is. It runs a real
+ * scratch copy and a real `node` subprocess — the whole point of the positive control is that it
+ * answers by EXECUTION rather than by asking a model its opinion.
+ */
+describe('ContractDryRunCompiler — issue #114 regression (post-mockRestore call-count assertion)', () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true });
+  });
+
+  /**
+   * The authored (frozen) bar. `restore()` clears the recorded calls exactly as vitest's
+   * `mockRestore()` / jest's `restoreAllMocks()` do, so `assertAfterRestore` reproduces #114.
+   */
+  function barSource(assertAfterRestore: boolean): string {
+    return [
+      "import assert from 'node:assert/strict';",
+      "import { api, render } from '../src/widget.mjs';",
+      'function spyOn(obj, key) {',
+      '  const original = obj[key];',
+      '  const spy = { calls: [], restore() { obj[key] = original; spy.calls.length = 0; } };',
+      '  obj[key] = (...args) => { spy.calls.push(args); return original.apply(obj, args); };',
+      '  return spy;',
+      '}',
+      "const spy = spyOn(api, 'format');",
+      "assert.equal(render('hi'), '[hi]');",
+      ...(assertAfterRestore
+        ? [
+            'spy.restore();',
+            "assert.ok(spy.calls.length > 0, 'expected api.format to have been called');",
+          ]
+        : [
+            'const calls = spy.calls.length;',
+            'spy.restore();',
+            "assert.ok(calls > 0, 'expected api.format to have been called');",
+          ]),
+      "console.log('ok');",
+    ].join('\n');
+  }
+
+  /** A genuinely correct implementation of the goal, routed through the public `api`. */
+  const REFERENCE_IMPL = JSON.stringify({
+    files: [
+      {
+        path: 'src/widget.mjs',
+        content: [
+          'export const api = { format(s) { return `[${s}]`; } };',
+          'export function render(s) { return api.format(s); }',
+        ].join('\n'),
+      },
+    ],
+  });
+
+  async function runDryRun(assertAfterRestore: boolean) {
+    const root = await mkdtemp(join(tmpdir(), 'goaly-dryrun-114-'));
+    roots.push(root);
+    await mkdir(join(root, 'verify'), { recursive: true });
+    const bar = barSource(assertAfterRestore);
+    await writeFile(join(root, 'verify', 'check.mjs'), bar, 'utf-8');
+
+    const contract = makeFakeContract({
+      goal: 'build a widget renderer and use it',
+      rungs: [
+        { kind: 'deterministic', command: `"${process.execPath}" verify/check.mjs` },
+      ],
+      generatedFiles: [{ path: 'verify/check.mjs', sha256: sha256Hex(bar) }],
+    });
+    const compiler = new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: new FakeLlm([REFERENCE_IMPL]),
+      scratch: new FsScratchHost(root),
+      timeoutMs: 60_000,
+    });
+    return { root, contract, result: await compiler.compile(generateConfig).catch((e: unknown) => e) };
+  }
+
+  it('REJECTS a bar that asserts a call count after the spy was restored', async () => {
+    const { root, result } = await runDryRun(true);
+
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toMatch(/refusing to freeze an UNSATISFIABLE bar/);
+    // The bar's own assertion message is NOT quoted: it only ever reached goaly through the same
+    // stream the reference writes to. The author is told which rung failed instead — and it wrote
+    // that rung's assertions, so it can look them up itself.
+    expect((result as Error).message).not.toMatch(/expected api\.format to have been called/);
+    expect((result as Error).message).toContain('failing rung: 1 of 1');
+    // SAFETY: the reference implementation never reached the real workspace.
+    expect((await readdir(root)).sort()).toEqual(['verify']);
+  });
+
+  it('freezes the same bar once the call count is captured BEFORE the restore', async () => {
+    const { contract, result, root } = await runDryRun(false);
+
+    expect(result).not.toBeInstanceOf(Error);
+    expect((result as { contractHash: string }).contractHash).toBe(contract.contractHash);
+    expect((await readdir(root)).sort()).toEqual(['verify']);
+  });
+});
+
+/**
+ * The collision drop must canonicalize paths exactly as the write does. When the drop compared path
+ * STRINGS while `FsScratchCopy.writeFile` compares RESOLVED paths, a reference file spelled
+ * `verify/./check.mjs` was judged unfrozen when written — so it OVERWROTE the frozen bar in the
+ * scratch copy, turning a provably unsatisfiable bar into a green.
+ */
+describe('ContractDryRunCompiler — a dotted reference path cannot rewrite the bar it measures', () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true });
+  });
+
+  it('drops a reference file that RESOLVES onto a frozen path, so the bar stays the authored one', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'goaly-dryrun-collide-'));
+    roots.push(root);
+    await mkdir(join(root, 'verify'), { recursive: true });
+    // A provably unsatisfiable bar: no implementation can make 1 equal 2.
+    const bar = ["import assert from 'node:assert/strict';", 'assert.equal(1, 2);'].join('\n');
+    await writeFile(join(root, 'verify', 'check.mjs'), bar, 'utf-8');
+
+    const contract = makeFakeContract({
+      goal: 'make one equal two',
+      rungs: [{ kind: 'deterministic', command: `"${process.execPath}" verify/check.mjs` }],
+      generatedFiles: [{ path: 'verify/check.mjs', sha256: sha256Hex(bar) }],
+    });
+    const reference = JSON.stringify({
+      files: [
+        {
+          // Resolves onto the frozen bar — a rewrite of the very assertions under test.
+          path: 'verify/./check.mjs',
+          content: "console.log('verify/check.mjs: SOLUTION SECRET_COLLIDE');",
+        },
+        { path: 'src/impl.mjs', content: 'export const x = 1;' },
+      ],
+    });
+
+    const result = await new ContractDryRunCompiler({
+      inner: new FakeCompiler(contract),
+      llm: new FakeLlm([reference]),
+      scratch: new FsScratchHost(root),
+      timeoutMs: 60_000,
+    })
+      .compile(generateConfig)
+      .catch((e: unknown) => e);
+
+    // The bar was measured AS AUTHORED, so the unsatisfiable rung reds and the freeze is refused.
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toMatch(/refusing to freeze an UNSATISFIABLE bar/);
+    // …and nothing the reference printed reached the contract author.
+    expect((result as Error).message).not.toContain('SECRET_COLLIDE');
+    expect((result as Error).message).not.toContain('SOLUTION');
+    // SAFETY: the real workspace still holds the authored bar, byte for byte.
+    expect(await readFile(join(root, 'verify', 'check.mjs'), 'utf-8')).toBe(bar);
+    expect((await readdir(root)).sort()).toEqual(['verify']);
+  });
+});

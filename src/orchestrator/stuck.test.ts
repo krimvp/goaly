@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { detectStuck, normalizeDetail } from './stuck';
+import type { LoopCtx } from './state';
 import { makeCtx, makeConfig, dh } from '../testing/fakes';
 
 // detectStuck is pure over the LoopCtx histories and returns a typed { kind, message } (or null).
@@ -51,6 +52,115 @@ describe('detectStuck', () => {
     it('still trips no-diff when a completed turn made no edits (regression)', () => {
       const ctx = makeCtx({ lastNoDiff: true, iteration: 1, lastRunStatus: 'completed' });
       expect(detectStuck(ctx)?.message).toContain('no-diff');
+    });
+  });
+
+  describe('timeout-no-diff streak (issue #119)', () => {
+    // A run whose iterations both TIME OUT and leave the tree unchanged used to be excused forever
+    // by the issue-#54 history excuse, so it burned the whole maxIterations budget in ten-minute
+    // no-op turns. It is now a typed, threshold-capped stuck condition — and the excuse is bounded
+    // by exactly that threshold, so #54's single cut-off turn is still forgiven.
+
+    /** Iterations 1..n as parallel histories: statuses + post-run tree hashes. */
+    const ctxFor = (
+      statuses: readonly LoopCtx['runStatusHistory'][number][],
+      hashes: readonly string[],
+      overrides: Partial<LoopCtx> = {},
+    ): LoopCtx =>
+      makeCtx({
+        iteration: statuses.length,
+        runStatusHistory: statuses,
+        diffHashHistory: dh(...hashes),
+        lastRunStatus: statuses[statuses.length - 1],
+        lastNoDiff: hashes.length >= 2 && hashes[hashes.length - 1] === hashes[hashes.length - 2],
+        ...overrides,
+      });
+
+    it("still excuses ONE timeout-driven no-diff (issue #54's intent is preserved)", () => {
+      // A single turn cut off by the wall-clock cap is "ran out of time", not "stuck".
+      expect(detectStuck(makeCtx({ lastNoDiff: true, iteration: 1, lastRunStatus: 'timeout' }))).toBeNull();
+      expect(detectStuck(ctxFor(['completed', 'timeout'], ['a', 'a']))).toBeNull();
+      // Iteration 1's no-diff is unknowable from the histories (the pre-run baseline hash is not in
+      // them), so the walk stops there and the pair is still only ONE *known* timeout no-diff.
+      expect(detectStuck(ctxFor(['timeout', 'timeout'], ['a', 'a']))).toBeNull();
+    });
+
+    it('fires on the SECOND consecutive timeout + no-diff iteration (default threshold 2)', () => {
+      // The observed incident: two back-to-back ten-minute turns, zero diff, nothing flagged.
+      const reason = detectStuck(ctxFor(['completed', 'timeout', 'timeout'], ['a', 'a', 'a']));
+      expect(reason?.kind).toBe('timeout-no-diff');
+      expect(reason?.message).toContain('STUCK_TIMEOUT_NO_DIFF');
+    });
+
+    it('names both harness-timeout flags as the fix', () => {
+      const message =
+        detectStuck(ctxFor(['completed', 'timeout', 'timeout'], ['a', 'a', 'a']))?.message ?? '';
+      expect(message).toContain('--harness-timeout-ms');
+      expect(message).toContain('--harness-idle-timeout-ms');
+    });
+
+    it('aborts typed instead of burning maxIterations on an unbounded timeout streak', () => {
+      // Before the fix this context produced NO stuck reason at all, so DECIDE just kept going.
+      const ctx = ctxFor(
+        ['timeout', 'timeout', 'timeout', 'timeout', 'timeout'],
+        ['a', 'a', 'a', 'a', 'a'],
+        { config: makeConfig({ maxIterations: 10 }) },
+      );
+      const reason = detectStuck(ctx);
+      expect(reason?.kind).toBe('timeout-no-diff');
+      expect(ctx.iteration).toBeLessThan(ctx.config.maxIterations); // bailed well before the cap
+    });
+
+    it('does not fire when a timed-out turn DID change the tree (it was progressing)', () => {
+      // it2 timed out but edited; only it3 was a no-op — one excused turn, not a streak.
+      expect(detectStuck(ctxFor(['completed', 'timeout', 'timeout'], ['a', 'b', 'b']))).toBeNull();
+    });
+
+    it('resets when a turn that was NOT a timeout interrupts the streak', () => {
+      // A completed turn in the middle breaks the run of cut-off turns, so the excuse is renewed…
+      expect(
+        detectStuck(ctxFor(['timeout', 'timeout', 'completed', 'timeout'], ['a', 'a', 'a', 'a'])),
+      ).toBeNull();
+      // …and the detector only re-fires once a fresh threshold-length streak has accumulated.
+      const again = ctxFor(
+        ['timeout', 'timeout', 'completed', 'timeout', 'timeout'],
+        ['a', 'a', 'a', 'a', 'a'],
+      );
+      expect(detectStuck(again)?.kind).toBe('timeout-no-diff');
+    });
+
+    it('honors a custom threshold — and the excuse stretches with it', () => {
+      const config = makeConfig({ stuckPolicy: { timeoutNoDiffThreshold: 3 } });
+      const two = ctxFor(['completed', 'timeout', 'timeout'], ['a', 'a', 'a'], { config });
+      expect(detectStuck(two)).toBeNull(); // still excused — the typed detector has not taken over
+      const three = ctxFor(
+        ['completed', 'timeout', 'timeout', 'timeout'],
+        ['a', 'a', 'a', 'a'],
+        { config },
+      );
+      expect(detectStuck(three)?.kind).toBe('timeout-no-diff');
+    });
+
+    it('leaves the truncated excuse unbounded (a turn cap is not a wall-clock kill)', () => {
+      // Follow-on F stands: a perpetually truncated worker still terminates at maxIterations/budget.
+      const ctx = ctxFor(
+        ['truncated', 'truncated', 'truncated', 'truncated'],
+        ['a', 'a', 'a', 'a'],
+      );
+      expect(detectStuck(ctx)).toBeNull();
+    });
+
+    it('lets the harness-crash streak win over a mixed crash/timeout tail', () => {
+      // A crash streak is the more specific diagnosis (the CLI never ran) and is checked first.
+      const ctx = ctxFor(['timeout', 'crashed', 'crashed'], ['a', 'a', 'a']);
+      expect(detectStuck(ctx)?.kind).toBe('crash');
+    });
+
+    it('is not silenced by --stuck-no-diff false (it is a distinct detector)', () => {
+      // Turning off the blunt no-diff abort must not re-open the unbounded timeout burn.
+      const config = makeConfig({ stuckPolicy: { noDiff: false } });
+      const ctx = ctxFor(['completed', 'timeout', 'timeout'], ['a', 'a', 'a'], { config });
+      expect(detectStuck(ctx)?.kind).toBe('timeout-no-diff');
     });
   });
 
@@ -191,11 +301,12 @@ describe('detectStuck', () => {
 
     it('prefers the codec-recognised remediation over the generic install/auth advice', () => {
       // droid refusing an action at its --auto tier: the CLI is installed, authenticated and
-      // runnable, so the generic advice is three dead ends. The codec named the real fix.
+      // runnable, so the generic advice is three dead ends. The codec named the KIND of fix; the
+      // sentence the operator reads is authored here (so no CLI text enters the trusted prefix).
       const ctx = makeCtx({
         runStatusHistory: ['crashed', 'crashed'],
         lastRunOutput: 'Exec ended early: insufficient permission to proceed.',
-        lastRunHint: 'droid REFUSED an action at its autonomy level — re-run with --harness-autonomy medium.',
+        lastRunHint: 'autonomy-refused',
       });
       const message = detectStuck(ctx)?.message ?? '';
       expect(message).toContain('STUCK_HARNESS_CRASH'); // same typed abort, same fail-closed outcome

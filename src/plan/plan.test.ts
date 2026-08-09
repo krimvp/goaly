@@ -95,6 +95,29 @@ describe('AgentPlanner — LLM-authored plan (issue #48)', () => {
     await expect(planner.plan(config)).rejects.toThrow();
   });
 
+  it('accepts an LLM-authored dependency DAG (id + dependsOn, issue #123)', async () => {
+    const llm = new FakeLlm([
+      '{"phases":[{"goal":"parser","id":"p","dependsOn":[]},' +
+        '{"goal":"formatter","id":"f","dependsOn":[]},' +
+        '{"goal":"wire them up","id":"cli","dependsOn":["p","f"]}]}',
+    ]);
+    const plan = await new AgentPlanner({ llm }).plan(config);
+    expect(plan.phases[2]!.dependsOn).toEqual(['p', 'f']);
+    expect(plan.planHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('fails closed (→ PLAN_FAILED) on an LLM-authored cycle', async () => {
+    const llm = new FakeLlm([
+      '{"phases":[{"goal":"a","id":"a","dependsOn":["b"]},{"goal":"b","id":"b","dependsOn":["a"]}]}',
+    ]);
+    await expect(new AgentPlanner({ llm }).plan(config)).rejects.toThrow(/cycle/);
+  });
+
+  it('fails closed on an LLM-authored dangling dependency', async () => {
+    const llm = new FakeLlm(['{"phases":[{"goal":"a","dependsOn":["ghost"]}]}']);
+    await expect(new AgentPlanner({ llm }).plan(config)).rejects.toThrow(/unknown phase id/);
+  });
+
   it('threads plan-Seal revise feedback into the authoring prompt', async () => {
     const llm = new FakeLlm(['{"phases":[{"goal":"a"}]}']);
     await new AgentPlanner({ llm }).plan(config, 'make phase 1 smaller');
@@ -117,6 +140,27 @@ describe('StaticPlanner — --plan-file (issue #48)', () => {
   it('fails closed on a bad shape (no phases)', async () => {
     const planner = new StaticPlanner({ path: 'p.json', read: async () => '{"phases":[]}' });
     await expect(planner.plan(config)).rejects.toThrow();
+  });
+
+  it('reads a dependency DAG and fails closed on a bad one (issue #123)', async () => {
+    const dag = JSON.stringify({
+      phases: [
+        { goal: 'parser', id: 'p', dependsOn: [] },
+        { goal: 'formatter', id: 'f', dependsOn: [] },
+        { goal: 'cli', id: 'c', dependsOn: ['p', 'f'] },
+      ],
+    });
+    const plan = await new StaticPlanner({ path: 'plan.json', read: async () => dag }).plan(config);
+    expect(plan.phases[2]!.dependsOn).toEqual(['p', 'f']);
+
+    const cyclic = JSON.stringify({
+      phases: [
+        { goal: 'a', id: 'a', dependsOn: ['b'] },
+        { goal: 'b', id: 'b', dependsOn: ['a'] },
+      ],
+    });
+    const bad = new StaticPlanner({ path: 'plan.json', read: async () => cyclic });
+    await expect(bad.plan(config)).rejects.toThrow(/cycle/);
   });
 
   it('fails closed on an unreadable file', async () => {

@@ -233,6 +233,16 @@ export function networkForSeam(policy: SandboxPolicy, seam: SandboxSeam): Sandbo
  * Host `$HOME` credential subdirectories that are NEVER bound into the jail (defense in depth on
  * top of env scrubbing). bwrap denies them with `--tmpfs`; the container simply never mounts
  * `$HOME`, so listing them is documentation of intent there.
+ *
+ * `.goaly` is here for a different reason than the credential dirs: it holds goaly's own cross-run
+ * state — the defect corpus and the HMAC key that signs it (`src/defects/corpus.ts`). Under the
+ * DEFAULT `--sandbox none` policy nothing here applies and the agent, being a same-uid subprocess,
+ * can read that key; masking `$HOME/.goaly` is what makes an ACTIVE policy actually put the key (and
+ * the corpus) out of the agent seam's reach instead of merely relying on file mode. It does not
+ * cover a corpus moved elsewhere with `--defect-corpus <path>`, and it says nothing about a run
+ * without a sandbox — see `resolveDefectCorpus`, which logs which case a run is in. The workspace's
+ * own `.goaly` run-log dir is unaffected: these are `$HOME`-rooted paths, and the workspace is bound
+ * read-write after the masks.
  */
 export const DENIED_HOME_SECRETS = [
   '.ssh',
@@ -242,4 +252,5 @@ export const DENIED_HOME_SECRETS = [
   '.docker',
   '.kube',
   '.npmrc',
+  '.goaly',
 ] as const;

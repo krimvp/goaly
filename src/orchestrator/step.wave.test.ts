@@ -160,6 +160,84 @@ describe('parallel waves reducer (EXPERIMENTAL --parallel-phases)', () => {
     }
   });
 
+  it('a DECLARED dependency graph fans out its topological frontier, not a positional band (#123)', () => {
+    // A: root. B: root. C: needs A+B. D: needs only A — inexpressible with `group`.
+    const dag = makeFakePlan({
+      phases: [
+        { goal: 'A', id: 'a', dependsOn: [] },
+        { goal: 'B', id: 'b', dependsOn: [] },
+        { goal: 'C', id: 'c', dependsOn: ['a', 'b'] },
+        { goal: 'D', id: 'd', dependsOn: ['a'] },
+      ],
+    });
+    const config = makeConfig({ phased: true, parallelPhases: true, autonomous: true });
+    const [s0] = initial(config);
+    const [s1] = step(s0, { tag: 'PLAN_COMPILED', plan: dag });
+    const [first] = step(s1, { tag: 'PLAN_SEAL_DECIDED', decision: { kind: 'approve' } });
+
+    // Frontier 1 = the two roots (C and D are gated on A).
+    expect(first.tag).toBe('RUNNING_WAVE');
+    if (first.tag === 'RUNNING_WAVE') expect(first.indices).toEqual([0, 1]);
+
+    const [second] = step(first, {
+      tag: 'WAVE_RAN',
+      outcomes: [
+        { kind: 'merged', index: 0 },
+        { kind: 'merged', index: 1 },
+      ],
+      tree: waveTree,
+    });
+    // Frontier 2 = C and D together — both their dependency sets are now complete.
+    expect(second.tag).toBe('RUNNING_WAVE');
+    if (second.tag === 'RUNNING_WAVE') expect(second.indices).toEqual([2, 3]);
+
+    const [accept] = step(second, {
+      tag: 'WAVE_RAN',
+      outcomes: [
+        { kind: 'merged', index: 2 },
+        { kind: 'merged', index: 3 },
+      ],
+      tree: waveTree,
+    });
+    // The cumulative ACCEPTANCE phase on the ORIGINAL goal still runs after all phases, unchanged.
+    expect(accept.tag).toBe('COMPILING');
+    if (accept.tag === 'COMPILING') {
+      expect(accept.config.goal).toBe(config.goal);
+      expect(accept.phase).toMatchObject({ index: 4 });
+    }
+  });
+
+  it('a DAG frontier that partially merges downgrades ONLY the unmerged member (no phase repeats)', () => {
+    const dag = makeFakePlan({
+      phases: [
+        { goal: 'A', id: 'a', dependsOn: [] },
+        { goal: 'B', id: 'b', dependsOn: [] },
+        { goal: 'C', id: 'c', dependsOn: ['a', 'b'] },
+      ],
+    });
+    const config = makeConfig({ phased: true, parallelPhases: true, autonomous: true });
+    const [s0] = initial(config);
+    const [s1] = step(s0, { tag: 'PLAN_COMPILED', plan: dag });
+    const [wave] = step(s1, { tag: 'PLAN_SEAL_DECIDED', decision: { kind: 'approve' } });
+    const [fallback] = step(wave, {
+      tag: 'WAVE_RAN',
+      outcomes: [
+        { kind: 'unmerged', index: 0, reason: 'merge conflict' },
+        { kind: 'merged', index: 1 },
+      ],
+      tree: waveTree,
+    });
+    // A re-runs sequentially; B (already merged) is never re-offered, and C still waits for both.
+    expect(fallback.tag).toBe('COMPILING');
+    if (fallback.tag === 'COMPILING') {
+      expect(fallback.config.goal).toBe('A');
+      expect(fallback.phase).toMatchObject({ index: 0, skip: [1], waved: [0, 1] });
+    }
+    const [next] = step(runPhaseToBothKeys(fallback), { tag: 'PHASE_ADVANCED', tree: waveTree });
+    expect(next.tag).toBe('COMPILING');
+    if (next.tag === 'COMPILING') expect(next.config.goal).toBe('C'); // straight past merged B
+  });
+
   it('ungrouped plans and the acceptance phase never fan out', () => {
     const linear = makeFakePlan({ phases: [{ goal: 'only phase' }] });
     const config = makeConfig({ phased: true, parallelPhases: true, autonomous: true });
