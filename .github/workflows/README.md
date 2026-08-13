@@ -36,13 +36,26 @@ and enables auto-merge, so the repo's version field catches up to npm automatica
 
 ### Cutting a release
 
-Releasing is a single action — create a GitHub Release. GitHub Actions does the build, version,
-and publish. Pick whichever entry point you like:
+**Step 1 — write the release notes first (on `main`, before any tag exists).** The workflow refuses
+to publish a version that `CHANGELOG.md` does not document, and a `v*` tag can never be moved or
+reused, so this has to land first:
 
+```sh
+make changelog VERSION=X.Y.Z   # moves the [Unreleased] section under '## [X.Y.Z] - <today>'
+```
+
+Commit that, merge it to `main`, and pull. `make release` runs the same check
+(`node scripts/changelog.mjs check X.Y.Z`) **before** it creates the tag, so a forgotten changelog
+is a local error message rather than a spent version.
+
+**Step 2 — create the GitHub Release.** GitHub Actions does the build, version, and publish. Pick
+whichever entry point you like:
+
+- **CLI:** `make release BUMP=patch` / `make release VERSION=X.Y.Z` — computes the next tag, runs
+  the changelog pre-flight, and creates the release. **Preferred**: the other two entry points skip
+  the pre-flight.
 - **GitHub UI:** *Releases* → *Draft a new release* → *Choose a tag* → type a new `vX.Y.Z` →
-  *Publish release*.
-- **CLI:** `gh release create vX.Y.Z --generate-notes` (or `make release BUMP=patch` /
-  `make release VERSION=X.Y.Z`, which computes the next tag and creates the release for you).
+  *Publish release* (or `gh release create vX.Y.Z --generate-notes`).
 - **Actions tab:** *Publish to npm* → *Run workflow*, passing the version explicitly.
 
 Publishing the release fires the `Publish to npm` workflow, which derives the version from the tag,
@@ -54,6 +67,11 @@ builds, and publishes to the registry.
 >
 > If a publish fails, fix forward and release the **next** version — the tag ruleset makes `v*`
 > tags immutable, so they can't be moved or reused.
+>
+> **Exception — a tag whose publish failed before anything reached npm** (e.g. the changelog gate).
+> The version is still free on the registry, so you do not have to skip it: fix `main`, then re-run
+> *Publish to npm* from the **Actions tab** with that same version. A `workflow_dispatch` run checks
+> out `main` instead of the tag, so it publishes the fixed tree under the existing release.
 
 ### Version sync
 

@@ -68,11 +68,13 @@ jobs:
           echo "Publishing version $VERSION"
 
       # A release without release notes is invisible to users — fail before building (plan 5.1).
+      # This is the LAST line of defence: `make release` runs the same check before it creates the
+      # tag, because a failure here has already burned an immutable version.
       - name: Require a CHANGELOG.md entry for this version
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
-          if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md has no '## [$VERSION]' entry — move the [Unreleased] items under '## [$VERSION] - $(date +%F)' and re-release."
+          if ! node scripts/changelog.mjs check "$VERSION"; then
+            echo "::error::CHANGELOG.md has no '## [$VERSION]' entry. Recover WITHOUT burning the tag: on main run 'make changelog VERSION=$VERSION', merge it, then re-run this workflow from the Actions tab (Publish to npm -> Run workflow) with version $VERSION — a manual run builds from main, not from the tag."
             exit 1
           fi
 
