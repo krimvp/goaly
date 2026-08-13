@@ -7,12 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-08-13
+
 ### Security
 - Upgraded `vitest` to `^3.2.7`, `@vitest/coverage-v8` to `^3.2.7`, and `esbuild` to `^0.28.1` to
   resolve `npm audit` advisories (moderate/high/critical in the previous toolchain).
 - Added an `npm audit --audit-level moderate` step to CI so new advisories fail the build.
 
 ### Fixed
+- **A release can no longer burn a version on a missing changelog entry.** The "does CHANGELOG.md
+  document this version" gate lived only in the publish workflow, which runs *after* the release is
+  created — and `v*` tags are immutable, so the notes-less release failed to publish and the version
+  was spent (this cost `v0.2.5` and `v0.2.6`). The check is now a script (`scripts/changelog.mjs`)
+  that `make release` runs **before** `gh release create`, so the failure is a local error message
+  instead of a dead tag. `make changelog VERSION=X.Y.Z` performs the [Unreleased] → `[X.Y.Z]` move
+  the gate asks for, and the workflow keeps the same check as its last line of defence — now with
+  the recovery path (re-run it from the Actions tab, which builds from `main`, not from the tag).
 - **Defect-corpus signatures no longer replay, and the threat model is stated honestly.** A valid
   HMAC proved a corpus line came from an adjudication, but not that it was there *once*: appending
   40 copies of one genuine line made `read()` return 41 records, and because the occurrence count is

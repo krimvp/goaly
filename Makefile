@@ -19,7 +19,7 @@ BUMP    ?= patch
 VERSION ?=
 
 .PHONY: help deps dev build run typecheck test test-watch coverage check \
-        install uninstall pack release clean distclean
+        install uninstall pack changelog release clean distclean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -70,6 +70,15 @@ pack: build ## Produce an installable tarball (npm pack)
 # "Publish to npm" workflow, which derives the version from the tag, builds, and
 # publishes to npm. GitHub Actions does the build/version/publish — not you.
 # This target is just a CLI shortcut for "Draft a new release" in the GitHub UI.
+#
+# The release notes come first: `make changelog VERSION=X.Y.Z` moves the
+# [Unreleased] section under that version, and it must be merged to main BEFORE
+# the tag exists — `make release` refuses to tag without it, because `v*` tags
+# are immutable and a failed publish would burn the version.
+
+changelog: ## Move the [Unreleased] notes under a new version heading. VERSION=X.Y.Z required
+	@test -n "$(VERSION)" || { echo "changelog: VERSION=X.Y.Z is required."; exit 1; }
+	@node scripts/changelog.mjs stamp "$(VERSION)"
 
 release: ## Cut a GitHub Release -> Actions publishes to npm. BUMP=patch|minor|major or VERSION=X.Y.Z
 	@command -v gh >/dev/null 2>&1 || { echo "release: GitHub CLI (gh) is required."; exit 1; }
@@ -96,6 +105,7 @@ release: ## Cut a GitHub Release -> Actions publishes to npm. BUMP=patch|minor|m
 	  if git rev-parse "$$TAG" >/dev/null 2>&1; then \
 	    echo "release: tag $$TAG already exists — versions are immutable, pick another." ; exit 1 ; \
 	  fi ; \
+	  node scripts/changelog.mjs check "$$V" ; \
 	  echo "release: creating GitHub Release $$TAG (Actions will build, version & publish)" ; \
 	  gh release create "$$TAG" --target main --generate-notes --title "$$TAG" ; \
 	  echo "release: $$TAG created — watch the 'Publish to npm' workflow in the Actions tab."
