@@ -12,215 +12,124 @@
   <meta property="og:title" content="goaly — verifiable goal orchestration for coding agents" />
   <meta property="og:description" content="Run a coding agent until the goal is verifiably met — against a contract it can't weaken. Harness-agnostic, easy to start, simple to extend." />
 
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="assets/styles.css" />
+  <style>
+    :root {
+      --bg:     #0a0a0b;
+      --panel:  #121214;
+      --line:   rgba(255, 255, 255, 0.09);
+      --fg:     #ededeb;
+      --fg-dim: #9b9b96;
+      --accent: #c5f04e;
+      --red:    #ef6f5e;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0 auto;
+      padding: 6rem 1.25rem 4rem;
+      max-width: 46rem;
+      background: var(--bg);
+      color: var(--fg);
+      font: 16px/1.65 var(--sans);
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    h1 { font-size: clamp(2rem, 6vw, 2.9rem); line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 1rem; }
+    h1 .hl { color: var(--accent); }
+    h2 { font-size: 0.8rem; font-family: var(--mono); font-weight: 500; text-transform: uppercase;
+         letter-spacing: 0.12em; color: var(--fg-dim); margin: 3.5rem 0 1rem; }
+    p { margin: 0 0 1rem; }
+    .lede { font-size: 1.1rem; color: var(--fg-dim); }
+    .lede em { color: var(--fg); font-style: normal; }
+
+    .brand { display: flex; align-items: center; gap: 0.5rem; font-family: var(--mono); font-size: 1rem; color: var(--fg); }
+    .brand img { width: 22px; height: 22px; }
+
+    pre {
+      margin: 0 0 1rem;
+      padding: 1rem 1.1rem;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      line-height: 1.7;
+      overflow-x: auto;
+    }
+    .cmt { color: #67675f; }
+    .ok  { color: var(--accent); }
+    .bad { color: var(--red); }
+    .str { color: #e0b24e; }
+
+    ul { margin: 0 0 1rem; padding-left: 1.1rem; color: var(--fg-dim); }
+    li { margin-bottom: 0.5rem; }
+    li b { color: var(--fg); font-weight: 600; }
+    code { font-family: var(--mono); font-size: 0.85em; color: var(--fg); }
+
+    .links { display: grid; gap: 0.5rem; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); }
+    .links a { display: block; padding: 0.75rem 0.9rem; border: 1px solid var(--line); border-radius: 10px; color: var(--fg); }
+    .links a:hover { border-color: var(--accent); text-decoration: none; }
+    .links span { display: block; font-size: 0.85rem; color: var(--fg-dim); }
+
+    footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--line);
+             font-size: 0.85rem; color: var(--fg-dim); }
+  </style>
 </head>
 <body>
 
-<!-- ============================== NAV ============================== -->
-<header class="nav">
-  <div class="wrap nav-inner">
-    <a class="brand" href="#top"><img src="assets/favicon.svg" alt="" />goaly</a>
-    <nav class="nav-links" id="navLinks">
-      <a href="#how">How it works</a>
-      <a href="#features">Features</a>
-      <a href="#docs">Docs</a>
-    </nav>
-    <a class="nav-cta" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">GitHub ↗</a>
-    <button class="nav-toggle" aria-label="Toggle navigation">☰</button>
-  </div>
+<header>
+  <a class="brand" href="https://github.com/krimvp/goaly"><img src="assets/favicon.svg" alt="" />goaly</a>
 </header>
 
-<!-- ============================== HERO ============================== -->
-<a id="top"></a>
-<section class="hero">
-  <div class="hero-glow" aria-hidden="true"></div>
-  <div class="wrap hero-grid">
-    <div class="hero-copy">
-      <div class="eyebrow">Goal orchestration for coding agents</div>
-      <h1>Loop a coding agent until the goal is <span class="hl">verifiably met</span>.</h1>
-      <p class="hero-lede">
-        Hand goaly a goal. It freezes what "done" means, then loops your agent
-        against that bar until it's <em>actually done</em> — a bar the agent can't
-        weaken to pass.
-      </p>
+<h1>Loop a coding agent until the goal is <span class="hl">verifiably met</span>.</h1>
 
-      <div class="code hero-install">
-        <button class="copy-btn" data-clip="npm i -g goaly">copy</button>
-<pre><span class="cmt">$</span> npm i -g goaly</pre>
-      </div>
+<p class="lede">
+  goaly freezes what &ldquo;done&rdquo; means, then loops your agent against that bar until it is
+  <em>actually done</em> — a bar the agent cannot weaken to pass.
+</p>
 
-      <div class="btn-row">
-        <a class="btn btn-primary" href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener">Get started →</a>
-        <a class="btn btn-ghost" href="#how">How it works</a>
-      </div>
-    </div>
+<h2>Install</h2>
+<pre><span class="cmt">$</span> npm i -g goaly   <span class="cmt"># Node ≥ 20</span></pre>
 
-    <div class="hero-art reveal">
-      <div class="code term" aria-hidden="true">
-        <div class="term-bar"><span></span><span></span><span></span><em>goaly</em></div>
-        <button class="copy-btn" data-clip='goaly -d "add /health endpoint"'>copy</button>
-<pre><span class="cmt">$</span> <span class="fn">goaly</span> -d <span class="str">"add /health endpoint"</span>  <span class="cmt"># just the goal</span>
+<h2>Run</h2>
+<p>Give it a goal. Everything else has a default.</p>
+<pre><span class="cmt">$</span> goaly <span class="str">"add a /health endpoint returning 200"</span>
 
-<span class="tok">✔ COMPILE</span>  contract frozen   <span class="cmt">┌ sha 9f3c…a2</span>
-<span class="str">● SEAL</span>  auto-accepted     <span class="cmt">(logged loudly)</span>
-<span class="cmt">↻ iter 1</span>  agent → verify <span class="bad">✗</span>  <span class="cmt">npm test: 2 failing</span>
-<span class="cmt">↻ iter 2</span>  agent → verify <span class="tok">✓</span>  SIGN-OFF <span class="bad">✗</span> veto: returns 500
-<span class="cmt">↻ iter 3</span>  agent → verify <span class="tok">✓</span>  SIGN-OFF <span class="tok">✓</span> no veto
-<span class="tok">✔ DONE</span>   two keys turned · 3 iterations</pre>
-      </div>
-    </div>
-  </div>
+<span class="ok">✔ COMPILE</span>  contract frozen   <span class="cmt">┌ sha 9f3c…a2</span>
+<span class="cmt">● SEAL     auto-accepted     (logged loudly)</span>
+<span class="cmt">↻ iter 1</span>   agent → verify <span class="bad">✗</span>  <span class="cmt">npm test: 2 failing</span>
+<span class="cmt">↻ iter 2</span>   agent → verify <span class="ok">✓</span>  SIGN-OFF <span class="bad">✗</span> veto: returns 500
+<span class="cmt">↻ iter 3</span>   agent → verify <span class="ok">✓</span>  SIGN-OFF <span class="ok">✓</span> no veto
+<span class="ok">✔ DONE</span>     two keys turned · 3 iterations</pre>
 
-  <div class="wrap harness-strip reveal">
-    <span class="hs-label">Works with</span>
-    <span class="hs-item">Claude Code</span>
-    <span class="hs-item">Codex</span>
-    <span class="hs-item">Droid</span>
-    <span class="hs-item">pi</span>
-    <span class="hs-item">goaly-code</span>
-    <span class="hs-item hs-yours">your own harness</span>
-  </div>
-</section>
+<h2>Why it holds</h2>
+<ul>
+  <li><b>The bar is frozen.</b> The success check is hashed before the loop starts, so the agent
+    cannot rewrite its own test to finish.</li>
+  <li><b>DONE needs two keys.</b> The frozen check passes <em>and</em> an independent, veto-only
+    reviewer does not object.</li>
+  <li><b>Everything fails closed.</b> An error or a garbage answer is a fail, never a false green.
+    The control loop makes zero LLM calls.</li>
+</ul>
+<p class="lede">
+  Works with Claude Code, Codex, Droid, pi, or your own harness.
+</p>
 
-<!-- ============================== PROMISES ============================== -->
-<section id="why">
-  <div class="wrap">
-    <div class="grid grid-3 grid-start reveal">
-      <div class="card"><h3><span class="pill pass">1</span> Freeze the bar</h3><p>The success check is hashed and <b>frozen</b> before the loop starts — the agent can't weaken its own test to finish.</p></div>
-      <div class="card"><h3><span class="pill gate">2</span> Two keys for DONE</h3><p>Done means <b>both</b> turn: the frozen check passes <em>and</em> an independent, refute-first reviewer doesn't veto.</p></div>
-      <div class="card"><h3><span class="pill fail">3</span> Fail closed</h3><p>Anything that errors or returns garbage is a <b>fail</b>, never a false green. The control loop makes zero LLM calls.</p></div>
-    </div>
-  </div>
-</section>
+<h2>Docs</h2>
+<div class="links">
+  <a href="https://github.com/krimvp/goaly#readme">README<span>the short tour</span></a>
+  <a href="https://github.com/krimvp/goaly/blob/main/docs/reference.md">Reference<span>every flag &amp; guarantee</span></a>
+  <a href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md">Architecture<span>reducer, seams, log</span></a>
+  <a href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md">Add a harness<span>wrap any agent CLI</span></a>
+</div>
 
-<hr class="section-line" />
-
-<!-- ============================== HOW IT WORKS ============================== -->
-<section id="how">
-  <div class="wrap">
-    <div class="eyebrow reveal">How it works</div>
-    <h2 class="reveal">One compile, then a verified loop.</h2>
-    <p class="lede reveal">A pure, zero-LLM reducer owns the policy; a thin driver does the work it asks for.
-      Click any stage.</p>
-
-    <div class="pipeline-wrap reveal">
-      <div class="pipeline">
-        <div class="stage" data-stage="compile"><span class="st-k">COMPILE</span><span class="st-s">author + freeze</span></div>
-        <span class="arrow">→</span>
-        <div class="stage gate" data-stage="seal"><span class="st-k">SEAL</span><span class="st-s">lock the bar</span></div>
-        <span class="arrow">→</span>
-        <div class="stage" data-stage="prepare"><span class="st-k">prepare</span><span class="st-s">once</span></div>
-        <span class="arrow">→</span>
-        <div class="loop-band">
-          <span class="loop-tag">loop 🔁 ≤ --max-iterations</span>
-          <div class="stage" data-stage="run"><span class="st-k">RUN_AGENT</span><span class="st-s">one turn · best-of-N</span></div>
-          <span class="arrow">→</span>
-          <div class="stage" data-stage="ladder"><span class="st-k">verify</span><span class="st-s">tests → judge</span></div>
-          <span class="arrow">→</span>
-          <div class="stage gate" data-stage="signoff"><span class="st-k">SIGN-OFF</span><span class="st-s">veto-only</span></div>
-          <span class="arrow">→</span>
-          <div class="stage" data-stage="decide"><span class="st-k">DECIDE</span><span class="st-s">pure</span></div>
-        </div>
-        <div class="term-row">
-          <div class="term-cell done">DONE ✔</div>
-          <div class="term-cell failed">FAILED</div>
-          <div class="term-cell aborted">ABORTED</div>
-        </div>
-      </div>
-      <div class="detail" id="pipeline-detail"></div>
-    </div>
-
-    <p class="lede footnote reveal">
-      The full design — verify ladder, stuck detection, seams, resume — lives in
-      <a class="more" href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">ARCHITECTURE.md →</a>
-    </p>
-  </div>
-</section>
-
-<hr class="section-line" />
-
-<!-- ============================== FEATURES (one line each) ============================== -->
-<section id="features">
-  <div class="wrap">
-    <div class="eyebrow reveal">And there's more</div>
-    <h2 class="reveal">Everything else, one line each.</h2>
-
-    <ul class="feature-index reveal">
-      <li><span class="fi-name">Best-of-N attempts</span><span class="fi-desc"><code>--candidates N</code> races N isolated attempts per iteration and keeps the one that climbs furthest.</span></li>
-      <li><span class="fi-name">Parallel waves</span><span class="fi-desc"><code>--parallel-phases</code> runs independent plan phases concurrently and re-verifies every merge. A phased plan is a <strong>dependency DAG</strong>, not a list: each phase names itself with <code>id</code> and declares what it needs with <code>dependsOn</code>, so &ldquo;C needs A and B, D needs only A&rdquo; is expressible and <em>checked</em> — an unknown id, a self-reference, a cycle or a forward edge is a typed, fail-closed plan-parse failure, never a silently linearized plan. goaly then runs each <strong>topological frontier</strong> (every phase whose dependencies have completed) as one wave, recomputing it after each merge and on <code>--resume</code> so no completed phase repeats. Independence is declared instead of inferred from adjacency, and the graph is frozen into <code>planHash</code> like everything else.</span></li>
-      <li><span class="fi-name">Named worktrees</span><span class="fi-desc"><code>--worktree</code> isolates the whole run in its own checkout — your main tree is never touched.</span></li>
-      <li><span class="fi-name">Non-git mode</span><span class="fi-desc"><code>--workspace-mode file</code> runs goaly in a plain directory with a content-addressed manifest; no <code>git init</code> required.</span></li>
-      <li><span class="fi-name">Adversarial review</span><span class="fi-desc"><code>--adversarial</code> red-teams the contract before Seal and attacks every green before Sign-off.</span></li>
-      <li><span class="fi-name">Satisfiability critic</span><span class="fi-desc">Red-teaming asks whether a lazy worker could pass the bar without meeting the goal. This asks the mirror question, and it is <strong>on by default</strong>: before the freeze, one call checks whether a <em>correct, complete</em> implementation could still FAIL the authored bar — a call-count assertion made after <code>mockRestore()</code> already cleared <code>mock.calls</code>, a bar pinned to one file layout instead of observable behavior, an assertion on timing, ordering, ids or float equality. A frozen bar nothing can satisfy costs the entire run; the guard costs one call. Findings are told to make the bar <em>satisfiable</em>, never easier — it must still be red on today's tree. <code>--no-satisfiability-critic</code> opts out.</span></li>
-      <li><span class="fi-name">Contract dry run</span><span class="fi-desc">The positive control, and the one guard that answers by <strong>execution</strong> instead of asking a model its opinion — also <strong>on by default</strong>. Pre-flight already proves the frozen bar is RED on today's tree; nothing proved it can ever go GREEN. So before the freeze, the compiler also writes a <em>throwaway</em> reference implementation, drops it into a <em>scratch copy</em> of your workspace beside the authored verification files, and runs the contract's deterministic rungs there. Green &rarr; the copy is destroyed and the contract freezes unchanged. Red &rarr; the bar is defective: the freeze is refused and the failure feeds the same bounded re-author loop as a compile failure. The reference implementation never reaches your workspace, the run diff, or any worker prompt — handing the worker a solution would defeat the run, so the scratch copy never duplicates a symlink back into your tree, and the refusal fed to the author carries <strong>no runner output at all</strong> — the failing rung's stdout and stderr are never read. It is built only from data goaly owns: the exit code, and <em>which</em> rung of the frozen contract failed (position, label, command). That is the removal of a channel rather than a stricter filter: a runner reds by printing the source of the code under test, which on a red is the reference, so those two streams carry runner text and reference text interleaved and no shape rule can tell them apart — four successive filters over them were defeated by a reference that simply printed prose, source, or runner-shaped lines. The cost is small because <em>the compiler already has the frozen verification files — it authored them</em>; what it could not know is which bar failed, and that is exactly what it is told. The scratch commands run under the same <code>--sandbox</code> jail and network policy as the verifier seam, and with the same <strong>credential-scrubbed environment</strong> (that tree holds model-authored code). A reference file whose path <em>resolves</em> onto an authored verification file is dropped rather than written, so the control can never quietly rewrite the bar it measures. Fail-open on any infrastructure error — including a rung goaly itself killed for blowing its 16&nbsp;MB captured-output cap, which a chatty reference implementation plus a verbose runner reaches easily and which would otherwise refuse the freeze of a perfectly sound bar — so it can only reject a bar or step aside. <code>--contract-dry-run false</code> opts out.</span></li>
-      <li><span class="fi-name">Independent second key</span><span class="fi-desc">The Sign-off approver never inherits the coding agent's <code>--model</code> where the provider has one of its own, so the two keys are not drawn from one model by default; the swap is announced. When only one model exists, the run is recorded as <code>SELF-JUDGED</code> (a typed degraded mode) in the run header, the end-of-run summary and <code>goaly runs show</code>, so a DONE nobody independently reviewed is labelled wherever it is reported. When only the approver collapses onto the coding agent's model &mdash; the judge rung on another, e.g. <code>--model gpt-5 --judge-model gpt-5-mini</code> on a provider with no default model of its own &mdash; the run is labelled <code>SELF-APPROVED</code>: the second key was the model that wrote the code, and that is never left unlabelled just because one other pair was independent. And when the approver sits on the provider's own default — a model id goaly cannot resolve, so it cannot compare the two keys at all — the run is labelled <code>INDEPENDENCE-UNVERIFIED</code> rather than reported as independent &mdash; and the swap notice says UNVERIFIED there too, never &ldquo;kept independent&rdquo;. Model flags are re-resolved on every <code>--resume</code>, so the label is reconciled to the <em>more severe</em> of the recorded one and the resumed invocation's (and any difference is warned): a resume can never collapse the second key off the record, and can never erase iterations that already ran degraded. That upgrade is <em>appended</em> to the write-ahead log as a <code>DEGRADED_ESCALATED</code> marker rather than rewriting the run header in place &mdash; the header is written exactly once, so a crash can never trade a resumable run for a label. <code>--approver-model</code> removes both.</span></li>
-      <li><span class="fi-name">Web UI</span><span class="fi-desc"><code>goaly ui</code> is a local control center: a mission dashboard, a live run pipeline, a session inspector into the agent's turns, and the Seal in a browser review station.</span></li>
-      <li><span class="fi-name">Watch &amp; steer</span><span class="fi-desc">Tail any live run, stop cleanly, resume with a note — you can add room, never lower the bar.</span></li>
-      <li><span class="fi-name">Crash-safe</span><span class="fi-desc">A write-ahead log survives a crash at any byte; budgets survive <code>--resume</code>.</span></li>
-      <li><span class="fi-name">Typed stuck aborts</span><span class="fi-desc">A no-progress run stops early with a reason that names its own fix — no-diff, repeat-failure, oscillation, harness crash, an unevaluable contract, or repeated turns that both hit <code>--harness-timeout-ms</code> and changed nothing &mdash; and the fix it names is one a <code>--resume</code> can actually apply: <code>--stuck-timeout-no-diff-threshold</code> un-terminates the run (the timeout flags are compose-time, so a resume carrying only them replays into the same abort), paired with a raised cap or an <code>--harness-idle-timeout-ms</code> so a still-working turn isn't guillotined. A repeat-failure streak can be re-adjudicated as a <code>CONTRACT_DEFECTIVE</code> contract fault rather than a worker fault — see below.</span></li>
-      <li><span class="fi-name">Contract-fault adjudication</span><span class="fi-desc">Contract soundness is otherwise judged exactly once, at t=0, against a tree with no implementation in it — the moment of least evidence. For an assertion no implementation can satisfy, that observation is genuinely ambiguous: it looks exactly like an honest "not written yet" red. So goaly asks again when the evidence exists. When a repeat-failure streak is about to abort and the repeated signature names one of the <em>frozen</em> authored check files on a tree the worker has demonstrably built out, one <strong>read-only</strong> call (at most once per run) asks whether <em>any</em> correct implementation could pass that check. If not, the run aborts as <code>CONTRACT_DEFECTIVE</code>, naming the file and saying plainly that your implementation may be correct and the tree is worth keeping &mdash; instead of telling you to raise <code>--stuck-repeat-threshold</code>, which cannot help. If the bar IS satisfiable, the abort leads with a <code>CONTRACT_ADJUDICATED_SOUND</code> marker and carries today's repeat-failure text after it as context: the recorded verdict makes that abort uncontinuable by any <code>--resume</code> extension, so goaly points at <code>goaly "&lt;goal&gt;" --from-run &lt;id&gt;</code> rather than at a threshold flag that does nothing (or a <code>--recontract</code> that refuses a sound bar). Diagnosis only: this path can never reach DONE, never re-authors the frozen bar, and fail-closes to today's abort on no LLM, an error, or any uncertainty.</span></li>
-      <li><span class="fi-name">Re-contract successor run</span><span class="fi-desc">The recovery a <code>CONTRACT_DEFECTIVE</code> verdict earns you, printed verbatim in the abort: <code>goaly --from-run &lt;id&gt; --recontract</code>. It <strong>keeps the tree</strong> (the implementation is the valuable artifact), inherits the predecessor's frozen goal, and re-runs COMPILE with the <em>defect report</em> as authoring feedback — the same free-text channel a Seal "revise" uses — then freezes a <strong>new</strong> contract with a <strong>new</strong> contractHash under a <strong>new</strong> run id. <strong>No contract is ever mutated:</strong> one run owns exactly one frozen bar for its whole life, and evolution happens <em>between</em> runs, recorded — the successor's header carries <code>predecessorRunId</code>, <code>predecessorContractHash</code> and the verdict, and <code>goaly runs show</code> prints the chain. Guarded on all sides: only a real (write-ahead, Zod-parsed) defective adjudication can reach it, so the worker can never trigger it and no worker text feeds the re-authoring; a re-authored bar that already passes faces a fail-open negative control before a single worker token is spent — <em>whether or not that bar generated any verification files</em>, since a &ldquo;repair&rdquo; that is a bare <code>--verify-cmd</code> is the softening shape the control most needs to catch, and <em>whatever the inherited tree contains</em>, since a tree with no implementation source left in it makes a green more suspicious, not less (every case where it genuinely cannot run — a re-authored bar with no deterministic rung to execute at t=0, a rung that errored instead of returning a verdict, a missing <code>requiredTools</code> program whose install is delegated to the agent, or no wired <code>--llm-provider</code> — is logged loudly rather than skipped in silence; the other prepare-phase exits are aborts, where no worker turn follows) — and that control is <strong>shown what it is judging</strong>: the re-authored rungs/rubric, the <em>contents</em> of the re-authored verification files, the predecessor's bar and the adjudicated defect, all untrusted-fenced, so “was this softened?” is answered by comparison rather than guessed from filenames (missing or unreadable evidence only weakens the control, it never aborts a run); and <code>--max-recontracts</code> (default 1) bounds the chain from the run log, not per process, so a bar cannot be ratcheted downward across generations.</span></li>
-      <li><span class="fi-name">Defect corpus (cross-run learning)</span><span class="fi-desc">Every other feedback channel in goaly dies with the run that produced it, so the compiler would re-author the same impossible bar forever. When a run adjudicates a bar <code>CONTRACT_DEFECTIVE</code>, goaly appends <strong>one compact record</strong> to <code>~/.goaly/defects.jsonl</code> — the adjudicator's <em>generalized</em> anti-pattern and assertion shape, the language/runner derived from the frozen contract, and the contractHash + runId for provenance. Never your source, never the diff, never the failure text. Future <code>--generate</code> authoring receives the entries relevant to <em>this</em> workspace as a bounded &ldquo;known false-red patterns — do not author these&rdquo; section, and each injected pattern is logged so a run says which local state shaped its bar. The safeguards are structural, not conventions: only an adjudicated defective verdict can mint a record (nothing else even type-checks against the append), the builder has no input through which worker text could arrive, and the strict schema has <strong>no field</strong> for iterations, duration, spend or severity, so &ldquo;this was hard&rdquo; can never arrive as data and become &ldquo;author an easier bar&rdquo;. The <strong>primary defense is the fence, not the signature</strong>: a pattern is model-authored text entering another model's prompt, so the section is wrapped in a random-nonce UNTRUSTED fence with the rule restated in the compiler's system prompt — the same treatment the diff gets at every other seam — and goaly's own framing, phrased as <em>impossibility</em>, stays outside it. That is what contains a hostile line whether or not its provenance is real. Signing is a second, narrower line: the corpus sits outside your workspace (outside the run diff, the frozen-file integrity guard, and everything Seal shows you), so every record is <strong>HMAC-signed</strong> with a key minted on first use beside it (<code>~/.goaly/defects.key</code>, owner-only) and carries a per-record nonce — any line that is missing a signature, altered, foreign, or a <em>replayed copy</em> of one already read is <strong>dropped or collapsed on read</strong>, and no single run can contribute more than three records. No key, no hints. Be clear about the limit: that closes hand-edited, copied-in and replayed lines, <em>not</em> the coding agent, which under the default <code>--sandbox none</code> runs as goaly's own uid and can read the key as easily as it could write the file — owner-only mode excludes other users, not a subprocess of ours. An active <code>--sandbox</code> policy masks <code>~/.goaly</code> from the agent seam &mdash; the <em>default</em> location only, so a corpus relocated with <code>--defect-corpus &lt;path&gt;</code> keeps its key beside it, outside the mask and often inside the rw workspace, where a jail reaches nothing. The injection log says in a <code>trust</code> field which of the three situations your run is in: masked by the jail, relocated out of the mask, or un-sandboxed. The effort word list (hard, difficult, iterations, attempts, time, tokens, complexity) is refused on mint and on read, but it is a <em>speed bump</em> over 240 characters of prose, not a semantic filter — a paraphrase gets through, and the impossibility framing plus the fence are what actually hold. The section is phrased as impossibility, the corpus is fail-open (missing/corrupt ⇒ exactly today's behavior), and a corpus-shaped contract still faces the critics, Seal, the pre-flight negative control and both keys. Inspect it with <code>goaly config defects list</code>, reset it with <code>goaly config defects clear</code>, opt out with <code>--no-defect-corpus</code>. Local only — nothing is uploaded or fetched.</span></li>
-      <li><span class="fi-name">Stuck self-recovery</span><span class="fi-desc"><code>--auto-remediate-stuck</code> lets a long unattended run spend up to 3 bounded self-recoveries — a change-your-approach hint on a no-diff turn, one extra attempt on a repeat/crash streak — before stopping for you.</span></li>
-      <li><span class="fi-name">Sandboxing</span><span class="fi-desc"><code>--sandbox</code> jails the agent and the verify command, with per-seam network policy.</span></li>
-      <li><span class="fi-name">Follow-ups</span><span class="fi-desc"><code>--from-run</code> starts a new, re-verified goal that knows what just happened. The predecessor and its bounded compaction are recorded in the run-log header, so a <code>--resume</code> that still has to compile (a crash before the freeze, or a Seal "revise") re-authors <em>with</em> the prior-run context instead of silently without it.</span></li>
-      <li><span class="fi-name">Autonomy profiles</span><span class="fi-desc"><code>--mode review|hands-off|aggressive</code> bundles the right flag combination for a whole autonomy posture; explicit flags always override, loudly.</span></li>
-      <li><span class="fi-name">Named presets</span><span class="fi-desc"><code>--preset &lt;name&gt;</code> selects a flag bundle by name: a language-neutral <code>default</code> ships built in and applies implicitly when no preset or mode is chosen (gap-filling only — config files and explicit flags always win; announced with <code>--preset none</code> as the off-switch), and <code>"presets"</code> in <code>.goalyrc</code> defines (or redefines) your own — persist <code>"preset"</code> to pick the one applied on every run. One word instead of N flags.</span></li>
-      <li><span class="fi-name">Dry run</span><span class="fi-desc"><code>--dry-run</code> resolves your flags and <code>.goalyrc</code> and prints the config a run would use — writing nothing and spending nothing.</span></li>
-      <li><span class="fi-name">Onboarding</span><span class="fi-desc"><code>goaly doctor</code> reports what your environment is missing (Node, git, harness CLIs, config validity); <code>goaly init</code> writes a starter <code>.goalyrc</code> — interactive or headless. A shipped JSON Schema gives <code>.goalyrc</code> editor auto-completion, and <code>goaly config validate</code> gives the run-path verdict.</span></li>
-      <li><span class="fi-name">Harness autonomy</span><span class="fi-desc"><code>--harness-autonomy</code> lets the agent install and build for a from-scratch goal; if it refuses an action, the abort names the fix instead of blaming your install. Raising it auto-pins the reviewed diff to the run-start commit, so an agent <code>git commit</code> stays visible to both keys (and the pin survives <code>--resume</code>).</span></li>
-    </ul>
-
-    <p class="lede footnote reveal">
-      Every flag, default, and guarantee:
-      <a class="more" href="https://github.com/krimvp/goaly/blob/main/docs/reference.md" target="_blank" rel="noopener">the full reference →</a>
-    </p>
-  </div>
-</section>
-
-<!-- ============================== CTA ============================== -->
-<section id="cta">
-  <div class="wrap">
-    <div class="cta-band reveal">
-      <h2>Hand it a goal. Get it back done.</h2>
-      <div class="code hero-install">
-        <button class="copy-btn" data-clip="npm i -g goaly">copy</button>
-<pre><span class="cmt">$</span> npm i -g goaly</pre>
-      </div>
-      <div class="btn-row">
-        <a class="btn btn-primary" href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener">Get started →</a>
-        <a class="btn btn-ghost" href="https://github.com/krimvp/goaly" target="_blank" rel="noopener">GitHub ↗</a>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============================== DOCS ============================== -->
-<section id="docs">
-  <div class="wrap">
-    <div class="eyebrow reveal">Docs</div>
-    <div class="doc-links reveal">
-      <a href="https://github.com/krimvp/goaly#readme" target="_blank" rel="noopener"><b>README</b><span>the short tour</span></a>
-      <a href="https://github.com/krimvp/goaly/blob/main/docs/reference.md" target="_blank" rel="noopener"><b>Reference</b><span>every flag &amp; guarantee</span></a>
-      <a href="https://github.com/krimvp/goaly/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener"><b>Architecture</b><span>reducer, seams, log</span></a>
-      <a href="https://github.com/krimvp/goaly/blob/main/docs/adding-a-harness.md" target="_blank" rel="noopener"><b>Add a harness</b><span>wrap any agent CLI</span></a>
-    </div>
-  </div>
-</section>
-
-<!-- ============================== FOOTER ============================== -->
-<footer class="footer" id="footer">
-  <div class="wrap">
-    <div class="legal">
-      <a class="brand" href="#top"><img src="assets/favicon.svg" alt="" /> goaly</a>
-      <span>MIT · Node ≥ 20 &amp; git · © <span id="year">2026</span> · built with Claude Code</span>
-    </div>
-  </div>
+<footer>
+  MIT · <a href="https://github.com/krimvp/goaly">github.com/krimvp/goaly</a> · built with Claude Code
 </footer>
 
-<script src="assets/app.js" defer></script>
 </body>
 </html>

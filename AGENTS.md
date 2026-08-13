@@ -223,9 +223,10 @@ functionality MUST update the affected docs below in the same change:**
 - [`docs/reference.md`](docs/reference.md) — the full practical reference: every flag, mode,
   default, and guarantee. This is where detailed flag/feature documentation lives now — a change to
   a flag, default, or behavior updates the reference (and the README only if the tour mentions it).
-- [`docs/index.html`](docs/index.html) — the GitHub Pages landing page (the interactive overview):
-  its pipeline / state-machine / DECIDE / verifier-ladder / seam diagrams, the support matrix, the
-  "adding a harness" guide, and the harness-comparison tabs.
+- [`docs/index.html`](docs/index.html) — the GitHub Pages landing page: a single self-contained
+  file with the pitch, the install line, one default-configuration example, and links into the
+  docs. Keep it minimal — it is not a second reference. Update it only when the pitch, the install
+  command, or that one example stops being true.
 - [`docs/adding-a-harness.md`](docs/adding-a-harness.md) — the harness-authoring guide. It contains
   **real interface signatures, a copy-paste skeleton, and field/status-mapping recipes**, so it
   rots silently when you change *how* a harness is written. Update it whenever you touch the

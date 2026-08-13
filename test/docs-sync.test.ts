@@ -2,13 +2,15 @@
  * Docs-sync coverage, as a test (AGENTS.md → "Keep the docs in sync" is a definition-of-done gate).
  *
  * `npm run check:docs` already pins every USAGE flag and config key to `docs/reference.md`. This
- * pins the three things that rot the same way but have no flag to key off:
+ * pins the two things that rot the same way but have no flag to key off:
  *
  *  1. every TYPED terminal reason the CLI can print (`STUCK_*` / `CONTRACT_*`) is documented in the
  *     reference — a new detector cannot ship with an undocumented abort;
  *  2. every README link into the reference resolves to a real heading — the feature table is one
- *     row per feature "linking into the reference", so a renamed heading must not silently 404;
- *  3. the landing page names the terminal outcomes a user is most likely to hit and search for.
+ *     row per feature "linking into the reference", so a renamed heading must not silently 404.
+ *
+ * The landing page (`docs/index.html`) is deliberately minimal — a pitch that points at the docs,
+ * not a second reference — so nothing here pins detailed content to it.
  *
  * Documentation-only assertions: nothing here constrains runtime behavior.
  */
@@ -19,7 +21,6 @@ const read = (p: string): string => readFileSync(new URL(`../${p}`, import.meta.
 
 const reference = read('docs/reference.md');
 const readme = read('README.md');
-const landing = read('docs/index.html') + read('docs/assets/app.js');
 
 /** Typed reason tags emitted by the stuck detectors and echoed by the CLI's next-step hints. */
 function reasonTags(source: string): string[] {
@@ -42,12 +43,6 @@ describe('docs stay in sync with the code', () => {
     const tags = reasonTags(read('src/orchestrator/stuck.ts') + read('src/cli/run-cmd.ts'));
     expect(tags.length).toBeGreaterThan(0);
     expect(tags.filter((tag) => !reference.includes(tag))).toEqual([]);
-  });
-
-  it('keeps the newest terminal outcomes on the landing page', () => {
-    for (const tag of ['CONTRACT_DEFECTIVE', 'STUCK_TIMEOUT_NO_DIFF']) {
-      expect(landing).toContain(tag);
-    }
   });
 
   it('resolves every README link into the reference', () => {
