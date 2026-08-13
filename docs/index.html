@@ -14,75 +14,205 @@
 
   <style>
     :root {
-      --bg:     #0a0a0b;
-      --panel:  #121214;
-      --line:   rgba(255, 255, 255, 0.09);
-      --fg:     #ededeb;
-      --fg-dim: #9b9b96;
-      --accent: #c5f04e;
-      --red:    #ef6f5e;
+      --bg:      #08080a;
+      --panel:   #121216;
+      --line:    rgba(255, 255, 255, 0.09);
+      --fg:      #f0f0ee;
+      --fg-dim:  #9b9b96;
+      --fg-faint:#63635c;
+      --accent:  #c5f04e;
+      --accent-2:#7ce0d0;
+      --red:     #ef6f5e;
+      --gold:    #e0b24e;
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
 
     *, *::before, *::after { box-sizing: border-box; }
+
     body {
       margin: 0 auto;
-      padding: 6rem 1.25rem 4rem;
-      max-width: 46rem;
+      padding: 5rem 1.25rem 4rem;
+      max-width: 48rem;
       background: var(--bg);
       color: var(--fg);
       font: 16px/1.65 var(--sans);
       -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
     }
+
+    /* lime aurora behind the hero */
+    body::before {
+      content: ""; position: fixed; z-index: -2;
+      top: -30vh; left: 50%; transform: translateX(-50%);
+      width: 130vw; height: 90vh;
+      background:
+        radial-gradient(42% 50% at 50% 50%, rgba(197, 240, 78, 0.17), transparent 70%),
+        radial-gradient(35% 45% at 22% 45%, rgba(124, 224, 208, 0.11), transparent 70%);
+      filter: blur(30px);
+      animation: drift 16s ease-in-out infinite alternate;
+    }
+    /* faint technical grid, faded out down the page */
+    body::after {
+      content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+      background-size: 46px 46px;
+      -webkit-mask-image: radial-gradient(90% 60% at 50% 0%, #000, transparent 80%);
+      mask-image: radial-gradient(90% 60% at 50% 0%, #000, transparent 80%);
+    }
+
+    @keyframes drift { to { transform: translateX(-50%) translateY(4vh) scale(1.08); } }
+    @keyframes rise  { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+    @keyframes blink { 50% { opacity: 0; } }
+    @keyframes pulse { 50% { opacity: 0.35; transform: scale(0.8); } }
+
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
 
-    h1 { font-size: clamp(2rem, 6vw, 2.9rem); line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 1rem; }
-    h1 .hl { color: var(--accent); }
-    h2 { font-size: 0.8rem; font-family: var(--mono); font-weight: 500; text-transform: uppercase;
-         letter-spacing: 0.12em; color: var(--fg-dim); margin: 3.5rem 0 1rem; }
+    /* every top-level block eases in, top to bottom */
+    body > * { animation: rise 0.6s cubic-bezier(0.2, 0.7, 0.3, 1) backwards; }
+    body > *:nth-child(1) { animation-delay: 0.02s; }
+    body > *:nth-child(2) { animation-delay: 0.10s; }
+    body > *:nth-child(3) { animation-delay: 0.18s; }
+    body > *:nth-child(4) { animation-delay: 0.26s; }
+    body > *:nth-child(5) { animation-delay: 0.32s; }
+    body > *:nth-child(n + 6) { animation-delay: 0.38s; }
+
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4.5rem; }
+    .brand { display: flex; align-items: center; gap: 0.55rem; font-family: var(--mono); font-size: 1.05rem; color: var(--fg); }
+    .brand img { width: 24px; height: 24px; filter: drop-shadow(0 0 12px rgba(197, 240, 78, 0.5)); }
+    .ghost-link { font-family: var(--mono); font-size: 0.8rem; color: var(--fg-dim); }
+    .ghost-link:hover { color: var(--accent); text-decoration: none; }
+
+    h1 {
+      font-size: clamp(2.1rem, 6.4vw, 3.25rem);
+      line-height: 1.08; letter-spacing: -0.03em; font-weight: 650;
+      margin: 0 0 1.1rem;
+    }
+    h1 .hl {
+      background: linear-gradient(100deg, var(--accent) 10%, #d8f79a 45%, var(--accent-2) 90%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+
+    h2 {
+      display: flex; align-items: center; gap: 0.85rem;
+      font: 500 0.72rem/1 var(--mono); text-transform: uppercase; letter-spacing: 0.16em;
+      color: var(--fg-faint); margin: 4rem 0 1.1rem;
+    }
+    h2::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
+
     p { margin: 0 0 1rem; }
-    .lede { font-size: 1.1rem; color: var(--fg-dim); }
+    .lede { font-size: 1.12rem; color: var(--fg-dim); }
     .lede em { color: var(--fg); font-style: normal; }
 
-    .brand { display: flex; align-items: center; gap: 0.5rem; font-family: var(--mono); font-size: 1rem; color: var(--fg); }
-    .brand img { width: 22px; height: 22px; }
-
-    pre {
-      margin: 0 0 1rem;
-      padding: 1rem 1.1rem;
+    /* install line */
+    .cmd {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.85rem 1.05rem; margin-bottom: 1rem;
+      font-family: var(--mono); font-size: 0.92rem;
       background: var(--panel);
-      border: 1px solid var(--line);
+      border: 1px solid var(--line); border-left: 2px solid var(--accent);
       border-radius: 10px;
-      font-family: var(--mono);
-      font-size: 0.85rem;
-      line-height: 1.7;
-      overflow-x: auto;
+      box-shadow: 0 0 0 1px rgba(197, 240, 78, 0.04), 0 18px 40px -34px rgba(197, 240, 78, 0.7);
     }
-    .cmt { color: #67675f; }
+    .cmd .caret { width: 8px; height: 1.05em; background: var(--accent); animation: blink 1.15s steps(1) infinite; }
+
+    /* terminal */
+    .term {
+      border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+      background: linear-gradient(180deg, #131318, #0e0e11);
+      box-shadow: 0 30px 70px -40px #000, inset 0 1px 0 rgba(255, 255, 255, 0.045);
+    }
+    .term-bar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.022);
+    }
+    .term-bar i { width: 9px; height: 9px; border-radius: 50%; background: #2b2b32; }
+    .term-bar em { margin-left: 0.5rem; font: 0.72rem var(--mono); font-style: normal; color: var(--fg-faint); letter-spacing: 0.1em; }
+    .term-body { padding: 1rem 1.15rem; font: 0.84rem/1.75 var(--mono); overflow-x: auto; }
+    .ln { white-space: pre; animation: rise 0.5s ease backwards; }
+    .ln:nth-child(1) { animation-delay: 0.45s; }
+    .ln:nth-child(2) { animation-delay: 0.60s; }
+    .ln:nth-child(3) { animation-delay: 0.75s; }
+    .ln:nth-child(4) { animation-delay: 0.90s; }
+    .ln:nth-child(5) { animation-delay: 1.05s; }
+    .ln:nth-child(6) { animation-delay: 1.20s; }
+    .ln:nth-child(7) { animation-delay: 1.35s; }
+    .ln:nth-child(8) { animation-delay: 1.50s; }
+
+    .cmt { color: var(--fg-faint); }
     .ok  { color: var(--accent); }
     .bad { color: var(--red); }
-    .str { color: #e0b24e; }
+    .str { color: var(--gold); }
+    .done { color: var(--accent); text-shadow: 0 0 22px rgba(197, 240, 78, 0.5); }
 
-    ul { margin: 0 0 1rem; padding-left: 1.1rem; color: var(--fg-dim); }
-    li { margin-bottom: 0.5rem; }
-    li b { color: var(--fg); font-weight: 600; }
-    code { font-family: var(--mono); font-size: 0.85em; color: var(--fg); }
+    /* harness chips */
+    .chips { display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 1.25rem 0 0; }
+    .chip {
+      padding: 0.28rem 0.7rem; border: 1px solid var(--line); border-radius: 999px;
+      font: 0.76rem var(--mono); color: var(--fg-dim);
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .chip:hover { color: var(--accent); border-color: rgba(197, 240, 78, 0.45); }
 
-    .links { display: grid; gap: 0.5rem; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); }
-    .links a { display: block; padding: 0.75rem 0.9rem; border: 1px solid var(--line); border-radius: 10px; color: var(--fg); }
-    .links a:hover { border-color: var(--accent); text-decoration: none; }
+    /* three reasons */
+    .cards { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); }
+    .card {
+      position: relative; padding: 1.1rem 1.1rem 1.15rem;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+      color: var(--fg-dim); font-size: 0.92rem;
+      transition: transform 0.22s, border-color 0.22s, box-shadow 0.22s;
+    }
+    .card:hover {
+      transform: translateY(-3px); border-color: rgba(197, 240, 78, 0.35);
+      box-shadow: 0 22px 50px -32px rgba(197, 240, 78, 0.55);
+    }
+    .card b { display: block; color: var(--fg); font-size: 0.95rem; margin-bottom: 0.35rem; }
+    .card em { color: var(--fg); font-style: normal; }
+    .card .n {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; margin-bottom: 0.7rem;
+      border: 1px solid rgba(197, 240, 78, 0.4); border-radius: 6px;
+      font: 0.72rem var(--mono); color: var(--accent);
+    }
+
+    /* docs */
+    .links { display: grid; gap: 0.5rem; grid-template-columns: repeat(2, 1fr); }
+    @media (max-width: 30rem) { .links { grid-template-columns: 1fr; } }
+    .links a {
+      display: block; padding: 0.8rem 0.95rem; color: var(--fg);
+      border: 1px solid var(--line); border-radius: 11px;
+      transition: transform 0.2s, border-color 0.2s, background 0.2s;
+    }
+    .links a::after { content: " →"; color: var(--accent); opacity: 0; transition: opacity 0.2s; }
+    .links a:hover {
+      transform: translateY(-2px); text-decoration: none;
+      border-color: rgba(197, 240, 78, 0.4); background: rgba(197, 240, 78, 0.035);
+    }
+    .links a:hover::after { opacity: 1; }
     .links span { display: block; font-size: 0.85rem; color: var(--fg-dim); }
 
-    footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--line);
-             font-size: 0.85rem; color: var(--fg-dim); }
+    footer {
+      display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+      margin-top: 4.5rem; padding-top: 1.5rem; border-top: 1px solid var(--line);
+      font-size: 0.85rem; color: var(--fg-dim);
+    }
+    footer .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+                  box-shadow: 0 0 12px var(--accent); animation: pulse 2.4s ease-in-out infinite; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
   </style>
 </head>
 <body>
 
 <header>
   <a class="brand" href="https://github.com/krimvp/goaly"><img src="assets/favicon.svg" alt="" />goaly</a>
+  <a class="ghost-link" href="https://github.com/krimvp/goaly">GitHub ↗</a>
 </header>
 
 <h1>Loop a coding agent until the goal is <span class="hl">verifiably met</span>.</h1>
@@ -93,31 +223,39 @@
 </p>
 
 <h2>Install</h2>
-<pre><span class="cmt">$</span> npm i -g goaly   <span class="cmt"># Node ≥ 20</span></pre>
+<div class="cmd"><span class="cmt">$</span> npm i -g goaly <span class="cmt">&nbsp;# Node ≥ 20</span><span class="caret"></span></div>
 
 <h2>Run</h2>
 <p>Give it a goal. Everything else has a default.</p>
-<pre><span class="cmt">$</span> goaly <span class="str">"add a /health endpoint returning 200"</span>
 
-<span class="ok">✔ COMPILE</span>  contract frozen   <span class="cmt">┌ sha 9f3c…a2</span>
-<span class="cmt">● SEAL     auto-accepted     (logged loudly)</span>
-<span class="cmt">↻ iter 1</span>   agent → verify <span class="bad">✗</span>  <span class="cmt">npm test: 2 failing</span>
-<span class="cmt">↻ iter 2</span>   agent → verify <span class="ok">✓</span>  SIGN-OFF <span class="bad">✗</span> veto: returns 500
-<span class="cmt">↻ iter 3</span>   agent → verify <span class="ok">✓</span>  SIGN-OFF <span class="ok">✓</span> no veto
-<span class="ok">✔ DONE</span>     two keys turned · 3 iterations</pre>
+<div class="term">
+  <div class="term-bar"><i></i><i></i><i></i><em>goaly</em></div>
+  <div class="term-body">
+<div class="ln"><span class="cmt">$</span> goaly <span class="str">"add a /health endpoint returning 200"</span></div>
+<div class="ln">&nbsp;</div>
+<div class="ln"><span class="ok">✔ COMPILE</span>  contract frozen   <span class="cmt">┌ sha 9f3c…a2</span></div>
+<div class="ln"><span class="cmt">● SEAL     auto-accepted     (logged loudly)</span></div>
+<div class="ln"><span class="cmt">↻ iter 1</span>   agent → verify <span class="bad">✗</span>  <span class="cmt">npm test: 2 failing</span></div>
+<div class="ln"><span class="cmt">↻ iter 2</span>   agent → verify <span class="ok">✓</span>  SIGN-OFF <span class="bad">✗</span> veto: returns 500</div>
+<div class="ln"><span class="cmt">↻ iter 3</span>   agent → verify <span class="ok">✓</span>  SIGN-OFF <span class="ok">✓</span> no veto</div>
+<div class="ln"><span class="done">✔ DONE     two keys turned · 3 iterations</span></div>
+  </div>
+</div>
+
+<div class="chips">
+  <span class="chip">Claude Code</span>
+  <span class="chip">Codex</span>
+  <span class="chip">Droid</span>
+  <span class="chip">pi</span>
+  <span class="chip">your own harness</span>
+</div>
 
 <h2>Why it holds</h2>
-<ul>
-  <li><b>The bar is frozen.</b> The success check is hashed before the loop starts, so the agent
-    cannot rewrite its own test to finish.</li>
-  <li><b>DONE needs two keys.</b> The frozen check passes <em>and</em> an independent, veto-only
-    reviewer does not object.</li>
-  <li><b>Everything fails closed.</b> An error or a garbage answer is a fail, never a false green.
-    The control loop makes zero LLM calls.</li>
-</ul>
-<p class="lede">
-  Works with Claude Code, Codex, Droid, pi, or your own harness.
-</p>
+<div class="cards">
+  <div class="card"><span class="n">1</span><b>The bar is frozen.</b>The success check is hashed before the loop starts, so the agent cannot rewrite its own test to finish.</div>
+  <div class="card"><span class="n">2</span><b>DONE needs two keys.</b>The frozen check passes <em>and</em> an independent, veto-only reviewer does not object.</div>
+  <div class="card"><span class="n">3</span><b>Everything fails closed.</b>An error or a garbage answer is a fail, never a false green. The control loop makes zero LLM calls.</div>
+</div>
 
 <h2>Docs</h2>
 <div class="links">
@@ -128,6 +266,7 @@
 </div>
 
 <footer>
+  <span class="dot"></span>
   MIT · <a href="https://github.com/krimvp/goaly">github.com/krimvp/goaly</a> · built with Claude Code
 </footer>
 
