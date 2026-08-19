@@ -172,6 +172,14 @@ export function runProcess(
     });
 
     if (child.stdin !== null) {
+      // A child that exits (or closes stdin) before draining a large piped input leaves a pending
+      // write that fails with EPIPE. With no 'error' listener on the stdin socket, Node raises an
+      // UNHANDLED 'error' and crashes the whole goaly process mid-run (issue #101). Swallow it:
+      // the child's real exit code still surfaces through 'close', so the calling seam fails closed
+      // on a dead child — the stdin error itself carries no verdict information.
+      child.stdin.on('error', () => {
+        /* ignore — a dead child's exit code, not the stdin write, decides the outcome */
+      });
       if (options.input !== undefined) child.stdin.write(options.input);
       // ALWAYS close stdin (even with no input): a headless agent CLI that reads stdin — pi reads it
       // even in `--print` mode — blocks waiting for EOF on the inherited pipe until the wall-clock

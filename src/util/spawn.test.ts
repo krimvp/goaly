@@ -93,6 +93,26 @@ describe('runProcess', () => {
     expect(r.code).toBe(0);
   });
 
+  it('a child that exits before draining a large piped input resolves (never EPIPE-crashes) (issue #101)', async () => {
+    // The child exits immediately without reading stdin; the input is far larger than the OS pipe
+    // buffer (64 KiB on Linux), so the write is still pending when the reader's end closes → EPIPE.
+    // Without an 'error' listener on child.stdin, Node raises an UNHANDLED 'error' on the socket
+    // and crashes the whole goaly process. The run must instead resolve through 'close' with the
+    // child's real exit code, failing closed at the calling seam.
+    const big = 'x'.repeat(8 * 1024 * 1024); // 8 MiB
+    const r = await runProcess('node', ['-e', 'process.exit(0)'], { input: big, timeoutMs: 10_000 });
+    expect(r.timedOut).toBe(false);
+    expect(r.code).toBe(0);
+  });
+
+  it('a non-zero child that exits before draining a large piped input still reports its real code', async () => {
+    // Same EPIPE setup, but the child fails: the exit code (not the swallowed stdin error) is what
+    // the seam sees — a dead child can never masquerade as a success.
+    const big = 'x'.repeat(8 * 1024 * 1024);
+    const r = await runProcess('node', ['-e', 'process.exit(3)'], { input: big, timeoutMs: 10_000 });
+    expect(r.code).toBe(3);
+  });
+
   it('killGroup + timeout reaps an orphaning shell that backgrounds a child without hanging', async () => {
     // The shell backgrounds a long sleeper that inherits stdout. Without a process-GROUP kill, the
     // sleeper would keep the inherited stdout pipe open and `close` would never fire — the call would
