@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { readFile } from 'node:fs/promises';
 import type { Logger } from '../log/logger';
 import { killActiveChildren } from '../util/spawn';
+import { readPackageVersion } from '../util/package-version';
 import { route, type RouterCtx } from './router';
 import { resolveAssetsDir, readAsset } from './assets';
 import { tailRun, NoSuchRunError, type TailDeps } from './sse';
@@ -296,16 +296,7 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 
 /** Best-effort package identity for `/api/version` — 'unknown' when the manifest isn't found. */
 async function readVersion(): Promise<VersionResponse> {
-  for (const rel of ['../package.json', '../../package.json']) {
-    try {
-      const raw = await readFile(new URL(rel, import.meta.url), 'utf8');
-      const parsed = JSON.parse(raw) as { name?: string; version?: string };
-      if (parsed.name === 'goaly') return { name: parsed.name, version: parsed.version ?? 'unknown' };
-    } catch {
-      /* try the next location */
-    }
-  }
-  return { name: 'goaly', version: 'unknown' };
+  return { name: 'goaly', version: await readPackageVersion(import.meta.url) };
 }
 
 function closeServer(server: Server): Promise<void> {

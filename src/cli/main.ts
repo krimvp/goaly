@@ -11,6 +11,7 @@ import { runConfig } from './config-cmd';
 import { renderCompletion } from './completion';
 import { WorktreeManager, WorktreeError } from '../workspace/worktree-manager';
 import { executeRun } from './run-cmd';
+import { readPackageVersion } from '../util/package-version';
 
 // The run path lives in run-cmd.ts (`executeRun`) so the goaly-ui server drives runs through the
 // SAME guards, lock, composition, and reporting (ADR 0015). Its helpers stay part of this module's
@@ -37,6 +38,11 @@ export async function main(argv: string[]): Promise<number> {
 
   if (parsed.command === 'help') {
     process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
+
+  if (parsed.command === 'version') {
+    process.stdout.write(`${await readPackageVersion(import.meta.url)}\n`);
     return 0;
   }
 

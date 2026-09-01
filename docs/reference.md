@@ -154,7 +154,8 @@ goaly init --harness codex --autonomous --yes
 source <(goaly completion bash)
 ```
 
-`goaly help` lists every flag. Exit codes for a run: `0` DONE · `1` FAILED/ABORTED · `2` usage
+`goaly help` lists every flag. `goaly --version` (or `-v`) prints the installed package version and
+exits 0. Exit codes for a run: `0` DONE · `1` FAILED/ABORTED · `2` usage
 error or a pre-run guard (a bad flag value, an unresolvable `--baseline`, a live run lock) ·
 `130` interrupted (Ctrl-C; the run stays resumable). An internal crash also exits `1`, after
 reaping any live child processes. The read-only subcommands use `0` ok · `1` not-ok (`runs show`

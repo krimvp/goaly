@@ -83,7 +83,17 @@ export {
 export { MAX_CANDIDATES, type StepTimeouts } from './flags/budget-flags';
 export { type RunsCommand, type UiCommand } from './flags/subcommands';
 export type ParsedArgs = {
-  command: 'run' | 'help' | 'runs' | 'worktree' | 'ui' | 'doctor' | 'init' | 'config' | 'completion';
+  command:
+    | 'run'
+    | 'help'
+    | 'version'
+    | 'runs'
+    | 'worktree'
+    | 'ui'
+    | 'doctor'
+    | 'init'
+    | 'config'
+    | 'completion';
   /** The read-only inspection subcommand; present only when `command === 'runs'`. */
   runs: RunsCommand | undefined;
   /** The worktree-management subcommand; present only when `command === 'worktree'`. */
@@ -274,6 +284,9 @@ export async function parseArgs(
 
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') {
     return helpResult();
+  }
+  if (command === '--version' || command === '-v') {
+    return versionResult();
   }
   if (command === 'runs') {
     return runsResult(parseRunsCommand(rest));
@@ -680,6 +693,10 @@ function parseCliInput(input: Record<string, unknown>): z.infer<typeof CliInput>
 
 function helpResult(): ParsedArgs {
   return baseArgs('help', undefined, process.cwd());
+}
+
+function versionResult(): ParsedArgs {
+  return baseArgs('version', undefined, process.cwd());
 }
 
 function runsResult(parsed: { runs: RunsCommand; workspace: string }): ParsedArgs {

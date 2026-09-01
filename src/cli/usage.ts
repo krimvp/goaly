@@ -72,6 +72,7 @@ Usage:
   goaly completion bash|zsh|fish
 
   goaly help
+  goaly --version                print the installed goaly version and exit
 
 Goal / intent / rubric input (choose ONE source per field):
   --goal "<text>"   inline value

@@ -309,6 +309,8 @@ describe('config-file schema vs. the documented CLI flags (drift guard)', () => 
    * so a genuinely new flag can never hide behind a loose heuristic.
    */
   const NOT_A_RUN_FLAG = new Set([
+    // A top-level command spelling like `goaly help`, only recognized as the first token.
+    'version',
     // Subcommand flags: `goaly ui` / `goaly worktree` / `goaly init` / `goaly config presets`.
     'port',
     'base',

@@ -667,6 +667,11 @@ describe('parseArgs', () => {
     expect((await parseArgs(['--help'])).command).toBe('help');
   });
 
+  it('returns version for --version / -v as the first token', async () => {
+    expect((await parseArgs(['--version'])).command).toBe('version');
+    expect((await parseArgs(['-v'])).command).toBe('version');
+  });
+
   describe('positional goal + implicit run (easy mode)', () => {
     it('treats a bare positional as the goal and implies run (generate by default)', async () => {
       const a = await parseArgs(['make the build green']);

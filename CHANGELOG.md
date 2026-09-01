@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Stale run-lock reclaims are reported.** The self-healing sweep of a dead driver's lock now
   prints a notice naming the dead pid instead of happening silently.
 - **`goaly runs show` prints the run's wall-clock `duration:`** next to started/ended.
+- **`goaly --version` / `-v`** prints the installed package version and exits 0; the UI's
+  `/api/version` now reads it through the same helper.
 - The reference now documents the read-only subcommands' exit codes and the stdout/stderr contract
   (outcome on stdout, everything live on stderr).
 
