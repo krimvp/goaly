@@ -19,6 +19,7 @@ import {
   parseWorkspaceMode,
 } from './flags/misc-flags';
 import { parseWorktreeRun } from './flags/subcommands';
+import { rejectUnknownFlags } from './flags/unknown';
 import { parseSubcommand } from './args-commands';
 import { buildCliInput } from './args-cli-input';
 import { resolveFlagLayers, type ConfigLoader } from './args-layers';
@@ -159,12 +160,12 @@ export async function parseArgs(
 function parseRunFlags(runArgs: string[]): RawFlags {
   const { flags: cliFlags, positionals } = parseFlags(runArgs);
 
-  // `--max-gate-a-revisions` was renamed to `--max-seal-revisions` (no alias). The CLI otherwise
-  // ignores unknown flags, so reject the removed spelling explicitly — silently dropping a flag a
-  // user's script used to rely on would lose the setting without warning.
+  // `--max-gate-a-revisions` was renamed to `--max-seal-revisions` (no alias): name the new
+  // spelling before the generic unknown-flag rejection below would merely call it unknown.
   if (cliFlags['max-gate-a-revisions'] !== undefined) {
     throw new UsageError('--max-gate-a-revisions was renamed to --max-seal-revisions');
   }
+  rejectUnknownFlags(cliFlags);
 
   // A single bare positional is the goal — sugar for `--goal` so a developer can just type it
   // (`goaly "my goal"`). Fold it into the CLI flags so it reuses the whole existing goal pipeline

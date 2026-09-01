@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { parseArgs, USAGE, UsageError, type UiCommand } from './args';
+import { parseArgs, UsageError, type UiCommand } from './args';
+import { renderHelp } from './help';
 import { startUiServer } from '../ui/server';
 import { STATE_DIR } from './compose';
 import { runRuns } from './runs';
@@ -37,8 +38,18 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (parsed.command === 'help') {
-    process.stdout.write(`${USAGE}\n`);
-    return 0;
+    // `goaly help [<topic>|all]` — the topic is the token after `help`/`--help`; a bare `goaly`
+    // (no argv) is the short index.
+    try {
+      process.stdout.write(`${renderHelp(argv[1])}\n`);
+      return 0;
+    } catch (e) {
+      if (e instanceof UsageError) {
+        process.stderr.write(`${e.message}\n`);
+        return 2;
+      }
+      throw e;
+    }
   }
 
   if (parsed.command === 'version') {
