@@ -293,10 +293,19 @@ async function performCommand(run: Run, loop: LoopState, command: Command): Prom
   const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge
   if (performed.ladder !== undefined) loop.ladder = performed.ladder;
   if (event.tag === 'CONTRACT_COMPILED') loop.contractHash = event.contract.contractHash;
-  logEvent(run.log, command, event);
+  logEvent(run.log, command, event, iterationOf(loop.state));
   return event;
 }
 
+/**
+ * The turn number a per-iteration log line belongs to. The reducer counts COMPLETED agent runs
+ * (`ctx.iteration`), so while the agent is running the line describes turn `iteration + 1`; once
+ * AGENT_RAN has folded (verifying, sign-off) the count already names the turn.
+ */
+function iterationOf(state: OrchestratorState): number | undefined {
+  if (!('ctx' in state)) return undefined;
+  return state.tag === 'RUNNING_AGENT' ? state.ctx.iteration + 1 : state.ctx.iteration;
+}
 
 /** Fold the Event, persist it write-ahead, then advance the loop state and the off-path beats. */
 async function commitTransition(run: Run, loop: LoopState, event: OrchestratorEvent): Promise<void> {

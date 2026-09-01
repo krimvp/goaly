@@ -6,7 +6,15 @@ import type { Logger } from '../log/logger';
  * secrets (prompts, harness output, verifier detail, the diff) is kept at `debug` only — `info`
  * stays content-free (statuses, counts, hashes, decisions).
  */
-export function logEvent(log: Logger, command: Command, event: OrchestratorEvent): void {
+export function logEvent(
+  log: Logger,
+  command: Command,
+  event: OrchestratorEvent,
+  iteration?: number,
+): void {
+  // The per-iteration beats carry the turn number so a run's log reads as a sequence, not a
+  // stream of identical lines; the one-time beats (compile, seal, prepare) have no iteration.
+  const it = iteration !== undefined ? { iteration } : {};
   switch (event.tag) {
     case 'PLAN_COMPILED':
       // Log the frozen plan LOUDLY so the decomposition is auditable (the plan-level analogue of the
@@ -53,6 +61,7 @@ export function logEvent(log: Logger, command: Command, event: OrchestratorEvent
       return;
     case 'AGENT_RAN':
       log.info('agent ran', {
+        ...it,
         status: event.run.status,
         changed: event.prevDiffHash !== event.diffHash,
         ...(event.budget.tokensSpent !== undefined ? { tokensSpent: event.budget.tokensSpent } : {}),
@@ -69,6 +78,7 @@ export function logEvent(log: Logger, command: Command, event: OrchestratorEvent
       return;
     case 'VERIFIED':
       log.info('verified', {
+        ...it,
         pass: event.verdict.pass,
         confidence: event.verdict.confidence,
         ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
@@ -80,6 +90,7 @@ export function logEvent(log: Logger, command: Command, event: OrchestratorEvent
       // content-free, so it is `info`; the reason may quote repo text, so it stays at `debug` like
       // every other content-bearing field.
       log.info('contract adjudicated', {
+        ...it,
         defective: event.defective,
         ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
       });
@@ -87,6 +98,7 @@ export function logEvent(log: Logger, command: Command, event: OrchestratorEvent
       return;
     case 'SIGNOFF_DECIDED':
       log.info('sign-off decided', {
+        ...it,
         veto: event.approval.veto,
         ...(event.llm !== undefined ? { llmTokens: event.llm.tokens } : {}),
         ...(event.approval.reason !== undefined ? { reason: event.approval.reason } : {}),
