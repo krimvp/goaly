@@ -58,14 +58,41 @@ export function reasonExprsAfter(source: string, siteRe: RegExp, key = 'reason')
   const out: string[] = [];
   for (const m of source.matchAll(siteRe)) {
     const rest = source.slice((m.index ?? 0) + m[0].length);
-    const at = propertyIndex(rest.slice(0, objectEnd(rest)), key);
+    const region = rest.slice(0, objectEnd(rest));
+    const at = propertyIndex(region, key);
     if (at < 0) {
-      out.push(`<<no ${key} in the object at ${m[0].trim()}>>`);
+      // A shorthand property (`{ …, reason, … }`) is the bare identifier — a parameter or local
+      // whose fillers the caller must follow (see `forwardedReasonExprs`).
+      out.push(hasShorthand(region, key) ? key : `<<no ${key} in the object at ${m[0].trim()}>>`);
       continue;
     }
     out.push(balancedExpr(rest.slice(at + key.length + 2)));
   }
   return out;
+}
+
+/** Whether `region` (one object literal) carries `key` as a shorthand property at depth 0. */
+function hasShorthand(region: string, key: string): boolean {
+  let depth = 0;
+  let i = 0;
+  while (i < region.length) {
+    const ch = region[i]!;
+    if (ch === "'" || ch === '"' || ch === '`') {
+      i = skipString(region, i);
+      continue;
+    }
+    if ('([{'.includes(ch)) depth += 1;
+    else if (')]}'.includes(ch)) depth -= 1;
+    else if (
+      depth === 0 &&
+      region.startsWith(key, i) &&
+      !/[\w$.]/.test(region[i - 1] ?? ',') &&
+      /^\s*[,}]/.test(region.slice(i + key.length))
+    )
+      return true;
+    i += 1;
+  }
+  return false;
 }
 
 /** How far the object literal the site sits in extends (its own closing brace). */
@@ -288,6 +315,62 @@ function balancedExpr(text: string): string {
     i += 1;
   }
   return text.slice(0, i).trim();
+}
+
+/**
+ * A reason that reaches an outcome literal through a helper's parameter is only as safe as the
+ * arguments that fill it. Return the expression passed for `param` at every call of `fn` in
+ * `source`, following forwarding: a call site that itself passes a bare parameter of the SAME
+ * name from an enclosing helper is resolved to that helper's callers, transitively. A call whose
+ * argument list is too short yields a sentinel no policy classifies, so it fails instead of hiding.
+ */
+export function forwardedReasonExprs(
+  source: string,
+  fn: string,
+  param = 'reason',
+  seen: Set<string> = new Set(),
+): readonly string[] {
+  if (seen.has(fn)) return [];
+  seen.add(fn);
+  const position = paramPosition(source, fn, param);
+  if (position < 0) return [`<<${fn} has no parameter named ${param}>>`];
+  const out: string[] = [];
+  for (const m of source.matchAll(new RegExp(`(?<![\\w.])${fn}\\(`, 'g'))) {
+    const at = (m.index ?? 0) + m[0].length;
+    if (isDeclaration(source, m.index ?? 0)) continue;
+    const args = splitTopLevel(source.slice(at, matchingParen(source, at - 1)), ',').map((a) => a.trim());
+    const expr = args[position];
+    if (expr === undefined) {
+      out.push(`<<${fn} called with too few arguments for ${param}>>`);
+    } else if (expr === param) {
+      const outer = enclosingFunction(source, m.index ?? 0);
+      out.push(...(outer === null ? [`<<bare ${param} outside any function>>`] : forwardedReasonExprs(source, outer, param, seen)));
+    } else {
+      out.push(expr);
+    }
+  }
+  return out;
+}
+
+/** Zero-based position of `param` in `fn`'s declared parameter list, or -1. */
+function paramPosition(source: string, fn: string, param: string): number {
+  const decl = new RegExp(`function ${fn}\\(`).exec(source);
+  if (decl === null) return -1;
+  const open = decl.index + decl[0].length - 1;
+  const params = splitTopLevel(source.slice(open + 1, matchingParen(source, open)), ',');
+  return params.findIndex((p) => p.trim().split(/[:=\s]/)[0] === param);
+}
+
+function isDeclaration(source: string, callIndex: number): boolean {
+  return /function\s+$/.test(source.slice(Math.max(0, callIndex - 40), callIndex));
+}
+
+/** The name of the innermost `function NAME(` declared before `index`, or null. */
+function enclosingFunction(source: string, index: number): string | null {
+  const before = source.slice(0, index);
+  const decls = [...before.matchAll(/(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g)];
+  const last = decls[decls.length - 1];
+  return last?.[1] ?? null;
 }
 
 /** Index just past the string/template literal that starts at `start`. */

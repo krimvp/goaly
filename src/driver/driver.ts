@@ -1,4 +1,4 @@
-import type { Command, RunOutcome } from '../domain/events';
+import type { Command, OrchestratorEvent, RunOutcome } from '../domain/events';
 import { OrchestratorEvent as OrchestratorEventSchema } from '../domain/events';
 import type { RunProvenance } from '../runlog/runlog';
 import type { RunConfig } from '../domain/config';
@@ -30,6 +30,36 @@ import { bootstrap } from './bootstrap';
 export { recordCheckpoint, type CheckpointDeps } from './baseline';
 export type { DriverDeps, DriveOptions } from './deps';
 
+/** Everything fixed for the whole run: the deps, the run identity, and the guarded side channels. */
+type Run = {
+  deps: DriverDeps;
+  config: RunConfig;
+  runId: RunId;
+  log: Logger;
+  llmMeter: LlmTokenMeter;
+  baseline: Baseline;
+  emitTelemetry: (event: TelemetryEvent) => void;
+  emitRunFinished: (o: RunOutcome) => void;
+};
+
+/**
+ * The loop's mutable cursor. ONE record mutated in place (never copied per step) on purpose: a
+ * throw mid-step must leave the fields already advanced (`seq`, `contractHash`) visible to the
+ * fail-closed catch, exactly as the former local `let`s did.
+ */
+type LoopState = {
+  state: OrchestratorState;
+  commands: Command[];
+  seq: number;
+  ladder: Verifier | null;
+  contractHash: ContractHash | null;
+  pendingNote: string | null;
+  /** The run's EFFECTIVE successor provenance — see `Bootstrapped.provenance` in `bootstrap.ts`. */
+  provenance: RunProvenance | undefined;
+};
+
+type OutcomeExtras = { usage?: UsageReport; sessionId?: SessionId };
+
 /**
  * The Driver: performs the Commands the pure reducer requests, feeds the resulting Events
  * back, and persists every event write-ahead. The ONLY component that touches the clock,
@@ -41,20 +71,52 @@ export async function drive(
   runId: RunId,
   options: DriveOptions = {},
 ): Promise<RunOutcome> {
-  let state: OrchestratorState;
-  let commands: Command[];
-  let seq: number;
-  let ladder: Verifier | null = null;
-  let contractHash: ContractHash | null = null;
-  let pendingNote: string | null = null;
-  /** The run's EFFECTIVE successor provenance — see `Bootstrapped.provenance` in `bootstrap.ts`. */
-  let provenance: RunProvenance | undefined;
   const log = deps.logger ?? noopLogger;
-  const llmMeter = deps.llmMeter ?? new LlmTokenMeter();
-  // Telemetry (pure observability seam): a fire-and-forget sink for lifecycle datapoints. Strictly
-  // OFF the control flow — never fed to the reducer, never on the durability path, never able to
-  // touch the frozen contract or the two-key DONE. Every call is GUARDED: a throwing sink degrades
-  // to "no telemetry" instead of taking down a run (invariant #4, fail-closed).
+  const telemetry = makeTelemetry(deps, runId, log);
+  telemetry.emitTelemetry({ kind: 'run_started', runId, resume: options.resume === true, ts: deps.clock.now() });
+  const run: Run = {
+    deps,
+    config,
+    runId,
+    log,
+    llmMeter: deps.llmMeter ?? new LlmTokenMeter(),
+    baseline: makeBaseline(deps, config),
+    ...telemetry,
+  };
+
+  log.info(options.resume === true ? 'resuming run' : 'starting run', {
+    runId,
+    resume: options.resume === true,
+  });
+
+  // The pre-loop IO (reading the log to resume; writing the fresh header) must resolve to a typed
+  // ABORTED like every other seam — a disk-full/corrupt-log throw here used to escape `drive()`
+  // entirely (the only rejection path left), reaching the caller as a raw stack trace.
+  let loop: LoopState;
+  try {
+    loop = await bootstrap(deps, config, runId, options, run.baseline, log);
+  } catch (e) {
+    log.error('run bootstrap failed (fail-closed → ABORTED)', { reason: errorMessage(e) });
+    return abortedOutcome(run, bootstrapFailedReason(errorMessage(e)), 0, null);
+  }
+
+  const refused = await refuseBestOfFloor(run, loop);
+  if (refused !== null) return refused;
+
+  return runLoop(run, loop);
+}
+
+/**
+ * Telemetry (pure observability seam): a fire-and-forget sink for lifecycle datapoints. Strictly
+ * OFF the control flow — never fed to the reducer, never on the durability path, never able to
+ * touch the frozen contract or the two-key DONE. Every call is GUARDED: a throwing sink degrades
+ * to "no telemetry" instead of taking down a run (invariant #4, fail-closed).
+ */
+function makeTelemetry(
+  deps: DriverDeps,
+  runId: RunId,
+  log: Logger,
+): Pick<Run, 'emitTelemetry' | 'emitRunFinished'> {
   const telemetry = deps.telemetry ?? noopTelemetry;
   const emitTelemetry = (event: TelemetryEvent): void => {
     try {
@@ -71,25 +133,31 @@ export async function drive(
       iterations: o.iterations,
       ts: deps.clock.now(),
     });
-  emitTelemetry({ kind: 'run_started', runId, resume: options.resume === true, ts: deps.clock.now() });
-  // Capture the run's START baseline BEFORE any internal checkpoint (or the resume re-point below)
-  // advances it. On a FRESH run this is `--baseline`/HEAD as compose applied it (including the
-  // raised-autonomy auto-pin), and bootstrap records it in the run-log header. On --resume it is
-  // whatever compose re-applied THIS invocation; a run resumed without the flag re-adopts the
-  // header's recorded baseline in bootstrap (see `adoptRunStart`), so the pin survives a crash —
-  // essential at raised harness autonomy, where the agent may have committed mid-run and a MOVED
-  // HEAD would empty the diff both keys review. Only a pre-recording log falls back to HEAD, which
-  // is safe when goaly's harness makes no commits (every iteration's work stays post-HEAD). Phased
-  // runs instead re-pin from the log below. Under --delta-verify the terminal Sign-off approver is pinned to a CUMULATIVE baseline —
-  // `approverBaseline` — so it reviews the whole change a per-iteration judge would never see at once
-  // (the cumulative guard, issue #49). It starts at the run-start baseline and, in a --phased run,
-  // advances to each PHASE boundary (so the approver reviews that phase's whole cumulative diff) while
-  // per-iteration delta checkpoints advance only the judge's (workspace) baseline. It never advances
-  // on those per-iteration checkpoints — that is what keeps the approver cumulative.
-  // The Baseline module owns both diff baselines + the delta-verify checkpoint policy (issue #47/#49),
-  // so the main loop and `perform` only ask it "what diff does the approver see" / "advance after this
-  // transition" instead of threading baselines by hand. `--delta-verify` is read here, never the reducer.
-  const baseline = new Baseline(
+  return { emitTelemetry, emitRunFinished };
+}
+
+/**
+ * Capture the run's START baseline BEFORE any internal checkpoint (or the resume re-point in
+ * bootstrap) advances it. On a FRESH run this is `--baseline`/HEAD as compose applied it (including
+ * the raised-autonomy auto-pin), and bootstrap records it in the run-log header. On --resume it is
+ * whatever compose re-applied THIS invocation; a run resumed without the flag re-adopts the
+ * header's recorded baseline in bootstrap (see `adoptRunStart`), so the pin survives a crash —
+ * essential at raised harness autonomy, where the agent may have committed mid-run and a MOVED
+ * HEAD would empty the diff both keys review. Only a pre-recording log falls back to HEAD, which
+ * is safe when goaly's harness makes no commits (every iteration's work stays post-HEAD). Phased
+ * runs instead re-pin from the log in bootstrap. Under --delta-verify the terminal Sign-off approver
+ * is pinned to a CUMULATIVE baseline — `approverBaseline` — so it reviews the whole change a
+ * per-iteration judge would never see at once (the cumulative guard, issue #49). It starts at the
+ * run-start baseline and, in a --phased run, advances to each PHASE boundary (so the approver
+ * reviews that phase's whole cumulative diff) while per-iteration delta checkpoints advance only
+ * the judge's (workspace) baseline. It never advances on those per-iteration checkpoints — that is
+ * what keeps the approver cumulative.
+ * The Baseline module owns both diff baselines + the delta-verify checkpoint policy (issue #47/#49),
+ * so the main loop and `perform` only ask it "what diff does the approver see" / "advance after this
+ * transition" instead of threading baselines by hand. `--delta-verify` is read here, never the reducer.
+ */
+function makeBaseline(deps: DriverDeps, config: RunConfig): Baseline {
+  return new Baseline(
     {
       workspace: deps.workspace,
       runlog: deps.runlog,
@@ -99,166 +167,54 @@ export async function drive(
     config.deltaVerify,
     deps.workspace.currentBaseline(),
   );
+}
 
-  log.info(options.resume === true ? 'resuming run' : 'starting run', {
-    runId,
-    resume: options.resume === true,
-  });
+/**
+ * Worktree floor (issue #85, locked decision #8): best-of-N needs a resolvable HEAD — `git worktree`
+ * cannot check out an unborn branch's tree — and a WorktreeHost to drive. Refuse to start fail-closed
+ * (a clear ABORTED, never a silent downgrade to a single attempt or a thrown rejection) when
+ * `--candidates > 1` on a HEAD-less repo or with no worktree host wired.
+ */
+async function refuseBestOfFloor(run: Run, loop: LoopState): Promise<RunOutcome | null> {
+  if (run.config.candidates <= 1) return null;
+  const floor = await bestOfFloor(run.deps);
+  if (floor === null) return null;
+  run.log.error('best-of-N refused to start (fail-closed)', { reason: floor });
+  return abortedOutcome(run, floor, iterationCount(loop.state), loop.contractHash ?? null);
+}
 
-  // The pre-loop IO (reading the log to resume; writing the fresh header) must resolve to a typed
-  // ABORTED like every other seam — a disk-full/corrupt-log throw here used to escape `drive()`
-  // entirely (the only rejection path left), reaching the caller as a raw stack trace.
+/** Build, emit (telemetry), and return an ABORTED outcome. */
+function abortedOutcome(
+  run: Run,
+  reason: string,
+  iterations: number,
+  contractHash: ContractHash | null,
+  extras: OutcomeExtras = {},
+): RunOutcome {
+  const outcome: RunOutcome = withExtras(
+    { status: 'ABORTED', reason, iterations, contractHash, runId: run.runId },
+    extras,
+  );
+  run.emitRunFinished(outcome);
+  return outcome;
+}
+
+function withExtras(outcome: RunOutcome, extras: OutcomeExtras): RunOutcome {
+  return {
+    ...outcome,
+    ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
+    ...(extras.sessionId !== undefined ? { sessionId: extras.sessionId } : {}),
+  };
+}
+
+/** The main loop: one {@link performStep} per non-terminal state, until terminal or aborted. */
+async function runLoop(run: Run, loop: LoopState): Promise<RunOutcome> {
   try {
-    ({ state, commands, seq, contractHash, ladder, pendingNote, provenance } = await bootstrap(
-      deps, config, runId, options, baseline, log,
-    ));
-  } catch (e) {
-    log.error('run bootstrap failed (fail-closed → ABORTED)', { reason: errorMessage(e) });
-    const outcome: RunOutcome = {
-      status: 'ABORTED',
-      reason: bootstrapFailedReason(errorMessage(e)),
-      iterations: 0,
-      contractHash: null,
-      runId,
-    };
-    emitRunFinished(outcome);
-    return outcome;
-  }
-
-  // Worktree floor (issue #85, locked decision #8): best-of-N needs a resolvable HEAD — `git worktree`
-  // cannot check out an unborn branch's tree — and a WorktreeHost to drive. Refuse to start fail-closed
-  // (a clear ABORTED, never a silent downgrade to a single attempt or a thrown rejection) when
-  // `--candidates > 1` on a HEAD-less repo or with no worktree host wired.
-  if (config.candidates > 1) {
-    const floor = await bestOfFloor(deps);
-    if (floor !== null) {
-      log.error('best-of-N refused to start (fail-closed)', { reason: floor });
-      const outcome: RunOutcome = {
-        status: 'ABORTED',
-        reason: floor,
-        iterations: iterationCount(state),
-        contractHash: contractHash ?? null,
-        runId,
-      };
-      emitRunFinished(outcome);
-      return outcome;
-    }
-  }
-
-  try {
-    while (!isTerminal(state)) {
+    while (!isTerminal(loop.state)) {
       // Cooperative interrupt: stop BETWEEN steps (the previous event is already durable), so the
       // user gets a clean ABORTED with the resume path instead of a mid-iteration kill.
-      if (deps.interrupted?.() === true) {
-        log.warn('interrupt requested — stopping before the next step', { runId });
-        const extras = await buildOutcomeExtras(deps);
-        const outcome: RunOutcome = {
-          status: 'ABORTED',
-          reason: `interrupted by user — resume this run with: --resume ${runId}`,
-          iterations: iterationCount(state),
-          contractHash: contractHash ?? null,
-          runId,
-          ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
-          ...(extras.sessionId !== undefined ? { sessionId: extras.sessionId } : {}),
-        };
-        emitRunFinished(outcome);
-        return outcome;
-      }
-      if (commands.length !== 1) {
-        throw new Error(
-          `driver invariant: non-terminal state ${state.tag} emitted ${commands.length} commands (expected 1)`,
-        );
-      }
-      let command = commands[0]!;
-      // Consume an un-consumed operator note (ADR 0012) on the FIRST agent turn after resume —
-      // whichever step it turns out to be. Worker steering only; the contract/ladder never see it.
-      if (
-        pendingNote !== null &&
-        (command.tag === 'RUN_AGENT' || command.tag === 'RUN_AGENT_BEST_OF')
-      ) {
-        command = withOperatorNote(command, pendingNote);
-        pendingNote = null;
-        log.info('operator note appended to the next agent prompt', {});
-      }
-      log.debug('perform command', { command: command.tag, state: state.tag });
-
-      // Best-of-N (issue #85): the Driver performs the WHOLE tournament here — it appends its own
-      // CANDIDATE_RAN/CANDIDATE_SELECTED markers write-ahead (advancing seq) and feeds back ONE
-      // AGENT_RAN for the winner, so the reducer is unchanged. Kept in this seam (not `perform`) so it
-      // can read the log for resume + advance seq exactly like the Baseline checkpoint path.
-      const performed: Performed =
-        command.tag === 'RUN_AGENT_BEST_OF'
-          ? await performBestOf(
-              command,
-              deps,
-              ladder,
-              state,
-              runId,
-              contractHash,
-              seq,
-              config.resumeBestOfIncomplete,
-            )
-          : await perform(command, deps, ladder, llmMeter, baseline, runId, provenance);
-      if (performed.seq !== undefined) seq = performed.seq;
-      const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge
-      if (performed.ladder !== undefined) ladder = performed.ladder;
-      if (event.tag === 'CONTRACT_COMPILED') contractHash = event.contract.contractHash;
-      logEvent(log, command, event);
-
-      // step() is pure — computing it before persisting is side-effect-free and lets us log the
-      // resulting state tag in the same write-ahead entry. Durability is AT-LEAST-ONCE: a crash
-      // after `perform` but before this `append` re-runs exactly that one effect on resume (the
-      // harness's session resume makes RUN_AGENT idempotent); we accept one repeated effect over
-      // a lost one.
-      const [next, nextCommands] = step(state, event);
-      seq += 1;
-      await deps.runlog.append({
-        runId,
-        seq,
-        ts: deps.clock.now(),
-        contractHash,
-        event,
-        stateTagAfter: next.tag,
-      });
-
-      log.debug('transition', { from: state.tag, to: next.tag, seq });
-
-      // Bounded stuck self-recovery (improvement plan 4.2) is a pure reducer policy — surface each
-      // spend LOUDLY here so an unattended operator can see the run saved itself (and how often).
-      const remediatedTo = remediationsTotal(next);
-      if (remediatedTo !== undefined && remediatedTo > (remediationsTotal(state) ?? remediatedTo)) {
-        log.warn('stuck auto-remediation applied — retrying instead of aborting', {
-          used: remediatedTo,
-          cap: MAX_STUCK_REMEDIATIONS,
-        });
-      }
-
-      state = next;
-      commands = nextCommands;
-
-      // Telemetry lifecycle beat (pure observability): one datapoint per performed-and-folded event —
-      // the compile → run → verify → sign-off progression an embedder meters. Guarded and off the
-      // replay log, so it can never affect the run's outcome.
-      emitTelemetry({ kind: 'lifecycle', runId, event: event.tag, stateAfter: state.tag, ts: deps.clock.now() });
-
-      // Advance the baselines after the transition: the approver's cumulative baseline at a --phased
-      // boundary, and (under --delta-verify) an internal checkpoint after a continuation iteration so
-      // the next judge sees only its delta. All of that — including the fail-closed rollback — lives in
-      // the Baseline module now; the loop just hands it the transition and takes back the (advanced) seq.
-      seq = await baseline.onTransition({
-        event,
-        nextCommand: commands[0],
-        seq,
-        runId,
-        contractHash,
-        nextTag: next.tag,
-      });
-
-      // `--explain` narration (issue #8) — AFTER the write-ahead append, so a slow side-LLM never
-      // sits on the durability path. Strictly advisory and off the critical path: the observer is
-      // internally fail-closed, and this extra guard means even a throw here degrades to "no
-      // summary" rather than touching the run's outcome.
-      await observe(deps.observer, (o) => o.onEvent(event), log);
+      if (run.deps.interrupted?.() === true) return interruptedOutcome(run, loop);
+      await performStep(run, loop);
     }
   } catch (e) {
     // Last-resort safety net: every effectful seam is individually fail-closed, but an unexpected
@@ -267,37 +223,159 @@ export async function drive(
     // lead-in, never claimed as goaly's own words: this catch wraps CHECKPOINT_AND_ADVANCE, a
     // --phased between-phase checkpoint that runs AFTER worker turns, so the exception text can
     // carry tree-authored content (see `src/orchestrator/reason-quote.ts`).
-    log.error('driver error (fail-closed → ABORTED)', { reason: errorMessage(e) });
-    const extras = await buildOutcomeExtras(deps);
-    const outcome: RunOutcome = {
-      status: 'ABORTED',
-      reason: driverErrorReason(errorMessage(e)),
-      iterations: iterationCount(state),
-      contractHash: contractHash ?? null,
-      runId,
-      ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
-      ...(extras.sessionId !== undefined ? { sessionId: extras.sessionId } : {}),
-    };
-    emitRunFinished(outcome);
-    return outcome;
+    run.log.error('driver error (fail-closed → ABORTED)', { reason: errorMessage(e) });
+    return abortedLoopOutcome(run, loop, driverErrorReason(errorMessage(e)));
   }
+  return finishRun(run, loop.state);
+}
 
-  const outcome = buildOutcome(state, runId);
-  const extras = await buildOutcomeExtras(deps);
-  log.info('run finished', {
+function interruptedOutcome(run: Run, loop: LoopState): Promise<RunOutcome> {
+  run.log.warn('interrupt requested — stopping before the next step', { runId: run.runId });
+  return abortedLoopOutcome(run, loop, `interrupted by user — resume this run with: --resume ${run.runId}`);
+}
+
+/** An ABORTED outcome mid-loop: carries the run's spend + last session id like a finished run. */
+async function abortedLoopOutcome(run: Run, loop: LoopState, reason: string): Promise<RunOutcome> {
+  const extras = await buildOutcomeExtras(run.deps);
+  return abortedOutcome(run, reason, iterationCount(loop.state), loop.contractHash ?? null, extras);
+}
+
+/** One iteration: perform → parse → write-ahead append → fold. The order is invariant #7. */
+async function performStep(run: Run, loop: LoopState): Promise<void> {
+  const command = nextCommand(run, loop);
+  const event = await performCommand(run, loop, command);
+  await commitTransition(run, loop, event);
+}
+
+/** Pop the single pending Command, decorated with an un-consumed operator note if one is pending. */
+function nextCommand(run: Run, loop: LoopState): Command {
+  if (loop.commands.length !== 1) {
+    throw new Error(
+      `driver invariant: non-terminal state ${loop.state.tag} emitted ${loop.commands.length} commands (expected 1)`,
+    );
+  }
+  let command = loop.commands[0]!;
+  // Consume an un-consumed operator note (ADR 0012) on the FIRST agent turn after resume —
+  // whichever step it turns out to be. Worker steering only; the contract/ladder never see it.
+  if (
+    loop.pendingNote !== null &&
+    (command.tag === 'RUN_AGENT' || command.tag === 'RUN_AGENT_BEST_OF')
+  ) {
+    command = withOperatorNote(command, loop.pendingNote);
+    loop.pendingNote = null;
+    run.log.info('operator note appended to the next agent prompt', {});
+  }
+  run.log.debug('perform command', { command: command.tag, state: loop.state.tag });
+  return command;
+}
+
+/** Perform one Command and parse its Event at the reducer's edge (invariant #6: the one choke point). */
+async function performCommand(run: Run, loop: LoopState, command: Command): Promise<OrchestratorEvent> {
+  const { deps, runId } = run;
+  // Best-of-N (issue #85): the Driver performs the WHOLE tournament here — it appends its own
+  // CANDIDATE_RAN/CANDIDATE_SELECTED markers write-ahead (advancing seq) and feeds back ONE
+  // AGENT_RAN for the winner, so the reducer is unchanged. Kept in this seam (not `perform`) so it
+  // can read the log for resume + advance seq exactly like the Baseline checkpoint path.
+  const performed: Performed =
+    command.tag === 'RUN_AGENT_BEST_OF'
+      ? await performBestOf(
+          command,
+          deps,
+          loop.ladder,
+          loop.state,
+          runId,
+          loop.contractHash,
+          loop.seq,
+          run.config.resumeBestOfIncomplete,
+        )
+      : await perform(command, deps, loop.ladder, run.llmMeter, run.baseline, runId, loop.provenance);
+  if (performed.seq !== undefined) loop.seq = performed.seq;
+  const event = OrchestratorEventSchema.parse(performed.event); // parse at the reducer's edge
+  if (performed.ladder !== undefined) loop.ladder = performed.ladder;
+  if (event.tag === 'CONTRACT_COMPILED') loop.contractHash = event.contract.contractHash;
+  logEvent(run.log, command, event);
+  return event;
+}
+
+
+/** Fold the Event, persist it write-ahead, then advance the loop state and the off-path beats. */
+async function commitTransition(run: Run, loop: LoopState, event: OrchestratorEvent): Promise<void> {
+  const { deps, runId, log } = run;
+  // step() is pure — computing it before persisting is side-effect-free and lets us log the
+  // resulting state tag in the same write-ahead entry. Durability is AT-LEAST-ONCE: a crash
+  // after `perform` but before this `append` re-runs exactly that one effect on resume (the
+  // harness's session resume makes RUN_AGENT idempotent); we accept one repeated effect over
+  // a lost one.
+  const [next, nextCommands] = step(loop.state, event);
+  loop.seq += 1;
+  await deps.runlog.append({
+    runId,
+    seq: loop.seq,
+    ts: deps.clock.now(),
+    contractHash: loop.contractHash,
+    event,
+    stateTagAfter: next.tag,
+  });
+
+  log.debug('transition', { from: loop.state.tag, to: next.tag, seq: loop.seq });
+  warnRemediation(log, loop.state, next);
+
+  loop.state = next;
+  loop.commands = nextCommands;
+
+  // Telemetry lifecycle beat (pure observability): one datapoint per performed-and-folded event —
+  // the compile → run → verify → sign-off progression an embedder meters. Guarded and off the
+  // replay log, so it can never affect the run's outcome.
+  run.emitTelemetry({ kind: 'lifecycle', runId, event: event.tag, stateAfter: next.tag, ts: deps.clock.now() });
+
+  // Advance the baselines after the transition: the approver's cumulative baseline at a --phased
+  // boundary, and (under --delta-verify) an internal checkpoint after a continuation iteration so
+  // the next judge sees only its delta. All of that — including the fail-closed rollback — lives in
+  // the Baseline module now; the loop just hands it the transition and takes back the (advanced) seq.
+  loop.seq = await run.baseline.onTransition({
+    event,
+    nextCommand: nextCommands[0],
+    seq: loop.seq,
+    runId,
+    contractHash: loop.contractHash,
+    nextTag: next.tag,
+  });
+
+  // `--explain` narration (issue #8) — AFTER the write-ahead append, so a slow side-LLM never
+  // sits on the durability path. Strictly advisory and off the critical path: the observer is
+  // internally fail-closed, and this extra guard means even a throw here degrades to "no
+  // summary" rather than touching the run's outcome.
+  await observe(deps.observer, (o) => o.onEvent(event), log);
+}
+
+/**
+ * Bounded stuck self-recovery (improvement plan 4.2) is a pure reducer policy — surface each
+ * spend LOUDLY here so an unattended operator can see the run saved itself (and how often).
+ */
+function warnRemediation(log: Logger, state: OrchestratorState, next: OrchestratorState): void {
+  const remediatedTo = remediationsTotal(next);
+  if (remediatedTo !== undefined && remediatedTo > (remediationsTotal(state) ?? remediatedTo)) {
+    log.warn('stuck auto-remediation applied — retrying instead of aborting', {
+      used: remediatedTo,
+      cap: MAX_STUCK_REMEDIATIONS,
+    });
+  }
+}
+
+/** The terminal outcome of a run that ended on its own: outcome + extras, logged, emitted, narrated. */
+async function finishRun(run: Run, state: OrchestratorState): Promise<RunOutcome> {
+  const outcome = buildOutcome(state, run.runId);
+  const extras = await buildOutcomeExtras(run.deps);
+  run.log.info('run finished', {
     status: outcome.status,
     iterations: outcome.iterations,
     ...(extras.usage !== undefined ? { tokensTotal: extras.usage.total.tokens } : {}),
   });
-  const finalOutcome: RunOutcome = {
-    ...outcome,
-    ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
-    ...(extras.sessionId !== undefined ? { sessionId: extras.sessionId } : {}),
-  };
-  emitRunFinished(finalOutcome);
+  const finalOutcome = withExtras(outcome, extras);
+  run.emitRunFinished(finalOutcome);
   // Final `--explain` checkpoint (issue #8): narrate the terminal outcome — especially a stuck
   // ABORTED. Same advisory, fail-closed contract as the per-iteration narration above.
-  await observe(deps.observer, (o) => o.onOutcome(finalOutcome), log);
+  await observe(run.deps.observer, (o) => o.onOutcome(finalOutcome), run.log);
   return finalOutcome;
 }
 
@@ -325,9 +403,7 @@ async function observe(
  * cannot be read degrades both to absent — it NEVER breaks the outcome. Reading the log (the source
  * of truth) means the extras are identical fresh or resumed.
  */
-async function buildOutcomeExtras(
-  deps: DriverDeps,
-): Promise<{ usage?: UsageReport; sessionId?: SessionId }> {
+async function buildOutcomeExtras(deps: DriverDeps): Promise<OutcomeExtras> {
   try {
     const stored = await deps.runlog.read();
     if (stored === null) return {};

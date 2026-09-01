@@ -16,8 +16,7 @@ import {
   classifyReasonExpr,
   reasonExprsAfter,
   unclassifiedReasons,
-  type ReasonPolicy,
-} from '../testing/reason-scan';
+  type ReasonPolicy, forwardedReasonExprs } from '../testing/reason-scan';
 import type { LoopCtx } from './state';
 
 /**
@@ -306,7 +305,7 @@ describe('abort-reason trust boundary — the DRIVER-authored terminal reasons',
     builders: Object.keys(builders),
     wrappers: [],
     // The run id goaly minted itself — not worker-reachable.
-    goalyOwnedHoles: ['runId'],
+    goalyOwnedHoles: ['runId', 'run.runId'],
     leadIns: LEAD_INS,
     delegated: {
       floor:
@@ -332,7 +331,14 @@ describe('abort-reason trust boundary — the DRIVER-authored terminal reasons',
     // sentinel expression that no policy classifies, so it fails here rather than escaping.
     expect(declared.length).toBe([...source.matchAll(sites)].length);
     expect(declared.length).toBeGreaterThan(0);
-    expect(unclassifiedReasons(declared, DRIVER_POLICY)).toEqual([]);
+    // The literal lives in one helper (`abortedOutcome`) whose `reason` parameter is filled at its
+    // call sites — follow the parameter to every argument that fills it, transitively through the
+    // forwarding helpers, so each expression that can reach the outcome is classified.
+    const filled = declared.flatMap((expr) =>
+      expr === 'reason' ? forwardedReasonExprs(source, 'abortedOutcome') : [expr],
+    );
+    expect(filled.length).toBeGreaterThan(declared.length);
+    expect(unclassifiedReasons(filled, DRIVER_POLICY)).toEqual([]);
   });
 
   it('the best-of-N start floor interpolates nothing at all (why `floor` is delegated)', () => {
