@@ -154,8 +154,17 @@ goaly init --harness codex --autonomous --yes
 source <(goaly completion bash)
 ```
 
-`goaly help` lists every flag. Exit codes: `0` DONE · `1` FAILED/ABORTED · `2` usage error ·
-`130` interrupted (Ctrl-C; the run stays resumable).
+`goaly help` lists every flag. Exit codes for a run: `0` DONE · `1` FAILED/ABORTED · `2` usage
+error or a pre-run guard (a bad flag value, an unresolvable `--baseline`, a live run lock) ·
+`130` interrupted (Ctrl-C; the run stays resumable). An internal crash also exits `1`, after
+reaping any live child processes. The read-only subcommands use `0` ok · `1` not-ok (`runs show`
+on a missing/corrupt run, `runs watch` on a stalled one, `doctor` on a hard fail, `config
+validate` on an invalid file) · `2` usage error.
+
+The stdout/stderr contract: **stdout carries only the machine-facing result** (the final outcome
+block, `runs`/`doctor`/`config` output); everything live — diagnostics log lines, `--stream`,
+`--explain`, warnings — goes to **stderr**. `goaly … 2>/dev/null` therefore leaves a clean,
+scriptable result.
 
 Goal, intent, and rubric each accept exactly one source: inline (`--goal "…"`, `--intent "…"`,
 `--rubric "…"`), a file (`--goal-file <path>`, `--intent-file <path>`, `--rubric-file <path>`),
@@ -1148,7 +1157,10 @@ kill an hours-long run. All defaults, no flags needed
   second Ctrl-C exits immediately, after reaping live child process groups.
 - **Crash-safety end to end.** Every run-log append is fsync'd write-ahead; a torn tail is
   tolerated on read and repaired on the next append. A per-run lock stops two processes driving the
-  same run (stale locks self-heal). A terminated-but-corrupt line still fails closed.
+  same run (stale locks self-heal, with a notice naming the dead holder's pid). A
+  terminated-but-corrupt line still fails closed. An unexpected fatal error reaps live child
+  process groups before the process exits, so a crashed goaly never leaves an agent CLI editing
+  the tree and spending tokens on its own — the run stays resumable either way.
 - **Budgets survive `--resume`.** Prior token spend is folded out of the log and re-armed against
   `--budget-tokens`. (The wall-clock budget restarts per process — the crash-to-resume gap is idle
   time, not spend.)
@@ -1223,7 +1235,7 @@ re-run nothing:
 ```bash
 goaly runs list                  # one row per run: id, status, iterations, tokens, goal
 goaly runs show run-<id>         # frozen contract + hash, Seal outcome, every verdict, totals,
-                                 # and any degraded-mode label (e.g. SELF-JUDGED)
+                                 # wall-clock duration, and any degraded-mode label (e.g. SELF-JUDGED)
 goaly runs watch run-<id>        # follow a LIVE run from another terminal
 goaly runs resume-cmd run-<id>   # how to continue the run's CLI session interactively
 goaly runs list --workspace ./myrepo
