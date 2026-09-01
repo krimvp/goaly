@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A dying subprocess can no longer crash the whole goaly process** (#101). Writing a large prompt
+  to a child that exits before draining its stdin raised an unhandled `EPIPE` on the stdin socket
+  and killed the orchestrator mid-run. The write now fails closed: the step resolves with the
+  child's real exit code and the seams handle it as the typed failure they were built for.
+- **Bad flag values are clean usage errors.** `--max-iterations abc` printed a raw ZodError stack
+  and exited `1` (colliding with a failed run); it now names the flag and exits `2`. A usage error
+  also prints the message plus a `goaly help` pointer instead of the full multi-hundred-line usage
+  text that scrolled the error off screen.
+
+### Added
+- **Fatal-crash child reaping.** An unexpected fatal error (uncaught exception / unhandled
+  rejection) now reaps live child process groups before exiting, so a crashed goaly never leaves
+  an agent CLI editing the tree and spending tokens on its own.
+- **Stale run-lock reclaims are reported.** The self-healing sweep of a dead driver's lock now
+  prints a notice naming the dead pid instead of happening silently.
+- **`goaly runs show` prints the run's wall-clock `duration:`** next to started/ended.
+- The reference now documents the read-only subcommands' exit codes and the stdout/stderr contract
+  (outcome on stdout, everything live on stderr).
+
 ## [0.2.6] - 2026-08-13
 
 ### Security
