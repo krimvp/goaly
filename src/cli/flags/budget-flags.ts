@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_TIMEOUT_MS } from '../../agent-cli/codec';
 import { z } from 'zod';
 import { UsageError, str, type RawFlags } from './tokens';
 
@@ -40,6 +41,15 @@ export function parseTimeouts(flags: RawFlags): StepTimeouts {
   };
   const harnessMs = ms('harness-timeout-ms');
   const harnessIdleMs = ms('harness-idle-timeout-ms');
+  // The wall clock is the absolute backstop, so an idle cap at or above it can never fire — the
+  // flag would be inert. Fail closed rather than let the user believe the heartbeat is armed.
+  if (harnessIdleMs !== undefined && harnessIdleMs >= (harnessMs ?? DEFAULT_AGENT_TIMEOUT_MS)) {
+    throw new UsageError(
+      `--harness-idle-timeout-ms ${harnessIdleMs} is not below the wall-clock ` +
+        `--harness-timeout-ms (${harnessMs ?? DEFAULT_AGENT_TIMEOUT_MS}), so it could never fire — ` +
+        'lower it, or raise --harness-timeout-ms',
+    );
+  }
   const llmMs = ms('llm-timeout-ms');
   const verifyMs = ms('verify-timeout-ms');
   const setupMs = ms('setup-timeout-ms');

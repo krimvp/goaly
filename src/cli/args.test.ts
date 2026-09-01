@@ -860,6 +860,30 @@ describe('parseArgs', () => {
     expect(b.baseline).toBeUndefined();
   });
 
+  describe('inert flag combinations fail closed', () => {
+    const run = ['run', '--goal', 'g', '--verify-cmd', 'true'];
+    it('rejects an idle timeout at or above the wall clock (it could never fire)', async () => {
+      await expect(
+        parseArgs([...run, '--harness-timeout-ms', '1000', '--harness-idle-timeout-ms', '1000']),
+      ).rejects.toThrow(/--harness-idle-timeout-ms 1000 is not below/);
+      // Against the default wall clock too.
+      await expect(
+        parseArgs([...run, '--harness-idle-timeout-ms', '600000']),
+      ).rejects.toThrow(UsageError);
+      const ok = await parseArgs([...run, '--harness-timeout-ms', '2000', '--harness-idle-timeout-ms', '1000']);
+      expect(ok.timeouts.harnessIdleMs).toBe(1000);
+    });
+
+    it('rejects sandbox sub-flags without --sandbox (they would be discarded)', async () => {
+      await expect(parseArgs([...run, '--sandbox-net', 'allow'])).rejects.toThrow(
+        /--sandbox-net requires --sandbox/,
+      );
+      await expect(
+        parseArgs([...run, '--sandbox-image', 'img', '--sandbox-runtime', 'docker']),
+      ).rejects.toThrow(/--sandbox-image, --sandbox-runtime require --sandbox/);
+    });
+  });
+
   describe('--sandbox (issue #9)', () => {
     const run = ['run', '--goal', 'g', '--verify-cmd', 'true'];
 

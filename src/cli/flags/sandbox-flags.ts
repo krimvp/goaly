@@ -33,6 +33,19 @@ export function parseSandbox(flags: RawFlags): SandboxPolicy {
   const net = str(flags, 'sandbox-net');
   const image = str(flags, 'sandbox-image');
   const runtime = str(flags, 'sandbox-runtime');
+  // Without `--sandbox` the policy is `mode: 'none'` and these would be parsed then discarded — a
+  // user who typed them believes the jail is configured. Fail closed instead.
+  const orphaned = [
+    ...(net !== undefined ? ['--sandbox-net'] : []),
+    ...(image !== undefined ? ['--sandbox-image'] : []),
+    ...(runtime !== undefined ? ['--sandbox-runtime'] : []),
+  ];
+  if (mode === undefined && orphaned.length > 0) {
+    throw new UsageError(
+      `${orphaned.join(', ')} require${orphaned.length === 1 ? 's' : ''} --sandbox (or --sandbox=<mode>) — ` +
+        'without it no sandbox is configured and the option would be ignored',
+    );
+  }
   const parsed = SandboxPolicy.safeParse({
     ...(mode !== undefined ? { mode } : {}),
     ...(net !== undefined ? { network: parseSandboxNet(net) } : {}),

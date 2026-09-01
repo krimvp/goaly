@@ -109,9 +109,12 @@ export function applyImpliedDefault(
       `${applied.join(', ')} — pass --preset none for the bare tool defaults`,
   ];
   const merged = { ...overlay, ...cliFlags };
-  const impliedAutonomy = applied.some((a) => a.startsWith('autonomous='));
+  // The reminder is about the RUN being unattended, not about who set the flag: a typed `-d` /
+  // `--autonomous` on a bare run must not silence it (it used to — the implied preset no longer
+  // "applied" autonomous, so the check keyed off the wrong fact).
+  const autonomous = merged['autonomous'] !== undefined;
   if (
-    impliedAutonomy &&
+    autonomous &&
     merged['approver-model'] === undefined &&
     merged['approver-models'] === undefined
   ) {

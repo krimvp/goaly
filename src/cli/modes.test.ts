@@ -48,6 +48,14 @@ describe('applyMode', () => {
   });
 });
 
+describe('applyMode: a typed flag that defeats the mode is reported', () => {
+  it('--mode review --autonomous keeps the flag but says so', () => {
+    const { overlay, notes } = applyMode('review', {}, { autonomous: true });
+    expect(overlay['autonomous']).toBeUndefined(); // the CLI spread on top will still set it
+    expect(notes.some((n) => n.includes('--autonomous (explicit) overrides --mode review'))).toBe(true);
+  });
+});
+
 describe('parseArgs with --mode', () => {
   it('hands-off expands to autonomous + medium autonomy + delta-verify + 1 candidate', async () => {
     const a = await parseArgs([...run, '--mode', 'hands-off'], defaultReaders, noConfig);

@@ -79,6 +79,13 @@ export function applyMode(
       delete overlay[key];
       notes.push(`--mode ${mode}: dropping config-file '${key}' (${mode} keeps a human at the gates)`);
     }
+    // The clear list only scrubs the config layer; a typed flag still wins. Say so, because a
+    // silent `--mode review --autonomous` is a review mode with nobody at the gate.
+    if (cliFlags[key] !== undefined) {
+      notes.push(
+        `--${key} (explicit) overrides --mode ${mode}, which would leave it off — the run keeps it`,
+      );
+    }
   }
 
   for (const [key, value] of Object.entries(spec.set)) {
