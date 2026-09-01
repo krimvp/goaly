@@ -9,13 +9,17 @@
  * flushed before the event loop drains and the process exits on its own.
  */
 import { main } from './main';
+import { makeCrashHandler } from './crash-guard';
+
+// A fatal error anywhere in the process (an unhandled 'error' event on a stream, an unawaited
+// rejection) must reap live child process groups before dying — otherwise a group-spawned agent
+// CLI outlives goaly and keeps editing/spending. See crash-guard.ts.
+const onFatal = makeCrashHandler();
+process.on('uncaughtException', onFatal);
+process.on('unhandledRejection', onFatal);
 
 main(process.argv.slice(2))
   .then((code) => {
     process.exitCode = code;
   })
-  .catch((err: unknown) => {
-    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
-    process.stderr.write(`${message}\n`);
-    process.exitCode = 1;
-  });
+  .catch(onFatal);
