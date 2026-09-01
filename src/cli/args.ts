@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { CliInput, cliInputToRunConfig, type RunConfig } from '../domain/config';
 import type { RunExtension } from '../domain/events';
 import { SandboxPolicy } from '../sandbox/policy';
@@ -458,7 +459,7 @@ export async function parseArgs(
   }
   const goalForParse = goalText ?? RESUMED_GOAL_PLACEHOLDER;
 
-  const cliInput = CliInput.parse({
+  const cliInput = parseCliInput({
     goal: goalForParse,
     ...(str(flags, 'verify-cmd') !== undefined ? { verifyCmd: str(flags, 'verify-cmd') } : {}),
     ...(flags['generate'] !== undefined ? { generate: true } : {}),
@@ -641,6 +642,40 @@ export async function parseArgs(
     baseUrl: str(flags, 'base-url'),
     llmApiKeyEnv: str(flags, 'llm-api-key-env') ?? 'OPENAI_API_KEY',
   };
+}
+
+/**
+ * The user-facing spelling of a `CliInput` field: mechanical camelCase→kebab-case, plus the two
+ * fields whose flag spelling is not mechanical.
+ */
+const FLAG_SPELLING_EXCEPTIONS: Record<string, string> = {
+  budgetWallClockMs: 'budget-wall-ms',
+  satisfiabilityCritic: 'no-satisfiability-critic',
+};
+
+function flagSpelling(field: string): string {
+  const kebab =
+    FLAG_SPELLING_EXCEPTIONS[field] ?? field.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+  return `--${kebab}`;
+}
+
+/**
+ * `CliInput.parse` with Zod failures translated into a clean {@link UsageError} naming the flag as
+ * the user spells it. Without this, a bad flag value (`--max-iterations abc`) escapes as a raw
+ * ZodError stack with exit 1 — indistinguishable from a failed run — instead of a usage error
+ * (exit 2) like every other malformed invocation.
+ */
+function parseCliInput(input: Record<string, unknown>): z.infer<typeof CliInput> {
+  try {
+    return CliInput.parse(input);
+  } catch (e) {
+    if (!(e instanceof z.ZodError)) throw e;
+    const lines = e.issues.map((issue) => {
+      const field = String(issue.path[0] ?? 'input');
+      return `invalid value for ${flagSpelling(field)}: ${issue.message}`;
+    });
+    throw new UsageError(lines.join('\n'));
+  }
 }
 
 function helpResult(): ParsedArgs {

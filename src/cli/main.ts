@@ -27,7 +27,9 @@ export async function main(argv: string[]): Promise<number> {
     parsed = await parseArgs(argv);
   } catch (e) {
     if (e instanceof UsageError) {
-      process.stderr.write(`${e.message}\n\n${USAGE}\n`);
+      // The message alone, plus a pointer: the full USAGE is hundreds of lines, and dumping it
+      // here scrolled the actual error (the first thing printed) straight off screen.
+      process.stderr.write(`${e.message}\n\nrun 'goaly help' for the full usage\n`);
       return 2;
     }
     throw e;

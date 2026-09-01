@@ -106,6 +106,28 @@ describe('parseArgs', () => {
     });
   });
 
+  describe('bad flag values are usage errors, not raw ZodErrors', () => {
+    const base = ['run', '--goal', 'g', '--verify-cmd', 'true'];
+
+    it('a non-numeric --max-iterations names the flag', async () => {
+      const p = parseArgs([...base, '--max-iterations', 'abc']);
+      await expect(p).rejects.toThrow(UsageError);
+      await expect(parseArgs([...base, '--max-iterations', 'abc'])).rejects.toThrow(
+        /--max-iterations/,
+      );
+    });
+
+    it('a non-mechanical spelling maps back to the flag the user typed', async () => {
+      await expect(parseArgs([...base, '--budget-wall-ms', 'soon'])).rejects.toThrow(
+        /--budget-wall-ms/,
+      );
+    });
+
+    it('an out-of-range --candidates names the flag', async () => {
+      await expect(parseArgs([...base, '--candidates', '-2'])).rejects.toThrow(/--candidates/);
+    });
+  });
+
   it('defaults maxCompileRetries to 2 when the flag is absent (issue #51)', async () => {
     const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
     expect(a.config.maxCompileRetries).toBe(2);
