@@ -14,10 +14,7 @@ import { join } from 'node:path';
 const LIMIT = 800;
 
 /** file → pinned max lines (its size when the gate landed). Shrink-only; never add entries. */
-const GRANDFATHERED = new Map([
-  ['src/driver/driver.ts', 1152],
-  ['src/cli/compose.ts', 1009],
-]);
+const GRANDFATHERED = new Map([]);
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {

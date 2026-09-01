@@ -1,3 +1,9 @@
+> **Archived.** Pre-implementation design handoff (its status line below says "not yet
+> implemented"; the project is now at v0.2.x with 20 ADRs). Its durable decisions live in
+> [ADR 0001](../adr/0001-wrapper-over-hooks.md) (wrapper vs hooks), [ADR 0002](../adr/0002-compile-once-then-freeze.md)
+> (verifier ladder), [ADR 0003](../adr/0003-two-key-approval.md) (two-key approval) and
+> [`ARCHITECTURE.md`](../../ARCHITECTURE.md). Kept as a record.
+
 # Generic Goal-Orchestration Layer — Design
 
 > Status: design converged, not yet implemented. This doc is a handoff for a fresh

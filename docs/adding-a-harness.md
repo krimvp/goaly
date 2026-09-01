@@ -438,7 +438,7 @@ The subprocess is **not** your problem: `AgentCliHarness` builds the default exe
 the shared `runProcess` (output cap, timeout, process-group kill, never-reject). Tests inject a fake
 `AgentExecFn` instead.
 
-**The sandbox is not your problem either.** When `--sandbox` is on, `compose.ts` wraps the injected
+**The sandbox is not your problem either.** When `--sandbox` is on, `compose-harness.ts` wraps the injected
 `exec` around your codec's `command`/argv at the composition root (`src/sandbox/`, ADR 0007) — it
 rewrites `[command, ...args]` into the jailed invocation (bwrap / container) before spawning. This is
 **transparent to codec authors**: you write your `harnessArgs`/`readonlyArgs` exactly as you would
@@ -539,7 +539,7 @@ empty/unparseable output, invariant #4). Because it is driven entirely by the co
 per-provider registration** — `makeLlmProvider` is generic:
 
 ```ts
-// src/cli/compose.ts — ALREADY generic; no edit needed when you add a CLI:
+// src/cli/compose-harness.ts — ALREADY generic; no edit needed when you add a CLI:
 return new AgentCliLlmProvider({ codec: codecFor(choice), /* model, timeoutMs, onEvent */ });
 ```
 
@@ -687,7 +687,7 @@ the wire uses.
 - `src/cli/args.ts`: `HarnessChoice = AgentCli | 'fake' | 'goaly-code'`; `LlmProviderChoice = AgentCli |
   'openai'`; allow both in `parseHarness`/`parseLlmProvider`; add `--base-url <url>` and
   `--llm-api-key-env <NAME>` (default `OPENAI_API_KEY`); usage strings.
-- `src/cli/compose.ts`: `makeHarness` is bypassed for `goaly-code` — `composeDeps` routes to `makeGoalyCodeHarness`
+- `src/cli/compose-harness.ts`: `makeHarness` is bypassed for `goaly-code` — `composeDeps` routes to `makeGoalyCodeHarness`
   (builds the `OpenAiClient`, the `NodeToolHost` with a sandbox-wrapped `run_shell`, and a
   `FileSessionStore`). `makeLlmProvider` gains an `openai` branch (a direct `OpenAiLlmProvider`). Both
   fail closed (`EndpointConfigError`) without a base URL / resolved model. `codecFor` is **untouched** (goaly-code

@@ -113,6 +113,17 @@ describe('renderRunDetail', () => {
     };
   }
 
+  it('renders the wall-clock duration between started and ended', () => {
+    // Fixture spans 50 s; a still-live run (no end) shows '-'.
+    expect(renderRunDetail(detail())).toContain('duration:    50s');
+    expect(
+      renderRunDetail(detail({ endedAt: 1_700_000_000_000 + 2 * 3600_000 + 31 * 60_000 })),
+    ).toContain('duration:    2h 31m');
+    expect(
+      renderRunDetail(detail({ status: 'INCOMPLETE', stateTag: 'VERIFYING', endedAt: undefined })),
+    ).toContain('duration:    -');
+  });
+
   it('renders the decomposition plan + per-iteration phase for a phased run (issue #48)', () => {
     const plan = makeFakePlan({ phases: [{ goal: 'scaffold the app' }, { goal: 'add the parser' }] });
     const text = renderRunDetail(

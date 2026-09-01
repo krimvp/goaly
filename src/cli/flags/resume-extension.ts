@@ -1,6 +1,8 @@
 import type { RunConfig } from '../../domain/config';
 import type { RunExtension } from '../../domain/events';
-import { parseDelegationDirective } from '../delegation';
+import { parseDelegationDirective, type Delegation } from '../delegation';
+
+export type { Delegation } from '../delegation';
 import { MAX_CANDIDATES } from './budget-flags';
 import { UsageError, str, type RawFlags } from './tokens';
 
@@ -14,7 +16,6 @@ import { UsageError, str, type RawFlags } from './tokens';
  * A natural-language parallel delegation recognised in a resume note ("try 4 parallel attempts"),
  * mapped onto the best-of-N tournament. Carried so the CLI can log the interpretation loudly.
  */
-export type Delegation = { candidates: number; phrase: string; overriddenByFlag: boolean };
 
 /**
  * Collect the operator extension for a `--resume` (ADR 0012) from EXPLICITLY-passed CLI flags

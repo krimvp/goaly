@@ -39,6 +39,17 @@ function tokensText(layer: TokenUsage): string {
  * optional `cost` overlay appends an approximate USD figure per priced layer (and marks the total
  * `+` when some model was unpriced). Shared by the end-of-run outcome and `goaly runs show`.
  */
+/** Human wall-clock span: `47s`, `12m 05s`, `2h 31m`. Clamped at zero (clock skew across resumes). */
+export function formatDuration(ms: number): string {
+  const totalSec = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`;
+  return `${s}s`;
+}
+
 export function formatUsage(u: UsageReport, cost?: CostView): string[] {
   const row = (label: string, layer: TokenUsage, layerCost: number | undefined): string => {
     let line = `  ${label.padEnd(13)}${tokensText(layer)}`;

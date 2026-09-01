@@ -50,137 +50,86 @@ COMPILE ──► SEAL ──► setup + pre-flight ──► ┌─────
                                                      DONE · FAILED · ABORTED
 ```
 
-- **The contract is frozen at Seal.** Its `contractHash` never changes again, and it's logged every
-  iteration to prove the bar never moved. Under `--mode review` you approve it once — or revise it
-  with feedback, or edit the authored files yourself and re-freeze. Autonomous runs (the implied
-  `default` preset, `--autonomous`, `-d`) skip the pause, never the freeze.
-- **The verifier ladder runs cheapest-and-hardest-to-game first**: deterministic checks (exit
-  codes, tests) before any LLM judge, short-circuiting on the first fail. A rung that errors is
-  **fail-closed** — a malformed grader is never a green.
-- **Two keys for DONE**: the frozen ladder passes *and* the independent Sign-off approver — which
-  runs only on a green and is **veto-only** — doesn't veto. "Tests pass" is not "done".
-- **The second key is kept independent, and labelled when it can't be.** `--model X` picks the
-  *agent's* model; the approver defaults to a **different** one wherever the provider offers it. If
-  the agent, the judge rung and the approver still collapse onto one model, the run is recorded as
-  a typed `SELF-JUDGED` degraded mode in the run header, the terminal summary and `goaly runs show`
-  — so a DONE nobody independently reviewed is labelled everywhere it is reported. When only the
-  approver collapses onto the agent's model (the judge rung differs), that is labelled too, as
-  `SELF-APPROVED`: the second key was the model that wrote the code. And when goaly
-  cannot *resolve* the approver's model to compare it at all (the provider's own default), the run is
-  labelled `INDEPENDENCE-UNVERIFIED` rather than passed off as independent.
-- **The control flow has zero LLM calls.** A pure reducer owns all policy; everything stochastic
-  hides behind narrow interfaces at four seams.
+- **The contract is frozen at Seal.** Its `contractHash` never changes again and is logged every
+  iteration. Under `--mode review` you approve it once; autonomous runs skip the pause, never the freeze.
+- **The verifier ladder runs cheapest-and-hardest-to-game first**: deterministic checks before any
+  LLM judge, short-circuiting on the first fail. A rung that errors is **fail-closed**.
+- **Two keys for DONE**: the frozen ladder passes *and* the independent, **veto-only** Sign-off
+  approver does not veto. "Tests pass" is not "done".
+- **The second key stays independent, and is labelled when it can't be.** `--model` picks the
+  *agent's* model; the approver defaults to a different one. A collapse (`SELF-JUDGED` and kin) is
+  labelled everywhere the run is reported — see [key independence](docs/reference.md#the-sign-off-approver-does-not-inherit---model).
+- **The control flow has zero LLM calls.** A pure reducer owns all policy behind four narrow seams.
 - **Every run is crash-safe and resumable.** A write-ahead log under `.goaly/<runId>/` makes runs
-  replayable, `--resume`-able, and inspectable (`goaly runs list` / `show` / `watch`, or
-  `goaly ui` in the browser).
+  replayable, `--resume`-able, and inspectable (`goaly runs list` / `show` / `watch`, `goaly ui`).
 - **Stuck detection bails early with a typed reason** (no-diff, repeated failure, oscillation,
-  harness crash, unevaluable contract, repeated timeout-with-no-diff, budget) instead of burning
-  iterations.
+  harness crash, unevaluable contract, repeated timeout-with-no-diff, budget).
 
-Under `--generate` (the default), the compiler also authors a one-time **setup** command and a
-**pre-flight** proves the frozen verification can actually run — an unsound contract aborts before
-any worker token is spent. And because that pre-flight happens at t=0, on a tree with no
-implementation in it, goaly asks once more when the evidence finally exists: a repeat-failure
-streak that keeps tripping a frozen authored check is re-adjudicated read-only, and an
-unsatisfiable bar aborts as **`CONTRACT_DEFECTIVE`** — "the contract is broken, keep your tree" —
-instead of blaming the worker. And that abort prints the way out:
-`goaly --from-run <id> --recontract` keeps the tree, re-authors the bar from the defect report, and
-freezes a **new** contract under a **new** run id with the predecessor recorded in its header. No
-contract is ever mutated — "the bar was wrong" becomes an auditable chain, not an in-place softening.
-
-And once a bar has been adjudicated defective, goaly **remembers across runs**: the adjudicator's
-generalized anti-pattern (never your source, never the diff) is appended to `~/.goaly/defects.jsonl`
-and injected into future contract authoring as *"known false-red patterns — do not author these"*.
-It is filtered to your language/runner, capped, logged, and fail-open. What keeps it from becoming a
-weakening channel is that a hint is **untrusted data all the way in** — fenced with a random nonce,
-framed as *impossibility*, and still facing the critics, Seal, the frozen ladder and both keys. On
-top of that: only an adjudicated `CONTRACT_DEFECTIVE` verdict can write a record, every record is
-HMAC-signed and nonce'd so a hand-added, edited, copied-in or **replayed** line is dropped on read,
-and the record schema has no field for "this was hard". `goaly config defects list` shows what it
-learned; `--no-defect-corpus` opts out.
+Under `--generate` (the default) the compiler also authors a one-time **setup** command, and a
+**pre-flight** proves the frozen verification can run before any worker token is spent. A bar that
+later proves unsatisfiable aborts as `CONTRACT_DEFECTIVE`; [re-contracting](docs/reference.md#re-contracting-a-defective-bar---recontract)
+re-authors it under a **new** run id (no contract is ever mutated), and the signed
+[defect corpus](docs/reference.md#the-defect-corpus-cross-run-learning) remembers the defect for future authoring.
 
 ## Features
 
-Everything below is documented in depth in the **[reference](docs/reference.md)**.
+Every row links to its section in the **[reference](docs/reference.md)**.
 
 | Feature | Flags | In short |
 | --- | --- | --- |
-| [Generated verification](docs/reference.md#seal-the-contract-gate) | `--generate` | The LLM authors the check + setup; pinned by hash, guarded against tampering. |
+| [Generated verification](docs/reference.md#seal-the-contract-gate) | `--generate` | The LLM authors the check and setup; pinned by hash, guarded against tampering. |
 | [Your own bar](docs/reference.md#the-verifier-ladder) | `--verify-cmd`, `--smoke` | Any command as the deterministic rung; `--smoke` runs the built artifact. |
-| [Phased goals](docs/reference.md#phased-goals---phased) | `--phased` | A frozen plan (a DAG) of small sub-goals + cumulative acceptance on the original goal. |
-| [Best-of-N worker](docs/reference.md#best-of-n-parallel-worker---candidates) | `--candidates N` | N isolated attempts per iteration; the frozen ladder picks the winner. Or just say *"use 4 subagents"*. |
-| [Parallel waves](docs/reference.md#cooperative-parallel-waves---parallel-phases-experimental) | `--parallel-phases` | Phases declare `dependsOn`; each topological frontier runs concurrently, merges with git plumbing, re-verifies. Experimental. |
+| [Phased goals](docs/reference.md#phased-goals---phased) | `--phased` | A frozen plan (a DAG) of small sub-goals, plus cumulative acceptance on the original goal. |
+| [Best-of-N worker](docs/reference.md#best-of-n-parallel-worker---candidates) | `--candidates N` | N isolated attempts per iteration; the frozen ladder picks the winner. Or say *"use 4 subagents"*. |
+| [Parallel waves](docs/reference.md#cooperative-parallel-waves---parallel-phases-experimental) | `--parallel-phases` | Phases that declare `dependsOn` run concurrently, merge with git plumbing, re-verify. Experimental. |
 | [Worktrees](docs/reference.md#worktrees---worktree) | `--worktree <name>` | The whole run in an isolated checkout; merge back with plain git. |
-| [Harness autonomy](docs/reference.md#harness-autonomy---harness-autonomy) | `--harness-autonomy` | Let the agent install & build for a from-scratch goal; a refusal names the fix, and the reviewed diff auto-pins to the run-start commit so agent commits stay visible. |
-| [Autonomy profiles](docs/reference.md#autonomy-profiles---mode) | `--mode` | `review` / `hands-off` / `aggressive` bundle the right flag combinations; explicit flags override, loudly. |
-| [Named presets](docs/reference.md#named-presets---preset) | `--preset` | Flag bundles selected by name — a language-neutral `default` ships built in, and `.goalyrc` (`"presets"`) defines or redefines your own; `"preset"` applies one on every run. One word instead of N flags. |
-| [Dry run](docs/reference.md#dry-run---dry-run) | `--dry-run` | Validate the flags + `.goalyrc` and print the resolved config. Writes nothing, spends nothing. |
+| [Harness autonomy](docs/reference.md#harness-autonomy---harness-autonomy) | `--harness-autonomy` | Let the agent install and build for a from-scratch goal; a refusal names the fix. |
+| [Autonomy profiles](docs/reference.md#autonomy-profiles---mode) | `--mode` | `review` / `hands-off` / `aggressive` bundle the right flags; explicit flags override, loudly. |
+| [Named presets](docs/reference.md#named-presets---preset) | `--preset` | Flag bundles by name: the built-in `default`, or your own from `"presets"` in `.goalyrc`. |
+| [Dry run](docs/reference.md#dry-run---dry-run) | `--dry-run` | Validate the flags and `.goalyrc`, print the resolved config. Writes nothing, spends nothing. |
 | [Adversarial review](docs/reference.md#hardening-against-reward-hacking) | `--adversarial` | Critics attack the contract before Seal; refuters attack every green before Sign-off. |
-| [Satisfiability critic](docs/reference.md#the-satisfiability-critic-false-red-guard) | on by default; `--no-satisfiability-critic` | The mirror of red-teaming: one call before the freeze asks whether a **correct** implementation could still FAIL the authored bar — an unsatisfiable frozen bar costs the whole run. |
-| [Contract dry run](docs/reference.md#the-contract-dry-run-compile-time-positive-control) | on by default; `--contract-dry-run false` | The positive control, by **execution** rather than opinion: before the freeze, a throwaway reference implementation runs against the authored bar in a scratch copy. Red ⇒ the bar is refused and re-authored (the author is told the exit code and **which** frozen rung failed, and nothing else — the rung's stdout/stderr are never read, because the reference writes to those same streams). The reference never touches your tree, and the scratch obeys `--sandbox` and runs credential-scrubbed like the verifier. |
+| [Satisfiability critic](docs/reference.md#the-satisfiability-critic-false-red-guard) | on by default; `--no-satisfiability-critic` | Before the freeze, one call asks whether a **correct** implementation could still fail the bar. |
+| [Contract dry run](docs/reference.md#the-contract-dry-run-compile-time-positive-control) | on by default; `--contract-dry-run false` | A throwaway reference implementation runs against the bar in a scratch copy; red refuses the bar. |
 | [Approver panels](docs/reference.md#hardening-against-reward-hacking) | `--approver-quorum`, `--approver-models` | Sign-off as a refute-first multi-vote panel, optionally across distinct models. |
-| [Key independence](docs/reference.md#the-sign-off-approver-does-not-inherit---model) | `--approver-model` | The approver never inherits the agent's `--model` where a distinct one exists; an irreducible collapse is labelled `SELF-JUDGED`, and an unresolvable one `INDEPENDENCE-UNVERIFIED`, in the header, summary and `runs show`. |
+| [Key independence](docs/reference.md#the-sign-off-approver-does-not-inherit---model) | `--approver-model` | The approver never inherits `--model` where a distinct model exists; a collapse is labelled. |
 | [Sandboxing](docs/reference.md#sandboxing) | `--sandbox`, `--sandbox-net` | OS-jail the agent and verifier (bwrap / firejail / container), with egress allowlists. |
 | [Operator control](docs/reference.md#operator-control-watch-steer-extend) | `--resume`, `--note` | Watch live, steer with notes, raise caps mid-run — never the frozen bar. |
 | [Follow-ups](docs/reference.md#following-up-after-a-run-ends---from-run) | `--from-run` | A new re-verified goal that knows what the last run did. |
-| [Web UI](docs/reference.md#web-ui-goaly-ui) | `goaly ui` | A local control center: mission dashboard, live pipeline + session inspector, worktrees, and a browser Seal review station. Localhost-only. |
+| [Web UI](docs/reference.md#web-ui-goaly-ui) | `goaly ui` | A localhost control center: dashboard, live pipeline, session inspector, browser Seal review. |
 | [Spend & budgets](docs/reference.md#spend-report--budgets) | `--budget-tokens`, `--cost-table` | Per-layer token report (cache included); budgets survive resume. |
 | [Observability](docs/reference.md#observability) | `--stream`, `--explain`, `--log-level` | Live agent turns, durable transcripts, plain-language narration. |
-| [Onboarding](docs/reference.md#onboarding-goaly-doctor--goaly-init) | `goaly doctor`, `goaly init` | A read-only environment report (Node, git, harness CLIs, config validity), and a starter `.goalyrc` written interactively or headless. |
-| [Reliability](docs/reference.md#reliability) | *(defaults)* | Preflight, bounded retries (contract *and* plan), safe Ctrl-C, fsync'd write-ahead log. |
-| [Stuck detection](docs/reference.md#stuck-detection) | `--stuck-*` | Typed early aborts — no-diff, repeat-failure, oscillation, harness crash, unevaluable contract, and repeated timeout-with-no-diff — each naming the flag that fixes it. |
-| [Stuck self-recovery](docs/reference.md#automatic-remediation---auto-remediate-stuck) | `--auto-remediate-stuck` | Opt-in: up to 3 bounded self-recoveries (no-diff hint, one extra repeat/crash attempt) before stopping for the operator. |
-| [Contract-fault adjudication](docs/reference.md#in-loop-contract-fault-adjudication-contract_defective) | *(defaults)* | A repeat-failure streak on a frozen authored file is re-adjudicated once, read-only, against the tree that now HAS an implementation: a `CONTRACT_DEFECTIVE` abort says the bar is broken and your tree is worth keeping. Fail-closed to today's abort. |
-| [Re-contract successor run](docs/reference.md#re-contracting-a-defective-bar---recontract) | `--recontract`, `--max-recontracts` | Recover from a `CONTRACT_DEFECTIVE` bar without discarding a correct tree: a NEW run, NEW contractHash, defect report as authoring feedback, predecessor recorded in the header. No contract is ever mutated. |
-| [Defect corpus](docs/reference.md#the-defect-corpus-cross-run-learning) | on by default; `--no-defect-corpus`, `--defect-corpus <path>`, `goaly config defects` | The one cross-run feedback loop: an adjudicated `CONTRACT_DEFECTIVE` verdict appends a generalized anti-pattern to `~/.goaly/defects.jsonl`, and future authoring gets a bounded, language-filtered "do not author these" section. Only that verdict can write; no worker text reaches a record; the schema cannot express difficulty. Fail-open. |
+| [Onboarding](docs/reference.md#onboarding-goaly-doctor--goaly-init) | `goaly doctor`, `goaly init` | A read-only environment report, and a starter `.goalyrc` written interactively or headless. |
+| [Reliability](docs/reference.md#reliability) | *(defaults)* | Preflight, bounded retries (contract and plan), safe Ctrl-C, fsync'd write-ahead log. |
+| [Stuck detection](docs/reference.md#stuck-detection) | `--stuck-*` | Typed early aborts (no-diff, repeat-failure, oscillation, crash, …), each naming the flag that fixes it. |
+| [Stuck self-recovery](docs/reference.md#automatic-remediation---auto-remediate-stuck) | `--auto-remediate-stuck` | Opt-in: up to 3 bounded self-recoveries before the run stops for the operator. |
+| [Contract-fault adjudication](docs/reference.md#in-loop-contract-fault-adjudication-contract_defective) | *(defaults)* | A repeat-failure streak on a frozen authored file is re-adjudicated once; `CONTRACT_DEFECTIVE` keeps your tree. |
+| [Re-contract successor run](docs/reference.md#re-contracting-a-defective-bar---recontract) | `--recontract`, `--max-recontracts` | Recover from a `CONTRACT_DEFECTIVE` bar and keep the tree: a new run, a new contract, chained. |
+| [Defect corpus](docs/reference.md#the-defect-corpus-cross-run-learning) | on by default; `--no-defect-corpus`, `--defect-corpus <path>` | Adjudicated defects append a signed anti-pattern to `~/.goaly/defects.jsonl` for future authoring. |
 
 ## Usage
 
 ```bash
 # Choose a harness, cap iterations, set a budget; resume a crashed run by id:
-goaly run --goal "..." --verify-cmd "pytest -q" --harness codex --max-iterations 8 \
-          --budget-tokens 500000
+goaly run --goal "..." --verify-cmd "pytest -q" --harness codex --max-iterations 8 --budget-tokens 500000
 goaly run --resume run-<id>
 
-# Different models for the agent vs. the LLM steps (judge/approver/compiler):
-goaly run --goal "..." --verify-cmd "npm test" --model claude-opus-4-8 --llm-model claude-sonnet-4-6
+# One flag for a whole autonomy posture, or a named preset (goaly config presets lists them):
+goaly "..." --verify-cmd "npm test" --mode hands-off     # or: --preset ship
 
-# No coding CLI at all — goaly's own agent loop on any OpenAI-compatible endpoint:
-goaly run --goal "..." --verify-cmd "npm test" --harness goaly-code \
-          --base-url http://localhost:11434/v1 --model qwen2.5-coder
-
-# One flag for a whole autonomy posture (review | hands-off | aggressive):
-goaly "..." --verify-cmd "npm test" --mode hands-off
-
-# Or a named preset: the built-in 'default' works in any repo with zero config,
-# and "presets" in .goalyrc defines (or redefines) your own:
-goaly "..." --preset default
-goaly "..." --preset ship          # goaly config presets lists what's defined
-
-# Check what a run WOULD do — flags, .goalyrc, models, budgets — without starting one:
+# Check what a run WOULD do without starting one; inspect runs (or open the browser UI: goaly ui):
 goaly run --goal "..." --generate --dry-run
+goaly runs list && goaly runs show run-<id>
 
-# Inspect and follow runs (read-only), or open the browser UI:
-goaly runs list
-goaly runs show run-<id>
-goaly ui
-
-# First-time setup: environment report, then a starter .goalyrc:
-goaly doctor
-goaly init
-
-# Tab completion for every subcommand and flag (zsh alike; fish: goaly completion fish | source):
+# First-time setup, then tab completion (zsh alike; fish: goaly completion fish | source):
+goaly doctor && goaly init
 source <(goaly completion bash)
 ```
 
-`goaly help` lists every flag. The **[CLI cookbook](docs/reference.md#cli-cookbook)** has a worked
-example for every mode; a **[config file](docs/reference.md#config-file)** (`.goalyrc` /
-`~/.goalyrc`) keeps repeated wiring out of your invocations — with a shipped JSON Schema
-(`goalyrc.schema.json`) for editor auto-completion and `goaly config validate <path>` for the
-run-path verdict.
-
-The LLM steps (compiler/judge/approver) **follow the harness** by default — `--harness codex`
-authors and judges on codex too, so one installed CLI is enough; `--llm-provider` splits them.
+`goaly help` prints a topic index; `goaly help <topic>` one section; `goaly help all` every flag.
+The **[CLI cookbook](docs/reference.md#cli-cookbook)** has a worked example for every mode; a
+**[config file](docs/reference.md#config-file)** (`.goalyrc` / `~/.goalyrc`, with a shipped JSON
+Schema and `goaly config validate`) keeps repeated wiring out of your invocations. The LLM steps
+**follow the harness** by default, so one installed CLI is enough; `--llm-provider` splits them.
 
 > Add `.goaly/` to your repo's `.gitignore`. Files authored under `--generate` are auto-registered
 > in `.git/info/exclude`, so your `git status` stays clean.
@@ -221,18 +170,19 @@ await drive(deps, config, runId);
 const stream = await readStreamTranscript('.goaly', runId);
 ```
 
-`DriverDeps` hooks for embedders: `interrupted` (cooperative shutdown), `sleep` (retry backoff),
-`onStreamEvent` (live turn subscription), `telemetry`, and `observer`. There's also an experimental
-[training pipeline](docs/reference.md#training-arc-experimental) built on the `goaly-code` harness.
+`DriverDeps` hooks: `interrupted`, `sleep`, `onStreamEvent`, `telemetry`, and `observer`. There is
+also an experimental [training pipeline](docs/reference.md#training-arc-experimental) on `goaly-code`.
 
 ## Docs
 
+- **[Docs router](docs/README.md)** — "I want to… → read this", one table
 - **[Reference](docs/reference.md)** — every flag, mode, and guarantee (start here for depth)
-- [`DESIGN.md`](DESIGN.md) — what & why · [`ARCHITECTURE.md`](ARCHITECTURE.md) — how
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is built · [`docs/adr/`](docs/adr/README.md) — why
+  (decision records)
 - [`CONTEXT.md`](CONTEXT.md) — the ubiquitous-language glossary
   ([plain-language version](docs/reference.md#glossary))
-- [`docs/adr/`](docs/adr/README.md) — decision records ([index](docs/adr/README.md)) ·
-  [`docs/adding-a-harness.md`](docs/adding-a-harness.md)
+- [`docs/adding-a-harness.md`](docs/adding-a-harness.md) — wrap a new agent CLI
+- [`CHANGELOG.md`](CHANGELOG.md) — what changed, per version
 
 ## License
 

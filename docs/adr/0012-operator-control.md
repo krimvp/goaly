@@ -75,7 +75,7 @@ prompt the reducer already built, at perform time: the reducer, the ladder, the 
 approver never see it as anything but worker context. Combined with the graceful interrupt this
 yields mid-run steering: `Ctrl-C` → `goaly --resume <id> --note "try the other approach"`.
 
-The division of labor stays exactly as DESIGN.md drew it: the human owns the **contract** (Seal)
+The division of labor stays exactly as the original design drew it: the human owns the **contract** (Seal)
 and now also the **operational envelope** (caps, steering); the machine owns the loop and the
 verdicts. `--resume` + extension is "same goal, more room"; `--from-run` remains "new/refined goal,
 new contract".

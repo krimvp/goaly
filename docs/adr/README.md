@@ -3,9 +3,8 @@
 The decisions behind goaly, in order. Each one was hard to reverse, surprising, or a real trade-off —
 if a change would contradict one of these, read it first and amend it in the same change.
 
-Start with [`DESIGN.md`](../../DESIGN.md) (what & why), [`ARCHITECTURE.md`](../../ARCHITECTURE.md)
-(how), [`CONTEXT.md`](../../CONTEXT.md) (glossary), and [`AGENTS.md`](../../AGENTS.md) (the eight
-invariants). The practical, user-facing reference is [`docs/reference.md`](../reference.md).
+Start with 0001–0003 (the trust model), then [`ARCHITECTURE.md`](../../ARCHITECTURE.md) (how).
+[`docs/README.md`](../README.md) routes every other question.
 
 | # | Decision |
 | --- | --- |

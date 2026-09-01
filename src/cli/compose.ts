@@ -1,22 +1,10 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DriverDeps } from '../driver/driver';
 import type { RunConfig } from '../domain/config';
-import type { CompiledContract } from '../domain/contract';
-import type { RunId, SessionId } from '../domain/ids';
-import { SessionId as SessionIdSchema } from '../domain/ids';
-import type { HarnessAdapter } from '../harness/adapter';
-import type { HarnessRunResult } from '../domain/events';
-import type { Verifier } from '../verify/verifier';
-import type { VerifierCompiler } from '../compile/compiler';
 import type { LlmProvider } from '../llm/provider';
-import { Ladder } from '../verify/ladder';
-import { AdversarialReviewRung } from '../verify/adversarial-rung';
-import { DeterministicVerifier } from '../verify/deterministic';
-import { GeneratedFilesGuard } from '../verify/generated-guard';
-import { JudgeVerifier } from '../verify/judge';
-import { AgentApprover } from '../verify/agent-approver';
+import type { Logger } from '../log/logger';
 import { AgentCompiler } from '../compile/agent-compiler';
+import type { VerifierCompiler } from '../compile/compiler';
 import { classifyUsageShape } from '../compile/usage-gate';
 import {
   critiqueCompiler,
@@ -31,214 +19,47 @@ import { StaticPlanner } from '../plan/static-planner';
 import { AutoPlanGate, HumanPlanGate } from '../plan/plan-gates';
 import type { Planner } from '../plan/planner';
 import type { PlanGate } from '../plan/plan-gate';
-import type { SealGate } from '../compile/seal';
 import { GitWorkspace, realExec } from '../workspace/git-workspace';
 import { FileWorkspace } from '../workspace/file-workspace';
 import { GitWorktreeHost } from '../workspace/git-worktree-host';
+import type { Workspace } from '../workspace/workspace';
 import { writeVerificationFile } from '../workspace/workspace-files';
 import { detectWorkspaceFacts, type WorkspaceFacts } from '../workspace/workspace-facts';
-import { resolveDefectCorpus, type DefectCorpusOptions } from '../defects/wiring';
+import { resolveDefectCorpus, type ResolvedDefectCorpus } from '../defects/wiring';
 import { DEFAULT_DEFECT_HINT_CAP } from '../defects/select';
 import { FileRunLog } from '../runlog/file-runlog';
-import { StreamTranscriptSink, STREAM_FILE } from '../runlog/stream-transcript';
-import { AgentCliHarness } from '../harness/agent-cli-harness';
 import { SystemClock } from '../driver/clock';
 import { SystemBudgetMeter } from '../driver/budget';
 import { LlmTokenMeter, meterLlm } from '../driver/llm-meter';
 import { DefaultWaveRunner } from '../driver/wave-runner';
-import { buildLogger, type FileLogOptions } from '../log/build';
-import type { Logger, LogLevel } from '../log/logger';
-import type { LogFs } from '../log/sinks';
-import { AgentCliLlmProvider } from '../llm/agent-cli-provider';
-import { OpenAiLlmProvider } from '../llm/openai-provider';
+import type { WaveRunner } from '../driver/wave';
+import type { HarnessAdapter } from '../harness/adapter';
 import { LlmObserver, type Observer } from '../observe/observer';
-import { OpenAiClient, type FetchLike } from '../llm-client/openai-client';
-import { GoalyCodeHarness } from '../goaly-code/harness';
-import { NodeToolHost, type ShellExec } from '../goaly-code/fs-host';
-import { FileSessionStore } from '../goaly-code/session-store';
-import { codecFor, type AgentCli } from '../agent-cli/registry';
-import type { AutonomyLevel } from '../agent-cli/droid-codec';
-import { runProcess } from '../util/spawn';
-import { augmentToolPath, scrubEnv } from '../workspace/scrub-env';
-import { resolveProfile } from '../sandbox';
-import type { ResolvedModels } from './models';
-import type { AgentEventSink, PhasedStreamSink, StreamPhase } from '../agent-cli/stream';
-import { makeStreamRenderer, streamLogFields } from './stream-render';
-import { resolveModels, type ModelSelection } from './models';
+import type { PhasedStreamSink, StreamPhase } from '../agent-cli/stream';
+import { resolveModels, type ResolvedModels } from './models';
 import { independenceWarnings } from './independence';
-import { defaultLlmProvider, type HarnessChoice, type LlmProviderChoice, type StepTimeouts } from './args';
-import {
-  makeLauncher,
-  neutralAgentExec,
-  networkForSeam,
-  withSandboxAgent,
-  withSandboxVerify,
-  SandboxUnavailableError,
-  type SandboxLauncher,
-  type SandboxProxy,
-} from '../sandbox';
-import { DEFAULT_AGENT_TIMEOUT_MS } from '../agent-cli/codec';
-import type { SandboxPolicy } from '../sandbox/policy';
+import { defaultLlmProvider, type LlmProviderChoice, type StepTimeouts } from './args';
+import { networkForSeam, withSandboxVerify, type SandboxLauncher } from '../sandbox';
 import type { ExecFn } from '../workspace/git-workspace';
+import type { ComposeOptions } from './compose-options';
+import { buildRunLogger, buildStreamSink } from './compose-logging';
+import { EndpointConfigError, makeLlmProvider } from './compose-provider';
+import { buildApprover, buildLadder } from './compose-verify';
+import {
+  defaultPolicy,
+  makeGoalyCodeHarness,
+  makeHarness,
+  makeSandboxLauncher,
+  refuseIfUnavailable,
+  resolveWorkspaceMode,
+} from './compose-harness';
 
-export type ComposeOptions = {
-  harness: HarnessChoice;
-  workspaceRoot: string;
-  /**
-   * Workspace backing mode (ADR 0018). `git` or `file` are used as-is; `auto` resolves to `git`
-   * when `workspaceRoot` is inside a git work tree and `file` otherwise.
-   */
-  workspaceMode?: 'git' | 'file' | 'auto';
-  runId: RunId;
-  /** Override the LLM provider (tests inject a FakeLlm; production uses the CLI provider). */
-  llm?: LlmProvider;
-  /**
-   * Which provider runs the LLM workflow steps (judge / approver / compiler). Default: FOLLOWS
-   * the harness ({@link defaultLlmProvider}), so a `--generate` bar is authored by the tool the
-   * user actually picked — never unconditionally `claude`.
-   */
-  llmProvider?: LlmProviderChoice;
-  /**
-   * `--harness-autonomy`: how much the WRITE-role CLI may do, for harnesses that gate privileged
-   * actions behind a tier (droid's `--auto`). Absent ⇒ the codec's own least-privilege default.
-   * Deliberately NOT applied to the read-only LLM provider below: a judge/approver/compiler must
-   * never be able to mutate the tree it is judging, whatever the worker is allowed to do.
-   */
-  harnessAutonomy?: AutonomyLevel | undefined;
-  /** Raw model-selection flags; resolved into per-seam models via the cascade. */
-  models?: ModelSelection;
-  /** Per-step subprocess timeouts (harness / LLM steps / verify command). Each absent ⇒ default. */
-  timeouts?: StepTimeouts;
-  /**
-   * Opt-in OS-isolation policy (issue #9). Absent / `mode: 'none'` ⇒ identity passthrough, so the
-   * harness and verifier execs are byte-for-byte the current calls. Any other mode is detected
-   * fail-closed: if the requested mechanism is absent the run refuses to start.
-   */
-  sandbox?: SandboxPolicy;
-  /** Inject the sandbox launcher directly (tests); bypasses host detection from {@link sandbox}. */
-  sandboxLauncher?: SandboxLauncher;
-  /**
-   * The running egress proxy when the sandbox policy uses an allowlist (issue #39). Started at the
-   * composition edge (main.ts) before deps are composed and torn down after the run; threaded into
-   * both jailed seams so they pin their proxy env vars at it. Absent ⇒ no allowlist active.
-   */
-  egressProxy?: SandboxProxy;
-  /**
-   * Diff baseline (issue #47): the git ref/SHA `diff()` (and thus Sign-off) compares the working tree
-   * against, instead of `HEAD`. The CLI validates it resolves fail-closed BEFORE composing; here it
-   * is just adopted onto the workspace. Absent ⇒ baseline stays `HEAD` (behavior unchanged).
-   */
-  baseline?: string;
-  /**
-   * Preferred directory (relative to the workspace root) for compiler-authored verification files
-   * (issue #52). Threaded to the compiler as authoring guidance; absent ⇒ the compiler chooses an
-   * idiomatic location. Authored files are registered in `.git/info/exclude` either way.
-   */
-  verifyDir?: string;
-  /**
-   * The cross-run DEFECT CORPUS (issue #122): `--no-defect-corpus` / `--defect-corpus <path>`.
-   * Absent ⇒ enabled at `~/.goaly/defects.jsonl`. Both ends are wired from ONE resolution below —
-   * the writer the Driver hands to a `CONTRACT_DEFECTIVE` adjudication, and the bounded
-   * "do not author these" section the compiler injects. Fail-open: a missing/corrupt corpus
-   * degrades to exactly today's behavior.
-   */
-  defects?: DefectCorpusOptions;
-  /**
-   * Phased decomposition (issue #48): the `--plan-file <path>` that sources a structured plan instead
-   * of authoring one with the LLM. When set (and `config.phased`), a {@link StaticPlanner} reads it;
-   * absent ⇒ the {@link AgentPlanner} authors the plan. Ignored when `config.phased` is false.
-   */
-  planFile?: string;
-  /** Where run logs live. Default `<workspaceRoot>/.goaly` (excluded from diffHash). */
-  stateDir?: string;
-  /** Minimum diagnostic log level. Default `info`. */
-  logLevel?: LogLevel;
-  /** Override the diagnostics file path. Default `<stateDir>/<runId>/goaly.log`. */
-  logFile?: string;
-  /** Disable the diagnostics file sink (console only). */
-  noLogFile?: boolean;
-  /** Disable the console sink (file only) — handy in tests to keep stderr quiet. */
-  noLogConsole?: boolean;
-  /** Inject a fully-built logger (tests); bypasses the level/file options above. */
-  logger?: Logger;
-  /** Inject the log filesystem (tests) so diagnostics never touch disk. */
-  logFs?: LogFs;
-  /** Inject the clock source for log timestamps (tests). */
-  now?: () => number;
-  /**
-   * Enable the `--stream` live view (issue #23): render the harness run AND the LLM steps'
-   * intermediate turns to stderr, phase-tagged. Opt-in; off by default.
-   */
-  stream?: boolean;
-  /** Override where the `--stream` renderer writes (tests capture it; default `process.stderr`). */
-  streamWrite?: (line: string) => void;
-  /**
-   * Embedder hook (issue #23): subscribe to every phase-tagged stream event (the agent run and the
-   * compile / judge / approve steps). Composed alongside the live view and the debug logger, then
-   * threaded into the harness (via `DriverDeps.onStreamEvent`) and the LLM-step providers.
-   */
-  onStreamEvent?: PhasedStreamSink;
-  /**
-   * Durable stream transcript (issue #28): persist every phase-tagged stream event as canonical
-   * JSONL to a per-run file for offline replay. `streamTranscript: true` writes to the default
-   * `<stateDir>/<runId>/stream.jsonl`. Opt-in; a SEPARATE file from the run log — never the state
-   * replay source — and fail-closed (a write failure degrades to "no transcript").
-   */
-  streamTranscript?: boolean;
-  /** Override the stream-transcript path (implies {@link streamTranscript}). Default next to the run log. */
-  streamFile?: string;
-  /**
-   * Enable the read-only `--explain` observer (issue #8): a side-LLM that narrates the frozen
-   * contract, each verifier-ladder run, and the terminal outcome in plain language. Opt-in; off by
-   * default. Strictly advisory — built on an UNMETERED read-only provider so its spend never enters
-   * the run budget and it can never influence the contract, the ladder, DECIDE, or the two-key DONE.
-   */
-  explain?: boolean;
-  /** Override where the observer writes its summaries (tests capture it; default `process.stderr`). */
-  explainWrite?: (text: string) => void;
-  /** Inject the observer directly (tests); bypasses building one from {@link explain}. */
-  observer?: Observer;
-  /**
-   * OpenAI-compatible endpoint base URL for `--harness goaly-code` / `--llm-provider openai`. Required for
-   * those targets; absent ⇒ they fail closed at composition (a typed {@link EndpointConfigError}).
-   */
-  baseUrl?: string;
-  /** Resolved bearer token for that endpoint (read from env at the composition edge). May be absent. */
-  llmApiKey?: string;
-  /** Inject the HTTP fetch for the OpenAI client (tests/embedders); default binds global fetch. */
-  llmFetch?: FetchLike;
-  /** Override the goaly-code harness per-run turn cap. */
-  goalyCodeMaxTurns?: number;
-  /**
-   * Follow-up seed (Capability C, `--from-run`): a deterministic COMPACTION of a prior run, woven
-   * into the compiler's (and, when phased, the planner's) authoring `feedback` so the new run's
-   * frozen contract is authored AWARE of what just happened. Pure wiring at the seam — the freeze is
-   * unaffected (every attempt is still frozen + Sealed on its own). Absent ⇒ a normal fresh run.
-   */
-  followupSeed?: string;
-  /**
-   * Inject the Seal gate (ADR 0015: the goaly-ui browser gate; tests inject fakes). A gate
-   * IMPLEMENTATION, never a bypass — the contract still freezes and `SEAL_DECIDED` still logs
-   * (invariant #5). Absent ⇒ the classic selection on `config.autonomous`.
-   */
-  sealGate?: SealGate;
-  /** Inject the plan-Seal gate (phased runs), same rules as {@link sealGate}. */
-  planGate?: PlanGate;
-  /**
-   * Inject the harness adapter per workspace root (tests/embedders) — bypasses {@link harness}
-   * selection. The FACTORY shape (not a single adapter) exists for EXPERIMENTAL parallel waves,
-   * where each wave child composes its own deps rooted at its worktree: the factory receives that
-   * root so a scripted test harness can write into the right tree.
-   */
-  harnessFactory?: (workspaceRoot: string) => HarnessAdapter;
-};
-
-/**
- * Thrown when `--harness goaly-code` / `--llm-provider openai` is selected without the config they require
- * (a base URL, a resolved model). Fail-closed (invariant #4): the run refuses to start rather than
- * silently pointing at nothing. The CLI catches it for a friendly message + exit 2.
- */
-export class EndpointConfigError extends Error {}
+// The public surface stays importable from './compose' (src/index.ts, the CLI commands, the UI, and
+// the tests); the pieces live in the compose-* modules beside this one.
+export type { ComposeOptions } from './compose-options';
+export { EndpointConfigError, makeLlmProvider } from './compose-provider';
+export { buildLadder } from './compose-verify';
+export { NoopHarness } from './compose-harness';
 
 /** The orchestrator's own state directory name, kept out of stuck-detection hashing. */
 export const STATE_DIR = '.goaly';
@@ -274,33 +95,21 @@ export const DEFAULT_DIFF_IGNORE: readonly string[] = [
  */
 export const DEFAULT_VERIFY_TIMEOUT_MS = 10 * 60 * 1000;
 
-/** The default (off) sandbox policy: identity passthrough, behavior byte-for-byte unchanged. */
-function defaultPolicy(): SandboxPolicy {
-  return { mode: 'none', network: 'none' };
-}
+/** Per-step timeouts with the verify default already applied (see {@link DEFAULT_VERIFY_TIMEOUT_MS}). */
+type Timeouts = StepTimeouts & { verifyMs: number };
 
+/** A metered, phase-tagged provider for one LLM workflow step (see {@link buildLlmFor}). */
+type LlmFor = (model: string | undefined, phase: StreamPhase) => LlmProvider;
 
-/**
- * Build the sandbox launcher ONCE from the policy (issue #9). A directly-injected launcher (tests)
- * wins; otherwise {@link makeLauncher} probes the host fail-closed. `none` (the default) ⇒ identity.
- */
-function makeSandboxLauncher(options: ComposeOptions): SandboxLauncher {
-  if (options.sandboxLauncher !== undefined) return options.sandboxLauncher;
-  return makeLauncher(options.sandbox ?? defaultPolicy());
-}
-
-/**
- * Fail-closed (invariant #4): an {@link UnavailableLauncher} (a requested mechanism that the host
- * lacks) makes the run REFUSE TO START — throw before any subprocess is composed, never a silent
- * downgrade to unsandboxed.
- */
-function refuseIfUnavailable(launcher: SandboxLauncher): void {
-  if (!launcher.available) {
-    throw new SandboxUnavailableError(
-      launcher.unavailableReason ?? 'requested sandbox mechanism is unavailable',
-    );
-  }
-}
+/** The resolved inputs every seam builder below reads; assembled once by {@link composeDeps}. */
+type Wiring = {
+  config: RunConfig;
+  options: ComposeOptions;
+  models: ResolvedModels;
+  timeouts: Timeouts;
+  logger: Logger;
+  llmFor: LlmFor;
+};
 
 /**
  * The composition root: assemble a fully-wired {@link DriverDeps} from validated config. This
@@ -314,19 +123,67 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
   // verify command that hangs (a test awaiting the network, a server that never exits) must never
   // hang the whole run unboundedly. A hit is a fail-closed could-not-evaluate — the unevaluable
   // streak or the run's own caps then govern — never a green. `--verify-timeout-ms` overrides.
-  const timeouts = { verifyMs: DEFAULT_VERIFY_TIMEOUT_MS, ...(options.timeouts ?? {}) };
+  const timeouts: Timeouts = { verifyMs: DEFAULT_VERIFY_TIMEOUT_MS, ...(options.timeouts ?? {}) };
   // One meter for every LLM workflow step (compiler / judge / approver) so the Driver can aggregate
   // their token spend per command (issue #17). Wrapping is transparent — the consumers still see a
   // plain LlmProvider, and an injected test `llm` is metered just the same.
   const llmMeter = new LlmTokenMeter();
   const clock = new SystemClock();
-  // Keep the orchestrator's own state dir, a default set of ephemeral verifier artifacts (bytecode /
-  // test / type caches — see DEFAULT_DIFF_IGNORE), AND any user-listed `--diff-ignore` paths out of the
-  // tree hash, so stuck-detection sees only the agent's real work — not caches a verifier drops between
-  // iterations. Deduped so an explicit `.goaly`/default in --diff-ignore is a no-op.
-  const excludes = [...new Set([STATE_DIR, ...DEFAULT_DIFF_IGNORE, ...config.diffIgnore])];
-  // Build the sandbox launcher ONCE (issue #9). `none` ⇒ identity; any other mode is detected
-  // fail-closed (an absent mechanism makes the run refuse to start — never silently unsandboxed).
+  const { launcher, runLauncher } = buildVerifyJail(options);
+  const { workspace, worktrees } = buildWorkspace(config, options, runLauncher);
+  const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
+  const logger = options.logger ?? buildRunLogger(options, stateDir);
+  const streamSink = buildStreamSink(options, logger, stateDir, options.now ?? (() => clock.now()));
+  warnIndependence(config, options, models, provider, logger);
+  const llmFor = buildLlmFor(options, provider, timeouts, streamSink, llmMeter);
+  const w: Wiring = { config, options, models, timeouts, logger, llmFor };
+  const phasedSeams = buildPhasedSeams(w);
+  const observer = buildObserver(options, models, timeouts, provider);
+  // Deterministic workspace facts (small-model steering): probed ONCE from files on disk, injected
+  // into the compiler + red-team prompts and driving the pre-freeze module-format lint. Strictly
+  // detected, never assumed — a non-code workspace yields `undefined` and nothing is injected.
+  const workspaceFacts = detectWorkspaceFacts(options.workspaceRoot);
+  const defects = buildDefects(options, logger, launcher);
+  // ONE budget meter for the whole run — hoisted so EXPERIMENTAL parallel-wave children share it
+  // (the `--budget-tokens` cap governs the fan-out, not each child separately).
+  const budget = new SystemBudgetMeter(config.budget, clock);
+  const wave = buildWaveRunner(w, workspace, worktrees, budget);
+
+  return {
+    compiler: buildCompiler(w, workspaceFacts, defects, runLauncher),
+    seal:
+      options.sealGate ??
+      (config.autonomous
+        ? new AutoSealGate()
+        : new HumanSealGate({ allowRevise: config.maxSealRevisions > 0 })),
+    ...(phasedSeams !== undefined ? phasedSeams : {}),
+    harness: buildHarness(options, models, timeouts, stateDir, logger, launcher),
+    ...buildVerifySeams(w, workspace),
+    // The corpus WRITER (issue #122). Handed to the Driver, which appends only from an adjudicated
+    // CONTRACT_DEFECTIVE verdict; absent under `--no-defect-corpus`, so nothing can be recorded.
+    ...(defects.corpus !== undefined ? { defectCorpus: defects.corpus } : {}),
+    workspace,
+    ...(worktrees !== undefined ? { worktrees } : {}),
+    ...(wave !== undefined ? { wave } : {}),
+    clock,
+    budget,
+    llmMeter,
+    runlog: new FileRunLog(path.join(stateDir, options.runId)),
+    logger,
+    ...(streamSink !== undefined ? { onStreamEvent: streamSink } : {}),
+    ...(observer !== undefined ? { observer } : {}),
+  };
+}
+
+/**
+ * The sandbox launcher, built ONCE (issue #9), and the verifier-seam jail derived from it. `none` ⇒
+ * identity; any other mode is detected fail-closed (an absent mechanism makes the run refuse to
+ * start — never silently unsandboxed).
+ */
+function buildVerifyJail(options: ComposeOptions): {
+  launcher: SandboxLauncher;
+  runLauncher: ((exec: ExecFn) => ExecFn) | undefined;
+} {
   const launcher = makeSandboxLauncher(options);
   refuseIfUnavailable(launcher);
   // The verifier seam: wrap ONLY GitWorkspace.run() — never the git plumbing. The dedicated
@@ -340,6 +197,20 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
           networkForSeam(options.sandbox ?? defaultPolicy(), 'verifier'),
           options.egressProxy,
         );
+  return { launcher, runLauncher };
+}
+
+/** The canonical workspace plus, when the run needs isolated worktrees, the host that makes them. */
+function buildWorkspace(
+  config: RunConfig,
+  options: ComposeOptions,
+  runLauncher: ((exec: ExecFn) => ExecFn) | undefined,
+): { workspace: Workspace; worktrees: GitWorktreeHost | undefined } {
+  // Keep the orchestrator's own state dir, a default set of ephemeral verifier artifacts (bytecode /
+  // test / type caches — see DEFAULT_DIFF_IGNORE), AND any user-listed `--diff-ignore` paths out of the
+  // tree hash, so stuck-detection sees only the agent's real work — not caches a verifier drops between
+  // iterations. Deduped so an explicit `.goaly`/default in --diff-ignore is a no-op.
+  const excludes = [...new Set([STATE_DIR, ...DEFAULT_DIFF_IGNORE, ...config.diffIgnore])];
   const workspaceMode = resolveWorkspaceMode(options.workspaceMode ?? 'auto', options.workspaceRoot);
   const workspace =
     workspaceMode === 'file'
@@ -355,44 +226,60 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
       'best-of-N and parallel phases require a git workspace (--workspace-mode git)',
     );
   }
-  const worktrees =
-    wantsWorktrees
-      ? new GitWorktreeHost({
-          root: options.workspaceRoot,
-          exec: realExec,
-          excludes,
-          scrubVerifyEnv: true,
-          ...(runLauncher !== undefined ? { runLauncher } : {}),
-        })
-      : undefined;
+  const worktrees = wantsWorktrees
+    ? new GitWorktreeHost({
+        root: options.workspaceRoot,
+        exec: realExec,
+        excludes,
+        scrubVerifyEnv: true,
+        ...(runLauncher !== undefined ? { runLauncher } : {}),
+      })
+    : undefined;
   // Adopt an explicit `--baseline` (issue #47) so `diff()`/Sign-off compare against it instead of HEAD.
   // The CLI already validated it resolves (fail-closed); a resumed run re-points it from the log.
   if (options.baseline !== undefined) workspace.setBaseline(options.baseline);
-  const stateDir = options.stateDir ?? path.join(options.workspaceRoot, STATE_DIR);
-  const logger = options.logger ?? buildRunLogger(options, stateDir);
-  const streamSink = buildStreamSink(options, logger, stateDir, options.now ?? (() => clock.now()));
+  return { workspace, worktrees };
+}
 
-  // Warn loudly when the "two independent keys" collapse onto one model. Skipped when
-  // the caller injects its own `llm` — then the resolved per-seam models are not what runs, so the
-  // wiring warning would be misleading (and noisy in tests/embedders).
-  if (options.llm === undefined) {
-    const independenceCtx = {
-      generate: config.verifier.kind === 'generate',
-      autonomous: config.autonomous,
-      approverQuorum: config.approver.quorum,
-      ...(models.approverModels !== undefined ? { approverModels: models.approverModels } : {}),
-    };
-    for (const warning of independenceWarnings(models, options.harness, provider, independenceCtx)) {
-      logger.warn('model independence', { detail: warning });
-    }
+/**
+ * Warn loudly when the "two independent keys" collapse onto one model. Skipped when the caller
+ * injects its own `llm` — then the resolved per-seam models are not what runs, so the wiring
+ * warning would be misleading (and noisy in tests/embedders).
+ */
+function warnIndependence(
+  config: RunConfig,
+  options: ComposeOptions,
+  models: ResolvedModels,
+  provider: LlmProviderChoice,
+  logger: Logger,
+): void {
+  if (options.llm !== undefined) return;
+  const independenceCtx = {
+    generate: config.verifier.kind === 'generate',
+    autonomous: config.autonomous,
+    approverQuorum: config.approver.quorum,
+    ...(models.approverModels !== undefined ? { approverModels: models.approverModels } : {}),
+  };
+  for (const warning of independenceWarnings(models, options.harness, provider, independenceCtx)) {
+    logger.warn('model independence', { detail: warning });
   }
+}
 
-  // An injected `llm` (tests) overrides every step; otherwise build a provider per step so each can
-  // carry its own resolved model, per-step timeout, AND its phase-tagged stream sink. All three are
-  // wiring — none enters the frozen contract. The sink is injected at CONSTRUCTION so it never leaks
-  // through the Verifier/Approver seams (the `LlmProvider` stays an internal seam). Each provider is
-  // wrapped with the shared meter so its token spend is aggregated at the Driver (issue #17).
-  const llmFor = (model: string | undefined, phase: StreamPhase): LlmProvider =>
+/**
+ * An injected `llm` (tests) overrides every step; otherwise build a provider per step so each can
+ * carry its own resolved model, per-step timeout, AND its phase-tagged stream sink. All three are
+ * wiring — none enters the frozen contract. The sink is injected at CONSTRUCTION so it never leaks
+ * through the Verifier/Approver seams (the `LlmProvider` stays an internal seam). Each provider is
+ * wrapped with the shared meter so its token spend is aggregated at the Driver (issue #17).
+ */
+function buildLlmFor(
+  options: ComposeOptions,
+  provider: LlmProviderChoice,
+  timeouts: Timeouts,
+  streamSink: PhasedStreamSink | undefined,
+  llmMeter: LlmTokenMeter,
+): LlmFor {
+  return (model, phase) =>
     meterLlm(
       options.llm ??
         makeLlmProvider(provider, model, {
@@ -404,173 +291,213 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
         }),
       llmMeter,
     );
+}
 
-  // Phased decomposition (issue #48): wire the planner + plan Seal ONLY for a phased run (a classic
-  // run never emits a PLAN command, so building them would be dead wiring + a spurious LLM provider).
-  // `--plan-file` selects the StaticPlanner; otherwise the AgentPlanner authors the plan. `--autonomous`
-  // moves the plan Seal pause too (still frozen + logged loudly).
-  const seed = options.followupSeed;
-  const phasedSeams: { planner: Planner; planGate: PlanGate } | undefined = config.phased
-    ? {
-        // A phased follow-up authors its plan AWARE of the prior run too: the seed rides the planner's
-        // authoring feedback (SeededPlanner), exactly as it rides the compiler below. The adversarial
-        // plan critique wraps ONLY the LLM planner — a --plan-file is the user's explicit plan.
-        planner: seedPlanner(
-          options.planFile !== undefined
-            ? new StaticPlanner({ path: options.planFile })
-            : critiquePlanner(
-                new AgentPlanner({ llm: llmFor(models.planner, 'plan') }),
-                config,
-                () => llmFor(models.critic, 'plan'),
-                logger,
-              ),
-          seed,
-        ),
-        planGate:
-          options.planGate ??
-          (config.autonomous
-            ? new AutoPlanGate()
-            : new HumanPlanGate({ allowRevise: config.maxPlanRevisions > 0 })),
-      }
-    : undefined;
+/**
+ * Phased decomposition (issue #48): wire the planner + plan Seal ONLY for a phased run (a classic
+ * run never emits a PLAN command, so building them would be dead wiring + a spurious LLM provider).
+ * `--plan-file` selects the StaticPlanner; otherwise the AgentPlanner authors the plan. `--autonomous`
+ * moves the plan Seal pause too (still frozen + logged loudly).
+ */
+function buildPhasedSeams(w: Wiring): { planner: Planner; planGate: PlanGate } | undefined {
+  const { config, options, models, logger, llmFor } = w;
+  if (!config.phased) return undefined;
+  return {
+    // A phased follow-up authors its plan AWARE of the prior run too: the seed rides the planner's
+    // authoring feedback (SeededPlanner), exactly as it rides the compiler. The adversarial
+    // plan critique wraps ONLY the LLM planner — a --plan-file is the user's explicit plan.
+    planner: seedPlanner(
+      options.planFile !== undefined
+        ? new StaticPlanner({ path: options.planFile })
+        : critiquePlanner(
+            new AgentPlanner({ llm: llmFor(models.planner, 'plan') }),
+            config,
+            () => llmFor(models.critic, 'plan'),
+            logger,
+          ),
+      options.followupSeed,
+    ),
+    planGate:
+      options.planGate ??
+      (config.autonomous
+        ? new AutoPlanGate()
+        : new HumanPlanGate({ allowRevise: config.maxPlanRevisions > 0 })),
+  };
+}
 
-  // The optional `--explain` observer (issue #8). Built ONLY when requested (or injected), so a
-  // default run pays nothing. Its read-only provider is deliberately NOT wrapped with the run's
-  // `llmMeter` and NOT stream-tapped: the narrator's spend must never enter the run budget or
-  // influence the loop — it is a strictly advisory side channel (the issue's core constraint). An
-  // injected `options.llm` (tests) still overrides the provider; an injected `options.observer`
-  // bypasses construction entirely.
-  const observer: Observer | undefined =
-    options.observer ??
-    (options.explain === true
-      ? new LlmObserver({
-          llm:
-            options.llm ??
-            makeLlmProvider(provider, models.explain, {
-              ...(timeouts.llmMs !== undefined ? { timeoutMs: timeouts.llmMs } : {}),
-              ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
-              ...(options.llmApiKey !== undefined ? { apiKey: options.llmApiKey } : {}),
-              ...(options.llmFetch !== undefined ? { fetch: options.llmFetch } : {}),
-            }),
-          write: options.explainWrite ?? ((text) => void process.stderr.write(text)),
-        })
-      : undefined);
+/**
+ * The optional `--explain` observer (issue #8). Built ONLY when requested (or injected), so a
+ * default run pays nothing. Its read-only provider is deliberately NOT wrapped with the run's
+ * `llmMeter` and NOT stream-tapped: the narrator's spend must never enter the run budget or
+ * influence the loop — it is a strictly advisory side channel (the issue's core constraint). An
+ * injected `options.llm` (tests) still overrides the provider; an injected `options.observer`
+ * bypasses construction entirely.
+ */
+function buildObserver(
+  options: ComposeOptions,
+  models: ResolvedModels,
+  timeouts: Timeouts,
+  provider: LlmProviderChoice,
+): Observer | undefined {
+  if (options.observer !== undefined) return options.observer;
+  if (options.explain !== true) return undefined;
+  return new LlmObserver({
+    llm:
+      options.llm ??
+      makeLlmProvider(provider, models.explain, {
+        ...(timeouts.llmMs !== undefined ? { timeoutMs: timeouts.llmMs } : {}),
+        ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
+        ...(options.llmApiKey !== undefined ? { apiKey: options.llmApiKey } : {}),
+        ...(options.llmFetch !== undefined ? { fetch: options.llmFetch } : {}),
+      }),
+    write: options.explainWrite ?? ((text) => void process.stderr.write(text)),
+  });
+}
 
-  // Deterministic workspace facts (small-model steering): probed ONCE from files on disk, injected
-  // into the compiler + red-team prompts and driving the pre-freeze module-format lint. Strictly
-  // detected, never assumed — a non-code workspace yields `undefined` and nothing is injected.
-  const workspaceFacts = detectWorkspaceFacts(options.workspaceRoot);
-
-  // The cross-run defect corpus (issue #122), resolved ONCE: `section` is injected into contract
-  // authoring (bounded + filtered to this workspace's ecosystem, and logged so the hidden local
-  // state that shaped the bar is named in the run's diagnostics); `corpus` is the writer only a
-  // CONTRACT_DEFECTIVE adjudication can use. Fail-open — an absent corpus changes nothing. The
-  // launcher is threaded in so the injection log can say plainly whether the corpus's HMAC means
-  // anything against the AGENT on this run (only a real jail masks `$HOME/.goaly`; under the
-  // default identity passthrough the agent shares goaly's uid and can read the signing key).
-  const defects = resolveDefectCorpus(
+/**
+ * The cross-run defect corpus (issue #122), resolved ONCE: `section` is injected into contract
+ * authoring (bounded + filtered to this workspace's ecosystem, and logged so the hidden local
+ * state that shaped the bar is named in the run's diagnostics); `corpus` is the writer only a
+ * CONTRACT_DEFECTIVE adjudication can use. Fail-open — an absent corpus changes nothing. The
+ * launcher is threaded in so the injection log can say plainly whether the corpus's HMAC means
+ * anything against the AGENT on this run (only a real jail masks `$HOME/.goaly`; under the
+ * default identity passthrough the agent shares goaly's uid and can read the signing key).
+ */
+function buildDefects(
+  options: ComposeOptions,
+  logger: Logger,
+  launcher: SandboxLauncher,
+): ResolvedDefectCorpus {
+  return resolveDefectCorpus(
     options.defects,
     options.workspaceRoot,
     logger,
     DEFAULT_DEFECT_HINT_CAP,
     !launcher.identity,
   );
+}
 
-  // ONE budget meter for the whole run — hoisted so EXPERIMENTAL parallel-wave children share it
-  // (the `--budget-tokens` cap governs the fan-out, not each child separately).
-  const budget = new SystemBudgetMeter(config.budget, clock);
+/**
+ * EXPERIMENTAL cooperative parallel waves (`--parallel-phases`): each wave CHILD is a FULL goaly
+ * run composed by {@link composeDeps} itself, rooted at its ephemeral worktree — its own frozen
+ * contract, two-key gate, and write-ahead log (under `<worktree>/.goaly`), on the parent's budget
+ * meter and interrupt probe. Parent-anchored artifact paths (log/stream/state overrides, the diff
+ * baseline) are stripped so children never write into the parent's files.
+ */
+function buildWaveRunner(
+  w: Wiring,
+  workspace: Workspace,
+  worktrees: GitWorktreeHost | undefined,
+  budget: SystemBudgetMeter,
+): WaveRunner | undefined {
+  const { config, options, timeouts, logger } = w;
+  if (!(config.phased && config.parallelPhases && worktrees !== undefined)) return undefined;
+  return new DefaultWaveRunner({
+    host: worktrees,
+    workspace,
+    workspaceRoot: options.workspaceRoot,
+    ...(timeouts.verifyMs !== undefined ? { verifyTimeoutMs: timeouts.verifyMs } : {}),
+    logger,
+    composeChild: async (spec, worktree, childRunId, interrupted) => {
+      const { logFile: _lf, streamFile: _sf, stateDir: _sd, baseline: _b, ...rest } = options;
+      const childDeps = composeDeps(spec.config, {
+        ...rest,
+        workspaceRoot: worktree.root,
+        runId: childRunId,
+      });
+      return {
+        ...childDeps,
+        budget,
+        ...(interrupted !== undefined ? { interrupted } : {}),
+      };
+    },
+  });
+}
 
-  // EXPERIMENTAL cooperative parallel waves (`--parallel-phases`): each wave CHILD is a FULL goaly
-  // run composed by this very function, rooted at its ephemeral worktree — its own frozen contract,
-  // two-key gate, and write-ahead log (under `<worktree>/.goaly`), on the parent's budget meter and
-  // interrupt probe. Parent-anchored artifact paths (log/stream/state overrides, the diff baseline)
-  // are stripped so children never write into the parent's files.
-  const wave =
-    config.phased && config.parallelPhases && worktrees !== undefined
-      ? new DefaultWaveRunner({
-          host: worktrees,
-          workspace,
-          workspaceRoot: options.workspaceRoot,
-          ...(timeouts.verifyMs !== undefined ? { verifyTimeoutMs: timeouts.verifyMs } : {}),
-          logger,
-          composeChild: async (spec, worktree, childRunId, interrupted) => {
-            const { logFile: _lf, streamFile: _sf, stateDir: _sd, baseline: _b, ...rest } = options;
-            const childDeps = composeDeps(spec.config, {
-              ...rest,
-              workspaceRoot: worktree.root,
-              runId: childRunId,
-            });
-            return {
-              ...childDeps,
-              budget,
-              ...(interrupted !== undefined ? { interrupted } : {}),
-            };
-          },
-        })
-      : undefined;
+/**
+ * The contract compiler stack, innermost out: the LLM author, the adversarial critics, the
+ * compile-time POSITIVE control (issue #115 — it executes the contract the critics already accepted,
+ * and a red there refuses the freeze → COMPILE_FAILED → the same bounded re-author loop; fail-open,
+ * so it can only reject or step aside), and the follow-up seed.
+ */
+function buildCompiler(
+  w: Wiring,
+  workspaceFacts: WorkspaceFacts | undefined,
+  defects: ResolvedDefectCorpus,
+  runLauncher: ((exec: ExecFn) => ExecFn) | undefined,
+): VerifierCompiler {
+  const { config, options, models, timeouts, logger, llmFor } = w;
+  const author = new AgentCompiler({
+    llm: llmFor(models.compiler, 'compile'),
+    writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
+    ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
+    ...(workspaceFacts !== undefined ? { facts: workspaceFacts } : {}),
+    ...(defects.section.length > 0 ? { defectSection: defects.section } : {}),
+    // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered
+    // like the authoring call) arms the gate on a confident build-and-use goal so a bar that a
+    // parallel reimplementation could green is refused at compile (COMPILE_FAILED → re-authored
+    // with a usage assertion). Fail-open, so it never blocks a non-build-and-use run.
+    classifyShape: (goal, intent) =>
+      classifyUsageShape(llmFor(models.compiler, 'compile'), goal, intent),
+  });
+  const critiqued = critiqueCompiler(
+    author,
+    config,
+    () => llmFor(models.critic, 'compile'),
+    options.workspaceRoot,
+    logger,
+    workspaceFacts,
+  );
+  const dryRun = dryRunCompiler(
+    critiqued,
+    config,
+    () => llmFor(models.compiler, 'compile'),
+    options.workspaceRoot,
+    timeouts.verifyMs,
+    logger,
+    workspaceFacts,
+    // The scratch executes the contract's setup + rungs, so it goes through the SAME jail as
+    // the verifier seam — never bare on the host under an active `--sandbox` policy.
+    runLauncher,
+  );
+  return seedCompiler(dryRun, options.followupSeed);
+}
 
+/** The coding-agent harness: an injected factory, the goaly-code adapter, or a codec CLI adapter. */
+function buildHarness(
+  options: ComposeOptions,
+  models: ResolvedModels,
+  timeouts: Timeouts,
+  stateDir: string,
+  logger: Logger,
+  launcher: SandboxLauncher,
+): HarnessAdapter {
+  if (options.harnessFactory !== undefined) return options.harnessFactory(options.workspaceRoot);
+  if (options.harness === 'goaly-code') {
+    return makeGoalyCodeHarness(options, models, stateDir, logger, launcher);
+  }
+  return makeHarness(
+    options.harness,
+    models.harness,
+    timeouts.harnessMs,
+    timeouts.harnessIdleMs,
+    {
+      launcher,
+      workspace: options.workspaceRoot,
+      policy: options.sandbox ?? defaultPolicy(),
+      ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
+    },
+    options.harnessAutonomy,
+  );
+}
+
+/** The verification seams: the Ladder factory (first key), Sign-off (second key), and pre-flight. */
+function buildVerifySeams(
+  w: Wiring,
+  workspace: Workspace,
+): Pick<DriverDeps, 'makeLadder' | 'approver' | 'prepareLlm' | 'prepareTimeouts'> {
+  const { config, models, timeouts, llmFor } = w;
   return {
-    compiler: seedCompiler(
-      // The compile-time POSITIVE control (issue #115) wraps the critics: what it executes is the
-      // contract the critics already accepted, and a red there refuses the freeze (→ COMPILE_FAILED
-      // → the same bounded re-author loop). Fail-open, so it can only reject or step aside.
-      dryRunCompiler(
-        critiqueCompiler(
-          new AgentCompiler({
-            llm: llmFor(models.compiler, 'compile'),
-            writeFile: (rel, content) => writeVerificationFile(options.workspaceRoot, rel, content, logger),
-            ...(options.verifyDir !== undefined ? { verifyDir: options.verifyDir } : {}),
-            ...(workspaceFacts !== undefined ? { facts: workspaceFacts } : {}),
-            ...(defects.section.length > 0 ? { defectSection: defects.section } : {}),
-            // Anti-reimplementation usage gate: a separate, neutral shape call over the goal (metered
-            // like the authoring call) arms the gate on a confident build-and-use goal so a bar that a
-            // parallel reimplementation could green is refused at compile (COMPILE_FAILED → re-authored
-            // with a usage assertion). Fail-open, so it never blocks a non-build-and-use run.
-            classifyShape: (goal, intent) =>
-              classifyUsageShape(llmFor(models.compiler, 'compile'), goal, intent),
-          }),
-          config,
-          () => llmFor(models.critic, 'compile'),
-          options.workspaceRoot,
-          logger,
-          workspaceFacts,
-        ),
-        config,
-        () => llmFor(models.compiler, 'compile'),
-        options.workspaceRoot,
-        timeouts.verifyMs,
-        logger,
-        workspaceFacts,
-        // The scratch executes the contract's setup + rungs, so it goes through the SAME jail as
-        // the verifier seam — never bare on the host under an active `--sandbox` policy.
-        runLauncher,
-      ),
-      seed,
-    ),
-    seal:
-      options.sealGate ??
-      (config.autonomous
-        ? new AutoSealGate()
-        : new HumanSealGate({ allowRevise: config.maxSealRevisions > 0 })),
-    ...(phasedSeams !== undefined ? phasedSeams : {}),
-    harness:
-      options.harnessFactory !== undefined
-        ? options.harnessFactory(options.workspaceRoot)
-        : options.harness === 'goaly-code'
-          ? makeGoalyCodeHarness(options, models, stateDir, logger, launcher)
-          : makeHarness(
-              options.harness,
-              models.harness,
-              timeouts.harnessMs,
-              timeouts.harnessIdleMs,
-              {
-                launcher,
-                workspace: options.workspaceRoot,
-                policy: options.sandbox ?? defaultPolicy(),
-                ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
-              },
-              options.harnessAutonomy,
-            ),
     makeLadder: (contract) => {
       // Surface the frozen authored bar (`generatedFiles`) in the diff the two LLM keys review, even
       // though it's git-excluded (issue #52) from the user's `git status`. Without this the judge sees
@@ -583,12 +510,7 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
         config.adversarial.enabled && config.adversarial.refuters > 0
           ? { llm: llmFor(models.critic, 'judge'), refuters: config.adversarial.refuters }
           : undefined;
-      return buildLadder(
-        contract,
-        llmFor(models.judge, 'judge'),
-        timeouts.verifyMs,
-        adversarial,
-      );
+      return buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs, adversarial);
     },
     // Sign-off (second key, issue #84 + follow-up): a single reviewer by default (quorum 1 ⇒
     // byte-for-byte the historical call). `--approver-quorum N` runs a perspective-diverse panel
@@ -601,396 +523,11 @@ export function composeDeps(config: RunConfig, options: ComposeOptions): DriverD
     // deterministic pre-flight rung is a broken frozen verifier or an honest red. Reuses the judge
     // model — it is a verification judgment — and is metered through the same shared meter.
     prepareLlm: llmFor(models.judge, 'preflight'),
-    // The corpus WRITER (issue #122). Handed to the Driver, which appends only from an adjudicated
-    // CONTRACT_DEFECTIVE verdict; absent under `--no-defect-corpus`, so nothing can be recorded.
-    ...(defects.corpus !== undefined ? { defectCorpus: defects.corpus } : {}),
-    workspace,
-    ...(worktrees !== undefined ? { worktrees } : {}),
-    ...(wave !== undefined ? { wave } : {}),
-    clock,
-    budget,
-    llmMeter,
-    runlog: new FileRunLog(path.join(stateDir, options.runId)),
-    logger,
     // Per-step timeouts for the one-time prepare phase (Fix #1 setup + Fix #2 pre-flight). The setup
     // command gets its own cap; the deterministic pre-flight reuses the verify-command cap. Pure wiring.
     prepareTimeouts: {
       ...(timeouts.setupMs !== undefined ? { setupMs: timeouts.setupMs } : {}),
       ...(timeouts.verifyMs !== undefined ? { verifyMs: timeouts.verifyMs } : {}),
     },
-    ...(streamSink !== undefined ? { onStreamEvent: streamSink } : {}),
-    ...(observer !== undefined ? { observer } : {}),
   };
 }
-
-/**
- * Assemble the one phase-tagged stream sink (issue #23) that fans every event out to the
- * driver-side consumer surfaces — the `--stream` live stderr view, the diagnostics logger (at
- * `debug`, respecting `--log-level`), the durable transcript (issue #28), and any embedder
- * subscription. Returns `undefined` when no consumer is active so a default run builds NO taps and
- * pays zero streaming overhead. Each branch is guarded: a throwing consumer can never crash a run
- * or starve the others (fail-closed).
- */
-function buildStreamSink(
-  options: ComposeOptions,
-  logger: Logger,
-  stateDir: string,
-  now: () => number,
-): PhasedStreamSink | undefined {
-  const renderer = options.stream === true ? makeStreamRenderer(streamRendererOpts(options)) : undefined;
-  const routeToLog = (options.logLevel ?? 'info') === 'debug';
-  const transcript = buildTranscriptSink(options, stateDir, now);
-  const embedder = options.onStreamEvent;
-  if (renderer === undefined && !routeToLog && transcript === undefined && embedder === undefined) {
-    return undefined;
-  }
-
-  return (phase, event) => {
-    if (renderer !== undefined) renderer(phase, event);
-    if (routeToLog) logger.debug('stream', streamLogFields(phase, event));
-    if (transcript !== undefined) transcript(phase, event); // already fail-closed inside the sink
-    if (embedder !== undefined) {
-      try {
-        embedder(phase, event);
-      } catch {
-        /* an embedder subscription must never crash the run */
-      }
-    }
-  };
-}
-
-/**
- * Build the durable stream-transcript subscriber (issue #28) when enabled. `streamFile` sets an
- * explicit path; `streamTranscript: true` uses the default `<stateDir>/<runId>/stream.jsonl`.
- * Returns the bound, already-fail-closed {@link PhasedStreamSink}, or `undefined` when no transcript
- * was requested.
- */
-function buildTranscriptSink(
-  options: ComposeOptions,
-  stateDir: string,
-  now: () => number,
-): PhasedStreamSink | undefined {
-  const file =
-    options.streamFile ??
-    (options.streamTranscript === true ? path.join(stateDir, options.runId, STREAM_FILE) : undefined);
-  if (file === undefined) return undefined;
-  return new StreamTranscriptSink({ path: file, now }).record;
-}
-
-function streamRendererOpts(options: ComposeOptions): { write?: (line: string) => void } {
-  return options.streamWrite !== undefined ? { write: options.streamWrite } : {};
-}
-
-/**
- * Build the run's diagnostic logger: a console sink (stderr, human-formatted) plus, unless
- * disabled, a size-rotated JSON file co-located with the run log at `<stateDir>/<runId>/goaly.log`.
- * `runId` is bound onto every record. This is the only place real filesystem logging is wired.
- */
-function buildRunLogger(options: ComposeOptions, stateDir: string): Logger {
-  const file: FileLogOptions | undefined =
-    options.noLogFile === true
-      ? undefined
-      : {
-          path: options.logFile ?? path.join(stateDir, options.runId, 'goaly.log'),
-          ...(options.logFs !== undefined ? { fs: options.logFs } : {}),
-        };
-  return buildLogger({
-    level: options.logLevel ?? 'info',
-    console: options.noLogConsole !== true,
-    ...(file !== undefined ? { file } : {}),
-    ...(options.now !== undefined ? { now: options.now } : {}),
-    fields: { runId: options.runId },
-  });
-}
-
-/**
- * Build the LLM provider for the workflow steps. `claude` uses the lean `claude -p` completion;
- * `codex`/`droid`/`pi` wrap their agentic CLI in a one-shot READ-ONLY mode (codex `--sandbox
- * read-only`, droid's default no-`--auto` exec, pi's `--tools read,grep,find,ls`) so a judge /
- * approver / compiler can use that tool's model without ever mutating the working tree it is judging.
- * The resolved per-step model is threaded in.
- */
-export function makeLlmProvider(
-  choice: LlmProviderChoice,
-  model: string | undefined,
-  opts: {
-    onEvent?: AgentEventSink;
-    timeoutMs?: number;
-    baseUrl?: string;
-    apiKey?: string;
-    fetch?: FetchLike;
-  } = {},
-): LlmProvider {
-  // `openai` is the first non-CLI provider: a direct chat-completions call (no coding CLI). It is
-  // structurally read-only (one [system,user] exchange, no tools) and fails closed without the
-  // endpoint/model it needs.
-  if (choice === 'openai') {
-    if (opts.baseUrl === undefined) {
-      throw new EndpointConfigError('--llm-provider openai requires --base-url <url>');
-    }
-    if (model === undefined) {
-      throw new EndpointConfigError('--llm-provider openai requires a model (--llm-model or --model)');
-    }
-    return new OpenAiLlmProvider({ client: makeOpenAiClient(opts.baseUrl, opts.apiKey, opts.timeoutMs, opts.fetch), model });
-  }
-  // One codec-driven provider for every CLI: the codec owns the read-only argv, the prompt-on-stdin
-  // decision, and the field/stream extractors, so judge/approver/compiler share one source of truth
-  // with the harness role. `claude` reads its prompt on stdin; codex/droid/pi carry it on argv —
-  // the provider keys that off `codec.promptOnStdin`.
-  return new AgentCliLlmProvider({
-    codec: codecFor(choice),
-    ...(model !== undefined ? { model } : {}),
-    ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-    ...(opts.onEvent !== undefined ? { onEvent: opts.onEvent } : {}),
-  });
-}
-
-/** Build the shared OpenAI-compatible HTTP client (transport for the provider AND the goaly-code harness). */
-function makeOpenAiClient(
-  baseUrl: string,
-  apiKey: string | undefined,
-  timeoutMs: number | undefined,
-  fetch: FetchLike | undefined,
-): OpenAiClient {
-  return new OpenAiClient({
-    baseUrl,
-    ...(apiKey !== undefined ? { apiKey } : {}),
-    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-    ...(fetch !== undefined ? { fetch } : {}),
-  });
-}
-
-/**
- * Turn the frozen contract's ordered rungs into a Ladder of concrete verifiers. An optional
- * `verifyTimeoutMs` caps each deterministic command — including an artifact-running smoke command
- * (issue #53), which is just another deterministic rung (a timeout is a fail-closed FAIL); the model
- * and timeout are wiring and never alter the frozen rungs themselves.
- *
- * `adversarial` (the `--adversarial` refuter panel) APPENDS a built-in {@link AdversarialReviewRung}
- * after every frozen rung — the same non-contract-rung precedent as the guard below: part of the
- * ladder, never part of `contractHash`. The ladder's short-circuit means it runs only on an
- * all-green frozen bar (so its LLM spend occurs only on candidate greens — under `--candidates > 1`
- * that is per green candidate, deliberately: its red feeds the graded selection) and it can only
- * FAIL that green, never promote a red.
- */
-export function buildLadder(
-  contract: CompiledContract,
-  llm: LlmProvider,
-  verifyTimeoutMs?: number,
-  adversarial?: { llm: LlmProvider; refuters: number },
-): Verifier {
-  const rungs: Verifier[] = contract.rungs.map((rung) =>
-    rung.kind === 'deterministic'
-      ? new DeterministicVerifier(rung.command, rung.label, verifyTimeoutMs)
-      : new JudgeVerifier({
-          rubric: rung.rubric,
-          quorum: rung.quorum,
-          confidenceFloor: rung.confidenceFloor,
-          llm,
-        }),
-  );
-  // Pin compiler-authored verification files: a guard runs FIRST and fails closed if
-  // any frozen generated file was modified/removed, so the worker can't rewrite the bar the frozen
-  // command measures. No generated files ⇒ no guard (the common --verify-cmd path is unchanged).
-  if (contract.generatedFiles.length > 0) {
-    rungs.unshift(new GeneratedFilesGuard(contract.generatedFiles));
-  }
-  if (adversarial !== undefined && adversarial.refuters > 0) {
-    rungs.push(new AdversarialReviewRung({ llm: adversarial.llm, refuters: adversarial.refuters }));
-  }
-  return new Ladder(rungs);
-}
-
-/**
- * Build the Sign-off approver (second key). With `--approver-models m1,m2,…` (follow-up to issue #84)
- * the panel gains REAL per-reviewer model independence: one `'approve'`-metered provider per model
- * (every panel call still attributes to the approver layer — no new spend category), passed as the
- * approver's `reviewers`. When the user did NOT pin `--approver-quorum`, the quorum defaults to the
- * model count (`AgentApprover` applies that default from the reviewers list). The single `llm` stays
- * the back-compat fallback. Absent ⇒ the single-model approver, byte-for-byte unchanged.
- *
- * `--approver-lenses` (issue #84 OQ4) replaces the cycled default lens taxonomy with an
- * operator-supplied one (forwarded only when set); absent ⇒ the AgentApprover's DEFAULT_LENSES.
- */
-function buildApprover(
-  config: RunConfig,
-  models: ResolvedModels,
-  llmFor: (model: string | undefined, phase: StreamPhase) => LlmProvider,
-): AgentApprover {
-  const reviewers = (models.approverModels ?? []).map((m) => llmFor(m, 'approve'));
-  // Only forward an explicit `--approver-quorum`. When a model list is given and the user left the
-  // quorum at its default 1, the approver defaults the quorum to the model count instead.
-  const quorumExplicit = reviewers.length === 0 || config.approver.quorum > 1;
-  return new AgentApprover({
-    llm: llmFor(models.approver, 'approve'),
-    diversityTemperature: config.approver.diversityTemperature,
-    ...(reviewers.length > 0 ? { reviewers } : {}),
-    ...(quorumExplicit ? { quorum: config.approver.quorum } : {}),
-    // Operator-supplied review lenses (issue #84 OQ4): forward when set so they replace the default
-    // taxonomy the AgentApprover cycles; absent ⇒ the approver uses DEFAULT_LENSES as today.
-    ...(config.approver.lenses !== undefined ? { lenses: config.approver.lenses } : {}),
-  });
-}
-
-/** The sandbox wiring threaded into {@link makeHarness}: the launcher + the harness-seam profile. */
-type HarnessSandbox = {
-  launcher: SandboxLauncher;
-  workspace: string;
-  policy: SandboxPolicy;
-  /** The running egress proxy when the policy uses an allowlist (issue #39). */
-  proxy?: SandboxProxy;
-};
-
-function makeHarness(
-  // `goaly-code` is the non-codec adapter, routed away in composeDeps; this builds only codec-backed (and fake).
-  choice: Exclude<HarnessChoice, 'goaly-code'>,
-  model: string | undefined,
-  timeoutMs: number | undefined,
-  idleTimeoutMs: number | undefined,
-  sandbox: HarnessSandbox,
-  autonomy?: AutonomyLevel | undefined,
-): HarnessAdapter {
-  const exec = sandboxedHarnessExec(choice, timeoutMs, idleTimeoutMs, sandbox);
-  const opts = {
-    // Run the agent IN the workspace, not goaly's invocation cwd (which `npm run` resets to the
-    // package root). Only the default exec reads this; the sandbox exec sets the jail's cwd itself.
-    cwd: sandbox.workspace,
-    ...(model !== undefined ? { model } : {}),
-    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-    ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
-    ...(exec !== undefined ? { exec } : {}),
-  };
-  // The fake harness has no codec; every real CLI is a thin binding of its codec over the one
-  // generic AgentCliHarness (seam #1). The codec→choice map lives once in `codecFor`.
-  if (choice === 'fake') return new NoopHarness();
-  // `autonomy` is the WRITE role's knob only; `codecFor` ignores it for CLIs without a tier.
-  return new AgentCliHarness(codecFor(choice, { autonomy }), opts);
-}
-
-/**
- * Build the SANDBOXED harness exec (issue #9) for a codec-backed adapter, or `undefined` when no
- * sandbox is active (the adapter then uses its default exec — byte-for-byte the current call). The
- * whole agent-CLI invocation is untrusted, so we wrap the entire exec. The neutral spawner runs
- * the launcher's rewritten `[binary, ...argv]`; the harness seam always keeps network egress.
- */
-function sandboxedHarnessExec(
-  choice: Exclude<HarnessChoice, 'goaly-code'>,
-  timeoutMs: number | undefined,
-  idleTimeoutMs: number | undefined,
-  sandbox: HarnessSandbox,
-): ReturnType<typeof withSandboxAgent> | undefined {
-  if (sandbox.launcher.identity || choice === 'fake') return undefined;
-  const codec = codecFor(choice);
-  const budget = timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
-  const inner = neutralAgentExec(budget, codec.promptOnStdin, idleTimeoutMs);
-  return withSandboxAgent(codec.command, inner, sandbox.launcher, {
-    workspace: sandbox.workspace,
-    network: networkForSeam(sandbox.policy, 'harness'),
-    // The harness keeps the FULL host env (NOT scrubbed): the agent CLI needs its API keys to
-    // authenticate. The container launcher re-exports each NAME with `-e` (a fresh `docker`/`podman
-    // run` inherits nothing); bwrap inherits the env naturally and ignores this.
-    env: process.env,
-    // The egress proxy when an allowlist is active (issue #39); the launcher pins the jail at it.
-    ...(sandbox.proxy !== undefined ? { proxy: sandbox.proxy } : {}),
-  });
-}
-
-/**
- * Build the goaly-code harness (the first non-codec adapter). It needs a base URL and a resolved model
- * (fail-closed otherwise), an OpenAI client for inference, a path-guarded {@link NodeToolHost} whose
- * `run_shell` is the ONLY sandboxed exec (finer-grained than wrapping an opaque CLI — spec §2.5), and
- * a {@link FileSessionStore} for resume. `sandboxedHarnessExec` (a codec-command wrapper) is bypassed.
- */
-function makeGoalyCodeHarness(
-  options: ComposeOptions,
-  models: ResolvedModels,
-  stateDir: string,
-  logger: Logger,
-  launcher: SandboxLauncher,
-): HarnessAdapter {
-  if (options.baseUrl === undefined) {
-    throw new EndpointConfigError('--harness goaly-code requires --base-url <url>');
-  }
-  if (models.harness === undefined) {
-    throw new EndpointConfigError('--harness goaly-code requires a model (--model <m>)');
-  }
-  const timeouts = options.timeouts ?? {};
-  const client = makeOpenAiClient(options.baseUrl, options.llmApiKey, timeouts.harnessMs, options.llmFetch);
-  const shell = goalyCodeShellExec({
-    root: options.workspaceRoot,
-    launcher,
-    policy: options.sandbox ?? defaultPolicy(),
-    ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
-    ...(timeouts.harnessMs !== undefined ? { timeoutMs: timeouts.harnessMs } : {}),
-  });
-  return new GoalyCodeHarness({
-    client,
-    model: models.harness,
-    host: new NodeToolHost({ root: options.workspaceRoot, shell }),
-    sessionStore: new FileSessionStore({ dir: path.join(stateDir, 'goaly-code-sessions') }),
-    logger,
-    ...(timeouts.harnessMs !== undefined ? { timeoutMs: timeouts.harnessMs } : {}),
-    ...(options.goalyCodeMaxTurns !== undefined ? { maxTurns: options.goalyCodeMaxTurns } : {}),
-  });
-}
-
-/**
- * The sandboxed `run_shell` exec for the goaly-code harness — the agent's untrusted shell, jailed at the
- * tool grain. Mirrors the verifier seam's `sh -c` rewrite but keeps the HARNESS network profile +
- * full env (the agent may need egress to build/install; the inference call is made by goaly itself,
- * un-jailed). With a {@link NoneLauncher} it is a plain in-workspace shell (default behavior).
- */
-function goalyCodeShellExec(opts: {
-  root: string;
-  launcher: SandboxLauncher;
-  policy: SandboxPolicy;
-  proxy?: SandboxProxy;
-  timeoutMs?: number;
-}): ShellExec {
-  const budget = opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs, killGroup: true } : { killGroup: true };
-  return async (command) => {
-    // Scrub credentials: run_shell runs model-authored commands but, unlike a CLI harness, it does
-    // NOT make the inference call (goaly does, un-jailed), so it never needs API keys. Deny it the
-    // parent's secrets (matches the verifier seam); still augment PATH so an agent-installed toolchain
-    // is discoverable.
-    const env = augmentToolPath(scrubEnv(process.env));
-    if (opts.launcher.identity) {
-      const r = await runProcess(command, [], { cwd: opts.root, shell: true, env, ...budget });
-      return { stdout: r.stdout, stderr: r.stderr, code: r.code, timedOut: r.timedOut };
-    }
-    const profile = resolveProfile(networkForSeam(opts.policy, 'harness'), {
-      workspace: opts.root,
-      env,
-      ...(opts.proxy !== undefined ? { proxy: opts.proxy } : {}),
-    });
-    const wrapped = opts.launcher.wrap('sh', ['-c', command], profile);
-    const r = await runProcess(wrapped.command, wrapped.args, { cwd: opts.root, env, ...budget });
-    return { stdout: r.stdout, stderr: r.stderr, code: r.code, timedOut: r.timedOut };
-  };
-}
-
-function resolveWorkspaceMode(mode: 'git' | 'file' | 'auto', root: string): 'git' | 'file' {
-  if (mode !== 'auto') return mode;
-  try {
-    const stat = require('node:fs').statSync(path.join(root, '.git'));
-    return stat.isDirectory() || stat.isFile() ? 'git' : 'file';
-  } catch {
-    return 'file';
-  }
-}
-
-/**
- * A harness that makes no changes — for exercising the full pipeline (workspace, verifier,
- * gates, run log) end-to-end without spawning a real agent.
- */
-export class NoopHarness implements HarnessAdapter {
-  readonly name = 'noop';
-  async run(_prompt: string, sessionId?: SessionId): Promise<HarnessRunResult> {
-    return {
-      output: '(noop harness made no changes)',
-      sessionId: sessionId ?? SessionIdSchema.parse('noop-session'),
-      status: 'completed',
-    };
-  }
-}
-

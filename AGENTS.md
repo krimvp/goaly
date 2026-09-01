@@ -5,9 +5,9 @@ first. It overrides generic habits where they conflict.
 
 `goaly` runs a coding agent in a loop until a goal is **verifiably** met, with a frozen
 success criterion the agent can't weaken. The whole point is correctness under adversarial
-self-interest — so the bar for changes here is high. Start with [`DESIGN.md`](DESIGN.md) (what &
-why), [`ARCHITECTURE.md`](ARCHITECTURE.md) (how), [`CONTEXT.md`](CONTEXT.md) (glossary), and the
-[`docs/adr/`](docs/adr) decisions.
+self-interest — so the bar for changes here is high. Start with [`ARCHITECTURE.md`](ARCHITECTURE.md)
+(how) and the [`docs/adr/`](docs/adr) decisions (what & why; 0001–0003 first), then
+[`CONTEXT.md`](CONTEXT.md) (glossary). [`docs/README.md`](docs/README.md) routes every other question.
 
 ## Commands
 
@@ -144,7 +144,7 @@ That is why a new harness is one file and why the whole policy is testable with 
 src/
   domain/      ids, config, contract, verdict, events, critique — types + Zod schemas (the language)
   orchestrator/ state, step, decide, stuck              — PURE reducer (the spine)
-  driver/      driver, clock, budget                    — effects + seam #4
+  driver/      driver, deps, perform, bootstrap, clock, budget — effects + seam #4 (drive() loop; perform = the Command switch)
   verify/      verifier, ladder, deterministic, judge, approver, agent-approver, adversarial-rung — seam #2/#3
   compile/     compiler, agent-compiler, critiqued-compiler, contract-dry-run, required-tools, seal, seal-gates — Phase 1 + freeze + Seal
   agent-cli/   codec, <tool>-codec, output, stream, estimate — one deep codec per CLI (seam-shared)
@@ -163,7 +163,7 @@ src/
                fail-open everywhere. The signature closes lines from ELSEWHERE, not the same-uid
                coding agent (which can read the key) — the untrusted fence is the real containment;
                do not restate the signature as more than that
-  cli/         args, compose, compose-authoring, main    — composition root + CLI
+  cli/         args (+ args-*), compose (+ compose-*), run-cmd (+ run-*), help, main — composition root + CLI
   testing/     fakes                                    — fakes for every seam
 ```
 

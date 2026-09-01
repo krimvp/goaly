@@ -1,5 +1,5 @@
-import { USAGE } from './usage';
 import { UsageError } from './flags/tokens';
+import { documentedFlagNames, helpTopicKeys } from './help';
 
 /**
  * `goaly completion <shell>` (improvement plan 3.3): print a bash / zsh / fish completion script
@@ -30,30 +30,22 @@ export const SUBCOMMANDS: readonly string[] = [
   'help',
 ];
 
-/**
- * Flag-shaped tokens in `USAGE` that are NOT goaly flags: another tool's flags and prose globs,
- * mirroring the drift test's enumeration (subcommand flags like `--port` stay — they complete).
- */
-const NOT_A_FLAG = new Set(['auto', 'rm', 'json', 'stuck-', 'baseline-style']);
-
-/** Every completable `--flag`, extracted from the documented contract, deduped and sorted. */
+/** Every completable `--flag`, from the documented contract (see `help.ts`), deduped and sorted. */
 export function documentedFlags(): string[] {
-  const names = new Set(
-    [...USAGE.matchAll(/--([a-z][a-z0-9-]*)/g)]
-      .map((m) => m[1] as string)
-      .filter((f) => !NOT_A_FLAG.has(f)),
-  );
-  return [...names].sort().map((f) => `--${f}`);
+  return documentedFlagNames().map((f) => `--${f}`);
 }
 
-function bashScript(flags: string[]): string {
+function bashScript(flags: string[], topics: string[]): string {
   return `# goaly bash completion — install with: source <(goaly completion bash)
 _goaly_completions() {
   local cur="\${COMP_WORDS[COMP_CWORD]}"
   local prev="\${COMP_WORDS[COMP_CWORD-1]}"
   local subcommands="${SUBCOMMANDS.join(' ')}"
   local flags="${flags.join(' ')}"
-  if [[ \$prev == --preset ]]; then
+  local topics="${topics.join(' ')}"
+  if [[ \$prev == help ]]; then
+    COMPREPLY=( \$(compgen -W "\$topics" -- "\$cur") )
+  elif [[ \$prev == --preset ]]; then
     COMPREPLY=( \$(compgen -W "none \$(goaly config presets --names 2>/dev/null)" -- "\$cur") )
   elif [[ \$COMP_CWORD -eq 1 && \$cur != -* ]]; then
     COMPREPLY=( \$(compgen -W "\$subcommands" -- "\$cur") )
@@ -65,13 +57,16 @@ complete -F _goaly_completions goaly
 `;
 }
 
-function zshScript(flags: string[]): string {
+function zshScript(flags: string[], topics: string[]): string {
   return `# goaly zsh completion — install with: source <(goaly completion zsh)
 _goaly() {
-  local -a subcommands flags
+  local -a subcommands flags topics
   subcommands=(${SUBCOMMANDS.join(' ')})
   flags=(${flags.join(' ')})
-  if [[ \$words[CURRENT-1] == --preset ]]; then
+  topics=(${topics.join(' ')})
+  if [[ \$words[CURRENT-1] == help ]]; then
+    compadd -- \$topics
+  elif [[ \$words[CURRENT-1] == --preset ]]; then
     compadd -- none \${(f)"\$(goaly config presets --names 2>/dev/null)"}
   elif (( CURRENT == 2 )) && [[ \$words[CURRENT] != -* ]]; then
     _describe 'goaly command' subcommands
@@ -85,11 +80,12 @@ fi
 `;
 }
 
-function fishScript(flags: string[]): string {
+function fishScript(flags: string[], topics: string[]): string {
   const lines = [
     '# goaly fish completion — install with: goaly completion fish | source',
     'complete -c goaly -f',
     `complete -c goaly -n '__fish_use_subcommand' -a '${SUBCOMMANDS.join(' ')}'`,
+    `complete -c goaly -n '__fish_seen_subcommand_from help' -a '${topics.join(' ')}'`,
     // --preset completes the user's preset names (asked live, so they track the config files).
     "complete -c goaly -l preset -x -a '(goaly config presets --names 2>/dev/null; echo none)'",
     ...flags.filter((f) => f !== '--preset').map((f) => `complete -c goaly -l ${f.slice(2)}`),
@@ -100,9 +96,10 @@ function fishScript(flags: string[]): string {
 /** Render the completion script for `shell`. Pure; the flag list comes from {@link documentedFlags}. */
 export function renderCompletion(shell: CompletionShell): string {
   const flags = documentedFlags();
-  if (shell === 'bash') return bashScript(flags);
-  if (shell === 'zsh') return zshScript(flags);
-  return fishScript(flags);
+  const topics = helpTopicKeys();
+  if (shell === 'bash') return bashScript(flags, topics);
+  if (shell === 'zsh') return zshScript(flags, topics);
+  return fishScript(flags, topics);
 }
 
 /** Validate the `<shell>` positional, fail-closed (invariant #6). */

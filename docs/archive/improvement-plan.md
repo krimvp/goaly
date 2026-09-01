@@ -1,3 +1,8 @@
+> **Archived.** Fully executed except 5.4 (remote UI access), deferred — see
+> [ADR 0014](../adr/0014-local-web-ui.md) / [ADR 0015](../adr/0015-ui-owned-runs.md).
+> The shipped work is documented in [`docs/reference.md`](../reference.md) and
+> [`CHANGELOG.md`](../../CHANGELOG.md). Kept as a record; not a live plan.
+
 # goaly Improvement Plan
 
 > Derived from a full health pass: `npm ci`, `npm run typecheck`, `npm test`, `npm run coverage`,

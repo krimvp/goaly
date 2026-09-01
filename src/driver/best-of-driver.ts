@@ -7,7 +7,7 @@ import { iterationCount } from '../orchestrator/state';
 import { noopLogger } from '../log/logger';
 import { errorMessage } from '../util/errors';
 import { runBestOf, type CandidateResult } from './tournament';
-import type { DriverDeps } from './driver';
+import type { DriverDeps } from './deps';
 
 /**
  * The performed best-of-N result fed back into the main loop: the winner's event + advanced seq. Shares

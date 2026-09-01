@@ -226,6 +226,16 @@ describe('the implied default (no --preset, no --mode)', () => {
     expect(a.warnings.some((w) => w.includes('no human at the gates'))).toBe(true);
   });
 
+  it('a typed -d / --autonomous on a bare run still carries the independence reminder', async () => {
+    // The reminder is about the run being unattended, whoever set the flag. It used to key off
+    // "the preset applied autonomous", so `-d` silently lost the one safety warning.
+    const a = await parseArgs([...run, '-d'], defaultReaders, noConfig);
+    expect(a.config.autonomous).toBe(true);
+    expect(a.warnings.some((w) => w.includes('no human at the gates'))).toBe(true);
+    const quiet = await parseArgs([...run, '-d', '--approver-model', 'other'], defaultReaders, noConfig);
+    expect(quiet.warnings.some((w) => w.includes('no human at the gates'))).toBe(false);
+  });
+
   it('fills gaps ONLY — a config-file key always beats the implied tier', async () => {
     const a = await parseArgs(
       [...run],

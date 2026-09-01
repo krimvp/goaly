@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A dying subprocess can no longer crash the whole goaly process** (#101). Writing a large prompt
+  to a child that exits before draining its stdin raised an unhandled `EPIPE` on the stdin socket
+  and killed the orchestrator mid-run. The write now fails closed: the step resolves with the
+  child's real exit code and the seams handle it as the typed failure they were built for.
+- **Bad flag values are clean usage errors.** `--max-iterations abc` printed a raw ZodError stack
+  and exited `1` (colliding with a failed run); it now names the flag and exits `2`. A usage error
+  also prints the message plus a `goaly help` pointer instead of the full multi-hundred-line usage
+  text that scrolled the error off screen.
+- **`-d` / `--autonomous` on a bare run no longer silences the Sign-off independence reminder.**
+  The reminder keyed off "the implied preset set autonomous", so typing the flag the preset would
+  have set anyway lost the one safety warning while changing nothing else.
+- `goaly help` no longer cites internal issue numbers; the provenance stays in the ADRs and this
+  changelog.
+
+### Added
+- **Fatal-crash child reaping.** An unexpected fatal error (uncaught exception / unhandled
+  rejection) now reaps live child process groups before exiting, so a crashed goaly never leaves
+  an agent CLI editing the tree and spending tokens on its own.
+- **Stale run-lock reclaims are reported.** The self-healing sweep of a dead driver's lock now
+  prints a notice naming the dead pid instead of happening silently.
+- **`goaly runs show` prints the run's wall-clock `duration:`** next to started/ended.
+- **`goaly --version` / `-v`** prints the installed package version and exits 0; the UI's
+  `/api/version` now reads it through the same helper.
+- The reference now documents the read-only subcommands' exit codes and the stdout/stderr contract
+  (outcome on stdout, everything live on stderr).
+- **`goaly help` is served by topic.** The default `goaly help` is now the quick start, the synopsis,
+  and a topic index (~100 lines instead of ~720); `goaly help <topic>` (`stuck`, `seal`, `models`,
+  `sandbox`, …) prints one section; `goaly help all` prints everything. Shell completion completes
+  the topic names. The full text is unchanged — it is the same flag contract the docs-sync gate,
+  the config drift test, and completion read, now through one shared extraction.
+- **An undocumented `--flag` is a usage error.** The command line was the one seam where a typo
+  (`--budget-token 500000`) was silently dropped — and, because an unknown flag also swallows the
+  next token, `--autonomus "my goal"` silently ate the goal. Both now fail closed with exit `2` and
+  the flag named, exactly as `.goalyrc` already does for an unknown key.
+- **`docs/README.md` routes the documentation.** One "I want to… → read this" table; the docs-sync
+  gate now fails on any top-level or `docs/*.md` document the router does not link. Finished plans
+  (`improvement-plan.md`, `plan-no-git-workspace.md`) and the pre-implementation `DESIGN.md` moved
+  to `docs/archive/` with headers stating their outcome; `ARCHITECTURE.md`'s directory map and
+  verification section were regenerated from the current tree.
+- **Inert flag combinations fail closed instead of silently doing nothing.** `--harness-idle-timeout-ms`
+  at or above the wall-clock `--harness-timeout-ms` (it could never fire), and `--sandbox-net` /
+  `--sandbox-image` / `--sandbox-runtime` without `--sandbox` (they were parsed and discarded) are
+  now usage errors naming the fix. `--mode review --autonomous` keeps the flag but says so — it used
+  to run unattended without a word.
+- **The end-of-run summary prints `elapsed:`** (this invocation's wall clock; a resumed run's full
+  span stays in `goaly runs show`).
+
+### Changed
+- **The composition edge is decomposed.** `driver.ts` (1059 → 353 lines: `deps.ts`, `perform.ts`,
+  `bootstrap.ts`), `compose.ts` (996 → 412: `compose-options/-provider/-verify/-logging/-harness.ts`),
+  `args.ts` (783 → 225: `args-types/-commands/-cli-input/-layers.ts`) and `run-cmd.ts` (779 → 205:
+  `run-prepare/-banner/-wiring/-report.ts`) are pure moves along their existing seams; every public
+  symbol is still importable from its historical module, so embedders and tests are unchanged. The
+  two grandfathered file-size ratchets are gone — every file is under the 800-line gate — and
+  `executeRun` (484 → 137 lines) and `parseArgs` (382 → 108) are readable again.
+
 ## [0.2.6] - 2026-08-13
 
 ### Security

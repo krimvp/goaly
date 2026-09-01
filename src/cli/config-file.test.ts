@@ -13,7 +13,8 @@ import {
   PER_INVOCATION_FLAGS,
   type ConfigFileReader,
 } from './config-file';
-import { UsageError, USAGE } from './args';
+import { UsageError } from './args';
+import { documentedFlagNames } from './help';
 
 /** A reader backed by an in-memory map keyed by full path; missing files are `undefined`. */
 function fakeReader(files: Record<string, string>): ConfigFileReader {
@@ -309,6 +310,8 @@ describe('config-file schema vs. the documented CLI flags (drift guard)', () => 
    * so a genuinely new flag can never hide behind a loose heuristic.
    */
   const NOT_A_RUN_FLAG = new Set([
+    // A top-level command spelling like `goaly help`, only recognized as the first token.
+    'version',
     // Subcommand flags: `goaly ui` / `goaly worktree` / `goaly init` / `goaly config presets`.
     'port',
     'base',
@@ -325,11 +328,7 @@ describe('config-file schema vs. the documented CLI flags (drift guard)', () => 
     'stuck-',
   ]);
 
-  const documented = new Set(
-    [...USAGE.matchAll(/--([a-z][a-z0-9-]*)/g)]
-      .map((m) => m[1] as string)
-      .filter((f) => !NOT_A_RUN_FLAG.has(f)),
-  );
+  const documented = new Set(documentedFlagNames().filter((f) => !NOT_A_RUN_FLAG.has(f)));
 
   it('every documented run flag is settable from a config file, except the per-invocation ones', () => {
     const keys = new Set(CONFIG_FILE_KEYS);

@@ -31,6 +31,12 @@ export async function acquireRunLock(
     isPidAlive?: (pid: number) => boolean;
     /** The pid recorded in the lock file. Defaults to `process.pid`. */
     pid?: number;
+    /**
+     * Called when a stale lock (dead holder) is reclaimed. The self-heal is correct but must not
+     * be silent: the stale file is the trace of a crashed/killed driver, and the operator deserves
+     * to know one was swept away. Default: no notice (library callers opt in).
+     */
+    onStaleReclaim?: (message: string) => void;
   } = {},
 ): Promise<RunLock> {
   const alive = opts.isPidAlive ?? defaultIsPidAlive;
@@ -68,6 +74,15 @@ export async function acquireRunLock(
         );
       }
       // Stale (holder dead / unreadable / our own pid from a previous incarnation): self-heal.
+      // Suppress the notice for our own pid — re-locking after our own earlier incarnation is
+      // routine, not the trace of a crash.
+      if (holder !== pid) {
+        opts.onStaleReclaim?.(
+          holder === null
+            ? `reclaimed an unreadable run lock at ${path} (previous driver left no valid pid)`
+            : `reclaimed a stale run lock at ${path} (previous driver pid ${holder} is gone — it crashed or was killed)`,
+        );
+      }
       await rm(path, { force: true }).catch(() => undefined);
     }
   }

@@ -25,6 +25,9 @@
  * classic single attempt, never a guess. The explicit `--candidates` flag always wins.
  */
 
+import { MAX_CANDIDATES } from './flags/budget-flags';
+import { UsageError } from './flags/tokens';
+
 /** Candidate count when the directive names no number ("use subagents"). */
 export const DEFAULT_DELEGATION_CANDIDATES = 3;
 
@@ -82,6 +85,9 @@ const PATTERNS: readonly { re: RegExp; count: (m: RegExpMatchArray) => number }[
  * none — the classic single-attempt run. Pure and deterministic; the caller owns validation
  * (candidate cap) and the loud interpretation log.
  */
+/** A parsed delegation directive: how many parallel candidates, and the phrase that asked. */
+export type Delegation = { candidates: number; phrase: string; overriddenByFlag: boolean };
+
 export function parseDelegationDirective(text: string): DelegationDirective | null {
   for (const { re, count } of PATTERNS) {
     const m = text.match(re);
@@ -94,6 +100,40 @@ export function parseDelegationDirective(text: string): DelegationDirective | nu
     return { candidates, phrase: m[0].replace(/^[\s,;:–—-]+/, ''), cleaned };
   }
   return null;
+}
+
+/**
+ * The CLI seam over {@link parseDelegationDirective} for the GOAL text: an explicit directive in the
+ * goal ("work with 4 subagents") maps onto the best-of-N tournament (issue #85) and its clause is
+ * STRIPPED — the goal is frozen into the contract and read by the judge/approver, so a leftover
+ * directive would become an unverifiable success criterion. Enforces the candidate cap and rejects a
+ * goal that is ONLY a directive (fail closed, with the fix). The caller logs the interpretation
+ * loudly; `overriddenByFlag` records that an explicit `--candidates` / `--best-of` (or config) wins.
+ * An absent goal (a `--resume` / `--recontract`) passes through untouched.
+ */
+export function applyDelegationDirective(
+  goal: string | undefined,
+  overriddenByFlag: boolean,
+): { goal: string | undefined; delegation: Delegation | undefined } {
+  if (goal === undefined) return { goal, delegation: undefined };
+  const directive = parseDelegationDirective(goal);
+  if (directive === null) return { goal, delegation: undefined };
+  if (directive.candidates > MAX_CANDIDATES) {
+    throw new UsageError(
+      `"${directive.phrase}": at most ${MAX_CANDIDATES} parallel candidates are supported ` +
+        `(each is a full concurrent worker + worktree) — ask for ${MAX_CANDIDATES} or fewer`,
+    );
+  }
+  if (directive.cleaned.length === 0) {
+    throw new UsageError(
+      `the goal '${goal}' is only a delegation directive — say WHAT to achieve too, ` +
+        `e.g. goaly "fix the flaky test, ${directive.phrase}"`,
+    );
+  }
+  return {
+    goal: directive.cleaned,
+    delegation: { candidates: directive.candidates, phrase: directive.phrase, overriddenByFlag },
+  };
 }
 
 /**

@@ -106,6 +106,28 @@ describe('parseArgs', () => {
     });
   });
 
+  describe('bad flag values are usage errors, not raw ZodErrors', () => {
+    const base = ['run', '--goal', 'g', '--verify-cmd', 'true'];
+
+    it('a non-numeric --max-iterations names the flag', async () => {
+      const p = parseArgs([...base, '--max-iterations', 'abc']);
+      await expect(p).rejects.toThrow(UsageError);
+      await expect(parseArgs([...base, '--max-iterations', 'abc'])).rejects.toThrow(
+        /--max-iterations/,
+      );
+    });
+
+    it('a non-mechanical spelling maps back to the flag the user typed', async () => {
+      await expect(parseArgs([...base, '--budget-wall-ms', 'soon'])).rejects.toThrow(
+        /--budget-wall-ms/,
+      );
+    });
+
+    it('an out-of-range --candidates names the flag', async () => {
+      await expect(parseArgs([...base, '--candidates', '-2'])).rejects.toThrow(/--candidates/);
+    });
+  });
+
   it('defaults maxCompileRetries to 2 when the flag is absent (issue #51)', async () => {
     const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
     expect(a.config.maxCompileRetries).toBe(2);
@@ -645,6 +667,11 @@ describe('parseArgs', () => {
     expect((await parseArgs(['--help'])).command).toBe('help');
   });
 
+  it('returns version for --version / -v as the first token', async () => {
+    expect((await parseArgs(['--version'])).command).toBe('version');
+    expect((await parseArgs(['-v'])).command).toBe('version');
+  });
+
   describe('positional goal + implicit run (easy mode)', () => {
     it('treats a bare positional as the goal and implies run (generate by default)', async () => {
       const a = await parseArgs(['make the build green']);
@@ -831,6 +858,30 @@ describe('parseArgs', () => {
     expect(a.baseline).toBe('main');
     const b = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true']);
     expect(b.baseline).toBeUndefined();
+  });
+
+  describe('inert flag combinations fail closed', () => {
+    const run = ['run', '--goal', 'g', '--verify-cmd', 'true'];
+    it('rejects an idle timeout at or above the wall clock (it could never fire)', async () => {
+      await expect(
+        parseArgs([...run, '--harness-timeout-ms', '1000', '--harness-idle-timeout-ms', '1000']),
+      ).rejects.toThrow(/--harness-idle-timeout-ms 1000 is not below/);
+      // Against the default wall clock too.
+      await expect(
+        parseArgs([...run, '--harness-idle-timeout-ms', '600000']),
+      ).rejects.toThrow(UsageError);
+      const ok = await parseArgs([...run, '--harness-timeout-ms', '2000', '--harness-idle-timeout-ms', '1000']);
+      expect(ok.timeouts.harnessIdleMs).toBe(1000);
+    });
+
+    it('rejects sandbox sub-flags without --sandbox (they would be discarded)', async () => {
+      await expect(parseArgs([...run, '--sandbox-net', 'allow'])).rejects.toThrow(
+        /--sandbox-net requires --sandbox/,
+      );
+      await expect(
+        parseArgs([...run, '--sandbox-image', 'img', '--sandbox-runtime', 'docker']),
+      ).rejects.toThrow(/--sandbox-image, --sandbox-runtime require --sandbox/);
+    });
   });
 
   describe('--sandbox (issue #9)', () => {

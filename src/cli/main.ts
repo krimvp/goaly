@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { parseArgs, USAGE, UsageError, type UiCommand } from './args';
+import { parseArgs, UsageError, type UiCommand } from './args';
+import { renderHelp } from './help';
 import { startUiServer } from '../ui/server';
 import { STATE_DIR } from './compose';
 import { runRuns } from './runs';
@@ -11,6 +12,7 @@ import { runConfig } from './config-cmd';
 import { renderCompletion } from './completion';
 import { WorktreeManager, WorktreeError } from '../workspace/worktree-manager';
 import { executeRun } from './run-cmd';
+import { readPackageVersion } from '../util/package-version';
 
 // The run path lives in run-cmd.ts (`executeRun`) so the goaly-ui server drives runs through the
 // SAME guards, lock, composition, and reporting (ADR 0015). Its helpers stay part of this module's
@@ -27,14 +29,31 @@ export async function main(argv: string[]): Promise<number> {
     parsed = await parseArgs(argv);
   } catch (e) {
     if (e instanceof UsageError) {
-      process.stderr.write(`${e.message}\n\n${USAGE}\n`);
+      // The message alone, plus a pointer: the full USAGE is hundreds of lines, and dumping it
+      // here scrolled the actual error (the first thing printed) straight off screen.
+      process.stderr.write(`${e.message}\n\nrun 'goaly help' for the full usage\n`);
       return 2;
     }
     throw e;
   }
 
   if (parsed.command === 'help') {
-    process.stdout.write(`${USAGE}\n`);
+    // `goaly help [<topic>|all]` — the topic is the token after `help`/`--help`; a bare `goaly`
+    // (no argv) is the short index.
+    try {
+      process.stdout.write(`${renderHelp(argv[1])}\n`);
+      return 0;
+    } catch (e) {
+      if (e instanceof UsageError) {
+        process.stderr.write(`${e.message}\n`);
+        return 2;
+      }
+      throw e;
+    }
+  }
+
+  if (parsed.command === 'version') {
+    process.stdout.write(`${await readPackageVersion(import.meta.url)}\n`);
     return 0;
   }
 

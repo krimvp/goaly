@@ -12,7 +12,7 @@ import {
   type RunSummary,
 } from '../runlog/inspect';
 import { recontractCommand } from '../followup/recontract';
-import { formatUsage } from './usage-format';
+import { formatDuration, formatUsage } from './usage-format';
 import { resumeHint, renderResumeHint } from './resume-cmd';
 import { runsWatch } from './watch';
 
@@ -140,6 +140,7 @@ export function renderRunDetail(d: RunDetail): string {
     `goal:        ${d.goal}`,
     `started:     ${fmtTime(d.startedAt)}`,
     `ended:       ${d.endedAt === undefined ? '-' : fmtTime(d.endedAt)}`,
+    `duration:    ${d.endedAt === undefined ? '-' : formatDuration(d.endedAt - d.startedAt)}`,
     `iterations:  ${d.iterations}`,
     `tokens:      ${d.tokensSpent === undefined ? '-' : d.tokensSpent}`,
   ];

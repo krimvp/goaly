@@ -172,6 +172,11 @@ export function runProcess(
     });
 
     if (child.stdin !== null) {
+      // A child that exits (or closes stdin) before draining a large piped input emits EPIPE on the
+      // stdin socket itself — not on `child` — and without a listener Node throws it as an unhandled
+      // 'error' event, killing the whole goaly process (issue #101). Swallowing is correct and
+      // fail-closed: the child is gone, and the 'close' handler resolves with its real exit code.
+      child.stdin.on('error', () => {});
       if (options.input !== undefined) child.stdin.write(options.input);
       // ALWAYS close stdin (even with no input): a headless agent CLI that reads stdin — pi reads it
       // even in `--print` mode — blocks waiting for EOF on the inherited pipe until the wall-clock
