@@ -5,22 +5,18 @@
  *
  * The exclusion list mirrors the config drift test's: flag-shaped tokens in USAGE that are another
  * tool's flags or prose globs, not goaly flags.
+ *
+ * A second check keeps `docs/README.md` (the router) complete: every top-level document and every
+ * `*.md` directly under `docs/` must be linked from it, so a new document cannot ship unreachable.
  */
-import { readFileSync } from 'node:fs';
-import { USAGE } from '../src/cli/usage';
+import { readdirSync, readFileSync } from 'node:fs';
+import { basename } from 'node:path';
+import { documentedFlagNames } from '../src/cli/help';
 import { CONFIG_FILE_KEYS } from '../src/cli/config-file';
-
-const NOT_A_FLAG = new Set(['auto', 'rm', 'json', 'stuck-', 'baseline-style']);
 
 const reference = readFileSync('docs/reference.md', 'utf8');
 
-const documentedFlags = [
-  ...new Set(
-    [...USAGE.matchAll(/--([a-z][a-z0-9-]*)/g)]
-      .map((m) => m[1] as string)
-      .filter((f) => !NOT_A_FLAG.has(f)),
-  ),
-].sort();
+const documentedFlags = documentedFlagNames();
 
 const missingFlags = documentedFlags.filter((flag) => !reference.includes(`--${flag}`));
 const missingKeys = [...CONFIG_FILE_KEYS].filter(
@@ -28,9 +24,25 @@ const missingKeys = [...CONFIG_FILE_KEYS].filter(
   (key) => !reference.includes(`--${key}`) && !reference.includes(`\`${key}\``),
 );
 
+const router = readFileSync('docs/README.md', 'utf8');
+const routed = [
+  'README.md',
+  'AGENTS.md',
+  'ARCHITECTURE.md',
+  'CONTEXT.md',
+  'CHANGELOG.md',
+  ...readdirSync('docs')
+    .filter((f) => f.endsWith('.md') && f !== 'README.md')
+    .map((f) => `docs/${f}`),
+];
+const orphans = routed.filter(
+  (doc) => !router.includes(doc) && !router.includes(`](${basename(doc)})`),
+);
+
 const failures = [
   ...missingFlags.map((f) => `--${f} is in USAGE but not in docs/reference.md`),
   ...missingKeys.map((k) => `config key '${k}' is not documented in docs/reference.md`),
+  ...orphans.map((d) => `${d} is not linked from docs/README.md (the docs router)`),
 ];
 
 if (failures.length > 0) {
@@ -38,5 +50,5 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log(
-  `docs-sync gate ok (${documentedFlags.length} flags, ${CONFIG_FILE_KEYS.length} config keys all referenced)`,
+  `docs-sync gate ok (${documentedFlags.length} flags, ${CONFIG_FILE_KEYS.length} config keys all referenced; ${routed.length} docs routed)`,
 );

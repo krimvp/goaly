@@ -25,8 +25,8 @@ Fixes #
       bug**; a **feature/enhancement ships with tests that pin the new behavior** so it can't regress
 - [ ] None of the eight invariants weakened (a needed change adds a test, it doesn't relax an invariant)
 - [ ] Docs synced **in this change** if it alters architecture / public-embeddable API / user-facing
-      functionality: `README.md` **and** `docs/index.html` (plus `docs/adding-a-harness.md` if the
-      harness-authoring pattern changed)
+      functionality: `README.md`, `docs/reference.md` **and** `docs/index.html` (plus
+      `docs/adding-a-harness.md` if the harness-authoring pattern changed)
 
 ## Invariant impact
 

@@ -1,7 +1,6 @@
 # ADR 0018 — Non-Git Workspace Support
 
 ## Status
-
 Accepted
 
 ## Context

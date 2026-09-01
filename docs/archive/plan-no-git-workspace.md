@@ -1,3 +1,9 @@
+> **Archived.** Shipped as `--workspace-mode git|file|auto`
+> ([ADR 0018](../adr/0018-non-git-workspace.md),
+> [`docs/reference.md` → "Workspace mode"](../reference.md#workspace-mode---workspace-mode)),
+> NOT as the `--no-git` / `--auto-init` flags this plan proposed. The open questions below
+> were resolved; kept as a record.
+
 # Plan: Non-Git Workspace Support for goaly
 
 ## Goal

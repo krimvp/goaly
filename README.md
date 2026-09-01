@@ -173,7 +173,7 @@ goaly init
 source <(goaly completion bash)
 ```
 
-`goaly help` lists every flag. The **[CLI cookbook](docs/reference.md#cli-cookbook)** has a worked
+`goaly help` prints a topic index; `goaly help <topic>` one section; `goaly help all` every flag. The **[CLI cookbook](docs/reference.md#cli-cookbook)** has a worked
 example for every mode; a **[config file](docs/reference.md#config-file)** (`.goalyrc` /
 `~/.goalyrc`) keeps repeated wiring out of your invocations — with a shipped JSON Schema
 (`goalyrc.schema.json`) for editor auto-completion and `goaly config validate <path>` for the
@@ -227,12 +227,14 @@ const stream = await readStreamTranscript('.goaly', runId);
 
 ## Docs
 
+- **[Docs router](docs/README.md)** — "I want to… → read this", one table
 - **[Reference](docs/reference.md)** — every flag, mode, and guarantee (start here for depth)
-- [`DESIGN.md`](DESIGN.md) — what & why · [`ARCHITECTURE.md`](ARCHITECTURE.md) — how
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is built · [`docs/adr/`](docs/adr/README.md) — why
+  (decision records)
 - [`CONTEXT.md`](CONTEXT.md) — the ubiquitous-language glossary
   ([plain-language version](docs/reference.md#glossary))
-- [`docs/adr/`](docs/adr/README.md) — decision records ([index](docs/adr/README.md)) ·
-  [`docs/adding-a-harness.md`](docs/adding-a-harness.md)
+- [`docs/adding-a-harness.md`](docs/adding-a-harness.md) — wrap a new agent CLI
+- [`CHANGELOG.md`](CHANGELOG.md) — what changed, per version
 
 ## License
 

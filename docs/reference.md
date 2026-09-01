@@ -2,7 +2,7 @@
 
 The complete practical reference: every flag, mode, and guarantee. The [README](../README.md) is
 the short tour; this is the depth. Architecture lives in [`ARCHITECTURE.md`](../ARCHITECTURE.md),
-rationale in [`DESIGN.md`](../DESIGN.md) and [`docs/adr/`](adr/), the terse contributor glossary in
+rationale in [`docs/adr/`](adr/), the terse contributor glossary in
 [`CONTEXT.md`](../CONTEXT.md).
 
 ## Contents
@@ -154,8 +154,11 @@ goaly init --harness codex --autonomous --yes
 source <(goaly completion bash)
 ```
 
-`goaly help` lists every flag. `goaly --version` (or `-v`) prints the installed package version and
-exits 0. Exit codes for a run: `0` DONE · `1` FAILED/ABORTED · `2` usage
+`goaly help` prints the quick start, the synopsis, and a topic index; `goaly help <topic>` (e.g.
+`goaly help stuck`, `goaly help seal`, `goaly help models`) prints one section, and `goaly help all`
+prints every flag. A flag that is not in that contract is a usage error (`unknown flag: --budget-token`)
+— the command line fails closed on a typo exactly like `.goalyrc` does on an unknown key. `goaly
+--version` (or `-v`) prints the installed package version and exits 0. Exit codes for a run: `0` DONE · `1` FAILED/ABORTED · `2` usage
 error or a pre-run guard (a bad flag value, an unresolvable `--baseline`, a live run lock) ·
 `130` interrupted (Ctrl-C; the run stays resumable). An internal crash also exits `1`, after
 reaping any live child processes. The read-only subcommands use `0` ok · `1` not-ok (`runs show`

@@ -1,14 +1,15 @@
 # Goal-Orchestration Layer — Architecture
 
-> Companion to [`DESIGN.md`](DESIGN.md). DESIGN.md says *what* to build and *why*;
-> this doc says *how* it's structured — deep modules, real seams, validation at every
-> edge, in **TypeScript/Node** under **WSL/Linux**. The first half is the walking-skeleton
+> This doc says *how* goaly is structured — deep modules, real seams, validation at every
+> edge, in **TypeScript/Node** under **WSL/Linux**. The *what* and *why* live in the
+> [ADRs](docs/adr/README.md) (start with 0001–0003); the original design handoff is archived at
+> [`docs/archive/DESIGN.md`](docs/archive/DESIGN.md). The first half is the walking-skeleton
 > spine (pure reducer + four seams); ["What the implementation added"](#what-the-implementation-added-beyond-the-walking-skeleton)
 > below covers the deep modules layered on since.
 
 ## Context
 
-DESIGN.md specifies a **harness-agnostic orchestration layer**: run a coding agent
+goaly is a **harness-agnostic orchestration layer**: run a coding agent
 repeatedly until a goal is *verifiably* achieved, with a deterministic thin layer in
 control and a frozen success criterion the agent can't weaken mid-loop (the
 anti-reward-hacking core).
@@ -100,7 +101,7 @@ one line in `codecFor` and the orchestrator can't tell which harness it called �
 the system changes. `diffHash` and verifier execution live *outside* the codec, identical
 everywhere, so stuck-detection works on any harness for free. Claude Code's in-process `Stop`-hook
 optimization lives **inside its adapter only**, behind the same `run()` — hooks never leak to the
-orchestrator (DESIGN's "wrapper-first, hooks as an optimization").
+orchestrator ([ADR 0001](docs/adr/0001-wrapper-over-hooks.md): wrapper-first, hooks as an optimization).
 
 > The full authoring walkthrough — the codec interface, a copy-paste skeleton, and the
 > field/status/stream mapping recipes — is in [`docs/adding-a-harness.md`](docs/adding-a-harness.md).
@@ -145,7 +146,7 @@ type OrchestratorState =
 // for stuck-detection.
 ```
 
-**DECIDE** is the DESIGN truth table, pure:
+**DECIDE** is a pure truth table:
 
 ```
 if !ladderPass                      → continue (feed verifier detail back)
@@ -280,31 +281,43 @@ to *drive* each from the CLI, see the [`README`](README.md); this section is the
 
 ## Directory layout & build order
 
-The shipped layout is a single package, core under `src/` with the CLI isolated in `src/cli/`:
+The layout is a single package, core under `src/` with the CLI isolated in `src/cli/`. One line
+per directory (the file-level map is in [`AGENTS.md`](AGENTS.md#directory-map)):
 
 ```
 src/
-  domain/      ids.ts config.ts contract.ts verdict.ts events.ts plan.ts usage.ts  (types + Zod)
-  orchestrator/  state.ts step.ts decide.ts stuck.ts                 (PURE — the spine)
-  driver/      driver.ts clock.ts budget.ts baseline.ts prepare.ts preflight-soundness.ts llm-meter.ts
-  verify/      verifier.ts deterministic.ts judge.ts approver.ts     (seam #2, #3)
-  compile/     compiler.ts seal.ts seal-gates.ts                     (Phase 1 + freeze)
-  plan/        the read-only planner for --phased (a frozen plan of sub-goals)
-  harness/     adapter.ts agent-cli-harness.ts fake.ts               (seam #1)
-  agent-cli/   codec.ts registry.ts output.ts stream.ts <name>-codec.ts   (the per-CLI codecs)
-  llm/         provider.ts agent-cli-provider.ts                     (read-only LLM seam)
-  sandbox/     policy.ts launcher.ts bwrap.ts firejail.ts container.ts proxy.ts   (ADR 0007)
-  workspace/   workspace.ts     runlog/ runlog.ts     log/ structured diagnostics
-  testing/     shared fakes      util/ spawn.ts + helpers
-  cli/         args.ts compose.ts main.ts             (thin caller; composition root)
+  domain/        ids, config, contract, verdict, events, plan, plan-graph, usage, critique, degraded — types + Zod schemas (the language)
+  orchestrator/  state, step, decide, stuck, remediate, prompts — PURE reducer (the spine)
+  driver/        driver, clock, budget, baseline, prepare, preflight-soundness, resume, refreeze, best-of-driver, tournament, wave-runner, llm-meter — effects + seam #4
+  verify/        verifier, ladder, deterministic, judge, approver, agent-approver, adversarial-rung, generated-guard, prompt-safety — seam #2/#3
+  compile/       compiler, agent-compiler, critiqued-compiler, contract-dry-run, required-tools, frozen-paths, seal, seal-gates — Phase 1 + freeze + Seal
+  plan/          planner, agent-planner, critiqued-planner, static-planner, plan-gates — the read-only planner for --phased
+  followup/      seeded, recontract, compaction — successor runs (--from-run, --recontract)
+  defects/       corpus, context, select, wiring — the cross-run defect corpus (signed, fail-open)
+  harness/       adapter, agent-cli-harness, classify — seam #1 (codec-backed adapter)
+  agent-cli/     codec, registry, output, stream, estimate, <tool>-codec — one deep codec per CLI
+  goaly-code/    harness, loop, tools, edit, fs-host, session-store, prompt — the SDK-native (non-codec) adapter (ADR 0008)
+  llm/           provider, agent-cli-provider, openai-provider, critic-panel — INTERNAL read-only LLM seam
+  llm-client/    openai-client, schema — OpenAI-compatible HTTP transport (fetch + Zod)
+  sandbox/       policy, launcher, bwrap, firejail, container, proxy, detect, sandboxed-exec — opt-in OS isolation (ADR 0007)
+  workspace/     workspace, git-workspace, file-workspace, worktree-manager, workspace-facts, scratch-copy, scrub-env — harness-independent diff/run
+  runlog/        runlog, file-runlog, replay, inspect, lock, stream-transcript, usage — write-ahead persistence + replay
+  observe/       observer — the external, trajectory-level observer (ADR 0020)
+  telemetry/     telemetry — usage counters for embedders
+  training/      trajectory, dataset, bench — labeled-trajectory export + SFT dataset + eval bench (ADR 0009)
+  ui/            server, router, sse, sessions, start-run, ui-gates, web/ — the local web UI (ADR 0014/0015)
+  log/           logger, sinks, build — structured diagnostics
+  cli/           main, args, flags/, compose, compose-authoring, run-cmd, resume-cmd, runs, watch, doctor, init, config-cmd, presets, modes, dry-run, completion, … — composition root + CLI
+  testing/       fakes, reason-scan — fakes for every seam
+  util/          spawn, which, hash, json-extract, errors — helpers
 CONTEXT.md   docs/adr/
 ```
 
-> Suggested toolchain: `tsx` for dev, `vitest` for tests, strict `tsconfig`
+> Toolchain: `tsx` for dev, `vitest` for tests, strict `tsconfig`
 > (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`).
 
 **TDD walking-skeleton order (red→green, one vertical slice at a time — not
-all-tests-first):**
+all-tests-first). This is how the skeleton was grown; follow it for new vertical slices:**
 
 1. Domain + Zod schemas (ids, config, verdict, events) — establishes the ubiquitous language.
 2. **Pure reducer + DECIDE + stuck** — table-tested with hand-built events, no adapters.
@@ -321,17 +334,16 @@ all-tests-first):**
 11. `goaly` CLI — thin caller; the library already works headless.
 
 Building the fake-driven loop (steps 1–4) before any real adapter means the entire control
-policy is proven correct before a single subprocess is spawned — the deterministic core
-DESIGN's "Suggested first build" calls for.
+policy is proven correct before a single subprocess is spawned.
 
-## Domain language & ADRs to record
+## Domain language & ADRs
 
-Create `CONTEXT.md` (glossary only) with the ubiquitous terms: **Goal, Contract, Verifier,
+[`CONTEXT.md`](CONTEXT.md) holds the glossary: the ubiquitous terms — **Goal, Contract, Verifier,
 Rubric, Verdict, Ladder, Seal / Sign-off, Two Keys, Harness, Adapter, Driver, Orchestrator,
-DECIDE, diffHash, Stuck, Autonomous** (each with an "avoid:" list, e.g. Harness ≠
-model/agent).
+DECIDE, diffHash, Stuck, Autonomous** — each with an "avoid:" list (e.g. Harness ≠
+model/agent). The plain-language version is the [reference glossary](docs/reference.md#glossary).
 
-These ADRs are recorded in [`docs/adr/`](docs/adr) (each hard-to-reverse, surprising, a real
+The ADRs are recorded in [`docs/adr/`](docs/adr) (each hard-to-reverse, surprising, a real
 trade-off). The list below is the original design-time set; the **current, complete index** —
 including the later decisions (prepare/reliability/operator control, the UI, the symmetric threat
 model, the external observer) — lives in [`docs/adr/README.md`](docs/adr/README.md):
@@ -344,19 +356,21 @@ model, the external observer) — lives in [`docs/adr/README.md`](docs/adr/READM
 - **0006** Write-ahead run log as the source of truth for resume.
 - **0007** Sandboxing model — one resolved `SandboxProfile`, per-launcher translation (`--sandbox`).
 
-## Verification (how we'll know it works)
+## How this is verified
 
-- **Unit/table tests** (`vitest`): DECIDE truth table and each stuck detector (no-diff,
-  timeout-no-diff, repeat-failure, oscillation, harness-crash, budget) over hand-built `LoopCtx` —
-  pure, instant.
-- **End-to-end loop tests with fakes, zero IO**: scripted harness/verifier/approver drive
-  the Driver through full runs — assert DONE/FAILED/ABORTED, iteration counts, and that the
-  run log shows the `contractHash` unchanged every iteration (proves the bar never moved).
-- **Resume test**: kill a run mid-loop, reconstruct from the log, assert it continues
-  without repeating completed iterations.
-- **Adapter contract tests**: run the *same* scenario suite against ClaudeCode, Codex, and
-  Fake adapters — identical orchestrator behaviour proves the seam is genuinely
-  harness-agnostic.
-- **Real smoke run**: `goaly run --goal "..." --autonomous --max-iterations 5` against a
-  tiny real repo with a trivial deterministic verifier (e.g. `npm test`), confirming a real
-  Claude Code session compiles a contract, loops, and exits DONE with a complete run log.
+The test suite (`vitest`, `npm test`) mirrors the seam structure:
+
+- **Unit tables over the pure reducer** (`src/orchestrator/*.test.ts`): the DECIDE truth table and
+  each stuck detector run over hand-built `LoopCtx` histories — pure, instant. A purity test asserts
+  the reducer imports no adapter, clock, or IO.
+- **Fakes for every seam** (`src/testing/fakes.ts`): scripted harness, verifier, approver, Seal gate,
+  workspace, clock, run log. Each seam has a real and a fake implementation, so the orchestrator
+  cannot tell which it called.
+- **Driver loop with zero IO** (`src/driver/*.test.ts`): the fakes drive full runs — DONE / FAILED /
+  ABORTED, iteration counts, resume from a mid-loop log, and the `contractHash` unchanged every
+  iteration (the bar never moved).
+- **Real-git workspace tests** (`src/workspace/`): `GitWorkspace`, worktrees, checkpoints, and the
+  `FileWorkspace` parity suite run against temporary real repositories.
+- **CLI end-to-end with the fake harness** (`src/cli/compose*.test.ts`): the composition root and
+  the CLI run whole loops with `--harness fake`, no network. `scripts/check-docs-sync.ts` gates the
+  docs against the CLI's `USAGE` in CI.
