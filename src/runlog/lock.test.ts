@@ -50,6 +50,42 @@ describe('acquireRunLock', () => {
     }
   });
 
+  it('reports a stale-lock reclaim through onStaleReclaim, naming the dead pid', async () => {
+    const dir = await freshDir();
+    try {
+      await acquireRunLock(dir, { pid: 1000, isPidAlive: () => true });
+      const notices: string[] = [];
+      const lock = await acquireRunLock(dir, {
+        pid: 2000,
+        isPidAlive: () => false,
+        onStaleReclaim: (m) => notices.push(m),
+      });
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toContain('stale run lock');
+      expect(notices[0]).toContain('pid 1000');
+      await lock.release();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not report a reclaim of our own pid from a previous incarnation', async () => {
+    const dir = await freshDir();
+    try {
+      await acquireRunLock(dir, { pid: 2000, isPidAlive: () => true });
+      const notices: string[] = [];
+      const lock = await acquireRunLock(dir, {
+        pid: 2000,
+        isPidAlive: () => true,
+        onStaleReclaim: (m) => notices.push(m),
+      });
+      expect(notices).toHaveLength(0);
+      await lock.release();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('self-heals an unreadable/garbage lock file', async () => {
     const dir = await freshDir();
     try {

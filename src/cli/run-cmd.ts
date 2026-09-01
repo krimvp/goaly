@@ -350,7 +350,9 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
   // holder refuses to start with a clear message (fail-closed, invariant #4).
   let runLock: RunLock;
   try {
-    runLock = await acquireRunLock(path.join(parsed.workspace, STATE_DIR, runId));
+    runLock = await acquireRunLock(path.join(parsed.workspace, STATE_DIR, runId), {
+      onStaleReclaim: (message) => io.err(`goaly: ${message}\n`),
+    });
   } catch (e) {
     if (e instanceof RunLockedError) {
       io.err(`goaly: ${e.message}\n`);
