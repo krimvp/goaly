@@ -1,6 +1,41 @@
 import { killActiveChildren } from '../util/spawn';
 
 /**
+ * Graceful-interrupt wiring (Ctrl-C / SIGTERM). The FIRST signal requests a cooperative stop: the
+ * Driver finishes the in-flight step (its event lands write-ahead) and resolves to a typed ABORTED
+ * with the resume command — nothing is lost and the user is told exactly how to continue. A SECOND
+ * signal force-exits (130) after reaping any live child process groups (a group-spawned agent CLI
+ * does not share the terminal's process group, so without the sweep it would outlive goaly and
+ * keep editing/spending). Exposed for tests; `executeRun` installs/removes it around `drive()`.
+ */
+export function makeInterruptController(
+  runId: string,
+  warn: (s: string) => void,
+  forceExit: () => void = () => {
+    killActiveChildren();
+    process.exit(130);
+  },
+): { onSignal: () => void; interrupted: () => boolean } {
+  let signals = 0;
+  return {
+    onSignal: (): void => {
+      signals += 1;
+      if (signals === 1) {
+        warn(
+          `\ngoaly: interrupt received — finishing the current step, then stopping cleanly ` +
+            `(press Ctrl-C again to exit immediately).\n` +
+            `goaly: resume later with: goaly --resume ${runId} (plus your original flags)\n`,
+        );
+        return;
+      }
+      warn(`\ngoaly: exiting immediately — resume with: goaly --resume ${runId}\n`);
+      forceExit();
+    },
+    interrupted: (): boolean => signals > 0,
+  };
+}
+
+/**
  * Last-resort fatal-error handler for the CLI process (`uncaughtException` /
  * `unhandledRejection`). A crash anywhere in the process — e.g. an unhandled `'error'` event on a
  * stream, the class of failure issue #101 was — must not orphan live child process groups: a

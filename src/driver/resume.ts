@@ -12,7 +12,7 @@ import { initial } from '../orchestrator/step';
 import { replay } from '../runlog/replay';
 import { summarizeUsage } from '../runlog/usage';
 import type { RunLogEntry, RunLogHeader, RunProvenance } from '../runlog/runlog';
-import type { DriverDeps } from './driver';
+import type { DriverDeps } from './deps';
 
 /**
  * RESUME = replay-fold + continue (invariant #7), extracted from `driver.ts` so the Driver file
