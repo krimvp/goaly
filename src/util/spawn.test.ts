@@ -21,6 +21,15 @@ describe('runProcess', () => {
     expect(r.stdout).toBe('ABC');
   });
 
+  it('resolves with the exit code when the child exits before draining a large stdin input (issue #101)', async () => {
+    // 8 MiB is far beyond the OS pipe buffer, so the write is still pending when the child exits;
+    // the resulting EPIPE on the stdin socket must resolve fail-closed, never crash the process.
+    const big = 'x'.repeat(8 * 1024 * 1024);
+    const r = await runProcess('sh', ['-c', 'exit 0'], { input: big, timeoutMs: 10_000 });
+    expect(r.code).toBe(0);
+    expect(r.timedOut).toBe(false);
+  });
+
   it('flags a timeout and kills the process', async () => {
     const r = await runProcess('node', ['-e', 'setTimeout(()=>{}, 10000)'], { timeoutMs: 100 });
     expect(r.timedOut).toBe(true);
