@@ -28,6 +28,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/version` now reads it through the same helper.
 - The reference now documents the read-only subcommands' exit codes and the stdout/stderr contract
   (outcome on stdout, everything live on stderr).
+- **`goaly help` is served by topic.** The default `goaly help` is now the quick start, the synopsis,
+  and a topic index (~100 lines instead of ~720); `goaly help <topic>` (`stuck`, `seal`, `models`,
+  `sandbox`, …) prints one section; `goaly help all` prints everything. Shell completion completes
+  the topic names. The full text is unchanged — it is the same flag contract the docs-sync gate,
+  the config drift test, and completion read, now through one shared extraction.
+- **An undocumented `--flag` is a usage error.** The command line was the one seam where a typo
+  (`--budget-token 500000`) was silently dropped — and, because an unknown flag also swallows the
+  next token, `--autonomus "my goal"` silently ate the goal. Both now fail closed with exit `2` and
+  the flag named, exactly as `.goalyrc` already does for an unknown key.
+- **`docs/README.md` routes the documentation.** One "I want to… → read this" table; the docs-sync
+  gate now fails on any top-level or `docs/*.md` document the router does not link. Finished plans
+  (`improvement-plan.md`, `plan-no-git-workspace.md`) and the pre-implementation `DESIGN.md` moved
+  to `docs/archive/` with headers stating their outcome; `ARCHITECTURE.md`'s directory map and
+  verification section were regenerated from the current tree.
+
+### Changed
+- **The composition edge is decomposed.** `driver.ts` (1059 → 353 lines: `deps.ts`, `perform.ts`,
+  `bootstrap.ts`), `compose.ts` (996 → 412: `compose-options/-provider/-verify/-logging/-harness.ts`),
+  `args.ts` (783 → 225: `args-types/-commands/-cli-input/-layers.ts`) and `run-cmd.ts` (779 → 205:
+  `run-prepare/-banner/-wiring/-report.ts`) are pure moves along their existing seams; every public
+  symbol is still importable from its historical module, so embedders and tests are unchanged. The
+  two grandfathered file-size ratchets are gone — every file is under the 800-line gate — and
+  `executeRun` (484 → 137 lines) and `parseArgs` (382 → 108) are readable again.
 
 ## [0.2.6] - 2026-08-13
 
