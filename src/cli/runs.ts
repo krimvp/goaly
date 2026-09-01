@@ -140,6 +140,7 @@ export function renderRunDetail(d: RunDetail): string {
     `goal:        ${d.goal}`,
     `started:     ${fmtTime(d.startedAt)}`,
     `ended:       ${d.endedAt === undefined ? '-' : fmtTime(d.endedAt)}`,
+    `duration:    ${d.endedAt === undefined ? '-' : fmtDuration(d.endedAt - d.startedAt)}`,
     `iterations:  ${d.iterations}`,
     `tokens:      ${d.tokensSpent === undefined ? '-' : d.tokensSpent}`,
   ];
@@ -292,6 +293,17 @@ function fmtVerdict(it: IterationDetail): string {
 // ---- shared helpers -------------------------------------------------------
 
 /** Epoch-ms → a compact, timezone-stable `YYYY-MM-DD HH:MM:SS` (UTC) for deterministic output. */
+/** Human wall-clock span: `47s`, `12m 05s`, `2h 31m`. Clamped at zero (clock skew across resumes). */
+function fmtDuration(ms: number): string {
+  const totalSec = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`;
+  return `${s}s`;
+}
+
 function fmtTime(ms: number): string {
   return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
 }
