@@ -7,7 +7,7 @@ import { hintSubject } from './reason-text';
 import { renderResumeHint, type ResumeHint } from './resume-cmd';
 import { degradedModeDetail, degradedModeTag, type DegradedMode } from '../domain/degraded';
 import type { CostView } from './cost';
-import { formatUsage } from './usage-format';
+import { formatDuration, formatUsage } from './usage-format';
 
 /**
  * The human-facing TEXT of the `goaly run` path: the end-of-run outcome report, its one-line
@@ -139,12 +139,15 @@ export function formatOutcome(
   cost?: CostView,
   resume?: ResumeHint,
   degraded?: DegradedMode,
+  elapsedMs?: number,
 ): string {
   const lines = [
     '',
     `── goaly run ${o.runId} ──`,
     `status:      ${o.status}`,
     `iterations:  ${o.iterations}`,
+    // This invocation's wall clock only — a resumed run's full span is in `goaly runs show`.
+    ...(elapsedMs !== undefined ? [`elapsed:     ${formatDuration(elapsedMs)}`] : []),
     `contract:    ${o.contractHash ?? '(none — failed before compile)'}`,
   ];
   // Issue #125: the typed degraded-mode label rides WITH the status, so a DONE whose two keys were

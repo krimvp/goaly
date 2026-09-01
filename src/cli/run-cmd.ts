@@ -67,6 +67,7 @@ const EXIT_INTERRUPTED = 130;
  * the run lock on, everything here MUTATES.
  */
 export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResult> {
+  const startedAt = Date.now();
   const worktreeName = typeof parsed.worktreeRun === 'string' ? parsed.worktreeRun : undefined;
 
   const prep = await prepareRun(parsed, io);
@@ -195,7 +196,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
     // Capability A: append "Continue this session:" with the harness-correct interactive-resume
     // command (or the goaly-code → --from-run route). Stays quiet when there is no real session.
     const hint = resumeHint(parsed.harness, outcome.sessionId, runId);
-    io.out(`${formatOutcome(outcome, cost, hint, degraded)}\n`);
+    io.out(`${formatOutcome(outcome, cost, hint, degraded, Date.now() - startedAt)}\n`);
     if (outcome.status === 'DONE') return { code: 0, runId, outcome };
     return { code: interrupt.interrupted() ? EXIT_INTERRUPTED : 1, runId, outcome };
   } finally {

@@ -100,7 +100,7 @@ export const USAGE_TOPICS: readonly UsageTopic[] = [
 is a usage error; --generate still overrides a verify-cmd inherited from a config file, loudly):
   --verify-cmd   point at an existing command that must exit 0
   --generate     have the agent author the verification (optionally guided by --intent)
-  --smoke <cmd>  add an artifact-RUNNING smoke rung (issue #53): an extra deterministic, ungameable
+  --smoke <cmd>  add an artifact-RUNNING smoke rung: an extra deterministic, ungameable
                   bar (a second --verify-cmd) that EXECUTES the built artifact and asserts on runtime
                   behavior, instead of a judge guessing from source. It's runtime-agnostic — the cmd
                   can be a headless-browser script, a server probe, a CLI smoke, anything that exits
@@ -130,8 +130,8 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                       edit and no tracked file touched. A loud log line names each authored file and
                       how to keep it ('git add -f'). The integrity guard still pins them by content
                       hash on disk (excluded ≠ unprotected). Absent ⇒ the compiler picks the dir.`),
-  topic('defects', 'Defect corpus', `Defect corpus — the CROSS-RUN feedback loop (ON by default, issue #122):
-  --no-defect-corpus  turn OFF the defect corpus. When a run's in-loop adjudication (#116) rules a
+  topic('defects', 'Defect corpus', `Defect corpus — the CROSS-RUN feedback loop (ON by default):
+  --no-defect-corpus  turn OFF the defect corpus. When a run's in-loop adjudication rules a
                       frozen bar CONTRACT_DEFECTIVE, goaly appends the adjudicator's GENERALIZED
                       anti-pattern (never source, never the diff, never anything about how hard the
                       work was) to ~/.goaly/defects.jsonl, and future --generate authoring receives
@@ -144,7 +144,7 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                       Each injected pattern is logged, so a run says which local state shaped it.
   --defect-corpus <path>  use <path> instead of ~/.goaly/defects.jsonl (also accepted by
                       'goaly config defects'). Contradicts --no-defect-corpus.`),
-  topic('baseline', 'Diff baseline', `Diff baseline (issue #47 — keep a run's diff small without touching the user's git history):
+  topic('baseline', 'Diff baseline', `Diff baseline (keep a run's diff small without touching the user's git history):
   --baseline <ref>  compute the worker's diff (the approver's Sign-off input) against <ref> — any git
                     ref or SHA — instead of HEAD. Validated to resolve before the run starts
                     (fail-closed on an unknown ref). Use it to chain multi-step builds: point run
@@ -153,7 +153,7 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                     unaffected (it always hashes the working tree). Recorded in the run-log header
                     (like the raised-autonomy auto-pin) and re-adopted on --resume — a re-passed
                     --baseline wins over the recorded one. Precedence: CLI flag > config.
-  --delta-verify    (issue #49) keep the per-iteration JUDGE prompt flat across a long run: after each
+  --delta-verify keep the per-iteration JUDGE prompt flat across a long run: after each
                     continuation iteration goaly takes an internal checkpoint (a --baseline-style tree,
                     no commit) so the NEXT iteration's judge reviews only that iteration's delta, not
                     the whole cumulative diff. The DONE decision stays cumulative — the deterministic
@@ -173,7 +173,7 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
   --stuck-no-diff <bool>          toggle the no-diff abort (default true). Even when on, a no-diff
                                   iteration is NOT terminal if the previous turn timed out, or if the
                                   ladder is green and a FRESH veto is the only blocker — the agent
-                                  gets one real turn to act on a correct critique first (issue #54).
+                                  gets one real turn to act on a correct critique first.
                                   The timeout excuse is bounded (see
                                   --stuck-timeout-no-diff-threshold), which this toggle does not
                                   disable.
@@ -216,9 +216,9 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
   history. Resuming is the operator's signal that something was changed. The relief is logged and
   recorded as a normal RUN_EXTENDED marker; an explicit --stuck-* flag always wins over it. no-diff
   is a toggle, not a counter, so it is not relieved — pass --stuck-no-diff false for that resume.`),
-  topic('phased', 'Phased decomposition', `Phased decomposition (issue #48 — split one big goal into a frozen plan of small, verified phases):
+  topic('phased', 'Phased decomposition', `Phased decomposition (split one big goal into a frozen plan of small, verified phases):
   --phased            turn one big goal into a PLAN of ordered sub-goals, each run as its OWN frozen,
-                      two-key contract with an internal checkpoint (issue #47) between phases so each
+                      two-key contract with an internal checkpoint between phases so each
                       phase's diff stays small — finished by a CUMULATIVE ACCEPTANCE contract on the
                       ORIGINAL goal (so decomposition can't green a goal whose parts pass but whole
                       doesn't). Flow: PLAN → [plan Seal] → per phase {compile → Seal → loop → checkpoint}
@@ -253,7 +253,7 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                       Requires --phased and --autonomous (children seal concurrently). Without this
                       flag, a DAG/grouped plan runs strictly sequentially. Resume note: a crash mid-wave
                       re-runs the WHOLE wave on --resume (children live in ephemeral worktrees).`),
-  topic('best-of', 'Best-of-N parallel worker', `Best-of-N parallel worker (issue #85 — tournament-select candidates against the frozen ladder):
+  topic('best-of', 'Best-of-N parallel worker', `Best-of-N parallel worker (tournament-select candidates against the frozen ladder):
   --candidates N      (alias --best-of N) run N independent worker attempts EACH loop iteration in
                       ISOLATED git worktrees off the current baseline tree, score each against the SAME
                       frozen verifier ladder, keep the BEST candidate's tree, and advance. N multiplies
@@ -283,7 +283,7 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                       your resume note: goaly --resume <id> --note "try 4 parallel attempts" raises
                       the fan-out as a RUN_EXTENDED candidates overlay (ADR 0012) and keeps any
                       remaining note text as worker guidance.`),
-  topic('authoring', 'Authoring resilience', `Authoring resilience (issue #51):
+  topic('authoring', 'Authoring resilience', `Authoring resilience:
   --max-compile-retries N    on a COMPILE_FAILED, re-author the verification with the error as
                              feedback up to N times before failing the run (default 2; 0 disables).
                              A correctable authoring mistake (bad path, transient parse miss) no
@@ -386,7 +386,7 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                         and counts against --budget-tokens. A small panel (≈3–5 reviewers) is the
                         recommended practical range; quorum 1 (the default) is cost-neutral.
   --approver-models m1,m2,…  run Sign-off as a panel of DISTINCT models for REAL per-reviewer
-                        independence (follow-up to issue #84): reviewer i uses model i (cycled),
+                        independence: reviewer i uses model i (cycled),
                         paired with lens i. Each is an 'approve'-metered provider on the SAME
                         --llm-provider, so all panel spend stays attributed to the approver. With ≥2
                         distinct models the panel IS the independent second key (not just variance
@@ -394,14 +394,14 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                         a quorum > the count cycles the models. Overrides --approver-model for the panel.
   --approver-diversity-temp T  sampling temperature for an --approver-quorum > 1 panel (default 0.5,
                         in [0,2]); applied ONLY when the quorum is > 1 (a single reviewer stays at 0).
-  --approver-lenses l1,l2,…  override the panel's review-lens taxonomy (issue #84): a comma-separated
+  --approver-lenses l1,l2,…  override the panel's review-lens taxonomy: a comma-separated
                         list of operator-supplied lenses, cycled across reviewers when quorum > 1
                         (ignored at quorum 1). Each lens biases one reviewer toward a failure mode and
                         rides the approver SYSTEM prompt (operator config — the worker diff stays
                         fenced). Absent ⇒ the built-in correctness/security/goal-met/injection lenses.
   --compiler-model <m>  model for the verification compiler only
-  --planner-model <m>   model for the phased planner only (issue #48)
-  --explain-model <m>   model for the --explain observer only (issue #8)
+  --planner-model <m>   model for the phased planner only
+  --explain-model <m>   model for the --explain observer only
   --llm-provider <p>    which provider runs the LLM steps: claude | codex | droid | pi | openai.
                         'openai' calls an OpenAI-compatible chat endpoint directly (no coding CLI
                         installed) — pair it with --base-url and a resolved --llm-model/--model.
@@ -486,7 +486,8 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                               stream output, so a slow-but-progressing build turn survives while a
                               genuine stall is reaped. Recommended for build-heavy / --phased runs
                               that legitimately exceed the wall-clock cap. The wall-clock
-                              --harness-timeout-ms stays the absolute backstop. Default: off.
+                              --harness-timeout-ms stays the absolute backstop, so the idle cap must be
+                              below it (a usage error otherwise). Default: off.
   --llm-timeout-ms N       cap each LLM step: judge / approver / compiler (default 600000)
   --verify-timeout-ms N    cap the verify command (default 600000 = 10 min). A timeout is a
                            fail-closed could-not-evaluate — never a green — so a hanging check can
@@ -494,7 +495,7 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                            the Fix #2 pre-flight.
   --setup-timeout-ms N     cap the one-time --setup-cmd bootstrap (default 600000 = 10 min). A
                            timeout is a fail-closed SETUP_FAILED.`),
-  topic('sandbox', 'Sandboxing', `Sandboxing (opt-in OS isolation — issue #9; default OFF, behavior unchanged without it):
+  topic('sandbox', 'Sandboxing', `Sandboxing (opt-in OS isolation; default OFF, behavior unchanged without it):
   --sandbox[=<mode>]  jail the two untrusted-code execs — the coding agent AND the verify command —
                       where <mode> is one of:
                         none       (default) no isolation; the caller is responsible (CI/container)
@@ -512,7 +513,8 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                       egress (it needs the model API). NOTE: 'npm test' that fetches the network needs
                       --sandbox-net allow.
   --sandbox-image <ref>      container image (container mode only; default debian:stable-slim)
-  --sandbox-runtime <r>      docker | podman (container mode only; default docker)`),
+  --sandbox-runtime <r>      docker | podman (container mode only; default docker)
+  The three sub-flags need --sandbox (or --sandbox=<mode>); alone they are a usage error.`),
   topic('config', 'Config file', `Config file (so the same wiring need not be repeated every run):
   Defaults are read from a JSON config in three layers (later overrides earlier):
     1. a home-level ~/.goalyrc — your personal defaults across every project — optional,
@@ -548,7 +550,7 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
   --log-file <p>    override the rotating diagnostics file (default
                     <workspace>/.goaly/<runId>/goaly.log; size-rotated, 5 MiB × 3 archives).
   --no-log-file     console only — write no diagnostics file.`),
-  topic('streaming', 'Live streaming & transcript', `Live streaming & transcript (opt-in observability — issues #23 / #28):
+  topic('streaming', 'Live streaming & transcript', `Live streaming & transcript (opt-in observability):
   --stream          render the agent run AND the LLM steps' intermediate turns (tool uses,
                     assistant messages, token counts) to stderr as they happen, each tagged by
                     phase ([agent] / [compile] / [judge] / [approve]). Independent of --log-level
@@ -565,7 +567,7 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                     to "no transcript", never a changed outcome).
   --stream-file <p> write the transcript to <p> instead of the default path (implies
                     --stream-transcript).`),
-  topic('narration', 'Plain-language run narration', `Plain-language run narration (opt-in observability — issue #8):
+  topic('narration', 'Plain-language run narration', `Plain-language run narration (opt-in observability):
   --explain         turn on a read-only side-LLM "observer" that narrates the run in plain language
                     at three checkpoints: the frozen contract at Seal (what "done" means), each
                     verifier-ladder run (passed/failed and why), and the terminal outcome (why it

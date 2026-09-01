@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and exited `1` (colliding with a failed run); it now names the flag and exits `2`. A usage error
   also prints the message plus a `goaly help` pointer instead of the full multi-hundred-line usage
   text that scrolled the error off screen.
+- **`-d` / `--autonomous` on a bare run no longer silences the Sign-off independence reminder.**
+  The reminder keyed off "the implied preset set autonomous", so typing the flag the preset would
+  have set anyway lost the one safety warning while changing nothing else.
+- `goaly help` no longer cites internal issue numbers; the provenance stays in the ADRs and this
+  changelog.
 
 ### Added
 - **Fatal-crash child reaping.** An unexpected fatal error (uncaught exception / unhandled
@@ -42,6 +47,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`improvement-plan.md`, `plan-no-git-workspace.md`) and the pre-implementation `DESIGN.md` moved
   to `docs/archive/` with headers stating their outcome; `ARCHITECTURE.md`'s directory map and
   verification section were regenerated from the current tree.
+- **Inert flag combinations fail closed instead of silently doing nothing.** `--harness-idle-timeout-ms`
+  at or above the wall-clock `--harness-timeout-ms` (it could never fire), and `--sandbox-net` /
+  `--sandbox-image` / `--sandbox-runtime` without `--sandbox` (they were parsed and discarded) are
+  now usage errors naming the fix. `--mode review --autonomous` keeps the flag but says so — it used
+  to run unattended without a word.
+- **The end-of-run summary prints `elapsed:`** (this invocation's wall clock; a resumed run's full
+  span stays in `goaly runs show`).
 
 ### Changed
 - **The composition edge is decomposed.** `driver.ts` (1059 → 353 lines: `deps.ts`, `perform.ts`,

@@ -118,6 +118,11 @@ describe('formatOutcome', () => {
     expect(text).toContain('12,000 tokens');
   });
 
+  it('prints this invocation\'s elapsed wall clock when given', () => {
+    expect(formatOutcome(outcome(), undefined, undefined, undefined, 125_000)).toContain('elapsed:     2m 05s');
+    expect(formatOutcome(outcome())).not.toContain('elapsed:');
+  });
+
   it('omits the spend block when usage is absent', () => {
     const text = formatOutcome(outcome({ usage: undefined }));
     expect(text).not.toContain('spend:');
