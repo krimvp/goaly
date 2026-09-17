@@ -7,6 +7,7 @@ import { AdversarialReviewRung } from '../verify/adversarial-rung';
 import { DeterministicVerifier } from '../verify/deterministic';
 import { GeneratedFilesGuard } from '../verify/generated-guard';
 import { JudgeVerifier } from '../verify/judge';
+import { SystemOneVerifier, type SystemOneOpts } from '../verify/systemone';
 import { AgentApprover } from '../verify/agent-approver';
 import type { StreamPhase } from '../agent-cli/stream';
 import type { ResolvedModels } from './models';
@@ -35,17 +36,25 @@ export function buildLadder(
   llm: LlmProvider,
   verifyTimeoutMs?: number,
   adversarial?: { llm: LlmProvider; refuters: number },
+  systemone?: SystemOneOpts,
 ): Verifier {
-  const rungs: Verifier[] = contract.rungs.map((rung) =>
-    rung.kind === 'deterministic'
-      ? new DeterministicVerifier(rung.command, rung.label, verifyTimeoutMs)
-      : new JudgeVerifier({
-          rubric: rung.rubric,
-          quorum: rung.quorum,
-          confidenceFloor: rung.confidenceFloor,
-          llm,
-        }),
-  );
+  // `systemone` (`--systemone-model`) INSERTS a built-in SystemOneVerifier before each judge rung,
+  // on that rung's rubric — the same non-contract-rung precedent: a cheap gate whose fail
+  // short-circuits before the judge, and whose pass still hands over to the judge.
+  const rungs: Verifier[] = contract.rungs.flatMap<Verifier>((rung) => {
+    if (rung.kind === 'deterministic') {
+      return [new DeterministicVerifier(rung.command, rung.label, verifyTimeoutMs)];
+    }
+    const judge = new JudgeVerifier({
+      rubric: rung.rubric,
+      quorum: rung.quorum,
+      confidenceFloor: rung.confidenceFloor,
+      llm,
+    });
+    return systemone === undefined
+      ? [judge]
+      : [new SystemOneVerifier({ ...systemone, rubric: rung.rubric }), judge];
+  });
   // Pin compiler-authored verification files: a guard runs FIRST and fails closed if
   // any frozen generated file was modified/removed, so the worker can't rewrite the bar the frozen
   // command measures. No generated files ⇒ no guard (the common --verify-cmd path is unchanged).

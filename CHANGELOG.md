@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changelog.
 
 ### Added
+- **System One gate (`--systemone-model <id>`).** A calibrated true/false score per rubric
+  criterion, inserted before each judge rung as a cheap first gate. It short-circuits on a fail
+  (the failing criteria are named first in the feedback) and hands over to the judge on a pass, so
+  it can only fail a green. No `TYPESAFE_API_KEY`, an HTTP error, a timeout or a malformed answer is
+  a could-not-evaluate red. Part of the ladder, never of the frozen contract.
 - **Fatal-crash child reaping.** An unexpected fatal error (uncaught exception / unhandled
   rejection) now reaps live child process groups before exiting, so a crashed goaly never leaves
   an agent CLI editing the tree and spending tokens on its own.

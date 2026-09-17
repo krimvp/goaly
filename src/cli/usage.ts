@@ -37,6 +37,7 @@ Usage:
                [--phased [--max-phases N] [--max-plan-revisions N] [--max-plan-retries N]
                          [--plan-file <p>] [--planner-model <m>] [--parallel-phases]]
                [--max-seal-revisions N] [--max-compile-retries N] [--verify-dir <dir>]
+               [--systemone-model <id>]
                [--no-defect-corpus | --defect-corpus <path>]
                [--budget-tokens N] [--budget-wall-ms N] [--diff-ignore "<p1,p2,…>"]
                [--stuck-no-diff true|false] [--stuck-repeat-threshold N]
@@ -123,6 +124,13 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                       setup, which would only fail on the absent toolchain, and threads the install
                       into the first prompt). false = a typed, fail-closed TOOLS_MISSING abort with
                       guidance, before any token is spent.
+  --systemone-model <id>  insert a calibrated System One gate BEFORE each judge rung (off when
+                      absent). Each line of the judge rung's rubric becomes one true/false question
+                      over the diff; the gate passes only when every criterion scores > 0.5 and its
+                      detail names the failing criteria first. It can only fail a green (the judge
+                      still runs on its pass; DONE still needs both keys). Part of the ladder, never
+                      of the frozen contract. Key: TYPESAFE_API_KEY. No key, an HTTP error, a
+                      timeout (15 s) or a malformed answer is a fail-closed could-not-evaluate red.
   --verify-dir <dir>  preferred directory for files the compiler authors under --generate (issue
                       #52). Authored files are written to idiomatic locations and AUTO-REGISTERED in
                       .git/info/exclude (git's per-clone, never-committed ignore) — so they never

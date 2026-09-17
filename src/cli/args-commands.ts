@@ -127,6 +127,7 @@ function baseArgs(
     workspaceMode: 'auto',
     baseline: undefined,
     verifyDir: undefined,
+    systemoneModel: undefined,
     defects: { enabled: true },
     planFile: undefined,
     resumeRunId: undefined,

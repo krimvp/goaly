@@ -270,6 +270,7 @@ export { FileRunLog } from './runlog/file-runlog';
 export { DeterministicVerifier } from './verify/deterministic';
 export { Ladder } from './verify/ladder';
 export { JudgeVerifier } from './verify/judge';
+export { SystemOneVerifier } from './verify/systemone';
 export { AgentApprover } from './verify/agent-approver';
 export { AgentCompiler } from './compile/agent-compiler';
 export {

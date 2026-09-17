@@ -102,6 +102,7 @@ const ConfigFileSchema = z
     'max-seal-revisions': FlagValue.optional(),
     'max-compile-retries': FlagValue.optional(),
     'verify-dir': FlagValue.optional(),
+    'systemone-model': FlagValue.optional(),
     'defect-corpus': FlagValue.optional(),
     'no-defect-corpus': FlagValue.optional(),
     smoke: FlagValue.optional(),

@@ -7,7 +7,7 @@ import { composeDeps, makeLlmProvider, buildLadder } from './compose';
 import { codexCodec } from '../agent-cli/codex-codec';
 import { droidCodec } from '../agent-cli/droid-codec';
 import { piCodec } from '../agent-cli/pi-codec';
-import { makeConfig, makeFakeContract, InMemoryLogFs, passVerdict } from '../testing/fakes';
+import { makeConfig, makeFakeContract, FakeWorkspace, InMemoryLogFs, passVerdict } from '../testing/fakes';
 import { sha256Hex } from '../util/hash';
 import { asRunId, DiffHash } from '../domain/ids';
 import { freezeContract } from '../util/hash';
@@ -574,5 +574,50 @@ describe('composeDeps — diagnostic logger wiring', () => {
     });
     deps.logger?.info('hello');
     expect(fs.files.size).toBe(0);
+  });
+});
+
+describe('buildLadder — the --systemone-model gate', () => {
+  const contract = freezeContract({
+    goal: 'g',
+    rungs: [
+      { kind: 'deterministic', command: 'true' },
+      { kind: 'judge', rubric: 'the diff adds a test', quorum: 1, confidenceFloor: 0.5 },
+    ],
+    rubric: 'r',
+    generatedFiles: [],
+  });
+  const ws = new FakeWorkspace('abc1234', 'diff');
+  const judgePass = JSON.stringify({ pass: true, confidence: 0.9, failing_criteria: [] });
+  const gate = (noul: number) => ({
+    model: 'jev-latest',
+    apiKey: 'k',
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ model: 'jev-1', answers: { c1: { type: 'noul', noul } } }),
+    }),
+  });
+
+  it('is absent by default: the rung count is the contract’s own', async () => {
+    const verdict = await buildLadder(contract, new FakeLlm([judgePass])).verify(ws, 'g', 'r');
+    expect(verdict.rungsTotal).toBe(2);
+  });
+
+  it('inserts one gate before each judge rung; a gate fail short-circuits before the judge', async () => {
+    const llm = new FakeLlm([judgePass]);
+    const verdict = await buildLadder(contract, llm, undefined, undefined, gate(0.2)).verify(ws, 'g', 'r');
+
+    expect(verdict).toMatchObject({ pass: false, rungsPassed: 1, rungsTotal: 3 });
+    expect(verdict.detail).toContain('FAIL (p=0.20): the diff adds a test');
+    expect(llm.requests).toEqual([]);
+  });
+
+  it('a gate pass still runs the judge (the gate never promotes)', async () => {
+    const llm = new FakeLlm([judgePass]);
+    const verdict = await buildLadder(contract, llm, undefined, undefined, gate(0.9)).verify(ws, 'g', 'r');
+
+    expect(verdict).toMatchObject({ pass: true, rungsPassed: 3, rungsTotal: 3 });
+    expect(llm.requests).toHaveLength(1);
   });
 });

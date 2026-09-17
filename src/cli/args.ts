@@ -128,6 +128,7 @@ export async function parseArgs(
     workspaceMode: parseWorkspaceMode(str(flags, 'workspace-mode')),
     baseline: str(flags, 'baseline'),
     verifyDir: str(flags, 'verify-dir'),
+    systemoneModel: str(flags, 'systemone-model'),
     defects: parseDefectCorpus(flags),
     planFile: str(flags, 'plan-file'),
     resumeRunId: str(flags, 'resume'),
