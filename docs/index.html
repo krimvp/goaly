@@ -254,7 +254,7 @@
 <div class="cards">
   <div class="card"><span class="n">1</span><b>The bar is frozen.</b>The success check is hashed before the loop starts, so the agent cannot rewrite its own test to finish.</div>
   <div class="card"><span class="n">2</span><b>DONE needs two keys.</b>The frozen check passes <em>and</em> an independent, veto-only reviewer does not object.</div>
-  <div class="card"><span class="n">3</span><b>Everything fails closed.</b>An error or a garbage answer is a fail, never a false green. The control loop makes zero LLM calls.</div>
+  <div class="card"><span class="n">3</span><b>Everything fails closed.</b>An error or a garbage answer is a fail, never a false green. The optional System One gate (<code>--systemone-model</code>) scores each rubric criterion before the LLM judge and can only fail a green. The control loop makes zero LLM calls.</div>
 </div>
 
 <h2>Docs</h2>

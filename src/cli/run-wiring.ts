@@ -40,6 +40,7 @@ export type WiringContext = {
  */
 export function composeOptions(parsed: ParsedArgs, io: WiringIo, ctx: WiringContext): ComposeOptions {
   const llmApiKey = process.env[parsed.llmApiKeyEnv];
+  const systemoneApiKey = process.env['TYPESAFE_API_KEY'];
   return {
     harness: parsed.harness,
     models: parsed.models,
@@ -57,6 +58,14 @@ export function composeOptions(parsed: ParsedArgs, io: WiringIo, ctx: WiringCont
         ? { baseline: ctx.autoPinnedBaseline }
         : {}),
     ...(parsed.verifyDir !== undefined ? { verifyDir: parsed.verifyDir } : {}),
+    ...(parsed.systemoneModel !== undefined
+      ? {
+          systemone: {
+            model: parsed.systemoneModel,
+            ...(systemoneApiKey !== undefined ? { apiKey: systemoneApiKey } : {}),
+          },
+        }
+      : {}),
     // Cross-run defect corpus (issue #122) — wiring, like --verify-dir; fail-open downstream.
     defects: parsed.defects,
     ...(parsed.planFile !== undefined ? { planFile: parsed.planFile } : {}),

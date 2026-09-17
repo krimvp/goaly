@@ -477,6 +477,21 @@ is fail-closed — a malformed grader is never a green.
   only shows at runtime. Runs after `--verify-cmd`, before the judge; frozen into the contract like
   any rung. (Plain `--verify-cmd "npm test && node smoke.mjs"` works too; `--smoke` gives the
   runtime check its own labeled rung and failure feedback.)
+- **System One gate (built-in, `--systemone-model <id>`).** Inserted immediately *before* each
+  judge rung, on that rung's rubric. Each non-empty line of the rubric (bullets and numbers
+  stripped) becomes one calibrated true/false question — "the workspace evidence shows this
+  criterion holds" versus "it does not show it, or it cannot be verified from the evidence" — over
+  the same evidence the judge reads: the goal, the rubric and the diff (capped at 8000 chars).
+  The verdict: `pass` only when **every** criterion scores > 0.5; `confidence` is the minimum
+  probability; `detail` opens with the model id and token usage the API returned, then one line
+  per criterion with its probability, **failing criteria first** (`FAIL (p=0.12): …`), so the
+  worker's next prompt names exactly what is missing. The gate short-circuits the ladder on a fail
+  and hands over to the judge on a pass — it can only fail a green, never promote one, so DONE
+  still needs the judge's key and the approver. Fail-closed: no `TYPESAFE_API_KEY`, an HTTP error
+  (one retry on 429/529), a 15 s timeout, a non-JSON or schema-mismatched body, or a missing
+  criterion answer is a could-not-evaluate red (`evaluable: false`, never a throw). Absent flag ⇒
+  no gate; like the guard and refuter rungs it is part of the ladder (counted in `rungsTotal`),
+  never of `contractHash`.
 - **Judge rung.** An LLM quorum over the diff for fuzzy criteria, judged against the frozen rubric.
 - **Refuter rung (built-in, `--adversarial`).** A refute-first skeptic panel appended last; it runs
   only on a candidate green and can only fail it. See
@@ -794,6 +809,7 @@ Model selection is pure wiring — it never enters the frozen contract.
 | `--llm-model` | all LLM steps (compiler / judge / approver) |
 | `--judge-model`, `--approver-model`, `--compiler-model`, `--critic-model`, `--explain-model` | one step each |
 | `--llm-provider` | which CLI/provider runs the LLM steps (`claude` / `codex` / `droid` / `pi` / `openai`) |
+| `--systemone-model <id>` | the [System One gate](#the-verifier-ladder) before each judge rung (off when absent; not cascaded; key from `TYPESAFE_API_KEY`) |
 
 Precedence per LLM step: per-step flag → `--llm-model` → `--model` → the tool's own default — with
 one deliberate exception for the Sign-off approver, [below](#the-sign-off-approver-does-not-inherit---model).

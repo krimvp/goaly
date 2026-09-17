@@ -106,6 +106,11 @@ export type ParsedArgs = {
    */
   verifyDir: string | undefined;
   /**
+   * `--systemone-model <id>`: a calibrated System One gate inserted before each judge rung. Pure
+   * wiring — part of the ladder, never of the frozen contract. Absent ⇒ no gate.
+   */
+  systemoneModel: string | undefined;
+  /**
    * Phased decomposition (issue #48): the `--plan-file <path>` that sources a structured plan instead
    * of authoring one with the LLM. Pure wiring (selects the StaticPlanner); only used when `--phased`.
    */

@@ -74,6 +74,8 @@ export type ComposeOptions = {
    * idiomatic location. Authored files are registered in `.git/info/exclude` either way.
    */
   verifyDir?: string;
+  /** `--systemone-model`: the System One gate before each judge rung; absent ⇒ no gate. */
+  systemone?: { model: string; apiKey?: string };
   /**
    * The cross-run DEFECT CORPUS (issue #122): `--no-defect-corpus` / `--defect-corpus <path>`.
    * Absent ⇒ enabled at `~/.goaly/defects.jsonl`. Both ends are wired from ONE resolution below —

@@ -496,7 +496,7 @@ function buildVerifySeams(
   w: Wiring,
   workspace: Workspace,
 ): Pick<DriverDeps, 'makeLadder' | 'approver' | 'prepareLlm' | 'prepareTimeouts'> {
-  const { config, models, timeouts, llmFor } = w;
+  const { config, options, models, timeouts, llmFor } = w;
   return {
     makeLadder: (contract) => {
       // Surface the frozen authored bar (`generatedFiles`) in the diff the two LLM keys review, even
@@ -510,7 +510,13 @@ function buildVerifySeams(
         config.adversarial.enabled && config.adversarial.refuters > 0
           ? { llm: llmFor(models.critic, 'judge'), refuters: config.adversarial.refuters }
           : undefined;
-      return buildLadder(contract, llmFor(models.judge, 'judge'), timeouts.verifyMs, adversarial);
+      return buildLadder(
+        contract,
+        llmFor(models.judge, 'judge'),
+        timeouts.verifyMs,
+        adversarial,
+        options.systemone,
+      );
     },
     // Sign-off (second key, issue #84 + follow-up): a single reviewer by default (quorum 1 ⇒
     // byte-for-byte the historical call). `--approver-quorum N` runs a perspective-diverse panel

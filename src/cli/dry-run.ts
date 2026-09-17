@@ -78,6 +78,7 @@ export function renderResolvedConfig(parsed: ParsedArgs, config: RunConfig): str
       title: 'Verification & review',
       rows: [
         ['judge quorum / floor', `${config.judge.quorum} / ${config.judge.confidenceFloor}`],
+        ...opt('systemone-model', parsed.systemoneModel),
         ['approver quorum', String(config.approver.quorum)],
         ...opt('approver lenses', config.approver.lenses?.join(', ')),
         ['baseline', parsed.baseline ?? 'HEAD'],

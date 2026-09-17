@@ -53,7 +53,10 @@ COMPILE ──► SEAL ──► setup + pre-flight ──► ┌─────
 - **The contract is frozen at Seal.** Its `contractHash` never changes again and is logged every
   iteration. Under `--mode review` you approve it once; autonomous runs skip the pause, never the freeze.
 - **The verifier ladder runs cheapest-and-hardest-to-game first**: deterministic checks before any
-  LLM judge, short-circuiting on the first fail. A rung that errors is **fail-closed**.
+  LLM judge, short-circuiting on the first fail. A rung that errors is **fail-closed**. With
+  `--systemone-model`, a calibrated System One gate scores each rubric criterion (a true/false
+  probability over the diff) before the judge; it can only fail a green, and no key or a fault is
+  a could-not-evaluate red, never a pass.
 - **Two keys for DONE**: the frozen ladder passes *and* the independent, **veto-only** Sign-off
   approver does not veto. "Tests pass" is not "done".
 - **The second key stays independent, and is labelled when it can't be.** `--model` picks the
@@ -87,6 +90,7 @@ Every row links to its section in the **[reference](docs/reference.md)**.
 | [Autonomy profiles](docs/reference.md#autonomy-profiles---mode) | `--mode` | `review` / `hands-off` / `aggressive` bundle the right flags; explicit flags override, loudly. |
 | [Named presets](docs/reference.md#named-presets---preset) | `--preset` | Flag bundles by name: the built-in `default`, or your own from `"presets"` in `.goalyrc`. |
 | [Dry run](docs/reference.md#dry-run---dry-run) | `--dry-run` | Validate the flags and `.goalyrc`, print the resolved config. Writes nothing, spends nothing. |
+| [System One gate](docs/reference.md#the-verifier-ladder) | `--systemone-model <id>` | A calibrated true/false score per rubric criterion before each judge rung; fails first, never promotes. Key: `TYPESAFE_API_KEY`. |
 | [Adversarial review](docs/reference.md#hardening-against-reward-hacking) | `--adversarial` | Critics attack the contract before Seal; refuters attack every green before Sign-off. |
 | [Satisfiability critic](docs/reference.md#the-satisfiability-critic-false-red-guard) | on by default; `--no-satisfiability-critic` | Before the freeze, one call asks whether a **correct** implementation could still fail the bar. |
 | [Contract dry run](docs/reference.md#the-contract-dry-run-compile-time-positive-control) | on by default; `--contract-dry-run false` | A throwaway reference implementation runs against the bar in a scratch copy; red refuses the bar. |

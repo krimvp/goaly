@@ -303,6 +303,20 @@
         }
       ]
     },
+    "systemone-model": {
+      "description": "Default for the --systemone-model flag. Explicit CLI flags always override.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
     "defect-corpus": {
       "description": "Default for the --defect-corpus flag. Explicit CLI flags always override.",
       "anyOf": [
@@ -1429,6 +1443,20 @@
           },
           "verify-dir": {
             "description": "Default for the --verify-dir flag. Explicit CLI flags always override.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "systemone-model": {
+            "description": "Default for the --systemone-model flag. Explicit CLI flags always override.",
             "anyOf": [
               {
                 "type": "string"
