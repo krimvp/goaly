@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="goaly runs a coding agent against frozen checks and veto-only Sign-off. See each attempt, inspect the result, and resume interrupted runs.">
-  <meta property="og:title" content="goaly — a fixed finish line for coding agents">
-  <meta property="og:description" content="Freeze the checks. Run the agent. Verify each attempt. Inspect the result.">
-  <title>goaly — a fixed finish line for coding agents</title>
+  <meta name="description" content="Goaly runs a coding agent toward a goal, checks each attempt, and repeats until the checks pass and a final review does not reject the result.">
+  <meta property="og:title" content="Goaly — give coding agents a clear finish line">
+  <meta property="og:description" content="Set a goal. Check every attempt. See why the run finished.">
+  <title>Goaly — give coding agents a clear finish line</title>
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <style>
     :root {
@@ -47,35 +47,49 @@
     .button:hover { background: #ddffa0; }
     .text-link { color: var(--text); text-underline-offset: .3em; }
     .hero-note { margin: 1.2rem 0 0; color: var(--muted); font-size: .82rem; }
-    .scene-wrap { min-height: 28rem; display: grid; place-items: center; perspective: 850px; }
-    .scene {
-      --rx: 0deg; --ry: 0deg; position: relative; width: min(100%, 31rem); min-height: 27rem;
-      display: grid; align-content: center; gap: .7rem; padding: 2.8rem 2.5rem;
-      transform-style: preserve-3d; transform: rotateX(calc(-9deg + var(--rx))) rotateY(calc(-13deg + var(--ry)));
-      transition: transform .35s ease;
+    .visual { --accent: #bff184; min-width: 0; text-align: center; }
+    .visual[data-step="1"] { --accent: #77e4cf; }
+    .visual[data-step="2"] { --accent: #f9ce85; }
+    .stage { position: relative; height: 21rem; display: grid; place-items: center; overflow: hidden; perspective: 750px; isolation: isolate; }
+    .stage::before {
+      position: absolute; width: 17rem; height: 17rem; border-radius: 50%; content: "";
+      background: var(--accent); filter: blur(5rem); opacity: .15; transition: background .35s;
     }
-    .scene::before {
-      position: absolute; inset: 1rem .4rem; content: ""; border: 1px solid #527b6a; border-radius: 1.4rem;
-      background: linear-gradient(145deg, #1c3730, #101d21 68%);
-      box-shadow: 1.2rem 2rem 3.5rem #0009, inset 0 0 4rem #192c29; transform: translateZ(-4rem);
+    .stage::after {
+      position: absolute; bottom: 1.2rem; width: 13rem; height: 2rem; border-radius: 50%; content: "";
+      background: #000; filter: blur(1.2rem); opacity: .7;
     }
-    .scene::after {
-      position: absolute; inset: 2.15rem 1.55rem; content: ""; pointer-events: none;
-      border: 1px dashed #75dec058; border-radius: .9rem; transform: translateZ(-2rem);
+    .cube { position: relative; z-index: 1; width: 11rem; height: 11rem; transform-style: preserve-3d; animation: turn 16s linear infinite; }
+    .face {
+      position: absolute; inset: 0; border: 2px solid var(--accent); border-radius: .55rem;
+      background: linear-gradient(140deg, #b5f7cb31, #13342d66 55%, #a0efdd17);
+      box-shadow: inset 0 0 2.2rem #9af6cb20, 0 0 1.4rem #a0efb51a;
+      backface-visibility: visible; transition: border-color .35s;
     }
-    .scene-label { position: relative; z-index: 1; margin: 0 0 .25rem; color: var(--mint); font: 700 .68rem var(--mono); letter-spacing: .16em; text-transform: uppercase; transform: translateZ(1.5rem); }
-    .step-button {
-      position: relative; z-index: 1; width: 100%; display: flex; align-items: center; gap: .8rem;
-      padding: .78rem .9rem; border: 1px solid #456058; border-radius: .7rem; background: #14252a;
-      color: var(--text); font: 600 .93rem var(--sans); text-align: left; box-shadow: .25rem .45rem .7rem #0005;
-      cursor: pointer; transform: translateZ(1.5rem); transition: transform .22s ease, border-color .22s ease, background .22s ease;
+    .face::after {
+      position: absolute; inset: 18%; border: 1px solid #baf9d668; border-radius: 50%; content: "";
+      background: radial-gradient(circle, var(--accent) 0 .18rem, transparent .2rem); opacity: .55;
     }
-    .step-button:hover, .step-button[aria-pressed="true"] { border-color: var(--lime); background: #244235; transform: translateZ(3rem) translateX(.35rem); }
-    .step-button[aria-pressed="true"]::after { content: "selected"; margin-left: auto; color: var(--lime); font: .65rem var(--mono); }
-    .step-number { flex: none; display: grid; place-items: center; width: 1.65rem; height: 1.65rem; border: 1px solid #7a9d89; border-radius: .4rem; color: var(--lime); font: 700 .7rem var(--mono); }
-    .step-arrow { margin-left: auto; color: var(--mint); font: 1.1rem var(--mono); }
-    .step-button[aria-pressed="true"] .step-arrow { display: none; }
-    .scene-caption { position: relative; z-index: 1; min-height: 3.5rem; margin: .45rem 0 0; color: #d4e6db; font-size: .85rem; transform: translateZ(1.5rem); }
+    .front { transform: translateZ(5.5rem); }
+    .back { transform: rotateY(180deg) translateZ(5.5rem); }
+    .right { transform: rotateY(90deg) translateZ(5.5rem); }
+    .left { transform: rotateY(-90deg) translateZ(5.5rem); }
+    .top { transform: rotateX(90deg) translateZ(5.5rem); }
+    .bottom { transform: rotateX(-90deg) translateZ(5.5rem); }
+    .core {
+      position: absolute; inset: 3.8rem; border-radius: 50%; transform: translateZ(0);
+      background: radial-gradient(circle at 30% 25%, #fff, var(--accent) 25%, #288673 72%);
+      box-shadow: 0 0 2.5rem var(--accent), 0 0 5rem #69d4ac66;
+    }
+    .visual-controls { display: flex; justify-content: center; align-items: center; gap: .6rem; flex-wrap: wrap; }
+    .step-button, .motion-button {
+      min-height: 2.55rem; padding: .5rem .8rem; border: 1px solid var(--line); border-radius: .55rem;
+      background: #102320; color: var(--muted); font: 650 .8rem var(--sans); cursor: pointer;
+    }
+    .step-button:hover, .motion-button:hover { color: var(--text); border-color: var(--mint); }
+    .step-button[aria-pressed="true"] { color: #09211b; border-color: var(--lime); background: var(--lime); }
+    .motion-button { margin-left: .25rem; }
+    .step-detail { min-height: 3rem; max-width: 25rem; margin: .85rem auto 0; color: var(--muted); font-size: .86rem; }
     .section { padding: 4rem 0; border-top: 1px solid var(--line); }
     .section-head { max-width: 43rem; margin-bottom: 2rem; }
     h2 { margin: 0 0 .65rem; font-size: clamp(1.9rem, 3vw, 2.65rem); line-height: 1.16; letter-spacing: -.035em; }
@@ -93,21 +107,27 @@
     .truth strong { color: var(--text); }
     .footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem; padding: 2rem 0 3rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .85rem; }
     .footer a { color: var(--text); }
+    @keyframes turn { from { transform: rotateX(-22deg) rotateY(0deg); } to { transform: rotateX(-22deg) rotateY(360deg); } }
+    .is-paused .cube { animation-play-state: paused; }
     @media (max-width: 760px) {
       .hero { grid-template-columns: 1fr; gap: 1.5rem; padding: 3.5rem 0 2.5rem; }
-      .scene-wrap { min-height: 25rem; } .scene { min-height: 25rem; }
+      .stage { height: 19rem; }
       .benefits, .quickstart { grid-template-columns: minmax(0, 1fr); } .quickstart { gap: .5rem; }
     }
     @media (max-width: 430px) {
       .shell { width: min(100% - 1.5rem, 70rem); } .topbar nav { gap: .7rem; }
-      .topbar nav a { font-size: .78rem; } .scene { padding: 2.6rem 1.3rem; }
-      .scene::before { inset-inline: 0; } .scene::after { inset-inline: .75rem; }
-      .step-button { font-size: .85rem; }
+      .topbar nav a { font-size: .78rem; } .stage { height: 17rem; }
+      .cube { width: 9rem; height: 9rem; }
+      .front { transform: translateZ(4.5rem); } .back { transform: rotateY(180deg) translateZ(4.5rem); }
+      .right { transform: rotateY(90deg) translateZ(4.5rem); } .left { transform: rotateY(-90deg) translateZ(4.5rem); }
+      .top { transform: rotateX(90deg) translateZ(4.5rem); } .bottom { transform: rotateX(-90deg) translateZ(4.5rem); }
+      .core { inset: 3rem; }
     }
     @media (prefers-reduced-motion: reduce) {
-      html { scroll-behavior: auto; } .scene { transform: none; transition: none; }
-      .scene::before, .scene::after, .scene-label, .step-button, .scene-caption { transform: none; transition: none; }
-      .step-button:hover, .step-button[aria-pressed="true"] { transform: none; }
+      html { scroll-behavior: auto; }
+      .cube { animation: none; transform: rotateX(-22deg) rotateY(-30deg); }
+      .motion-override .cube { animation: turn 16s linear infinite; }
+      .face, .stage::before { transition: none; }
     }
   </style>
 </head>
@@ -126,67 +146,76 @@
         <div>
           <p class="eyebrow">Coding agents, with a fixed finish line</p>
           <h1 id="hero-title">Give the work a <span>real check.</span></h1>
-          <p class="lead">goaly runs a coding agent in a loop. It freezes the success checks first, tests every attempt, and asks for Sign-off only after the checks pass.</p>
+          <p class="lead">Goaly sets the success checks before a coding agent starts. It tests each attempt and sends failures back for another try. A final review can reject the result even when the checks pass.</p>
           <div class="actions">
             <a class="button" href="#quickstart">Get started <span aria-hidden="true">&nbsp;→</span></a>
             <a class="text-link" href="https://github.com/krimvp/goaly">View on GitHub</a>
           </div>
-          <p class="hero-note">Works with Claude Code, Codex, Droid, pi, or your own harness.</p>
+          <p class="hero-note">Use Claude Code, Codex, Droid, pi, or Goaly's built-in coding agent.</p>
         </div>
-        <div class="scene-wrap" aria-label="Interactive diagram of the goaly loop">
-          <div class="scene" id="loop-scene">
-            <p class="scene-label">The goaly loop / select a step</p>
-            <button class="step-button" type="button" data-step="0" aria-pressed="true"><span class="step-number">01</span> Compile checks <span class="step-arrow" aria-hidden="true">↗</span></button>
-            <button class="step-button" type="button" data-step="1" aria-pressed="false"><span class="step-number">02</span> Freeze the bar <span class="step-arrow" aria-hidden="true">↗</span></button>
-            <button class="step-button" type="button" data-step="2" aria-pressed="false"><span class="step-number">03</span> Run and verify <span class="step-arrow" aria-hidden="true">↗</span></button>
-            <button class="step-button" type="button" data-step="3" aria-pressed="false"><span class="step-number">04</span> Sign off or retry <span class="step-arrow" aria-hidden="true">↗</span></button>
-            <p class="scene-caption" id="step-detail" aria-live="polite">Write a goal. goaly creates the success checks before the agent starts.</p>
+        <div class="visual" id="loop-visual" data-step="0">
+          <div class="stage" role="img" aria-label="A transparent cube with a glowing center rotates slowly">
+            <div class="cube" aria-hidden="true">
+              <span class="face front"></span><span class="face back"></span>
+              <span class="face right"></span><span class="face left"></span>
+              <span class="face top"></span><span class="face bottom"></span>
+              <span class="core"></span>
+            </div>
           </div>
+          <div class="visual-controls" role="group" aria-label="Explore how Goaly works">
+            <button class="step-button" type="button" data-step="0" aria-pressed="true">1 · Set checks</button>
+            <button class="step-button" type="button" data-step="1" aria-pressed="false">2 · Try the work</button>
+            <button class="step-button" type="button" data-step="2" aria-pressed="false">3 · Review result</button>
+            <button class="motion-button" id="motion-toggle" type="button" aria-pressed="false">Pause animation</button>
+          </div>
+          <p class="step-detail" id="step-detail" aria-live="polite">Goaly sets success checks before the agent starts. Those checks stay the same during the run.</p>
         </div>
       </section>
       <section class="section" id="how-it-works" aria-labelledby="how-title">
         <div class="section-head">
           <p class="eyebrow">Why use goaly</p>
-          <h2 id="how-title">A loop you can inspect.</h2>
-          <p>Set a goal once. Keep the bar fixed. See why an attempt passed, failed, or stopped.</p>
+          <h2 id="how-title">Know why a run finished.</h2>
+          <p>Set a goal once. See each attempt and the reason it passed, failed, or stopped.</p>
         </div>
         <div class="benefits">
-          <div class="benefit"><b>Checks stay frozen</b><p>The contract has a recorded hash. Changes to authored checks are detected.</p></div>
-          <div class="benefit"><b>Feedback drives each retry</b><p>The verifier reports failures to the agent. Veto-only Sign-off follows a passing check.</p></div>
-          <div class="benefit"><b>Runs stay inspectable</b><p>A write-ahead log records the run. You can inspect it and resume after an interruption.</p></div>
+          <div class="benefit"><b>One fixed target</b><p>The success checks stay the same. Goaly detects changes to them during the run.</p></div>
+          <div class="benefit"><b>Useful retries</b><p>Goaly checks each attempt and gives failures back to the agent for the next try.</p></div>
+          <div class="benefit"><b>A run you can inspect</b><p>Goaly records what happened. You can inspect the result and resume after an interruption.</p></div>
         </div>
       </section>
       <section class="section quickstart" id="quickstart" aria-labelledby="quickstart-title">
         <div>
           <p class="eyebrow">Quick start</p>
           <h2 id="quickstart-title">One goal. One command.</h2>
-          <p>Requires Node 20 or newer. By default, goaly uses the first installed agent CLI: Claude Code, Codex, Droid, then pi.</p>
+          <p>Requires Node 20 or newer. By default, Goaly uses the first installed coding agent: Claude Code, Codex, Droid, then pi.</p>
         </div>
         <div>
           <pre class="command"><code><span>$</span> npm i -g goaly
 <span>$</span> goaly "add a /health endpoint returning 200"</code></pre>
-          <p class="aside">The default run is hands-off, capped at 500,000 tokens and 7,200,000 ms, with no Goaly OS sandbox. Use <code>--mode review</code> to approve the frozen contract at Seal.</p>
+          <p class="aside">Default limits: 500,000 tokens and 7,200,000 ms (2 hours). Tokens are units of AI text. By default, Goaly does not isolate the agent's commands from your computer (no Goaly OS sandbox). <a href="https://github.com/krimvp/goaly/blob/main/docs/reference.md">See options and limits</a>.</p>
           <a class="text-link" href="https://github.com/krimvp/goaly/blob/main/docs/reference.md">Read the full reference →</a>
         </div>
       </section>
       <section class="section" aria-label="What DONE means">
-        <p class="truth"><strong>What DONE means:</strong> the frozen verifier ladder passed, and veto-only Sign-off did not veto. DONE records that check outcome. It does not prove semantic correctness; that depends on check quality and model independence.</p>
+        <p class="truth"><strong>What “DONE” means:</strong> All saved checks passed, and a separate final review did not reject the result. This does not prove semantic correctness, meaning the code does everything you intended. The checks may miss a case.</p>
       </section>
     </main>
     <footer class="footer"><span>goaly · MIT licensed</span><span><a href="https://github.com/krimvp/goaly">GitHub</a> · <a href="https://github.com/krimvp/goaly/blob/main/docs/README.md">Docs</a> · <a href="https://github.com/krimvp/goaly/blob/main/docs/reference.md">Reference</a></span></footer>
   </div>
   <script>
     (() => {
-      const scene = document.querySelector('#loop-scene');
-      const buttons = [...scene.querySelectorAll('.step-button')];
+      const visual = document.querySelector('#loop-visual');
+      const buttons = [...visual.querySelectorAll('.step-button')];
       const detail = document.querySelector('#step-detail');
+      const motion = document.querySelector('#motion-toggle');
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
       const descriptions = [
-        'Write a goal. goaly creates the success checks before the agent starts.',
-        'The contract is frozen and logged. An autonomous run still freezes it.',
-        'The agent works, then the frozen verifier checks the result. A failure feeds the next attempt.',
-        'Sign-off can veto a passing result. DONE needs both a passing ladder and no veto.'
+        'Goaly sets success checks before the agent starts. Those checks stay the same during the run.',
+        'The agent works. Goaly checks the attempt and sends failures back for another try.',
+        'When the checks pass, a separate final review can still reject the result. The run ends only when both steps clear.'
       ];
       const select = (index) => {
+        visual.dataset.step = String(index);
         buttons.forEach((button, i) => button.setAttribute('aria-pressed', String(i === index)));
         detail.textContent = descriptions[index];
       };
@@ -200,18 +229,15 @@
           select(next);
         });
       });
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-      scene.addEventListener('pointermove', (event) => {
-        const rect = scene.getBoundingClientRect();
-        const x = (event.clientX - rect.left) / rect.width - .5;
-        const y = (event.clientY - rect.top) / rect.height - .5;
-        scene.style.setProperty('--rx', (-y * 8).toFixed(2) + 'deg');
-        scene.style.setProperty('--ry', (x * 10).toFixed(2) + 'deg');
-      });
-      scene.addEventListener('pointerleave', () => {
-        scene.style.setProperty('--rx', '0deg');
-        scene.style.setProperty('--ry', '0deg');
-      });
+      const setPaused = (paused) => {
+        visual.classList.toggle('is-paused', paused);
+        visual.classList.toggle('motion-override', !paused);
+        motion.setAttribute('aria-pressed', String(paused));
+        motion.textContent = paused ? 'Play animation' : 'Pause animation';
+      };
+      setPaused(reducedMotion.matches);
+      motion.addEventListener('click', () => setPaused(!visual.classList.contains('is-paused')));
+      reducedMotion.addEventListener('change', (event) => setPaused(event.matches));
     })();
   </script>
 </body>
