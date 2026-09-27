@@ -12,7 +12,10 @@ function openPage(reducedMotion: boolean): Window {
       suppressInsecureJavaScriptEnvironmentWarning: true,
     },
   });
-  window.matchMedia = (() => ({ matches: reducedMotion })) as unknown as typeof window.matchMedia;
+  window.matchMedia = (() => ({
+    matches: reducedMotion,
+    addEventListener: () => {},
+  })) as unknown as typeof window.matchMedia;
   window.document.write(html);
   return window;
 }
@@ -22,36 +25,37 @@ describe('landing page loop', () => {
     const window = openPage(false);
     const buttons = [...window.document.querySelectorAll('.step-button')] as HTMLButtonElement[];
     const detail = window.document.querySelector('#step-detail');
+    const visual = window.document.querySelector('#loop-visual') as HTMLElement;
 
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([
-      '01 Compile checks ↗',
-      '02 Freeze the bar ↗',
-      '03 Run and verify ↗',
-      '04 Sign off or retry ↗',
+      '1 · Set checks',
+      '2 · Try the work',
+      '3 · Review result',
     ]);
     expect(buttons[0]?.getAttribute('aria-pressed')).toBe('true');
     buttons[0]?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
-    expect(buttons[3]?.getAttribute('aria-pressed')).toBe('true');
-    expect(window.document.activeElement).toBe(buttons[3]);
-    expect(detail?.textContent).toContain('DONE needs both');
+    expect(buttons[2]?.getAttribute('aria-pressed')).toBe('true');
+    expect(window.document.activeElement).toBe(buttons[2]);
+    expect(detail?.textContent).toContain('final review');
+    expect(visual.dataset.step).toBe('2');
 
     buttons[1]?.click();
     expect(buttons[1]?.getAttribute('aria-pressed')).toBe('true');
-    expect(detail?.textContent).toContain('frozen and logged');
+    expect(detail?.textContent).toContain('another try');
+    expect(visual.dataset.step).toBe('1');
     window.close();
   });
 
-  it('tilts on pointer input and stays still for reduced motion', () => {
+  it('lets users pause the animation and starts still for reduced motion', () => {
     for (const reducedMotion of [false, true]) {
       const window = openPage(reducedMotion);
-      const scene = window.document.querySelector('#loop-scene') as HTMLElement | null;
-      expect(scene).not.toBeNull();
-      if (!scene) throw new Error('loop scene is missing');
-      scene.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 200 }) as ReturnType<typeof scene.getBoundingClientRect>;
-      scene.dispatchEvent(new window.PointerEvent('pointermove', { clientX: 150, clientY: 50 }));
-      expect(scene.style.getPropertyValue('--ry')).toBe(reducedMotion ? '' : '2.50deg');
-      scene.dispatchEvent(new window.PointerEvent('pointerleave'));
-      expect(scene.style.getPropertyValue('--ry')).toBe(reducedMotion ? '' : '0deg');
+      const visual = window.document.querySelector('#loop-visual') as HTMLElement;
+      const motion = window.document.querySelector('#motion-toggle') as HTMLButtonElement;
+      expect(visual.classList.contains('is-paused')).toBe(reducedMotion);
+      expect(motion.getAttribute('aria-pressed')).toBe(String(reducedMotion));
+      motion.click();
+      expect(visual.classList.contains('is-paused')).toBe(!reducedMotion);
+      expect(motion.textContent).toBe(reducedMotion ? 'Pause animation' : 'Play animation');
       window.close();
     }
   });
