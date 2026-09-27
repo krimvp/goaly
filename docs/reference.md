@@ -1,9 +1,10 @@
 # goaly reference
 
-The complete practical reference: every flag, mode, and guarantee. The [README](../README.md) is
-the short tour; this is the depth. Architecture lives in [`ARCHITECTURE.md`](../ARCHITECTURE.md),
-rationale in [`docs/adr/`](adr/), the terse contributor glossary in
-[`CONTEXT.md`](../CONTEXT.md).
+The complete practical reference: every flag, mode, and guarantee. For a shorter path, start with
+the [first run](first-run.md) and [run walkthrough](how-it-works.md). The [docs map](README.md)
+links concepts to code. Architecture lives in [`ARCHITECTURE.md`](../ARCHITECTURE.md), rationale
+in the [decision records](adr/README.md), and the terse contributor glossary in
+[`CONTEXT.md`](../CONTEXT.md). See the [verification map](verification.md) for repeatable checks.
 
 ## Contents
 
