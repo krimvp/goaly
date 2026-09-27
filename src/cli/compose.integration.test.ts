@@ -120,7 +120,7 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
       runId,
       noLogConsole: true,
       llm: new FakeLlm([
-        { text: '{"command":"printf ok","rubric":"is it done"}', tokensUsed: 800 },
+        { text: JSON.stringify({ command: "test \"$(cat README.md)\" = '# fixture'", rubric: 'is it done' }), tokensUsed: 800 },
         // usage-gate shape classification (a second compile-phase call, metered under the compiler).
         { text: '{"buildAndUse":false,"targetArtifact":null,"reason":"n/a"}', tokensUsed: 100 },
         { text: '{"pass":true,"confidence":1,"failing_criteria":[]}', tokensUsed: 1200 },
@@ -163,7 +163,7 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
     });
     const runId = asRunId('run-cli-usage-resume');
     const llmScript = [
-      { text: '{"command":"printf ok","rubric":"is it done"}', tokensUsed: 800 },
+      { text: JSON.stringify({ command: "test \"$(cat README.md)\" = '# fixture'", rubric: 'is it done' }), tokensUsed: 800 },
       { text: '{"buildAndUse":false,"targetArtifact":null,"reason":"n/a"}', tokensUsed: 100 },
       { text: '{"pass":true,"confidence":1,"failing_criteria":[]}', tokensUsed: 1200 },
       { text: '{"veto":false}', tokensUsed: 400 },

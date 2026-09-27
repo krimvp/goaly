@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { BENCH_TASKS, runBench, summarizeBench, type BenchResult, type BenchTask } from './bench';
+import { BENCH_TASKS, runBench, summarizeBench, classifyProductResult, summarizeProductBench, type BenchResult, type BenchTask, type ProductBenchResult } from './bench';
+import { mkdtemp, mkdir, writeFile, readdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runProcess } from '../util/spawn';
 
 describe('BENCH_TASKS', () => {
   it('are deterministic, uniquely-identified, ladder-checkable tasks', () => {
@@ -76,5 +81,45 @@ describe('summarizeBench', () => {
     expect(s.passAt1).toBe(0);
     expect(s.avgIterationsToPass).toBe(0);
     expect(s.totalTokens).toBe(0);
+  });
+});
+
+describe('independent product checks', () => {
+  it('classifies false DONE, false red, and oracle errors separately', () => {
+    const base: ProductBenchResult = {
+      taskId: 't', status: 'DONE', passed: true, iterations: 2, tokens: 100,
+      oraclePassed: true, oracleDetail: 'ok', elapsedMs: 500,
+    };
+    expect(classifyProductResult(base)).toBe('true-done');
+    expect(classifyProductResult({ ...base, oraclePassed: false })).toBe('false-done');
+    expect(classifyProductResult({ ...base, status: 'FAILED', passed: false })).toBe('false-red');
+    expect(classifyProductResult({ ...base, status: 'FAILED', passed: false, oraclePassed: false })).toBe('true-red');
+    expect(classifyProductResult({ ...base, oraclePassed: null })).toBe('unresolved');
+    expect(classifyProductResult({ ...base, status: 'ABORTED', passed: false, iterations: 0, oraclePassed: false })).toBe('unresolved');
+    expect(summarizeProductBench([
+      base,
+      { ...base, oraclePassed: false },
+      { ...base, status: 'FAILED', passed: false },
+    ])).toMatchObject({ counts: { 'true-done': 1, 'false-done': 1, 'false-red': 1 }, completionRate: 2 / 3 });
+    expect(summarizeProductBench([{ ...base, status: 'DONE', hadRejectedAttempt: true, attempts: 2 }]))
+      .toMatchObject({ totalAttempts: 2, recoveryOpportunities: 1, recoveryRate: 1 });
+  });
+
+  it('keeps withheld oracle code out of each seeded worker workspace', async () => {
+    const oracle = fileURLToPath(new URL('../../evaluation/oracle.cjs', import.meta.url));
+    for (const task of BENCH_TASKS.filter((t) => t.oracleId !== undefined)) {
+      const root = await mkdtemp(join(tmpdir(), `goaly-bench-${task.id}-`));
+      for (const [path, content] of Object.entries(task.seedFiles ?? {})) {
+        const full = join(root, path);
+        await mkdir(dirname(full), { recursive: true });
+        await writeFile(full, content);
+      }
+      expect(await readdir(root)).not.toContain('oracle.cjs');
+      const result = await runProcess(process.execPath, [oracle, task.oracleId!, root], {
+        cwd: root, timeoutMs: 5000,
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.timedOut).toBe(false);
+    }
   });
 });

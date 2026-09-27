@@ -20,6 +20,6 @@
     "noEmit": true,
     "resolveJsonModule": true
   },
-  "include": ["src", "test"],
+  "include": ["src", "test", "scripts/eval-product.ts"],
   "exclude": ["node_modules", "dist"]
 }

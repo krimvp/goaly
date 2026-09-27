@@ -56,10 +56,11 @@ lists what the term is **not**, because the cheapest bugs to prevent are vocabul
   and freeze a **new** contract (new `contractHash`, logged) that is re-presented at the Seal.
   Strictly **pre-approval**; costs no LLM tokens; never consumes the revise cap. _avoid:_
   mutating a frozen contract; any post-approval change.
-- **Sign-off** — the result gate: the independent **Approver**, every iteration, **veto-only**.
+- **Sign-off** — the result gate: a separate **Approver**, every iteration, **veto-only**. A
+  distinct model can add independent evidence; the wiring may still use one model for every role.
   _avoid:_ Seal; a promoter (it can never turn a red into a green).
-- **Two Keys** — DONE requires both keys to turn: the frozen verifier passes **and** the
-  approver doesn't veto. _avoid:_ "tests pass ⇒ done".
+- **Two Keys** — DONE requires both gates: the frozen verifier passes **and** the approver doesn't
+  veto. This is a check outcome, not proof of semantic correctness. _avoid:_ "tests pass ⇒ done".
 - **Harness** — a coding agent run headlessly (Claude Code, Codex, …). _avoid:_ the model; the
   agent; the orchestrator.
 - **Adapter** — the one-method `run(prompt, sessionId?)` wrapper over a harness. _avoid:_ a

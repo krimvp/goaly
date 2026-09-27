@@ -9,10 +9,9 @@
 
 ## Context
 
-goaly is a **harness-agnostic orchestration layer**: run a coding agent
-repeatedly until a goal is *verifiably* achieved, with a deterministic thin layer in
-control and a frozen success criterion the agent can't weaken mid-loop (the
-anti-reward-hacking core).
+goaly is a **harness-agnostic orchestration layer**: run a coding agent repeatedly until its
+frozen verifier ladder passes and Sign-off does not veto. This is a check outcome, not proof of
+semantic correctness. The check is frozen so the agent cannot weaken it mid-loop.
 
 This doc turns the spec into a **deep-module architecture** (Matt Pocock's
 `codebase-design` vocabulary: Module / Interface / Implementation / Seam / Adapter /
@@ -58,11 +57,11 @@ makes the whole run replayable from the log.
 | **Driver** | `drive(deps,config)->RunOutcome` | command interpreter, write-ahead persist, crash→Event, budget polling | — |
 | **HarnessAdapter** | `run(prompt, sessionId?)->RunResult` | flag dialects, JSON parsing, session resume, CC's optional Stop-hook fast-path | **#1 REAL** (CC, Codex, Fake) |
 | **Verifier / Ladder** | `verify(ws,goal,rubric)->Verdict` | shell/exit-code, test runs, LLM quorum judge; ladder *is* a Verifier (composite); built-in non-contract rungs (anti-tamper guard first, `--adversarial` refute-first panel last) | **#2 REAL** (det, judge, Fake) |
-| **Approver (Sign-off)** | `review(input)->ApprovalVerdict` (veto-only) | independent refute-first approval agent, reject-on-uncertainty bias, optional lensed N-reviewer panel (early-exits once settled), ideally different model | **#3 REAL** (agent, Fake) |
+| **Approver (Sign-off)** | `review(input)->ApprovalVerdict` (veto-only) | separate refute-first approval agent, reject-on-uncertainty bias, optional lensed N-reviewer panel (early-exits once settled); distinct model adds evidence but is not guaranteed | **#3 REAL** (agent, Fake) |
 | **VerifierCompiler** | `compile(goal,intent)->CompiledContract` | finds/writes tests, authors rubric, emits runnable spec; deterministic lints (vacuous/out-of-repo/network/module-format) + detected workspace facts; optional red-team critique rounds (`--adversarial`, a decorator); **freezes once** | (agent, Fake) |
 | **SealGate (Seal)** | `approveContract(c)->SealDecision` | human CLI prompt vs auto-accept + loud audit log | (Human/Auto/Fake) |
 | **Clock / BudgetMeter** | `now()`, `spent()/remaining()` | system time/token metering | **#4 REAL** (System, Manual) |
-| **Workspace** | `diffHash()`, `run(cmd)` | git tree hash, command exec — *harness-independent* | (Git, Fake) |
+| **Workspace** | `diffHash()`, `run(cmd)` | git tree hash or file-content hashes and byte-backed checkpoints; command exec — *harness-independent* | (Git, File, Fake) |
 | **RunLog** | `append(entry)`, `replay()->state` | write-ahead persist + pure replay-fold | (File, InMemory) |
 
 Every seam has **≥2 adapters** → all real, none mere indirection. **Deliberately not a
@@ -114,9 +113,11 @@ orchestrator ([ADR 0001](docs/adr/0001-wrapper-over-hooks.md): wrapper-first, ho
 behaviours the state machine can't distinguish:
 
 1. **DeterministicVerifier** — runs a command; `pass = exitCode===0`, `confidence=1`.
-   Ungameable.
-2. **JudgeVerifier** — temp-0 LLM, best-of-N quorum + confidence floor, Zod-parsed
-   structured output. Only adjudicates the fuzzy residual.
+   Its result is objective for that command, while the command and its transitive inputs must still
+   be trustworthy.
+2. **JudgeVerifier** — Zod-parsed LLM votes for the fuzzy residual. A green requires a strict
+   majority of positive votes from the requested quorum; errors and invalid outputs do not reduce
+   the vote count needed. Single-sample temperature is 0; multi-sample temperature adds diversity.
 3. **The Ladder** — itself a `Verifier` (composite); runs rungs cheapest-first and
    **short-circuits** on the first deterministic fail (no judge call wasted). A rung that
    errors is **fail-closed** (`pass:false`) — a malformed grader is never a green.
@@ -127,9 +128,10 @@ behaviours the state machine can't distinguish:
    never promote a red. Short-circuit means it spends tokens only on candidate greens.
 
 The **Approver (Sign-off)** is verdict-shaped but a *separate seam*: veto-only, fed
-independent inputs (goal + frozen rubric + diff + verdicts, **not** the worker's
-self-justification). DONE requires **two keys**: the frozen verifier passes *and* the
-independent approver doesn't veto.
+separate inputs (goal + frozen rubric + diff + verdicts, **not** the worker's self-justification).
+DONE requires **two keys**: the frozen verifier passes *and* the approver doesn't veto. These are
+gates over configured evidence, not proof of semantic correctness; model independence is reported
+when it can be established.
 
 ## State machine (pure, zero-LLM-by-construction)
 

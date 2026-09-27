@@ -614,6 +614,7 @@ function stepVerifying(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
     const next: LoopCtx = {
       ...ctx,
       lastVerdict: verdict,
+      ...(event.budget !== undefined ? { lastBudget: event.budget } : {}),
       verifierDetailHistory: [],
       verifierEvaluableHistory: [...ctx.verifierEvaluableHistory, true],
     };
@@ -636,6 +637,7 @@ function stepVerifying(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
   const next: LoopCtx = {
     ...ctx,
     lastVerdict: verdict,
+    ...(event.budget !== undefined ? { lastBudget: event.budget } : {}),
     verifierDetailHistory: [...ctx.verifierDetailHistory, normalizeDetail(verdict.detail)],
     verifierEvaluableHistory: [...ctx.verifierEvaluableHistory, verdict.evaluable !== false],
   };
@@ -648,7 +650,8 @@ function stepAwaitSignoff(ctx: LoopCtx, event: OrchestratorEvent): StepResult {
   if (verdict === undefined) {
     throw new Error('AWAIT_SIGNOFF reached without a ladder verdict (corrupt state)');
   }
-  return applyDecision(ctx, decide(ctx, verdict, event.approval));
+  const next = event.budget !== undefined ? { ...ctx, lastBudget: event.budget } : ctx;
+  return applyDecision(next, decide(next, verdict, event.approval));
 }
 
 /**

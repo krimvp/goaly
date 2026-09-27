@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile, stat, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { WorktreeManager, WorktreeError, WorktreeName, worktreeBranch, WORKTREES_DIR } from './worktree-manager';
+import { realExec } from './git-workspace';
 import { CliInput, cliInputToRunConfig } from '../domain/config';
 
 function git(cwd: string, ...args: string[]): string {
@@ -160,6 +161,35 @@ describe('WorktreeManager (integration, real git)', () => {
     const listed = await m.list();
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ name: 'gone', prunable: true, dirty: false, runs: 0 });
+  });
+
+  it('list matches canonical Git paths to a symlinked root, including prunable entries', async () => {
+    const alias = `${root}-alias`;
+    await symlink(root, alias);
+    const physicalRoot = await realpath(root);
+    const m = new WorktreeManager({
+      root: alias,
+      exec: async (command, args, options) => {
+        const result = await realExec(command, args, options);
+        if (args.includes('--porcelain')) {
+          return { ...result, stdout: result.stdout.replaceAll(alias, physicalRoot) };
+        }
+        return result;
+      },
+    });
+    try {
+      const active = await m.create('active');
+      await m.create('gone');
+      await rm(join(alias, WORKTREES_DIR, 'gone'), { recursive: true, force: true });
+      const listed = await m.list();
+      expect(listed.map(({ name, prunable }) => ({ name, prunable }))).toEqual([
+        { name: 'active', prunable: false },
+        { name: 'gone', prunable: true },
+      ]);
+      expect(await realpath(listed[0]!.path)).toBe(await realpath(active.path));
+    } finally {
+      await rm(alias, { force: true });
+    }
   });
 
   it('remove refuses a dirty worktree without force, removes with force, keeps the branch', async () => {

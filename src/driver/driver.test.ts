@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { drive, type DriverDeps } from './driver';
 import type { RunLog } from '../runlog/runlog';
+import { replay } from '../runlog/replay';
 import { RunId } from '../domain/ids';
 import type { RunConfig } from '../domain/config';
 import type { Verdict, ApprovalVerdict } from '../domain/verdict';
@@ -130,7 +131,7 @@ describe('drive() — full loop with zero IO', () => {
     const workspace = new FakeWorkspace('0000000', 'a fake diff', [
       { exitCode: 1, stdout: '', stderr: 'could not resolve dependencies' },
     ]);
-    const { deps, harness } = wire({
+    const { deps, harness, runlog } = wire({
       workspace,
       compiler: new FakeCompiler(setupContract),
       scripts: [],
@@ -423,6 +424,51 @@ describe('drive() — full loop with zero IO', () => {
     const outcome = await drive(deps, makeConfig({ maxIterations: 10 }), runId);
     expect(outcome.status).toBe('ABORTED');
     expect(outcome.reason).toBe('budget exceeded');
+  });
+
+  it('does not start another worker after verifier spend crosses the budget', async () => {
+    const budget = new ManualBudgetMeter(false);
+    const { deps, harness, runlog } = wire({
+      scripts: [{ postHash: '0000001' }, { postHash: '0000002' }],
+      verdicts: [failVerdict('unused')],
+      budget,
+    });
+    deps.makeLadder = () => ({
+      verify: async () => {
+        budget.setExceeded(true);
+        return failVerdict('still red');
+      },
+    });
+
+    const outcome = await drive(deps, makeConfig({ maxIterations: 4 }), runId);
+
+    expect(outcome.status).toBe('ABORTED');
+    expect(outcome.reason).toBe('budget exceeded');
+    expect(harness.prompts).toHaveLength(1);
+    const verified = runlog.entries.find((entry) => entry.event.tag === 'VERIFIED')?.event;
+    expect(verified?.tag === 'VERIFIED' && verified.budget?.exceeded).toBe(true);
+    expect(replay(makeConfig({ maxIterations: 4 }), runlog.entries).state.tag).toBe('ABORTED');
+  });
+
+  it('does not start another worker after a Sign-off veto crosses the budget', async () => {
+    const budget = new ManualBudgetMeter(false);
+    const { deps, harness } = wire({
+      scripts: [{ postHash: '0000001' }, { postHash: '0000002' }],
+      verdicts: [passVerdict()],
+      budget,
+    });
+    deps.approver = {
+      review: async () => {
+        budget.setExceeded(true);
+        return veto('still vetoed');
+      },
+    };
+
+    const outcome = await drive(deps, makeConfig({ maxIterations: 4 }), runId);
+
+    expect(outcome.status).toBe('ABORTED');
+    expect(outcome.reason).toBe('budget exceeded');
+    expect(harness.prompts).toHaveLength(1);
   });
 
   it('ABORTED when the contract is rejected at Seal (and the loop never starts)', async () => {

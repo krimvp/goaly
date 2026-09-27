@@ -49,5 +49,32 @@ jobs:
       - name: Test (with coverage thresholds)
         run: npm run coverage
 
+      - name: CLI argument coverage gate
+        run: >-
+          npx vitest run src/cli/args.test.ts src/cli/args.goaly-code.test.ts --coverage
+          --coverage.include=src/cli/args.ts
+          --coverage.exclude='src/**/*.test.ts'
+          --coverage.thresholds.lines=80
+          --coverage.thresholds.functions=80
+          --coverage.thresholds.branches=80
+          --coverage.thresholds.statements=80
+
       - name: Build
         run: npm run build
+
+  macos-worktree:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test worktree management on macOS
+        run: npx vitest run src/workspace/worktree-manager.test.ts src/cli/worktree-cmd.test.ts

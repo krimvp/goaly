@@ -46,7 +46,7 @@ describe('AgentCliLlmProvider — one codec-driven provider for every CLI', () =
     // codex is argv-delivered: the combined prompt rides in argv, not on stdin.
     expect(rec[0]!.input).toBeUndefined();
     expect(rec[0]!.args).toEqual([
-      'exec', '--sandbox', 'read-only', '--model', 'gpt-x', 'sys\n\njudge this', '--json',
+      'exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--model', 'gpt-x', 'sys\n\njudge this', '--json',
     ]);
   });
 

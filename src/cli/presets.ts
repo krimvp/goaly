@@ -25,7 +25,7 @@ export const BUILTIN_PRESET_SOURCE = 'built-in';
 /**
  * Presets goaly ships, so `--preset` works (and `goaly config presets` lists something to copy
  * from) before anyone has authored a config file. Exactly one, the most straightforward complete
- * way to run: `default` — hands-off autonomy, everything else left to the tool defaults.
+ * way to run: `default` — hands-off autonomy with starter token and wall-clock caps.
  *
  * Built-in bodies are deliberately LANGUAGE- AND TOOLCHAIN-NEUTRAL: no `verify-cmd`, no
  * `setup-cmd`, no harness or model choice — verification falls back to the `--generate` default
@@ -34,7 +34,10 @@ export const BUILTIN_PRESET_SOURCE = 'built-in';
  * wholesale, exactly like one config layer over another.
  */
 export const BUILTIN_PRESETS: Readonly<Record<string, LoadedPreset>> = {
-  default: { overlay: { mode: 'hands-off' }, source: BUILTIN_PRESET_SOURCE },
+  default: {
+    overlay: { mode: 'hands-off', 'budget-tokens': '500000', 'budget-wall-ms': '7200000' },
+    source: BUILTIN_PRESET_SOURCE,
+  },
 };
 
 /**

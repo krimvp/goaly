@@ -1,5 +1,6 @@
 import { readdir, rm, stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { z } from 'zod';
 import { realExec, type ExecFn, type ExecResult } from './git-workspace';
 import { listRuns } from '../runlog/inspect';
@@ -141,12 +142,12 @@ export class WorktreeManager {
     if (r.code !== 0) {
       throw new WorktreeError(`git worktree list failed (code ${r.code}): ${r.stderr.trim()}`);
     }
-    const prefix = resolve(this.#root, WORKTREES_DIR) + '/';
+    const managedRoot = await canonicalPath(resolve(this.#root, WORKTREES_DIR));
     const out: WorktreeInfo[] = [];
     for (const entry of parseWorktreePorcelain(r.stdout)) {
-      if (!entry.path.startsWith(prefix)) continue;
-      const name = entry.path.slice(prefix.length);
-      if (name.includes('/')) continue; // never a managed worktree (they are direct children)
+      const canonicalEntry = await canonicalPath(entry.path);
+      const name = relative(managedRoot, canonicalEntry);
+      if (name.length === 0 || name === '..' || name.startsWith(`..${sep}`) || name.includes(sep)) continue;
       out.push(await this.#infoFromEntry(name, entry));
     }
     return out.sort((a, b) => a.name.localeCompare(b.name));
@@ -310,6 +311,20 @@ async function exists(path: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function canonicalPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    // Git keeps registrations for deleted worktrees. Resolve their existing parent so symlink
+    // aliases such as /var/folders and /private/var/folders still compare equal.
+    try {
+      return join(await realpath(dirname(path)), path.slice(dirname(path).length + 1));
+    } catch {
+      return resolve(path);
+    }
   }
 }
 

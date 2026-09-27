@@ -1,12 +1,12 @@
 /**
  * Slice 2 — the eval bench. A fixed, deterministic set of goaly tasks `(goal, verify-cmd[, seed])`,
- * each ladder-checkable, used to compare harnesses (goaly-code on a frontier model vs. claude/codex)
- * and, later, to gate each new trained model — strictly held out from any training/synthetic data.
+ * each ladder-checkable, used to compare harnesses and, later, to gate trained models. The product
+ * tasks below have separate oracle checks. A runner must keep those checks out of the worker tree.
  *
  * The tasks are pure data (seed files are inline strings, so a task is serializable and reproducible).
  * The RUN is injected (`RunTaskFn`) so the bench library is testable with a fake runner and the live
- * runner wires real `composeDeps` + `drive`. Metrics: pass@1 (ladder + approver), iterations to
- * converge, token cost.
+ * runner wires the real goaly CLI. `summarizeBench` counts Goaly DONE; the product classification
+ * below separately compares that status with the external oracle.
  */
 
 import type { RunStatus } from '../runlog/inspect';
@@ -17,6 +17,8 @@ export type BenchTask = {
   readonly goal: string;
   readonly verifyCmd: string;
   readonly seedFiles?: Readonly<Record<string, string>>;
+  /** External oracle identifier. Its checks stay outside the worker workspace. */
+  readonly oracleId?: string;
 };
 
 /** The held-out bench. Small, deterministic, runtime-checkable; covers create / structured / fix. */
@@ -47,7 +49,81 @@ export const BENCH_TASKS: readonly BenchTask[] = [
     verifyCmd: 'test "$(cat notes.txt)" = "$(printf \'first\\nsecond\')"',
     seedFiles: { 'notes.txt': 'first\n' },
   },
+  {
+    id: 'order-pricing',
+    goal: 'Fix src/price.cjs and src/receipt.cjs. priceCents(unitCents, quantity, discountPercent) must return the integer total after a percentage discount, rounded once to the nearest cent; clamp discounts to 0..100. receipt(items, taxPercent) must sum each priced line, then add tax rounded once to the nearest cent. It must return {subtotalCents, taxCents, totalCents} and must not change input items.',
+    verifyCmd: 'node test.cjs',
+    oracleId: 'order-pricing',
+    seedFiles: {
+      'src/price.cjs': 'exports.priceCents = (unitCents, quantity, discountPercent) => Math.round(unitCents * (1 - discountPercent / 100)) * quantity;\n',
+      'src/receipt.cjs': 'const { priceCents } = require("./price.cjs");\nexports.receipt = (items, taxPercent) => {\n  const subtotalCents = items.reduce((sum, item) => sum + priceCents(item.unitCents, item.quantity, item.discountPercent), 0);\n  return { subtotalCents, taxCents: 0, totalCents: subtotalCents };\n};\n',
+      'test.cjs': 'const assert = require("node:assert/strict");\nconst { priceCents } = require("./src/price.cjs");\nconst { receipt } = require("./src/receipt.cjs");\nassert.equal(priceCents(100, 2, 10), 180);\nassert.deepEqual(receipt([{ unitCents: 100, quantity: 2, discountPercent: 0 }], 10), { subtotalCents: 200, taxCents: 20, totalCents: 220 });\n',
+    },
+  },
+  {
+    id: 'event-report',
+    goal: 'Fix src/parse.cjs and src/report.cjs. parseLine(line) accepts kind|count rows: trim the kind, require a nonempty kind and a nonnegative integer count, and return null for blank or invalid rows. summarize(text) must parse all lines, ignore invalid rows, sum counts by kind, and return an array of {kind, count} sorted by kind. It must not include prototype keys from Object.prototype.',
+    verifyCmd: 'node test.cjs',
+    oracleId: 'event-report',
+    seedFiles: {
+      'src/parse.cjs': 'exports.parseLine = (line) => { const [kind, count] = line.split("|"); return { kind, count: Number(count) }; };\n',
+      'src/report.cjs': 'const { parseLine } = require("./parse.cjs");\nexports.summarize = (text) => text.split("\\n").map(parseLine);\n',
+      'test.cjs': 'const assert = require("node:assert/strict");\nconst { parseLine } = require("./src/parse.cjs");\nconst { summarize } = require("./src/report.cjs");\nassert.deepEqual(parseLine("red|2"), { kind: "red", count: 2 });\nassert.deepEqual(summarize("red|2\\nblue|3\\nred|1"), [{ kind: "blue", count: 3 }, { kind: "red", count: 3 }]);\n',
+    },
+  },
 ];
+
+export type ProductBenchResult = BenchResult & {
+  readonly oraclePassed: boolean | null;
+  readonly oracleDetail: string;
+  readonly elapsedMs: number;
+  readonly attempts?: number;
+  readonly hadRejectedAttempt?: boolean;
+  readonly runId?: string;
+  readonly evidence?: {
+    readonly workspace: string;
+    readonly runLogDir: string | null;
+    readonly oracleSha256: string;
+    readonly harness: string;
+    readonly llmProvider: string;
+    readonly model: string;
+    readonly degraded: unknown;
+    readonly usage?: unknown;
+  };
+};
+
+export type ProductClassification = 'true-done' | 'false-done' | 'false-red' | 'true-red' | 'unresolved';
+
+export function classifyProductResult(result: ProductBenchResult): ProductClassification {
+  if (result.oraclePassed === null || (result.status !== 'DONE' && result.iterations === 0)) return 'unresolved';
+  if (result.status === 'DONE') return result.oraclePassed ? 'true-done' : 'false-done';
+  return result.oraclePassed ? 'false-red' : 'true-red';
+}
+
+export function summarizeProductBench(results: readonly ProductBenchResult[]) {
+  const counts: Record<ProductClassification, number> = {
+    'true-done': 0,
+    'false-done': 0,
+    'false-red': 0,
+    'true-red': 0,
+    unresolved: 0,
+  };
+  for (const result of results) counts[classifyProductResult(result)]++;
+  const known = results.filter((r) => r.oraclePassed !== null);
+  const recoverable = results.filter((r) => r.hadRejectedAttempt === true);
+  return {
+    counts,
+    tasks: results.length,
+    completionRate: results.length === 0 ? 0 : results.filter((r) => r.status === 'DONE').length / results.length,
+    oraclePassRate: known.length === 0 ? null : known.filter((r) => r.oraclePassed === true).length / known.length,
+    totalAttempts: results.reduce((sum, r) => sum + (r.attempts ?? r.iterations), 0),
+    reportedTokens: results.reduce((sum, r) => sum + (r.tokens ?? 0), 0),
+    unknownTokenRuns: results.filter((r) => r.tokens === undefined).length,
+    totalElapsedMs: results.reduce((sum, r) => sum + r.elapsedMs, 0),
+    recoveryOpportunities: recoverable.length,
+    recoveryRate: recoverable.length === 0 ? null : recoverable.filter((r) => r.status === 'DONE').length / recoverable.length,
+  };
+}
 
 /** The outcome of running one bench task. */
 export type BenchResult = {

@@ -13,8 +13,11 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { documentedFlagNames } from '../src/cli/help';
 import { CONFIG_FILE_KEYS } from '../src/cli/config-file';
+import { BUILTIN_PRESETS } from '../src/cli/presets';
 
 const reference = readFileSync('docs/reference.md', 'utf8');
+const readme = readFileSync('README.md', 'utf8');
+const landing = readFileSync('docs/index.html', 'utf8');
 
 const documentedFlags = documentedFlagNames();
 
@@ -39,10 +42,32 @@ const orphans = routed.filter(
   (doc) => !router.includes(doc) && !router.includes(`](${basename(doc)})`),
 );
 
+const defaultPreset = BUILTIN_PRESETS.default?.overlay;
+const defaultTokens = Number(defaultPreset?.['budget-tokens']);
+const defaultWallMs = Number(defaultPreset?.['budget-wall-ms']);
+const formatNumber = (value: number): string => value.toLocaleString('en-US');
+const defaultBudgetPhrase = `${formatNumber(defaultTokens)} tokens and ${formatNumber(defaultWallMs)} ms`;
+const requiredAssuranceClaims: [string, string, string][] = [
+  ['README.md', readme, 'semantic correctness'],
+  ['README.md', readme, 'check quality'],
+  ['README.md', readme, '7,200,000 ms'],
+  ['docs/reference.md', reference, 'semantic correctness'],
+  ['docs/reference.md', reference, 'requested sample count N'],
+  ['docs/reference.md', reference, defaultBudgetPhrase],
+  ['docs/reference.md', reference, 'does not enable the Goaly OS sandbox'],
+  ['docs/index.html', landing, 'semantic correctness'],
+  ['docs/index.html', landing, defaultBudgetPhrase],
+  ['docs/index.html', landing, 'no Goaly OS sandbox'],
+];
+const missingAssuranceClaims = requiredAssuranceClaims.filter(([, content, phrase]) =>
+  !content.replace(/\s+/g, ' ').includes(phrase),
+);
+
 const failures = [
   ...missingFlags.map((f) => `--${f} is in USAGE but not in docs/reference.md`),
   ...missingKeys.map((k) => `config key '${k}' is not documented in docs/reference.md`),
   ...orphans.map((d) => `${d} is not linked from docs/README.md (the docs router)`),
+  ...missingAssuranceClaims.map(([name, , phrase]) => `${name} is missing high-risk product wording: '${phrase}'`),
 ];
 
 if (failures.length > 0) {

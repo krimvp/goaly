@@ -112,6 +112,50 @@ describe('AgentCompiler — existing verifier', () => {
 });
 
 describe('AgentCompiler — generate verifier', () => {
+  it('refuses a mutable package script when it authors a frozen test', async () => {
+    const llm = new FakeLlm([JSON.stringify({
+      command: 'npm test',
+      rubric: '',
+      files: [{ path: 'parser.test.ts', content: 'test("x", () => {})' }],
+    })]);
+    const writes: string[] = [];
+    const compiler = new AgentCompiler({ llm, writeFile: async (path) => void writes.push(path) });
+
+    await expect(compiler.compile(makeConfig({ verifier: { kind: 'generate' } }))).rejects.toThrow(
+      /package script.*runner directly/,
+    );
+    expect(writes).toEqual([]);
+  });
+
+  it('rejects a package script with options before its subcommand', async () => {
+    const llm = new FakeLlm([JSON.stringify({
+      command: 'npm --prefix . test parser.test.ts',
+      rubric: '',
+      files: [{ path: 'parser.test.ts', content: 'test("x", () => {})' }],
+    })]);
+    const compiler = new AgentCompiler({ llm, writeFile: async () => {} });
+
+    await expect(compiler.compile(makeConfig({ verifier: { kind: 'generate' } }))).rejects.toThrow(
+      /package script or indirect command/,
+    );
+  });
+
+  it.each(['true # parser.test.ts', 'echo parser.test.ts'])(
+    'rejects a no-op command that only mentions the authored path: %s',
+    async (command) => {
+      const llm = new FakeLlm([JSON.stringify({
+        command,
+        rubric: '',
+        files: [{ path: 'parser.test.ts', content: 'test("x", () => {})' }],
+      })]);
+      const compiler = new AgentCompiler({ llm, writeFile: async () => {} });
+
+      await expect(compiler.compile(makeConfig({ verifier: { kind: 'generate' } }))).rejects.toThrow(
+        /vacuous/,
+      );
+    },
+  );
+
   it('authors a deterministic rung from command, writes files, and records generatedFiles', async () => {
     // Arrange
     const writes: Array<{ path: string; content: string }> = [];
