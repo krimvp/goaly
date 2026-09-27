@@ -9,6 +9,7 @@ import {
   parseHarnessAutonomy,
   parseLlmProvider,
   parseModels,
+  PUBLIC_HARNESS_CHOICES,
 } from './flags/harness-flags';
 import { candidatesFlag, parseMaxAgentTurns, parseTimeouts } from './flags/budget-flags';
 import { parseSandbox } from './flags/sandbox-flags';
@@ -24,6 +25,8 @@ import { parseSubcommand } from './args-commands';
 import { buildCliInput } from './args-cli-input';
 import { resolveFlagLayers, type ConfigLoader } from './args-layers';
 import { MULTI_SOURCE_FIELDS, RESUMED_GOAL_PLACEHOLDER, type ParsedArgs } from './args-types';
+import { which } from '../util/which';
+import { codecFor, isAgentCli } from '../agent-cli/registry';
 
 /**
  * The CLI argument coordinator (Phase 3.1 of the improvement plan): tokenizing, per-group flag
@@ -51,6 +54,7 @@ export async function parseArgs(
   argv: string[],
   readers: InputReaders = defaultReaders,
   load: ConfigLoader = (dir, explicit) => loadConfig(dir, explicit),
+  isInstalled: (command: string) => boolean = which,
 ): Promise<ParsedArgs> {
   const [command, ...rest] = argv;
   const subcommand = parseSubcommand(command, rest);
@@ -94,7 +98,11 @@ export async function parseArgs(
         : undefined;
   const cliInput = buildCliInput(flags, resolved, goal ?? RESUMED_GOAL_PLACEHOLDER, candidates);
 
-  const harness = parseHarness(str(flags, 'harness'));
+  const configuredHarness = str(flags, 'harness');
+  const detectedHarness = configuredHarness === undefined
+    ? PUBLIC_HARNESS_CHOICES.filter(isAgentCli).find((harness) => isInstalled(codecFor(harness).command)) ?? 'claude'
+    : undefined;
+  const harness = parseHarness(configuredHarness ?? detectedHarness);
   const config = cliInputToRunConfig(cliInput);
   assertParallelPhasesWiring(config, resuming);
 

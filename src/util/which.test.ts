@@ -23,8 +23,23 @@ describe('which', () => {
     try {
       const bin = join(dir, 'tool');
       await writeFile(bin, 'x');
+      await chmod(bin, 0o755);
       expect(which(bin, {})).toBe(true);
       expect(which(join(dir, 'absent'), {})).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips files without execute permission', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'which-'));
+    try {
+      const bin = join(dir, 'not-executable');
+      await writeFile(bin, '#!/bin/sh\n');
+      await chmod(bin, 0o644);
+      expect(which('not-executable', { PATH: dir })).toBe(false);
+      expect(which(bin, {})).toBe(false);
+      expect(which(dir, {})).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

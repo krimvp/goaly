@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import path from 'node:path';
+import path, { delimiter } from 'node:path';
 import { parseArgs, UsageError } from './args';
 import type { InputReaders } from './input-sources';
 import { loadConfig, type ConfigFileReader, type LoadedConfig } from './config-file';
+import { which } from '../util/which';
 
 /** Fake readers so tests never touch the filesystem or the real stdin stream. */
 function fakeReaders(opts: { files?: Record<string, string>; stdin?: string }): InputReaders {
@@ -679,6 +680,67 @@ describe('parseArgs', () => {
       expect(a.config.goal).toBe('make the build green');
       // No --verify-cmd ⇒ the verifier defaults to generate (LLM authors it).
       expect(a.config.verifier.kind).toBe('generate');
+    });
+
+    it('selects the first installed bundled CLI for a direct invocation', async () => {
+      const a = await parseArgs(['make the build green'], undefined, undefined, (name) => name === 'codex');
+      expect(a.harness).toBe('codex');
+      expect(a.llmProvider).toBe('codex');
+      expect(a.harnessExplicit).toBe(false);
+    });
+
+    it('skips a non-executable Claude file and selects executable Codex', async () => {
+      const claudeDir = await mkdtemp(path.join(tmpdir(), 'goaly-cli-'));
+      const codexDir = await mkdtemp(path.join(tmpdir(), 'goaly-cli-'));
+      try {
+        const claude = path.join(claudeDir, 'claude');
+        const codex = path.join(codexDir, 'codex');
+        await writeFile(claude, '#!/bin/sh\n');
+        await chmod(claude, 0o644);
+        await writeFile(codex, '#!/bin/sh\n');
+        await chmod(codex, 0o755);
+
+        const a = await parseArgs(
+          ['make the build green'],
+          undefined,
+          undefined,
+          (name) => which(name, { PATH: [claudeDir, codexDir].join(delimiter) }),
+        );
+        expect(a.harness).toBe('codex');
+      } finally {
+        await Promise.all([
+          rm(claudeDir, { recursive: true, force: true }),
+          rm(codexDir, { recursive: true, force: true }),
+        ]);
+      }
+    });
+
+    it('keeps CLI and config harness choices ahead of installed-harness detection', async () => {
+      const installed = (name: string): boolean => name === 'codex';
+      const cli = await parseArgs(['make it', '--harness', 'pi'], undefined, undefined, installed);
+      expect(cli.harness).toBe('pi');
+      expect(cli.llmProvider).toBe('pi');
+
+      const config = await parseArgs(
+        ['make it', '--workspace', '/project'],
+        undefined,
+        async () => ({ overlay: { harness: 'droid' }, sources: ['.goalyrc'] }),
+        installed,
+      );
+      expect(config.harness).toBe('droid');
+      expect(config.llmProvider).toBe('droid');
+    });
+
+    it('uses installed-harness detection for explicit `run` commands too', async () => {
+      const a = await parseArgs(['run', 'make it'], undefined, undefined, (name) => name === 'codex');
+      expect(a.harness).toBe('codex');
+      expect(a.llmProvider).toBe('codex');
+    });
+
+    it('falls back to Claude when no bundled CLI is installed', async () => {
+      const a = await parseArgs(['make it'], undefined, undefined, () => false);
+      expect(a.harness).toBe('claude');
+      expect(a.llmProvider).toBe('claude');
     });
 
     it('accepts the positional under an explicit run too', async () => {
