@@ -40,7 +40,8 @@ const SYSTEM_PROMPT =
  * majority-votes on pass, and applies a confidence floor. A multi-sample quorum samples at a
  * small diversity temperature so best-of-N actually reduces variance rather than re-rolling
  * the same near-deterministic answer; a single-sample quorum stays at temperature 0. Fail-closed:
- * zero parseable samples → a red verdict, never a green from a malformed grader.
+ * A pass needs a majority of the requested sample count. An incomplete, undecided vote is
+ * unevaluable; invalid or failed calls never shrink the quorum needed for green.
  */
 export class JudgeVerifier implements Verifier {
   readonly #rubric: string;
@@ -100,7 +101,8 @@ export class JudgeVerifier implements Verifier {
     }
 
     const passCount = samples.filter((s) => s.pass).length;
-    const majorityPass = passCount * 2 > samples.length;
+    const votesNeeded = Math.floor(this.#quorum / 2) + 1;
+    const majorityPass = passCount >= votesNeeded;
     const avgConfidence =
       samples.reduce((sum, s) => sum + s.confidence, 0) / samples.length;
 
@@ -109,6 +111,16 @@ export class JudgeVerifier implements Verifier {
 
     if (finalPass) {
       return { pass: true, confidence: avgConfidence, detail: 'judge quorum passed' };
+    }
+
+    const missingVotes = this.#quorum - samples.length;
+    if (!majorityPass && missingVotes > 0 && passCount + missingVotes >= votesNeeded) {
+      return {
+        pass: false,
+        confidence: avgConfidence,
+        detail: `judge quorum incomplete (${samples.length}/${this.#quorum} parseable verdicts)`,
+        evaluable: false,
+      };
     }
 
     if (majorityPass && !meetsFloor) {

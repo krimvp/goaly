@@ -77,10 +77,14 @@ describe('renderResolvedConfig', () => {
     expect(out).toMatch(/unevaluable threshold\s+2/); // the untouched default, shown explicitly
   });
 
-  it('reports budgets as "unlimited" rather than blank when uncapped', async () => {
+  it('reports the implied default budget caps and shows bare tool defaults when opted out', async () => {
     const out = await render(['run', '--goal', 'g', '--verify-cmd', 'true']);
-    expect(out).toMatch(/budget-tokens\s+unlimited/);
-    expect(out).toMatch(/budget-wall-ms\s+unlimited/);
+    expect(out).toMatch(/budget-tokens\s+500000/);
+    expect(out).toMatch(/budget-wall-ms\s+7200000/);
+
+    const bare = await render(['run', '--goal', 'g', '--verify-cmd', 'true', '--preset', 'none']);
+    expect(bare).toMatch(/budget-tokens\s+unlimited/);
+    expect(bare).toMatch(/budget-wall-ms\s+unlimited/);
   });
 
   it('names the config files that contributed, or says none', async () => {

@@ -142,8 +142,8 @@ Every serious harness exposes these; find each for your target:
 
 | Capability | Claude Code | Codex | What you need |
 |---|---|---|---|
-| Headless / print invocation | `claude -p "<prompt>"` | `codex exec --full-auto "<prompt>"` | how to run one non-interactive turn |
-| Write autonomy *(harness role)* | `--permission-mode acceptEdits` | `--full-auto` | let the **write** role apply edits — both CLIs deny writes headlessly by default; the read-only LLM role omits it |
+| Headless / print invocation | `claude -p "<prompt>"` | `codex exec --approve-for-me --skip-git-repo-check "<prompt>" --json` | how to run one non-interactive turn |
+| Write autonomy *(harness role)* | `--permission-mode acceptEdits` | `--approve-for-me` | let the **write** role apply edits — both CLIs deny writes headlessly by default; the read-only LLM role omits it |
 | Structured output | `--output-format json` | `--json` (JSONL stream) | a machine-readable result |
 | Session resume | `--resume <id>` | `codex exec resume <id>` | continue the same conversation |
 | Streaming turns *(optional)* | `--output-format stream-json --verbose` | `--json` (already a JSONL stream) | per-turn events for live observability (issue #23) |
@@ -155,10 +155,12 @@ unaffected (a tool that only emits a final envelope still degrades to a couple o
 
 **The two argv dialects are the crux.** `harnessArgs` must run in a writable mode (the agent *drives*
 edits), and `readonlyArgs` must forbid edits (a judge/approver/compiler must never touch the tree it
-is judging). Some CLIs are read-only by default and need an explicit write flag: `codex exec` runs in
-a read-only sandbox unless you pass `--full-auto` (its workspace-write alias), so codex's
-`harnessArgs` passes it and its `readonlyArgs` passes `--sandbox read-only` instead. If you forget the
-write flag, the agent can diagnose but never apply a fix and every iteration no-diffs.
+is judging). For the Codex CLI version tested (0.155.1), `--approve-for-me` selects writable
+workspace access with automatic approval review; `--skip-git-repo-check` lets it run in Goaly's
+temporary and plain-directory workspaces. The read-only dialect uses `--sandbox read-only` and also
+skips the Git check. The Codex flag surface is version-sensitive: inspect `codex exec --help` for the
+installed version before copying these flags into another adapter. If the write flag is missing, the
+agent can diagnose but never apply a fix and every iteration no-diffs.
 
 ## The mappings you define inside the codec
 

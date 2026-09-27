@@ -86,6 +86,12 @@ describe('AgentCliHarness(codexCodec)', () => {
     expect(new AgentCliHarness(codexCodec).name).toBe('codex');
   });
 
+  it('keeps the LLM provider read-only in a plain directory', () => {
+    expect(codexCodec.readonlyArgs({ prompt: 'review', model: undefined, stream: false })).toEqual([
+      'exec', '--sandbox', 'read-only', '--skip-git-repo-check', 'review', '--json',
+    ]);
+  });
+
   // Regression: the current codex event format (item.completed / turn.completed) must classify as
   // `completed` with its text and tokens — before the `item` traversal it parsed to null → crashed.
   it('classifies the current codex event format as completed', async () => {
@@ -115,8 +121,7 @@ describe('AgentCliHarness(codexCodec)', () => {
     expect(result.output).toBe('all done, files written');
     expect(result.sessionId).toBe('codex-thread-42');
     expect(result.tokensUsed).toBe(123);
-    // Default (no resume) args — --full-auto enables the writable sandbox the harness needs.
-    expect(sink.args[0]).toEqual(['exec', '--full-auto', 'do the thing', '--json']);
+    expect(sink.args[0]).toEqual(['exec', '--approve-for-me', '--skip-git-repo-check', 'do the thing', '--json']);
   });
 
   it('passes a resume flag and session id when resuming', async () => {
@@ -131,7 +136,7 @@ describe('AgentCliHarness(codexCodec)', () => {
       'exec',
       'resume',
       'prev-session',
-      '--full-auto',
+      '--skip-git-repo-check',
       'continue',
       '--json',
     ]);
@@ -143,14 +148,14 @@ describe('AgentCliHarness(codexCodec)', () => {
     const adapter = new AgentCliHarness(codexCodec, { exec, model: 'gpt-x' });
 
     await adapter.run('do it');
-    expect(sink.args[0]).toEqual(['exec', '--full-auto', '--model', 'gpt-x', 'do it', '--json']);
+    expect(sink.args[0]).toEqual(['exec', '--approve-for-me', '--skip-git-repo-check', '--model', 'gpt-x', 'do it', '--json']);
 
     await adapter.run('more', SessionId.parse('prev'));
     expect(sink.args[1]).toEqual([
       'exec',
       'resume',
       'prev',
-      '--full-auto',
+      '--skip-git-repo-check',
       '--model',
       'gpt-x',
       'more',

@@ -244,12 +244,16 @@ export const OrchestratorEvent = z.discriminatedUnion('tag', [
     verdict: Verdict,
     /** LLM spend by the judge rung (absent when the ladder had no LLM rung). */
     llm: TokenUsage.optional(),
+    /** Current total spend after this verification step, used before deciding to continue. */
+    budget: BudgetSnapshot.optional(),
   }),
   z.object({
     tag: z.literal('SIGNOFF_DECIDED'),
     approval: ApprovalVerdict,
     /** LLM spend by the approver (absent only if the call never reached the model). */
     llm: TokenUsage.optional(),
+    /** Current total spend after Sign-off, used before deciding to continue. */
+    budget: BudgetSnapshot.optional(),
   }),
   /**
    * The in-loop contract-fault adjudication resolved (issue #116). A repeat-failure streak whose

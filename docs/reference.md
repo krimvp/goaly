@@ -42,6 +42,7 @@ rationale in [`docs/adr/`](adr/), the terse contributor glossary in
   - [Observability](#observability)
   - [Spend report & budgets](#spend-report--budgets)
 - [Reference](#reference)
+  - [Product evaluation smoke](#product-evaluation-smoke)
   - [Training arc](#training-arc-experimental)
   - [Glossary](#glossary)
 
@@ -53,11 +54,14 @@ config file that keeps the wiring out of your invocations.
 ## CLI cookbook
 
 ```bash
-# Easiest: just the goal. The LLM authors the verification (--generate) and checks the work,
-# on Claude by default. A human approves the frozen contract once at Seal:
+# Easiest: just the goal. The LLM authors the verification (--generate) and checks the work.
+# The default is hands-off, has 500k-token / 2-hour caps, and auto-accepts Seal:
 goaly "make the parser handle empty input"
 
-# Fully hands-off: -d (alias --defaults) auto-accepts the still-frozen, still-logged contract:
+# Review the frozen contract at Seal before the run:
+goaly --mode review "make the parser handle empty input"
+
+# -d (alias --defaults) also auto-accepts the still-frozen contract:
 goaly -d "add a /health endpoint returning 200"
 
 # Point at an existing test command instead of generating one:
@@ -284,8 +288,10 @@ A preset body takes the same kebab-case keys as the config file itself (minus `p
 chaining), including `mode`, so a preset can pair an autonomy posture with project wiring.
 
 **One preset ships built in**, so presets work before any config file exists: `default`,
-the most straightforward complete run — `{ "mode": "hands-off" }`, everything else left to the
-tool defaults. Built-in presets are deliberately **language- and toolchain-neutral**: no verify
+the hands-off run with starter caps of 500,000 tokens and 7,200,000 ms (two hours) wall time —
+`{ "mode": "hands-off", "budget-tokens": 500000, "budget-wall-ms": 7200000 }`. It uses the
+provider defaults and does not enable the Goaly OS sandbox. If only one model is available, the run is
+labelled `SELF-JUDGED`. Built-in presets are deliberately **language- and toolchain-neutral**: no verify
 command, no setup command, no harness or model choice. Verification falls back to the
 `--generate` default (the LLM authors checks for whatever project it finds), so it works the
 same in a Rust crate, a Python package, or a Node repo. Redefine `default` in a config file to
@@ -315,7 +321,7 @@ opts out for one invocation, a persisted `"preset": "none"` for a whole tree, an
 ```
 
 ```bash
-goaly "fix the flaky test"                   # the implied 'default' preset: hands-off, any repo
+goaly "fix the flaky test"                   # hands-off, 500k-token / 2-hour caps; any repo
 goaly "fix the flaky test" --preset ship     # one word selects the whole way of running
 goaly "audit the parser"                     # a persisted "preset": "quick" applies instead
 goaly "hotfix" --preset none                 # bare tool defaults for one invocation
@@ -493,18 +499,29 @@ is fail-closed — a malformed grader is never a green.
   no gate; like the guard and refuter rungs it is part of the ladder (counted in `rungsTotal`),
   never of `contractHash`.
 - **Judge rung.** An LLM quorum over the diff for fuzzy criteria, judged against the frozen rubric.
+  A green requires a strict majority of positive votes out of the requested sample count N
+  (`floor(N/2) + 1`); errors and invalid outputs do not lower that requirement. If completed votes
+  leave the result undecided and fewer than N parse, the rung is an unevaluable red.
 - **Refuter rung (built-in, `--adversarial`).** A refute-first skeptic panel appended last; it runs
   only on a candidate green and can only fail it. See
   [Hardening](#hardening-against-reward-hacking).
 
-**Two keys for DONE:** the frozen ladder passes *and* the independent Sign-off approver — which
-runs only on a green ladder and is veto-only — doesn't veto.
+**DONE means the frozen ladder passed and Sign-off did not veto.** Sign-off runs only on a green
+ladder and is veto-only. This records that the configured checks passed; it does not prove semantic
+correctness. That depends on check quality and model independence. A one-model run is labelled
+`SELF-JUDGED`; multiple calls to one model do not establish independent model evidence.
 
 **Authored files stay out of your way.** Under `--generate`, authored tests/helpers are written to
 idiomatic locations and auto-registered in `.git/info/exclude` (per-clone, never committed), so
 they never appear in `git status`. A loud log line names each file and how to keep it
 (`git add -f`). The guard still pins them by content hash (excluded ≠ unprotected). `--verify-dir
 <dir>` steers where they land. Also add `.goaly/` to your repo's `.gitignore`.
+
+When `--generate` produced at least one authored verification file, compile refuses verification
+commands that invoke npm, pnpm, yarn, bun, or Make. Use a direct test runner command so a worker
+cannot make the frozen check pass by editing a package script. A direct runner can still load
+mutable project configuration or helper files; the guard pins authored verification files, not all
+transitive inputs to the runner.
 
 ## Hardening against reward-hacking
 
@@ -1034,6 +1051,11 @@ The run-start baseline (an explicit `--baseline`, or the automatic pin applied w
 header, and a `--resume` **re-adopts** it — a re-passed `--baseline` wins, and a logged internal
 checkpoint still re-points on top. So the pin survives a crash even if the agent committed mid-run.
 
+In git mode, checkpoints store Git tree IDs. In file mode, current checkpoints store version 2
+snapshots of original file bytes so diffs can show old and new text. Non-empty version 1 checkpoints
+stored hashes only; their previous bytes were never captured, so they cannot be upgraded. If resume
+reaches one, start a new file-mode run to get accurate baseline diffs.
+
 **`--delta-verify`** (default off) keeps the LLM **judge's** prompt flat on long runs: after each
 continuation iteration goaly takes an internal checkpoint so the next judge reviews only that
 iteration's delta. The trust model is preserved because the **DONE decision stays cumulative**:
@@ -1051,14 +1073,19 @@ bound the cumulative diff itself.
 
 By default goaly uses git plumbing to hash and diff the working tree, and it requires a git
 repository. **`--workspace-mode file`** replaces git plumbing with a content-addressed file-system
-manifest: it hashes every file, renders a textual diff against stored baseline manifests, and keeps
-baseline snapshots under `.goaly/baselines/` so the run can resume. This lets goaly run in a plain
+snapshot: it hashes every file, stores checkpoint file bytes, renders a textual diff against those
+bytes, and keeps baseline snapshots under `.goaly/baselines/` so the run can resume. This lets goaly run in a plain
 directory without `git init`.
 
 - `--workspace-mode git` — explicit git plumbing (the preflight enforces a git repo).
 - `--workspace-mode file` — explicit file-system manifest mode.
 - `--workspace-mode auto` — pick `git` when the workspace is inside a git work tree, otherwise `file`.
   This is the default.
+
+File mode runs the verifier with a credential-scrubbed environment and the configured tool path,
+like git mode. It renders the old and new contents from checkpointed bytes and labels non-UTF-8
+changes as binary. Scan errors and missing or corrupt named baselines fail closed. Glob exclusions
+match nested paths.
 
 File mode runs the verify command through the same seam git mode does, so the *could-not-evaluate*
 facts goaly owns about its own kill travel identically: a verify command it timed out, could not
@@ -1070,8 +1097,7 @@ support worktrees, best-of-N (`--candidates > 1`), or parallel phases, because t
 plumbing. Harness-autonomy auto-pinning (which pins the review baseline to the run-start HEAD SHA) is
 also git-only and is skipped in file mode.
 
-In file mode, an explicit `--baseline` must name a previously stored manifest hash (produced by a
-prior `checkpoint`), not a git ref.
+In file mode, an explicit `--baseline` must name a previously stored checkpoint hash, not a git ref.
 
 ## Worktrees (`--worktree`)
 
@@ -1092,6 +1118,8 @@ goaly worktree remove feature-x --force --delete-branch
   `goaly/<name>` — inside the already git-ignored `.goaly` dir, so nothing shows in `git status`.
   (Corollary: `git clean -dfx` on the main tree deletes the checkouts; committed work survives on
   the branch. `worktree list` flags orphaned registrations as `PRUNABLE`.)
+- **macOS path aliases:** listing canonicalizes paths, so `/var/folders` and `/private/var/folders`
+  aliases still show managed and prunable entries.
 - **The whole run is re-rooted:** run log, run lock, agent cwd, verifier, diff scope. Resume with
   the same `--worktree <name>` (the banner prints the exact command).
 - **Merge-back is plain git.** Runs never commit; the end-of-run hint shows the two steps
@@ -1945,6 +1973,14 @@ budget:      501,774 / 500,000 tokens (100%) — budget exceeded
   `--budget-tokens` blind for that layer and `--budget-wall-ms` is the real cap. (Adding
   `--harness-idle-timeout-ms` puts the CLI into its streaming mode, which restores the estimate —
   and, on some CLIs, a `usage` block the buffered mode omits.)
+- **Checked after each step:** budget snapshots include verifier and Sign-off spend. If a red
+  verification or a Sign-off veto crosses the cap, the run aborts before another worker call. A
+  green ladder and non-veto Sign-off still complete as `DONE`, even if that final work crosses the
+  cap.
+- **Default caps:** the implicit `default` preset sets `--budget-tokens 500000` and
+  `--budget-wall-ms 7200000` only when config and CLI leave those keys unset. Token spend is capped
+  across resume; the wall-clock cap applies to each process, so a later resume gets a fresh clock.
+  A config key or explicit CLI value can raise or lower either cap.
 - **A failed turn still bills what it reported.** A turn that did real work and then crashed, timed
   out, or was truncated is accounted for from its own envelope — a refused or interrupted turn is
   not free, and dropping its count is what would make the budget silently blind. The status is
@@ -1965,13 +2001,39 @@ budget:      501,774 / 500,000 tokens (100%) — budget exceeded
 
 # Reference
 
-This part covers the experimental training pipeline and the plain-language glossary.
+This part covers product evaluation, the experimental training pipeline, and the plain-language glossary.
+
+## Product evaluation smoke
+
+The clone-only product evaluation path runs two seeded, multi-file coding tasks against a withheld oracle:
+`order-pricing` and `event-report`. It is a diagnostic task set, not a population sample or a
+success-rate estimate.
+
+```bash
+npx tsx scripts/eval-product.ts --task order-pricing  # one bounded Codex run
+npx tsx scripts/eval-product.ts --all                 # both tasks
+npx tsx scripts/eval-product.ts --task event-report --output ./eval-out --model MODEL
+```
+
+Each run allows two iterations, 300,000 reported tokens, 180 seconds of Goaly wall time, and 200
+seconds overall. The token budget is post-call: a worker call can report more than the cap because
+Goaly can account for usage only after the call returns. It then completes verification and, if
+the ladder passes, Sign-off for that iteration; if both keys pass, `DONE` takes precedence over the
+exceeded budget.
+The evaluator stores the exact command, Goaly stdout/stderr and raw run log, the
+oracle output, and a per-task `result.json`; `summary.json` holds the task classifications. The
+oracle lives in `evaluation/oracle.cjs`, outside the worker workspace. The default Codex CLI model
+is not resolved by the evaluator, so the evidence records it as unresolved. A live result applies
+only to the recorded task, model wiring, and run conditions. Framework unit tests do not establish
+live coding success. The script and its development dependencies are in the repository checkout;
+the published npm package does not include this smoke runner.
 
 ## Training arc (experimental)
 
 `--harness goaly-code` exists so goaly can own the inference path and specialize a small model to
-its own loop, using the frozen ladder + independent approver as a reward-hacking-resistant training
-signal (a policy cannot win by weakening the bar). The data pipeline is shipped and embeddable:
+its own loop, using frozen-ladder and Sign-off outcomes as a reward-hacking-resistant training
+signal (a policy cannot win by weakening the bar, though the outcome still depends on check quality).
+The data pipeline is shipped and embeddable:
 
 ```ts
 import { exportRunTrajectory, toSftJsonl, BENCH_TASKS, runBench, summarizeBench } from 'goaly';
@@ -2009,7 +2071,7 @@ contributor *"one term, one meaning"* reference, see [`CONTEXT.md`](../CONTEXT.m
   and locked at Seal; no later step can rewrite it, and the hash is logged every iteration to prove
   the bar never moved.
 - <a id="g-two-keys"></a>**Two keys (for DONE)** — the frozen verifier ladder passes *and* the
-  independent approver doesn't veto. "Tests pass" is not "done".
+  separate, veto-only approver doesn't veto. This is a check outcome, not proof of semantic truth.
 - **Seam** — a boundary where a real implementation and a fake are interchangeable. goaly has four
   real seams (harness, verifier/ladder, approver, clock+budget) plus the internal read-only
   `LlmProvider` seam.

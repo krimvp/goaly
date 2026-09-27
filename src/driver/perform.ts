@@ -426,7 +426,15 @@ async function performRunVerifier(
     command.contract.goal,
     command.contract.rubric,
   );
-  return { event: { tag: 'VERIFIED', verdict, ...llmField(meterStep('verify')) } };
+  const llm = meterStep('verify');
+  return {
+    event: {
+      tag: 'VERIFIED',
+      verdict,
+      ...llmField(llm),
+      budget: deps.budget.snapshot(),
+    },
+  };
 }
 
 async function performRequestSignoff(
@@ -443,14 +451,24 @@ async function performRequestSignoff(
       diff,
       verdicts: command.verdicts,
     });
-    return { event: { tag: 'SIGNOFF_DECIDED', approval, ...llmField(meterStep('approve')) } };
+    const llm = meterStep('approve');
+    return {
+      event: {
+        tag: 'SIGNOFF_DECIDED',
+        approval,
+        ...llmField(llm),
+        budget: deps.budget.snapshot(),
+      },
+    };
   } catch (e) {
     // Fail-closed: an approver that errors is treated as a veto, never a green.
+    const llm = meterStep('approve');
     return {
       event: {
         tag: 'SIGNOFF_DECIDED',
         approval: { veto: true, reason: `approver error: ${errorMessage(e)}` },
-        ...llmField(meterStep('approve')),
+        ...llmField(llm),
+        budget: deps.budget.snapshot(),
       },
     };
   }

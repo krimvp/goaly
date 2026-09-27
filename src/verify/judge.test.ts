@@ -201,6 +201,54 @@ describe('JudgeVerifier', () => {
     expect(verdict.confidence).toBeCloseTo(0.9, 5);
   });
 
+  it('does not turn one passing vote and two invalid samples into a quorum', async () => {
+    const llm = new FakeLlm([passSample(0.9), 'invalid', 'invalid']);
+    const judge = new JudgeVerifier({ rubric: 'r', quorum: 3, confidenceFloor: 0.5, llm });
+
+    const verdict = await judge.verify(ws, 'goal', 'r');
+
+    expect(verdict.pass).toBe(false);
+    expect(verdict.evaluable).toBe(false);
+    expect(verdict.detail).toContain('incomplete');
+  });
+
+  it('marks a split vote with a missing sample unevaluable', async () => {
+    const llm = new FakeLlm([passSample(0.9), failSample(0.9, ['missing']), 'invalid']);
+    const judge = new JudgeVerifier({ rubric: 'r', quorum: 3, confidenceFloor: 0.5, llm });
+
+    const verdict = await judge.verify(ws, 'goal', 'r');
+
+    expect(verdict.pass).toBe(false);
+    expect(verdict.evaluable).toBe(false);
+  });
+
+  it('keeps a decisive failing quorum evaluable when one sample is invalid', async () => {
+    const llm = new FakeLlm([failSample(0.9, ['missing']), failSample(0.9, ['missing']), 'invalid']);
+    const judge = new JudgeVerifier({ rubric: 'r', quorum: 3, confidenceFloor: 0.5, llm });
+
+    const verdict = await judge.verify(ws, 'goal', 'r');
+
+    expect(verdict.pass).toBe(false);
+    expect(verdict.evaluable).toBeUndefined();
+    expect(verdict.detail).toBe('missing');
+  });
+
+  it('keeps two failing votes evaluable in a four-sample panel with two invalid calls', async () => {
+    const llm = new FakeLlm([
+      failSample(0.9, ['missing']),
+      failSample(0.8, ['missing']),
+      'invalid',
+      'invalid',
+    ]);
+    const judge = new JudgeVerifier({ rubric: 'r', quorum: 4, confidenceFloor: 0.5, llm });
+
+    const verdict = await judge.verify(ws, 'goal', 'r');
+
+    expect(verdict.pass).toBe(false);
+    expect(verdict.evaluable).toBeUndefined();
+    expect(verdict.detail).toBe('missing');
+  });
+
   it('drops a THROWN sample but votes on the surviving ones (partial quorum failure)', async () => {
     const scripted = [passSample(0.9), new Error('LLM CLI timed out'), passSample(0.8)];
     let i = 0;

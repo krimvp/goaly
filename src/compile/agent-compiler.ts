@@ -53,6 +53,10 @@ const SYSTEM_PROMPT =
   '"requiredTools"?: string[], "files"?: Array<{ "path": string, "content": string }>, ' +
   '"usageAssertion"?: { "targetSymbols": string[], "description": string } }. ' +
   'The command must exit 0 exactly when the goal is achieved.\n' +
+  'If you author verification files, invoke the test runner directly. Do not ' +
+  'use a package manager or Make command such as `npm test`, `pnpm run test`, or `make check`: ' +
+  'the worker can rewrite the script ' +
+  'without changing your frozen test.\n' +
   'Guardrails for a RUNNABLE bar (issue #55):\n' +
   '- The files you author are VERIFICATION ONLY — test files, fixtures, or a check script. NEVER ' +
   'author the implementation/solution itself (the source the goal asks for): writing that code is the ' +
@@ -90,8 +94,8 @@ const SYSTEM_PROMPT =
   'already-installed runner in the command. Concretely: do NOT use fetch-on-run forms like ' +
   '`npx --yes <pkg>` / `npx -y <pkg>`, `pip install ... && ...`, `go run <remote-url>`, or ' +
   '`uvx <pkg>` in the command — install the tool in "setup" (e.g. setup `npm install --no-save vitest`, ' +
-  'command `npx --no-install vitest run ...` or `node ./node_modules/.bin/vitest run ...`; or simply ' +
-  "use the repo's own `npm test` script). A verify command that depends on a live network is flaky by " +
+  'command `npx --no-install vitest run ...` or `node ./node_modules/.bin/vitest run ...`). ' +
+  'A verify command that depends on a live network is flaky by ' +
   'construction and is the single most common cause of a run that cannot be evaluated.\n' +
   '- List in "requiredTools" the external programs the command and setup assume ALREADY exist on PATH ' +
   '— the language toolchain and test runner (e.g. ["cargo"], ["python","pytest"], ["go"], ' +
@@ -116,7 +120,8 @@ const SYSTEM_PROMPT =
 
 /**
  * Reject a verification command that trivially exits 0 without measuring anything.
- * An autonomously-authored bar like `true`, `:`, or `exit 0` would pass both keys vacuously, so a
+ * An autonomously-authored bar like `true`, `:`, `exit 0`, or `echo file.test.ts` would pass both
+ * keys vacuously, so a
  * generated command made only of no-op segments is refused at compile (→ COMPILE_FAILED) rather
  * than frozen as a hollow contract. Conservative on purpose: it only flags commands whose EVERY
  * segment is a recognised no-op, so any real test/check command passes through untouched. This is
@@ -126,10 +131,10 @@ const SYSTEM_PROMPT =
 export function isVacuousCommand(command: string): boolean {
   const segments = command
     .split(/[\n;]|&&|\|\||\|/)
-    .map((s) => s.trim())
+    .map((s) => s.replace(/(?:^|\s)#.*$/, '').trim())
     .filter((s) => s.length > 0);
   if (segments.length === 0) return true;
-  const NOOP = /^(true|:|exit(\s+0)?)$/;
+  const NOOP = /^(true|:|exit(\s+0)?|echo(?:\s+.*)?|printf(?:\s+.*)?)$/;
   return segments.every((s) => NOOP.test(s));
 }
 
@@ -455,9 +460,17 @@ export class AgentCompiler implements VerifierCompiler {
           `('${generated.command}') — it runs every iteration and a network hiccup would make a ` +
           'correct tree un-evaluable. Move the install into "setup" (runs once) and invoke the ' +
           'already-installed runner offline in the command (e.g. setup "npm install --no-save vitest", ' +
-          'command "npx --no-install vitest run …" or "node ./node_modules/.bin/vitest run …"; or the ' +
-          "repo's own \"npm test\").",
+          'command "npx --no-install vitest run …" or "node ./node_modules/.bin/vitest run …").',
       );
+    }
+
+    if ((generated.files?.length ?? 0) > 0) {
+      if (usesMutableRunner(generated.command)) {
+        throw new Error(
+          'AgentCompiler: refusing a package script or indirect command for authored verification; ' +
+            'invoke the test runner directly',
+        );
+      }
     }
 
     // Deterministic module-format lint (small-model steering): an authored file that cannot even
@@ -519,6 +532,10 @@ export class AgentCompiler implements VerifierCompiler {
     };
     return freezeContract(unhashed);
   }
+}
+
+function usesMutableRunner(command: string): boolean {
+  return /(?:^|[;&|\s(])(?:npm|pnpm|yarn|bun|make)\b/.test(command);
 }
 
 /**

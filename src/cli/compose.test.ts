@@ -17,13 +17,13 @@ import type { Workspace, CommandResult } from '../workspace/workspace';
 describe('LLM provider completion argv (read-only)', () => {
   it('codex runs --sandbox read-only with the model before the prompt positional', () => {
     expect(codexCodec.readonlyArgs({ prompt: 'judge this', model: 'gpt-x', stream: false })).toEqual([
-      'exec', '--sandbox', 'read-only', '--model', 'gpt-x', 'judge this', '--json',
+      'exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--model', 'gpt-x', 'judge this', '--json',
     ]);
   });
 
   it('codex omits --model when none is set', () => {
     expect(codexCodec.readonlyArgs({ prompt: 'p', model: undefined, stream: false })).toEqual([
-      'exec', '--sandbox', 'read-only', 'p', '--json',
+      'exec', '--sandbox', 'read-only', '--skip-git-repo-check', 'p', '--json',
     ]);
   });
 

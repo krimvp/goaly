@@ -3,12 +3,11 @@
  *
  * Assumed CLI contract (the EXACT flags may drift between codex versions — this is the seam, not a
  * hard dependency):
- *   harness  (write):  codex exec [resume <id>] --full-auto [--model <m>] <prompt> --json
+ *   harness  (write):  codex exec --approve-for-me [--model <m>] <prompt> --json
  *   provider (read):   codex exec --sandbox read-only [--model <m>] <prompt> --json
  *
- * `--full-auto` is MANDATORY for the harness role: `codex exec` defaults to a read-only sandbox, so
- * without it codex can diagnose a fix but never apply one — every iteration would no-diff and the run
- * would abort. The read-only LLM role must NOT get it (it judges, never edits) — it passes
+ * `--approve-for-me` selects a writable workspace sandbox with automatic approval review on current
+ * Codex CLI versions. The read-only LLM role must NOT get it (it judges, never edits) — it passes
  * `--sandbox read-only`. `--json` makes codex stream JSONL events on stdout (one object per line); we
  * parse those tolerantly via the shared core, so codex ignores the `stream` flag (it is always JSONL).
  * The model flag (when set) precedes the prompt positional so the prompt is never mistaken for it.
@@ -237,15 +236,16 @@ export const codexCodec: AgentCliCodec = {
   harnessArgs({ prompt, model, sessionId }) {
     const modelArgs = model !== undefined ? ['--model', model] : [];
     if (sessionId !== undefined) {
-      return ['exec', 'resume', sessionId, '--full-auto', ...modelArgs, prompt, '--json'];
+      return ['exec', 'resume', sessionId, '--skip-git-repo-check', ...modelArgs, prompt, '--json'];
     }
-    return ['exec', '--full-auto', ...modelArgs, prompt, '--json'];
+    return ['exec', '--approve-for-me', '--skip-git-repo-check', ...modelArgs, prompt, '--json'];
   },
   readonlyArgs({ prompt, model }) {
     return [
       'exec',
       '--sandbox',
       'read-only',
+      '--skip-git-repo-check',
       ...(model !== undefined ? ['--model', model] : []),
       prompt,
       '--json',

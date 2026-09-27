@@ -4,13 +4,16 @@
 [![npm version](https://img.shields.io/npm/v/goaly.svg)](https://www.npmjs.com/package/goaly)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Run a coding agent (Claude Code, Codex, Droid, pi, or your own) in a loop until your goal is
-**verifiably** achieved — checked against a **frozen** success contract the agent can't weaken to
-pass.
+Run a coding agent (Claude Code, Codex, Droid, pi, or your own) in a loop until the frozen checks
+and Sign-off pass. `DONE` means the frozen verifier ladder passed and the veto-only Sign-off
+approver did not veto. It does not prove semantic correctness: that depends on check quality and
+how independent the models are.
 
-The anti-reward-hacking core: "until the goal is achieved" must not collapse into "until the agent
-weakens its own test". goaly compiles the success contract **once**, freezes it, and requires **two
-independent keys** — a frozen verifier *and* an independent approver — before declaring a run DONE.
+goaly compiles the success contract once and records its hash. The worker cannot edit authored
+checks without detection. The default run is hands-off, has caps of 500,000 tokens and 7,200,000 ms
+(two hours), and does not enable the Goaly OS sandbox. If only one model is available, the run is
+labelled `SELF-JUDGED`; the judge and approver use the same model, so their calls do not provide
+independent model evidence.
 
 **🌐 [Interactive overview →](https://krimvp.github.io/goaly/)**
 
@@ -20,16 +23,15 @@ independent keys** — a frozen verifier *and* an independent approver — befor
 npm i -g goaly                 # or, from a clone: make install
 
 # Just give it a goal — the agent writes the check, runs, and verifies, hands-off:
-# with no preset or mode chosen the built-in 'default' preset applies (announced on
-# every run; the contract is still frozen and logged, just auto-accepted at Seal):
+# with no preset or mode chosen the built-in 'default' preset applies: hands-off,
+# capped at 500,000 tokens and two hours, and auto-accepted at Seal (still frozen and logged):
 goaly "add a /health endpoint returning 200"
 
 # Keep a human at the gates instead — approve the frozen contract once at Seal:
 goaly --mode review "add a /health endpoint returning 200"
 
-# With one model available, the agent, the judge rung and the Sign-off approver are the same
-# model — that run is labelled SELF-JUDGED (degraded) in its summary and `goaly runs show`.
-# Give the second key its own model to make the two keys independent in fact:
+# If only one model is available, all three roles use it and the run is labelled SELF-JUDGED.
+# Choose a different approver model to add independent model evidence:
 goaly "add a /health endpoint returning 200" --approver-model <a-different-model>
 
 # Or point at a check you already have:
@@ -57,11 +59,11 @@ COMPILE ──► SEAL ──► setup + pre-flight ──► ┌─────
   `--systemone-model`, a calibrated System One gate scores each rubric criterion (a true/false
   probability over the diff) before the judge; it can only fail a green, and no key or a fault is
   a could-not-evaluate red, never a pass.
-- **Two keys for DONE**: the frozen ladder passes *and* the independent, **veto-only** Sign-off
-  approver does not veto. "Tests pass" is not "done".
-- **The second key stays independent, and is labelled when it can't be.** `--model` picks the
-  *agent's* model; the approver defaults to a different one. A collapse (`SELF-JUDGED` and kin) is
-  labelled everywhere the run is reported — see [key independence](docs/reference.md#the-sign-off-approver-does-not-inherit---model).
+- **DONE is a check outcome**: the frozen ladder passes *and* the veto-only Sign-off approver does
+  not veto. This does not prove semantic correctness; evidence quality depends on the checks and
+  model independence. A one-model run is labelled `SELF-JUDGED`.
+- **Model independence is reported.** goaly records `SELF-JUDGED` and related degraded modes in
+  run results — see [key independence](docs/reference.md#the-sign-off-approver-does-not-inherit---model).
 - **The control flow has zero LLM calls.** A pure reducer owns all policy behind four narrow seams.
 - **Every run is crash-safe and resumable.** A write-ahead log under `.goaly/<runId>/` makes runs
   replayable, `--resume`-able, and inspectable (`goaly runs list` / `show` / `watch`, `goaly ui`).
@@ -101,6 +103,7 @@ Every row links to its section in the **[reference](docs/reference.md)**.
 | [Follow-ups](docs/reference.md#following-up-after-a-run-ends---from-run) | `--from-run` | A new re-verified goal that knows what the last run did. |
 | [Web UI](docs/reference.md#web-ui-goaly-ui) | `goaly ui` | A localhost control center: dashboard, live pipeline, session inspector, browser Seal review. |
 | [Spend & budgets](docs/reference.md#spend-report--budgets) | `--budget-tokens`, `--cost-table` | Per-layer token report (cache included); budgets survive resume. |
+| [Product evaluation smoke](docs/reference.md#product-evaluation-smoke) | Clone-only: `npx tsx scripts/eval-product.ts` | Two bounded multi-file diagnostic tasks with a withheld oracle; not a success-rate estimate. |
 | [Observability](docs/reference.md#observability) | `--stream`, `--explain`, `--log-level` | Live agent turns, durable transcripts, plain-language narration. |
 | [Onboarding](docs/reference.md#onboarding-goaly-doctor--goaly-init) | `goaly doctor`, `goaly init` | A read-only environment report, and a starter `.goalyrc` written interactively or headless. |
 | [Reliability](docs/reference.md#reliability) | *(defaults)* | Preflight, bounded retries (contract and plan), safe Ctrl-C, fsync'd write-ahead log. |

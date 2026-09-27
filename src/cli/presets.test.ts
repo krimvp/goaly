@@ -74,9 +74,16 @@ describe('applyPreset', () => {
 });
 
 describe('built-in presets', () => {
-  it("ships exactly one straightforward built-in: 'default' = mode hands-off", () => {
+  it("ships one hands-off built-in with bounded starter budgets", () => {
     expect(BUILTIN_PRESETS).toEqual({
-      default: { overlay: { mode: 'hands-off' }, source: BUILTIN_PRESET_SOURCE },
+      default: {
+        overlay: {
+          mode: 'hands-off',
+          'budget-tokens': '500000',
+          'budget-wall-ms': '7200000',
+        },
+        source: BUILTIN_PRESET_SOURCE,
+      },
     });
   });
 
@@ -220,6 +227,8 @@ describe('the implied default (no --preset, no --mode)', () => {
     const a = await parseArgs([...run], defaultReaders, noConfig);
     expect(a.config.autonomous).toBe(true);
     expect(a.harnessAutonomy).toBe('medium');
+    expect(a.config.budget.tokens).toBe(500000);
+    expect(a.config.budget.wallClockMs).toBe(7200000);
     expect(a.config.deltaVerify).toBe(true);
     expect(a.warnings.some((w) => w.includes("the 'default' preset (built-in) fills the gaps"))).toBe(true);
     expect(a.warnings.some((w) => w.includes('pass --preset none for the bare tool defaults'))).toBe(true);
@@ -244,6 +253,24 @@ describe('the implied default (no --preset, no --mode)', () => {
     );
     expect(a.harnessAutonomy).toBe('low'); // config wins over the implied hands-off medium
     expect(a.config.autonomous).toBe(true); // the genuine gaps are still filled
+  });
+
+  it('a config file and explicit CLI flags can raise either implied budget cap', async () => {
+    const configured = await parseArgs(
+      [...run],
+      defaultReaders,
+      withConfig({ 'budget-tokens': '900000', 'budget-wall-ms': '3600000' }),
+    );
+    expect(configured.config.budget.tokens).toBe(900000);
+    expect(configured.config.budget.wallClockMs).toBe(3600000);
+
+    const explicit = await parseArgs(
+      [...run, '--budget-tokens', '1200000', '--budget-wall-ms', '1800000'],
+      defaultReaders,
+      noConfig,
+    );
+    expect(explicit.config.budget.tokens).toBe(1200000);
+    expect(explicit.config.budget.wallClockMs).toBe(1800000);
   });
 
   it('choosing a --mode suppresses the implied default entirely (pure posture, no hybrid)', async () => {

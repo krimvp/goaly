@@ -51,18 +51,18 @@ describe('AgentCliCodec argv dialects', () => {
   });
 
   describe('codex', () => {
-    it('harnessArgs: --full-auto, model before the prompt, --json (resume threads the id)', () => {
+    it('harnessArgs: writable auto-review, model before the prompt, --json (resume threads the id)', () => {
       expect(codexCodec.harnessArgs({ prompt: 'do it', model: 'gpt-x', stream: false })).toEqual([
-        'exec', '--full-auto', '--model', 'gpt-x', 'do it', '--json',
+        'exec', '--approve-for-me', '--skip-git-repo-check', '--model', 'gpt-x', 'do it', '--json',
       ]);
       expect(
         codexCodec.harnessArgs({ prompt: 'more', model: undefined, sessionId: sid('prev'), stream: false }),
-      ).toEqual(['exec', 'resume', 'prev', '--full-auto', 'more', '--json']);
+      ).toEqual(['exec', 'resume', 'prev', '--skip-git-repo-check', 'more', '--json']);
     });
 
-    it('readonlyArgs: --sandbox read-only (never --full-auto), model before the prompt', () => {
+    it('readonlyArgs: --sandbox read-only, model before the prompt', () => {
       expect(codexCodec.readonlyArgs({ prompt: 'judge this', model: 'gpt-x', stream: false })).toEqual([
-        'exec', '--sandbox', 'read-only', '--model', 'gpt-x', 'judge this', '--json',
+        'exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--model', 'gpt-x', 'judge this', '--json',
       ]);
     });
   });
