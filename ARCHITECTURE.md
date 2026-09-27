@@ -1,7 +1,8 @@
 # Goal-Orchestration Layer — Architecture
 
 > This doc says *how* goaly is structured — deep modules, real seams, validation at every
-> edge, in **TypeScript/Node** under **WSL/Linux**. The *what* and *why* live in the
+> edge, in **TypeScript/Node**. Start with the [run walkthrough](docs/how-it-works.md) for the
+> control flow. The *what* and *why* live in the
 > [ADRs](docs/adr/README.md) (start with 0001–0003); the original design handoff is archived at
 > [`docs/archive/DESIGN.md`](docs/archive/DESIGN.md). The first half is the walking-skeleton
 > spine (pure reducer + four seams); ["What the implementation added"](#what-the-implementation-added-beyond-the-walking-skeleton)
@@ -23,16 +24,16 @@ Depth) with **runtime validation at every seam** (Zod), so that:
 - the control flow is **pure, replayable, and table-testable** — no LLM call can sneak
   into the loop logic.
 
-Confirmed decisions: **TypeScript/Node**, **CLI-first with a library core**, first
-adapters **Claude Code + Codex** (plus a fake for tests), **Zod** for all validation,
-executed under **WSL/Linux**.
+The implementation is **TypeScript/Node**, **CLI-first with a library core**, and uses
+**Zod** at external seams. CLI harnesses include Claude Code, Codex, Droid, and pi.
+`goaly-code` is the SDK-native harness. A fake harness supports local tests.
 
 ## The shape in one breath
 
 One deep module owns **all policy** — the **Orchestrator**, a *pure reducer*
 (`step(state, event) -> [state', Command[]]`). A thin imperative **Driver** performs the
 effects the reducer requests. Everything stochastic (running the agent, judging,
-approving) hides behind boolean/value interfaces at **four real seams**. The reducer
+approving) hides behind narrow interfaces at **four real seams**. The reducer
 never calls an LLM, never reads a clock, never spawns a process — which is exactly what
 makes the whole run replayable from the log.
 
@@ -41,12 +42,12 @@ makes the whole run replayable from the log.
      │  performs Commands, feeds back Events
    Orchestrator  ── pure step(state,event) → [state, Command[]] ──  ZERO LLM, ZERO IO
      │ Commands ↓
-   ┌──────────┬──────────┬──────────┬───────────┐
-   Harness    Verifier   Approver   Compiler+Seal
-   Adapter    Ladder     (Sign-off)
-   (seam#1)   (seam#2)   (seam#3)
-   CC/Codex   det/judge  agent      + Clock/Budget (seam#4, injected into Driver)
-   /Fake      /Fake      /Fake
+   ┌───────────────┬───────────────┬────────────────┬──────────────┐
+   HarnessAdapter  Verifier/Ladder Approver         Clock/Budget
+   #1              #2              #3               #4 (Driver)
+   CLI/SDK/Fake    det/judge/Fake  agent/Fake       system/manual
+
+   Compiler and Seal prepare the frozen contract before the loop.
 ```
 
 ## Module decomposition (deep modules + seam reality)
@@ -55,7 +56,7 @@ makes the whole run replayable from the log.
 |---|---|---|---|
 | **Orchestrator** | `step(state,event)->[state,Command[]]`, `initial(config)` — *pure, sync* | whole COMPILE→Seal→loop→DECIDE graph, iteration count, stuck bookkeeping | the spine |
 | **Driver** | `drive(deps,config)->RunOutcome` | command interpreter, write-ahead persist, crash→Event, budget polling | — |
-| **HarnessAdapter** | `run(prompt, sessionId?)->RunResult` | flag dialects, JSON parsing, session resume, CC's optional Stop-hook fast-path | **#1 REAL** (CC, Codex, Fake) |
+| **HarnessAdapter** | `run(prompt, sessionId?, onEvent?)->HarnessRunResult` | flag dialects, JSON parsing, session resume, event streaming | **#1 REAL** (Claude Code, Codex, Droid, pi, goaly-code, Fake) |
 | **Verifier / Ladder** | `verify(ws,goal,rubric)->Verdict` | shell/exit-code, test runs, LLM quorum judge; ladder *is* a Verifier (composite); built-in non-contract rungs (anti-tamper guard first, `--adversarial` refute-first panel last) | **#2 REAL** (det, judge, Fake) |
 | **Approver (Sign-off)** | `review(input)->ApprovalVerdict` (veto-only) | separate refute-first approval agent, reject-on-uncertainty bias, optional lensed N-reviewer panel (early-exits once settled); distinct model adds evidence but is not guaranteed | **#3 REAL** (agent, Fake) |
 | **VerifierCompiler** | `compile(goal,intent)->CompiledContract` | finds/writes tests, authors rubric, emits runnable spec; deterministic lints (vacuous/out-of-repo/network/module-format) + detected workspace facts; optional red-team critique rounds (`--adversarial`, a decorator); **freezes once** | (agent, Fake) |
@@ -78,10 +79,13 @@ it *is* the product's intelligence.
 
 ## Why adding a harness is trivial (the "thin adapter" requirement)
 
-The orchestrator-facing seam is one method:
+The orchestrator-facing seam has one method. This is a short view of the interface. See
+[`HarnessAdapter`](src/harness/adapter.ts) and the parsed
+[`HarnessRunResult`](src/domain/events.ts) for the full types.
 
 ```ts
 interface HarnessAdapter {
+  readonly name: string;
   run(prompt: string, sessionId?: SessionId, onEvent?: AgentEventSink): Promise<HarnessRunResult>;
 }
 type HarnessRunResult = {
@@ -89,6 +93,7 @@ type HarnessRunResult = {
   sessionId: SessionId;
   status: 'completed' | 'crashed' | 'truncated' | 'timeout';
   tokensUsed?: number;           // diffHash is NOT here — the shared Workspace computes it
+  // The full schema also records token source, token split, and typed remediation advice.
 };
 ```
 
@@ -135,18 +140,21 @@ when it can be established.
 
 ## State machine (pure, zero-LLM-by-construction)
 
-Discriminated-union state, pure synchronous reducer, effects requested as data `Command`s:
+[`OrchestratorState`](src/orchestrator/state.ts) is a discriminated union. The synchronous
+[`step`](src/orchestrator/step.ts) returns the next state and `Command` data. A normal run
+follows this path:
 
-```ts
-type OrchestratorState =
-  | { tag: 'COMPILING'; config } | { tag: 'AWAIT_SEAL'; contract }
-  | { tag: 'RUNNING_AGENT'; ctx } | { tag: 'VERIFYING'; ctx; lastRun }
-  | { tag: 'AWAIT_SIGNOFF'; ctx; ladder } | { tag: 'DECIDING'; ctx; signals }
-  | { tag: 'DONE' } | { tag: 'FAILED'; reason } | { tag: 'ABORTED'; reason };
-
-// LoopCtx carries the FROZEN contract by reference + diffHash/failure histories
-// for stuck-detection.
+```text
+COMPILING → AWAIT_SEAL → [PREPARING] → RUNNING_AGENT → VERIFYING
+VERIFYING red → RUNNING_AGENT (with check feedback)
+VERIFYING green → AWAIT_SIGNOFF
+AWAIT_SIGNOFF veto → RUNNING_AGENT (with veto feedback)
+AWAIT_SIGNOFF no veto → DONE
 ```
+
+Phased plans, parallel waves, and contract-fault adjudication add states. `LoopCtx` carries
+the frozen contract and the histories used for stuck detection. [`decide.ts`](src/orchestrator/decide.ts)
+holds the decision table; there is no `DECIDING` state.
 
 **DECIDE** is a pure truth table:
 
@@ -241,18 +249,18 @@ to *drive* each from the CLI, see the [`README`](README.md); this section is the
   through the loop by hand.
 
 - **Typed stuck reasons.** `detectStuck` stays pure over the loop histories and returns a typed
-  `{ kind, message }`. Kinds: no-diff, `STUCK_REPEATED_FAILURE` (same verifier signature N×),
-  oscillation, `STUCK_HARNESS_CRASH` (the agent CLI exited abnormally N× in a row — surfaced as an
-  environment failure, not looped on), and budget. The one reason-specific excuse — a fresh, unseen
-  Sign-off veto pardons a no-diff once — lives in DECIDE, which holds the verdict.
+  `{ kind, message }`. Kinds include no-diff, timeout-no-diff, repeat-failure, oscillation,
+  harness-crash, unevaluable, and budget. A fresh Sign-off veto can excuse one no-diff result;
+  DECIDE owns that exception because it holds the verdict.
 
 - **Prepare: tools + setup + pre-flight (once, after SEAL).** Before iteration 1 the Driver
   (`src/driver/prepare.ts`) probes the frozen `requiredTools` manifest (missing tools are handed to the
   agent to install by default, or a typed `TOOLS_MISSING` abort), runs the one-time `setup` command
-  (`SETUP_FAILED` on non-zero), and **pre-flights** the frozen deterministic checks: a language-agnostic
-  read-only classification (`src/driver/preflight-soundness.ts`) aborts a *broken* contract
-  (`CONTRACT_UNSOUND`) before any worker token is spent, while failing **open** on uncertainty so a
-  legitimate red still proceeds.
+  when possible, and **pre-flights** the frozen deterministic checks. A failing user `--setup-cmd`
+  ends as `SETUP_FAILED`; a failing compiler-authored setup gives the worker a recovery hint.
+  The read-only classifier (`src/driver/preflight-soundness.ts`) can abort a confirmed broken
+  contract as `CONTRACT_UNSOUND` before any worker token is spent. It fails open on uncertainty,
+  so a legitimate red can proceed.
 
 - **Phased: a frozen plan of frozen contracts (`--phased`).** A read-only **planner** seam
   (`src/plan/`) decomposes the goal into a plan of sub-goals — a dependency DAG (`id`/`dependsOn`,
@@ -373,6 +381,7 @@ The test suite (`vitest`, `npm test`) mirrors the seam structure:
   iteration (the bar never moved).
 - **Real-git workspace tests** (`src/workspace/`): `GitWorkspace`, worktrees, checkpoints, and the
   `FileWorkspace` parity suite run against temporary real repositories.
-- **CLI end-to-end with the fake harness** (`src/cli/compose*.test.ts`): the composition root and
-  the CLI run whole loops with `--harness fake`, no network. `scripts/check-docs-sync.ts` gates the
-  docs against the CLI's `USAGE` in CI.
+- **CLI tests with injected fakes** (`src/cli/compose*.test.ts`): tests can run whole loops
+  without network calls. Selecting `--harness fake` in a normal CLI run does not fake the
+  compiler, judge, or approver. `scripts/check-docs-sync.ts` checks reference coverage of CLI
+  flags and config keys in CI; it does not validate every behavior claim.

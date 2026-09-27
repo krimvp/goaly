@@ -17,6 +17,10 @@ independent model evidence.
 
 **🌐 [Interactive overview →](https://krimvp.github.io/goaly/)**
 
+**Read in steps:** [first run](docs/first-run.md) → [how a run works](docs/how-it-works.md) →
+[full reference](docs/reference.md). The [docs map](docs/README.md) links each concept to its
+source code, design decision, and verification steps.
+
 ## Quick start
 
 ```bash
@@ -190,8 +194,11 @@ also an experimental [training pipeline](docs/reference.md#training-arc-experime
 
 ## Docs
 
-- **[Docs router](docs/README.md)** — "I want to… → read this", one table
-- **[Reference](docs/reference.md)** — every flag, mode, and guarantee (start here for depth)
+- **[First run](docs/first-run.md)** — one small run and how to inspect it
+- **[How a run works](docs/how-it-works.md)** — the contract, loop, and two result gates
+- **[Docs map](docs/README.md)** — follow a topic from overview to source and test
+- **[Reference](docs/reference.md)** — every flag, mode, and guarantee
+- **[Verification map](docs/verification.md)** — claims, source files, and repeatable checks
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it is built · [`docs/adr/`](docs/adr/README.md) — why
   (decision records)
 - [`CONTEXT.md`](CONTEXT.md) — the ubiquitous-language glossary
