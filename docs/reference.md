@@ -54,7 +54,10 @@ config file that keeps the wiring out of your invocations.
 ## CLI cookbook
 
 ```bash
-# Easiest: just the goal. The LLM authors the verification (--generate) and checks the work.
+# On a terminal, start goaly and enter one goal when asked. The run streams live:
+goaly
+
+# Or pass the goal now. The LLM authors verification (--generate) and checks the work.
 # The default is hands-off, has 500k-token / 2-hour caps, and auto-accepts Seal:
 goaly "make the parser handle empty input"
 
@@ -184,6 +187,10 @@ block, `runs`/`doctor`/`config` output); everything live — diagnostics log lin
 `--explain`, warnings — goes to **stderr**. `goaly … 2>/dev/null` therefore leaves a clean,
 scriptable result.
 
+Bare `goaly` asks for one goal when stdin and stdout are terminals. It then starts the run with
+`--stream` output. A blank answer ends without a run. With no terminal, bare `goaly` prints help.
+A quoted positional goal starts the run at once; `run` and `--goal` remain available for scripts.
+
 Goal, intent, and rubric each accept exactly one source: inline (`--goal "…"`, `--intent "…"`,
 `--rubric "…"`), a file (`--goal-file <path>`, `--intent-file <path>`, `--rubric-file <path>`),
 or stdin (`--goal -`). More than one source per field is a usage error. `--intent` steers what
@@ -214,11 +221,12 @@ unparsable config) surface as one actionable report instead of a cryptic mid-run
 Exit code `0` means goaly can run here in some configuration; `1` means something goaly cannot
 work around needs fixing first. It writes nothing.
 
-**`goaly init`** writes a starter `.goalyrc` in the workspace: default harness, autonomy
-preference, optional model and verify-command defaults. It runs `goaly doctor` first so
+**`goaly init`** writes a starter `.goalyrc` in the workspace: optional harness, autonomy
+preference, model, and verify-command defaults. It runs `goaly doctor` first so
 environment gaps are visible before defaults are saved. On a TTY it asks interactively (empty
-answers accept the defaults); with flags (`--harness`, `--autonomous`, `--model`,
-`--verify-cmd`) or `--yes` it is fully headless for CI. The candidate config is validated
+answers accept auto-detection and the hands-off default; answer no to autonomy to save
+`"mode": "review"`). Use `--yes` with optional flags (`--harness`, `--autonomous`, `--model`,
+`--verify-cmd`) for a headless run. The candidate config is validated
 against the same fail-closed schema every run parses before a byte is written, and an existing
 `.goalyrc` is never overwritten without `--force`.
 
@@ -353,7 +361,7 @@ Keys mirror the CLI flags in kebab-case. Full precedence:
 **CLI flag > `--config` > `<workspace>/.goalyrc` > `~/.goalyrc` > tool default**.
 
 ```jsonc
-// ~/.goalyrc — run hands-off everywhere (generate + Claude already apply by default)
+// ~/.goalyrc — run hands-off everywhere (generate + harness detection already apply)
 { "autonomous": true }
 ```
 
@@ -954,8 +962,10 @@ worktrees.
 
 ## Harnesses
 
-`--harness` picks the write-role coding agent: `claude` (default), `codex`, `droid`, `pi`, or
-`goaly-code`.
+`--harness` picks the write-role coding agent: `claude`, `codex`, `droid`, `pi`, or `goaly-code`.
+Without a CLI or config choice, goaly uses the first installed CLI in that order. With none
+installed, it selects `claude` so the missing-install error gives a clear next step. An explicit
+`--harness` or a config value always wins over detection.
 
 - The CLI harnesses shell out to their respective CLIs.
   [`pi`](https://pi.dev) is provider-agnostic: pass `--model "provider/id"`

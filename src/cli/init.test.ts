@@ -4,6 +4,9 @@ import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { runInit, type InitCommand, type InitIo } from './init';
 import type { DoctorProbes } from './doctor';
+import { parseArgs } from './args';
+import { defaultReaders } from './input-sources';
+import { defaultConfigFileReader, loadConfig } from './config-file';
 
 /**
  * `goaly init` against a real temp workspace: the written `.goalyrc` must round-trip through the
@@ -78,11 +81,11 @@ describe('goaly init', () => {
     expect(capture.out).toContain('wrote ');
   });
 
-  it('defaults to a claude-only config when no flags and not interactive', async () => {
+  it('uses installed-harness selection and the hands-off default when no flags are given', async () => {
     const capture: Capture = { out: '', err: '' };
     const code = await runInit(cmd(), workspace, io(capture));
     expect(code).toBe(0);
-    expect(await readConfig()).toEqual({ harness: 'claude' });
+    expect(await readConfig()).toEqual({ autonomous: true });
   });
 
   it('refuses to overwrite an existing .goalyrc without --force', async () => {
@@ -102,7 +105,7 @@ describe('goaly init', () => {
       io({ out: '', err: '' }),
     );
     expect(code).toBe(0);
-    expect(await readConfig()).toEqual({ harness: 'codex' });
+    expect(await readConfig()).toEqual({ harness: 'codex', autonomous: true });
   });
 
   it('rejects an unknown harness with the public choices, writing nothing', async () => {
@@ -111,6 +114,14 @@ describe('goaly init', () => {
     expect(code).toBe(2);
     expect(capture.err).toContain("unknown harness 'bogus'");
     expect(capture.err).toContain('claude | codex | droid | pi | goaly-code');
+    await expect(readFile(path.join(workspace, '.goalyrc'), 'utf8')).rejects.toThrow();
+  });
+
+  it('rejects an explicit empty harness', async () => {
+    const capture: Capture = { out: '', err: '' };
+    const code = await runInit(cmd({ harness: '' }), workspace, io(capture));
+    expect(code).toBe(2);
+    expect(capture.err).toContain("unknown harness ''");
     await expect(readFile(path.join(workspace, '.goalyrc'), 'utf8')).rejects.toThrow();
   });
 
@@ -138,9 +149,44 @@ describe('goaly init', () => {
     });
     expect(questions[0]).toContain('harness');
     expect(questions[1]).toContain('autonomous');
+    expect(questions[1]).toContain('(Y/n)');
   });
 
-  it('empty interactive answers accept the defaults', async () => {
+  it('an N answer selects review at Seal on the next run', async () => {
+    const answers = ['', 'n', '', ''];
+    let asked = 0;
+    const code = await runInit(
+      cmd(),
+      workspace,
+      io({ out: '', err: '' }, { interactive: true, ask: async () => answers[asked++] ?? '' }),
+    );
+    expect(code).toBe(0);
+    expect(await readConfig()).toEqual({ mode: 'review' });
+
+    const parsed = await parseArgs(
+      ['run', 'fix the bug', '--workspace', workspace],
+      defaultReaders,
+      (dir, explicit) => loadConfig(dir, explicit, defaultConfigFileReader, '/fake-home'),
+      () => false,
+    );
+    expect(parsed.config.autonomous).toBe(false);
+  });
+
+  it('rejects an unclear autonomy answer before writing a config', async () => {
+    const answers = ['', 'maybe'];
+    let asked = 0;
+    const capture: Capture = { out: '', err: '' };
+    const code = await runInit(
+      cmd(),
+      workspace,
+      io(capture, { interactive: true, ask: async () => answers[asked++] ?? '' }),
+    );
+    expect(code).toBe(2);
+    expect(capture.err).toContain('answer y or n');
+    await expect(readConfig()).rejects.toThrow();
+  });
+
+  it('empty interactive answers accept the hands-off and auto-detect defaults', async () => {
     const capture: Capture = { out: '', err: '' };
     const code = await runInit(
       cmd(),
@@ -148,7 +194,7 @@ describe('goaly init', () => {
       io(capture, { interactive: true, ask: async () => '' }),
     );
     expect(code).toBe(0);
-    expect(await readConfig()).toEqual({ harness: 'claude' });
+    expect(await readConfig()).toEqual({ autonomous: true });
   });
 
   it('--yes skips prompts even when interactive', async () => {
@@ -169,6 +215,6 @@ describe('goaly init', () => {
     );
     expect(code).toBe(0);
     expect(asked).toBe(0);
-    expect(await readConfig()).toEqual({ harness: 'pi' });
+    expect(await readConfig()).toEqual({ harness: 'pi', autonomous: true });
   });
 });

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import readline from 'node:readline/promises';
 import { parseArgs, UsageError, type UiCommand } from './args';
 import { renderHelp } from './help';
 import { startUiServer } from '../ui/server';
@@ -13,6 +14,7 @@ import { renderCompletion } from './completion';
 import { WorktreeManager, WorktreeError } from '../workspace/worktree-manager';
 import { executeRun } from './run-cmd';
 import { readPackageVersion } from '../util/package-version';
+import { promptForGoal } from './interactive';
 
 // The run path lives in run-cmd.ts (`executeRun`) so the goaly-ui server drives runs through the
 // SAME guards, lock, composition, and reporting (ADR 0015). Its helpers stay part of this module's
@@ -24,6 +26,17 @@ export { executeRun, formatOutcome, nextStepHint, makeInterruptController, type 
  * 130 = interrupted) so the thin bin launcher stays trivial and `main` is unit-testable.
  */
 export async function main(argv: string[]): Promise<number> {
+  if (argv.length === 0 && process.stdin.isTTY && process.stdout.isTTY) {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    let goal: string | undefined;
+    try {
+      goal = await promptForGoal((question) => rl.question(question));
+    } finally {
+      rl.close();
+    }
+    if (goal === undefined) return 0;
+    argv = [goal, '--stream'];
+  }
   let parsed;
   try {
     parsed = await parseArgs(argv);

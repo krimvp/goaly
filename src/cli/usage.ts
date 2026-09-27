@@ -17,7 +17,10 @@ export type UsageTopic = {
 
 export const USAGE_HEAD = `goaly — run a coding agent until a frozen success contract is met.
 
-Quick start (the LLM authors & checks everything, with Claude — just give it a goal):
+Quick start (the LLM authors and checks everything):
+  goaly                     on a terminal, enter one goal and stream the run; blank ends
+                            without a run
+                            without a terminal, show help
   goaly "<goal>"            runs hands-off: with no --preset/--mode chosen, the built-in 'default'
                             preset applies (announced on every run; the contract is still frozen
                             and logged, just auto-accepted at Seal)
@@ -25,6 +28,8 @@ Quick start (the LLM authors & checks everything, with Claude — just give it a
   goaly --preset none "<goal>"   opt out of the implied default (bare tool defaults)
   Persist your own way of running in ~/.goalyrc once (a "mode", a "preset", or a "presets" block)
   and only the goal need ever be typed. The goal is a positional (sugar for --goal); 'run' is optional.
+  With no harness choice in the command or config, goaly uses the first installed CLI in this
+  order: claude, codex, droid, pi. With none installed, it gives Claude install guidance.
 
 Usage:
   goaly [run] "<goal>" [flags]   (or --goal "<goal>"; see "Goal / intent / rubric input" below)
@@ -356,8 +361,9 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                         run per compile attempt (metered under the compile phase, --compiler-model);
                         inert for a user-supplied --verify-cmd (your bar, your call).`),
   topic('harness', 'Harness selection', `Harness selection:
-  --harness <name>      the write-role coding agent: claude (default) | codex | droid | pi |
-                        goaly-code.
+  --harness <name>      the write-role coding agent: claude | codex | droid | pi | goaly-code.
+                        A command or config choice wins. Otherwise use the first installed CLI
+                        in that order; if none is installed, show Claude install guidance.
   --harness-autonomy <level>  low | medium | high — how much the harness CLI is allowed to do, for
                         CLIs that gate privileged actions behind a tier (today: droid's --auto).
                         Default: the CLI's own least-privilege level (droid: low = edit files, but
@@ -449,7 +455,7 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                             [e]dited stays available even then)
   --autonomous                skip the prompt: auto-accept (still frozen; logged loudly)
   -d, --defaults              hands-off sugar for --autonomous. The other easy-mode defaults
-                              (--generate, the claude harness, the LLM provider following the
+                              (--generate, detected harness, the LLM provider following the
                               harness) already apply with no flag, so -d's only effect is
                               auto-accepting the contract.
   --mode review|hands-off|aggressive
@@ -701,9 +707,11 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
                             which harness CLIs are on PATH, config-file presence/validity, and
                             (with --base-url <url>) whether an OpenAI-compatible endpoint answers.
                             Exit 0 = goaly can run here; 1 = something needs fixing first.
-  goaly init                write a starter .goalyrc (default harness, autonomy, model,
-                            verify command). Interactive on a TTY; headless with flags
-                            (--harness/--autonomous/--model/--verify-cmd) or --yes. Runs doctor
+  goaly init                write a starter .goalyrc (optional harness, autonomy, model,
+                            verify command). Interactive on a TTY: Enter keeps harness
+                            detection and the hands-off autonomy default; no to autonomy
+                            saves mode review. Use --yes with optional flags
+                            (--harness/--autonomous/--model/--verify-cmd) for headless use. Runs doctor
                             first, validates against the same schema every run parses, and never
                             overwrites an existing .goalyrc without --force.
   goaly config validate <path>

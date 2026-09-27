@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`goaly init` now saves the Seal choice it asks for.** Its default matches the hands-off run;
+  answering no saves review mode. Leaving the harness blank keeps automatic selection.
 - **A dying subprocess can no longer crash the whole goaly process** (#101). Writing a large prompt
   to a child that exits before draining its stdin raised an unhandled `EPIPE` on the stdin socket
   and killed the orchestrator mid-run. The write now fails closed: the step resolves with the
@@ -23,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changelog.
 
 ### Added
+- **Start with one command.** Bare `goaly` on a terminal asks for one goal and streams the run.
+  A positional goal starts at once. Without a harness choice, goaly selects the first installed
+  Claude Code, Codex, Droid, or pi CLI in that order.
 - **System One gate (`--systemone-model <id>`).** A calibrated true/false score per rubric
   criterion, inserted before each judge rung as a cheap first gate. It short-circuits on a fail
   (the failing criteria are named first in the feedback) and hands over to the judge on a pass, so

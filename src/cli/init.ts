@@ -77,12 +77,15 @@ export async function runInit(cmd: InitCommand, workspace: string, io: InitIo): 
     return answer === '' ? def : answer;
   };
 
-  const harness = await askFor(
-    `default harness (${PUBLIC_HARNESS_CHOICES.join(' | ')})`,
-    cmd.harness,
-    'claude',
+  const harnessAnswer = cmd.harness ?? (
+    interactive && !cmd.yes
+      ? await ask(`default harness (${PUBLIC_HARNESS_CHOICES.join(' | ')}; Enter = auto-detect): `)
+      : ''
   );
-  if (!isHarnessChoice(harness)) {
+  const harness = harnessAnswer.trim() === '' && cmd.harness === undefined
+    ? undefined
+    : harnessAnswer.trim();
+  if (harness !== undefined && !isHarnessChoice(harness)) {
     io.err(
       `goaly init: unknown harness '${harness}' (expected ${PUBLIC_HARNESS_CHOICES.join(' | ')})\n`,
     );
@@ -91,9 +94,14 @@ export async function runInit(cmd: InitCommand, workspace: string, io: InitIo): 
   const autonomousAnswer = cmd.autonomous
     ? 'y'
     : !interactive || cmd.yes
-      ? 'n'
-      : await ask('autonomous by default — auto-accept the frozen contract? (y/N): ');
-  const autonomous = /^y(es)?$/i.test(autonomousAnswer.trim());
+      ? 'y'
+      : await ask('autonomous by default — auto-accept the frozen contract? (Y/n): ');
+  const autonomyChoice = autonomousAnswer.trim().toLowerCase();
+  if (!['', 'y', 'yes', 'n', 'no'].includes(autonomyChoice)) {
+    io.err('goaly init: answer y or n for autonomous mode\n');
+    return 2;
+  }
+  const autonomous = autonomyChoice !== 'n' && autonomyChoice !== 'no';
   const model = await askFor('default model (empty = harness default)', cmd.model, '');
   const verifyCmd = await askFor(
     'default verify command (empty = choose per run)',
@@ -102,8 +110,8 @@ export async function runInit(cmd: InitCommand, workspace: string, io: InitIo): 
   );
 
   const config: Record<string, string | boolean> = {
-    harness,
-    ...(autonomous ? { autonomous: true } : {}),
+    ...(harness !== undefined ? { harness } : {}),
+    ...(autonomous ? { autonomous: true } : { mode: 'review' }),
     ...(model !== '' ? { model } : {}),
     ...(verifyCmd !== '' ? { 'verify-cmd': verifyCmd } : {}),
   };

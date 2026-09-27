@@ -22,7 +22,10 @@ independent model evidence.
 ```bash
 npm i -g goaly                 # or, from a clone: make install
 
-# Just give it a goal — the agent writes the check, runs, and verifies, hands-off:
+# On a terminal, goaly asks for one goal and streams the run:
+goaly
+
+# Give it a goal in the command to start at once:
 # with no preset or mode chosen the built-in 'default' preset applies: hands-off,
 # capped at 500,000 tokens and two hours, and auto-accepted at Seal (still frozen and logged):
 goaly "add a /health endpoint returning 200"
@@ -37,6 +40,11 @@ goaly "add a /health endpoint returning 200" --approver-model <a-different-model
 # Or point at a check you already have:
 goaly run --goal "make the parser handle empty input" --verify-cmd "npm test"
 ```
+
+The CLI uses the first installed agent in this order: Claude Code, Codex, Droid, pi. A harness in
+`.goalyrc` or `--harness` takes priority. With no installed CLI, goaly reports how to install Claude
+Code; you can also select `--harness goaly-code` for an OpenAI-compatible endpoint. Bare `goaly`
+shows help when stdin or stdout is not a terminal.
 
 Requires Node ≥ 20. Git is recommended (used by default); pass `--workspace-mode file` to run in a plain directory without `git init`. Exit codes: `0` DONE · `1` FAILED/ABORTED · `2` usage error ·
 `130` interrupted (Ctrl-C — the run stays resumable).
@@ -127,7 +135,7 @@ goaly "..." --verify-cmd "npm test" --mode hands-off     # or: --preset ship
 goaly run --goal "..." --generate --dry-run
 goaly runs list && goaly runs show run-<id>
 
-# First-time setup, then tab completion (zsh alike; fish: goaly completion fish | source):
+# Optional setup, then tab completion (zsh alike; fish: goaly completion fish | source):
 goaly doctor && goaly init
 source <(goaly completion bash)
 ```
@@ -149,7 +157,7 @@ goaly help
 ```
 
 Or by hand: `npm install && npm run build && npm install -g .` — or `make pack` for a
-redistributable tarball. The default adapters shell out to the `claude` / `codex` / `droid` / `pi`
+redistributable tarball. The CLI adapters shell out to the `claude` / `codex` / `droid` / `pi`
 CLIs; `--harness goaly-code` needs no CLI at all (any OpenAI-compatible endpoint, including a local
 keyless one like ollama).
 
