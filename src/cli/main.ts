@@ -124,7 +124,7 @@ export async function main(argv: string[]): Promise<number> {
 
   // Without a terminal the Seal prompt reads EOF, its promise never settles, and Node exits 0 with
   // no outcome — an unattended script would read that as DONE. A resume is past Seal.
-  if (!parsed.config.autonomous && parsed.resumeRunId === undefined && process.stdin.isTTY !== true) {
+  if (!parsed.config.autonomous && parsed.resumeRunId === undefined && !parsed.dryRun && process.stdin.isTTY !== true) {
     process.stderr.write(
       'goaly: this run stops at Seal for a human to approve the contract, but stdin is not a ' +
         'terminal, so nobody can answer. Run it in a terminal, or add --autonomous for an ' +

@@ -899,4 +899,12 @@ describe('main() — a human Seal needs a terminal', () => {
     expect(res.err).toContain('--autonomous');
     expect(existsSync(join(root, STATE_DIR))).toBe(false);
   });
+
+  it('still allows --dry-run, which never reaches Seal', async () => {
+    const res = await captureErr(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--mode', 'review',
+        '--workspace-mode', 'file', '--workspace', root, '--dry-run']),
+    );
+    expect(res.code).toBe(0);
+  });
 });
