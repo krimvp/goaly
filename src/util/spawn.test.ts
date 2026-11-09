@@ -113,4 +113,35 @@ describe('runProcess', () => {
     });
     expect(r.timedOut).toBe(true);
   });
+
+  it('resolves with the real exit code when a backgrounded child keeps the pipes open after the shell exits', async () => {
+    // A verify command that starts a server in the background and exits 0. The server inherits the
+    // stdio pipes, so `close` never fires; the run must not wait for the server or for the timeout.
+    const started = Date.now();
+    const r = await runProcess('sleep 30 & echo started', [], {
+      shell: true,
+      killGroup: true,
+      timeoutMs: 20_000,
+    });
+    expect(r.code).toBe(0);
+    expect(r.timedOut).toBe(false);
+    expect(r.stdout).toBe('started\n');
+    expect(Date.now() - started).toBeLessThan(10_000);
+  }, 15_000);
+
+  it('does not hang after a timeout when a descendant left the process group (setsid) and holds the pipes', async () => {
+    const r = await runProcess('setsid sleep 6 & sleep 30', [], {
+      shell: true,
+      killGroup: true,
+      timeoutMs: 200,
+    });
+    expect(r.timedOut).toBe(true);
+  }, 10_000);
+
+  it('decodes a multi-byte character split across two output chunks', async () => {
+    const script =
+      'process.stdout.write(Buffer.from([0xe2, 0x82]));setTimeout(() => process.stdout.write(Buffer.from([0xac])), 50);';
+    const r = await runProcess('node', ['-e', script]);
+    expect(r.stdout).toBe('€');
+  });
 });
