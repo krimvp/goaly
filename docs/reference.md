@@ -449,7 +449,8 @@ Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject:
 
 `--autonomous` skips the pause, never the freeze — the contract is still frozen and loudly logged.
 Piping the goal via stdin (`--goal -`) consumes stdin, so there's nothing left for the prompt —
-use `--autonomous` or `--goal-file`.
+use `--autonomous` or `--goal-file`. A fresh run that would pause at Seal refuses to start (exit 2)
+when stdin is not a terminal (a pipe, `</dev/null`, CI), because nobody could answer the prompt.
 
 **What the banner shows.** The goal, the `contractHash`, any frozen `setup` and `requiredTools`, the
 rubric **once**, then the ladder *as it will actually run* — including the built-in
@@ -1359,7 +1360,8 @@ kill an hours-long run. All defaults, no flags needed
 
 - **Fail-fast preflight.** A run refuses to start — with the exact fix — when the workspace isn't a
   git repo, the `--harness` / `--llm-provider` CLI isn't on PATH, a `--resume` id is unknown, or a
-  stdin-fed goal lacks `--autonomous` (which would deadlock the Seal prompt).
+  stdin-fed goal lacks `--autonomous`, or stdin is not a terminal (either would deadlock the Seal
+  prompt).
 - **Transient failures are absorbed.** The OpenAI-compatible transport retries 429/5xx/network
   errors with backoff (honoring `Retry-After`, capped at 60 s); CLI-backed LLM steps retry a
   non-zero exit or unparseable output; a judge-quorum sample that throws drops that sample only; a

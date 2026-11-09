@@ -852,3 +852,42 @@ describe('main() — doctor and init onboarding subcommands', () => {
     expect(res.out).toContain('--force');
   });
 });
+
+describe('main() — a human Seal needs a terminal', () => {
+  let root: string;
+  let origIsTTY: boolean | undefined;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'goaly-main-notty-'));
+    origIsTTY = process.stdin.isTTY;
+    process.stdin.isTTY = false as true;
+  });
+  afterEach(async () => {
+    process.stdin.isTTY = origIsTTY as true;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function captureErr(fn: () => Promise<number>): Promise<{ code: number; err: string }> {
+    const writes: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((s: string | Uint8Array): boolean => {
+      writes.push(typeof s === 'string' ? s : Buffer.from(s).toString());
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      return { code: await fn(), err: writes.join('') };
+    } finally {
+      process.stderr.write = orig;
+    }
+  }
+
+  it('refuses --mode review when stdin is not a terminal (exit 2), before a run starts', async () => {
+    const res = await captureErr(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--mode', 'review',
+        '--workspace-mode', 'file', '--workspace', root]),
+    );
+    expect(res.code).toBe(2);
+    expect(res.err).toContain('--autonomous');
+    expect(existsSync(join(root, STATE_DIR))).toBe(false);
+  });
+});

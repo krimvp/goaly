@@ -118,6 +118,17 @@ export async function main(argv: string[]): Promise<number> {
     });
   }
 
+  // Without a terminal the Seal prompt reads EOF, its promise never settles, and Node exits 0 with
+  // no outcome — an unattended script would read that as DONE. A resume is past Seal.
+  if (!parsed.config.autonomous && parsed.resumeRunId === undefined && process.stdin.isTTY !== true) {
+    process.stderr.write(
+      'goaly: this run stops at Seal for a human to approve the contract, but stdin is not a ' +
+        'terminal, so nobody can answer. Run it in a terminal, or add --autonomous for an ' +
+        'unattended run (the contract is still frozen and logged).\n',
+    );
+    return 2;
+  }
+
   // --worktree: re-root the ENTIRE run at a managed worktree BEFORE anything reads
   // `parsed.workspace` (baseline validation, --from-run/--resume log reads, preflight, state dir,
   // run lock, composeDeps) — one rewrite here and every downstream consumer composes against the
