@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { h, render } from 'preact';
-import { RunsPage, WorktreesPage } from './views';
-import type { RunsIndex, WorktreesResponse } from '../api-schema';
-import type { RunSummary } from '../../runlog/inspect';
+import { RunDetailPage, RunsPage, WorktreesPage } from './views';
+import type { RunDetailResponse, RunsIndex, WorktreesResponse } from '../api-schema';
+import { runDetail, type RunSummary } from '../../runlog/inspect';
 import { RunId } from '../../domain/ids';
+import { makeConfig } from '../../testing/fakes';
 
 /**
  * The dashboard views, rendered for real under happy-dom against a stubbed `fetch`. These prove
@@ -148,5 +149,49 @@ describe('WorktreesPage', () => {
     const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
     expect(post?.[0]).toBe('/api/worktrees');
     expect(JSON.parse(post?.[1]?.body as string)).toEqual({ name: 'new-wt' });
+  });
+});
+
+describe('RunDetailPage', () => {
+  class FakeEventSource {
+    static readonly CLOSED = 2;
+    static instance: FakeEventSource | undefined;
+    readyState = 1;
+    onerror: (() => void) | null = null;
+    private readonly listeners = new Map<string, (raw: MessageEvent<string>) => void>();
+    constructor() {
+      FakeEventSource.instance = this;
+    }
+    addEventListener(name: string, fn: (raw: MessageEvent<string>) => void): void {
+      this.listeners.set(name, fn);
+    }
+    close(): void {
+      this.readyState = FakeEventSource.CLOSED;
+    }
+    emit(name: string, data: unknown): void {
+      this.listeners.get(name)?.({ data: JSON.stringify(data) } as MessageEvent<string>);
+    }
+  }
+
+  it('coalesces the detail refetches when the SSE replays a long finished run', async () => {
+    const header = { runId: RunId.parse('run-long'), startedAt: 1, config: makeConfig({ goal: 'long goal' }) };
+    const body: RunDetailResponse = { root: { kind: 'main' }, live: false, detail: runDetail(header, []) };
+    const fetchMock = vi.fn(async () => jsonResponse(body));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    render(h(RunDetailPage, { runId: 'run-long', tab: 'overview' }), root);
+    await until(() => FakeEventSource.instance !== undefined);
+    for (let seq = 1; seq <= 300; seq++) {
+      FakeEventSource.instance?.emit('entry', {
+        runId: 'run-long', seq, ts: seq, contractHash: null, stateTagAfter: 'RUNNING_AGENT',
+        event: { tag: 'VERIFIED', verdict: { pass: false, confidence: 1, detail: 'red' } },
+      });
+    }
+    FakeEventSource.instance?.emit('terminal', { stateTag: 'FAILED' });
+    await until(() => text().includes('long goal'));
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(3);
   });
 });
