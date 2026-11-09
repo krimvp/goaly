@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { ParsedArgs } from './args';
 import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
-import { drive } from '../driver/driver';
+import { drive, isInterruptedOutcome } from '../driver/driver';
 import { asRunId, type RunId } from '../domain/ids';
 import type { RunOutcome } from '../domain/events';
 import type { SealGate } from '../compile/seal';
@@ -59,6 +59,15 @@ export type RunResult = { code: number; runId: RunId | undefined; outcome: RunOu
 
 /** Exit code for a run stopped by Ctrl-C/SIGTERM (128 + SIGINT), distinct from FAILED/ABORTED (1). */
 const EXIT_INTERRUPTED = 130;
+
+/**
+ * 0 for DONE, 130 only for a run an interrupt stopped (it is resumable), else 1. A run that reached
+ * FAILED or a stuck ABORTED of its own while the stop was pending exits 1, as without the stop.
+ */
+export function runExitCode(outcome: RunOutcome): number {
+  if (outcome.status === 'DONE') return 0;
+  return isInterruptedOutcome(outcome) ? EXIT_INTERRUPTED : 1;
+}
 
 /**
  * Execute one run end-to-end. Byte-for-byte the historical `main()` run path — extracted so the
@@ -192,8 +201,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
     // command (or the goaly-code → --from-run route). Stays quiet when there is no real session.
     const hint = resumeHint(parsed.harness, outcome.sessionId, runId);
     io.out(`${formatOutcome(outcome, cost, hint, degraded, Date.now() - startedAt)}\n`);
-    if (outcome.status === 'DONE') return { code: 0, runId, outcome };
-    return { code: interrupt.interrupted() ? EXIT_INTERRUPTED : 1, runId, outcome };
+    return { code: runExitCode(outcome), runId, outcome };
   } finally {
     await egressProxy?.close();
     await runLock.release();

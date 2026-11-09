@@ -1380,7 +1380,8 @@ kill an hours-long run. All defaults, no flags needed
   never retried.
 - **Ctrl-C is safe.** The first Ctrl-C / SIGTERM / SIGHUP stops between steps: the in-flight step
   finishes, lands write-ahead, and the outcome is a typed `ABORTED` naming `--resume <runId>` (exit
-  130). A second signal exits immediately, after reaping live child process groups. A lost terminal
+  130; if that last step ends the run on its own — DONE, FAILED, a stuck abort — the exit code is
+  that outcome's 0 or 1). A second signal exits immediately, after reaping live child process groups. A lost terminal
   (an ssh drop, a closed window, `goaly … | head`) is not a crash: SIGHUP takes the same clean stop,
   and a closed stdout/stderr only drops console output — `goaly.log` and the run log keep the record.
 - **Crash-safety end to end.** Every run-log append is fsync'd write-ahead; a torn tail is

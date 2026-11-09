@@ -230,6 +230,14 @@ async function runLoop(run: Run, loop: LoopState): Promise<RunOutcome> {
   return finishRun(run, loop.state);
 }
 
+// The literal is repeated in `interruptedOutcome`: the reason-boundary test forbids interpolating it.
+const INTERRUPTED_REASON = 'interrupted by user';
+
+/** Did the run stop on an operator interrupt (and not reach a terminal state of its own)? */
+export function isInterruptedOutcome(outcome: RunOutcome): boolean {
+  return outcome.status === 'ABORTED' && outcome.reason?.startsWith(INTERRUPTED_REASON) === true;
+}
+
 function interruptedOutcome(run: Run, loop: LoopState): Promise<RunOutcome> {
   run.log.warn('interrupt requested — stopping before the next step', { runId: run.runId });
   return abortedLoopOutcome(run, loop, `interrupted by user — resume this run with: --resume ${run.runId}`);
