@@ -39,7 +39,8 @@ after the verifier ladder passes. A veto or a failed check becomes feedback for 
 See [how a run works](how-it-works.md) for this sequence.
 
 The default mode auto-accepts Seal and uses large token and wall-time caps. Keep
-`--mode review` for a first run if you want to inspect the bar before work starts. For exact
+`--mode review` for a first run if you want to inspect the bar before work starts. Review mode
+needs a terminal: without one (a pipe, CI), goaly refuses to start and asks for `--autonomous`. For exact
 defaults and limits, use [autonomy profiles](reference.md#autonomy-profiles---mode).
 
 ## Inspect the result
