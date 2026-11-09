@@ -270,14 +270,13 @@ export class GitWorkspace implements Workspace {
 
     const untracked = await this.#exec(
       'git',
-      ['-C', this.#root, 'ls-files', '--others', '--exclude-standard', ...ps],
+      ['-C', this.#root, 'ls-files', '-z', '--others', '--exclude-standard', ...ps],
       { cwd: this.#root },
     );
 
-    const untrackedFiles = untracked.stdout
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
+    // `-z`: without it git C-quotes a name with non-ASCII or control characters (`"caf\303\251.py"`),
+    // and that quoted name is not a path on disk, so the file content never reached the two keys.
+    const untrackedFiles = untracked.stdout.split('\0').filter((name) => name.length > 0);
 
     const sections: string[] = [tracked.stdout];
     if (untrackedFiles.length > 0) {
@@ -340,7 +339,8 @@ export class GitWorkspace implements Workspace {
     );
     // `git diff --no-index` exits 0 (identical — unreachable here) or 1 (differs); anything else is a
     // real failure, so fall back to the name so the file is never invisible to the keys.
-    if (added.code === 0 || added.code === 1) {
+    // An unreadable path also exits 1 (with empty stdout), so empty output falls back to the name.
+    if ((added.code === 0 || added.code === 1) && added.stdout.length > 0) {
       return added.stdout;
     }
     return `${file}\n`;

@@ -117,6 +117,17 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(text).toContain('.b { color: red; }');
   });
 
+  it('diff renders untracked files whose names git would quote (non-ASCII, tab, leading space)', async () => {
+    const ws = new GitWorkspace(root);
+    await writeFile(join(root, 'café.py'), 'cafe-line\n');
+    await writeFile(join(root, 'tab\there.txt'), 'tab-line\n');
+    await writeFile(join(root, ' lead.txt'), 'lead-line\n');
+    const text = await ws.diff();
+    expect(text).toContain('+cafe-line');
+    expect(text).toContain('+tab-line');
+    expect(text).toContain('+lead-line');
+  });
+
   it('diff includes tracked modifications', async () => {
     const ws = new GitWorkspace(root);
     await writeFile(join(root, 'file.txt'), 'modified\n');
