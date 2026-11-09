@@ -6,10 +6,11 @@
  *
  * Design contract:
  *   - injectable `fetch` + `sleep` so unit tests never touch the network or a real timer;
- *   - bounded retries on transient failure (network error, 429, 5xx) with linear backoff, then a
- *     fail-closed throw — never a fabricated empty completion (invariant #4);
+ *   - bounded retries on transient failure (network error, 408, 429, 5xx) with exponential backoff,
+ *     then a fail-closed throw — never a fabricated empty completion (invariant #4);
  *   - the response is Zod-validated at the seam (invariant #6); a malformed envelope throws;
- *   - per-request wall-clock timeout via `AbortController`.
+ *   - per-request wall-clock timeout via `AbortController`. A timeout is NOT retried: the goaly-code
+ *     harness uses its whole turn budget as this timeout, so a retry would run past that cap.
  * It returns a NORMALIZED {@link ChatResult} (minted tool-call ids, usage → `TokenBreakdown`) so the
  * provider and the loop never re-handle wire quirks.
  */
@@ -27,10 +28,14 @@ import {
 
 /** Default per-request wall-clock budget. */
 export const DEFAULT_LLM_HTTP_TIMEOUT_MS = 10 * 60 * 1000;
-/** Default number of retries (so total attempts = retries + 1) on a transient failure. */
-const DEFAULT_RETRIES = 2;
-/** Exponential backoff base between attempts (500ms, 1s, 2s, …). */
-const BACKOFF_MS = 500;
+/**
+ * Default number of retries (so total attempts = retries + 1) on a transient failure. With the
+ * backoff below the waits are 1s, 2s, 4s, … 32s: a provider outage of about one minute does not fail
+ * the call (and so does not count toward the stuck-crash streak of a long run).
+ */
+const DEFAULT_RETRIES = 6;
+/** Exponential backoff base between attempts (1s, 2s, 4s, …). */
+const BACKOFF_MS = 1000;
 /** Cap on a server-requested Retry-After wait, so a hostile/buggy header can't stall the run. */
 const MAX_RETRY_AFTER_MS = 60_000;
 
@@ -167,8 +172,8 @@ export class OpenAiClient implements LlmClient {
       });
       const text = await res.text();
       if (!res.ok) {
-        // 429 / 5xx are transient (retry); other 4xx (auth, bad request) fail closed immediately.
-        const retriable = res.status === 429 || res.status >= 500;
+        // 408 / 429 / 5xx are transient (retry); other 4xx (auth, bad request) fail closed immediately.
+        const retriable = res.status === 408 || res.status === 429 || res.status >= 500;
         const retryAfterMs = parseRetryAfterMs(res.headers?.get('retry-after'));
         return {
           ok: false,
@@ -180,7 +185,9 @@ export class OpenAiClient implements LlmClient {
       }
       return this.#parseBody(text);
     } catch (e) {
-      // Network error / abort (timeout) — transient, so retry.
+      if (controller.signal.aborted) {
+        return { ok: false, retriable: false, error: `request timed out after ${this.#timeoutMs}ms` };
+      }
       return { ok: false, retriable: true, error: errorMessage(e) };
     } finally {
       clearTimeout(timer);

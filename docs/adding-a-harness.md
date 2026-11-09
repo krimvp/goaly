@@ -623,7 +623,8 @@ src/goaly-code/
 ### The transport (`LlmClient`) — shared with the `openai` provider
 
 The HTTP layer is one place (`OpenAiClient`): `fetch` + Zod, base-url + bearer auth, bounded retries
-(network / 429 / 5xx, then a fail-closed throw), per-request `AbortController` timeout, and `usage`
+(network / 408 / 429 / 5xx for about one minute, then a fail-closed throw), a per-request
+`AbortController` timeout (not retried — the harness passes its turn budget as this timeout), and `usage`
 → `TokenBreakdown` (OpenAI's `prompt_tokens` is cache-inclusive, so cached tokens are split out into
 `cacheRead`). Both `fetch` and the backoff `sleep` are injectable, so unit tests touch no network and
 no real timer. It returns a **normalized** `ChatResult` (minted tool-call ids, parsed usage) so the

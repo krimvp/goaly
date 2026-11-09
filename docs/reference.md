@@ -1372,8 +1372,9 @@ kill an hours-long run. All defaults, no flags needed
   git repo, the `--harness` / `--llm-provider` CLI isn't on PATH, a `--resume` id is unknown, or a
   stdin-fed goal lacks `--autonomous`, or stdin is not a terminal (either would deadlock the Seal
   prompt).
-- **Transient failures are absorbed.** The OpenAI-compatible transport retries 429/5xx/network
-  errors with backoff (honoring `Retry-After`, capped at 60 s); CLI-backed LLM steps retry a
+- **Transient failures are absorbed.** The OpenAI-compatible transport retries 408/429/5xx/network
+  errors with exponential backoff for about one minute (1 s, 2 s, … 32 s; a longer `Retry-After` is
+  honored, capped at 60 s per wait); a request that hits its own timeout is not retried; CLI-backed LLM steps retry a
   non-zero exit or unparseable output; a judge-quorum sample that throws drops that sample only; a
   crashed harness turn is retried once before counting toward the stuck-crash streak. Timeouts are
   never retried.
