@@ -4,13 +4,14 @@ import { runProcess } from '../util/spawn';
 import { which } from '../util/which';
 import { codecFor, isAgentCli, type AgentCli } from '../agent-cli/registry';
 import {
-  overlayFromConfig,
+  parseConfigDocument,
   defaultConfigFileReader,
   IMPLICIT_CONFIG_FILENAME,
   HOME_CONFIG_LABEL,
   type ConfigFileReader,
 } from './config-file';
 import { UsageError } from './flags/tokens';
+import { checkConfigValues } from './config-cmd';
 
 /**
  * `goaly doctor` (Phase 2.2 of the improvement plan): a READ-ONLY environment report for
@@ -153,7 +154,7 @@ export async function collectChecks(
       continue;
     }
     try {
-      overlayFromConfig(JSON.parse(text), label);
+      await checkConfigValues(parseConfigDocument(JSON.parse(text), label), label);
       checks.push({ status: 'ok', label: 'config', detail: `${label}: present and valid` });
     } catch (e) {
       checks.push({

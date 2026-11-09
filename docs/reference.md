@@ -219,8 +219,9 @@ unparsable config) surface as one actionable report instead of a cryptic mid-run
   `--workspace-mode file`; the report prints the `git init` recipe for full git-mode features),
 - which bundled harness CLIs (`claude`, `codex`, `droid`, `pi`) are on PATH — none installed is
   only a warning, since `--harness goaly-code` works against any OpenAI-compatible endpoint,
-- presence **and validity** of `~/.goalyrc` and the workspace `.goalyrc` (an invalid config file
-  fails every run in the tree, so it is a hard failure here),
+- presence **and validity** of `~/.goalyrc` and the workspace `.goalyrc` — keys and values, with the
+  same check as `goaly config validate` (an invalid config file fails every run in the tree, so it
+  is a hard failure here),
 - with `--base-url <url>`: whether the OpenAI-compatible endpoint answers (a `GET /models` probe).
 
 Exit code `0` means goaly can run here in some configuration; `1` means something goaly cannot
@@ -401,7 +402,9 @@ difference — and a test enforces it, so a newly added flag cannot quietly beco
 
 `goaly config validate <path>` parses a config file through the exact fail-closed path every run
 uses and reports the verdict (exit `0` valid / `1` invalid / `2` unreadable) — so "this file
-validates" and "a run accepts this file" are one fact. It reports the presets a file defines
+validates" and "a run accepts this file" are one fact. It checks each value with the run's own flag
+parser (`"max-iterations": "abc"` or `"harness": "nope"` is invalid), once for the top level and
+once for each preset it defines. It reports the presets a file defines
 alongside its settings. `goaly config presets [--names] [--workspace <dir>]` lists the named
 presets exactly as a run would resolve them across all layers.
 `goaly config defects list|clear [--defect-corpus <path>]` inspects or resets the cross-run
