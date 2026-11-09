@@ -174,7 +174,8 @@ source <(goaly completion bash)
 
 `goaly help` prints the quick start, the synopsis, and a topic index; `goaly help <topic>` (e.g.
 `goaly help stuck`, `goaly help seal`, `goaly help models`) prints one section, and `goaly help all`
-prints every flag. A flag that is not in that contract is a usage error (`unknown flag: --budget-token
+prints every flag. `--help` (or `-h`) anywhere after a subcommand prints that subcommand's section
+and runs nothing (`goaly init --help` writes no file). A flag that is not in that contract is a usage error (`unknown flag: --budget-token
 — did you mean --budget-tokens?`) — the command line fails closed on a typo exactly like `.goalyrc`
 does on an unknown key. Each subcommand (`doctor`, `init`, `runs`, `worktree`, `ui`, `config`) also
 rejects a flag it does not accept and lists the flags it does. `goaly

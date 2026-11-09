@@ -26,6 +26,14 @@ describe('renderHelp', () => {
     expect(text.split('\n').length).toBeLessThan(USAGE.split('\n').length / 4);
   });
 
+  it('maps every subcommand name to its section, and run to the index', () => {
+    expect(renderHelp('doctor')).toContain('goaly doctor');
+    expect(renderHelp('init')).toContain('goaly init');
+    expect(renderHelp('completion')).toContain('goaly completion');
+    expect(renderHelp('worktree')).toContain('goaly worktree');
+    expect(renderHelp('run')).toBe(renderHelp(undefined));
+  });
+
   it('prints one section for a topic key, and the whole contract for "all"', () => {
     expect(renderHelp('stuck')).toBe(USAGE_TOPICS.find((t) => t.key === 'stuck')?.text);
     expect(renderHelp('all')).toBe(USAGE);

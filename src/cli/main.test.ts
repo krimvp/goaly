@@ -845,6 +845,15 @@ describe('main() — doctor and init onboarding subcommands', () => {
     expect(config).toEqual({ harness: 'codex', autonomous: true });
   });
 
+  it('--help after a subcommand prints its help and does not run it', async () => {
+    const res = await capture(() => main(['init', '--help', '--workspace', root]));
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('goaly init');
+    expect(res.out).not.toContain('goaly doctor — environment report');
+    expect(existsSync(join(root, '.goalyrc'))).toBe(false);
+    expect((await capture(() => main(['run', '-h']))).code).toBe(0);
+  });
+
   it('goaly init refuses to overwrite without --force (exit 2)', async () => {
     await writeFile(join(root, '.goalyrc'), '{ "harness": "pi" }\n');
     const res = await capture(() => main(['init', '--harness', 'codex', '--workspace', root]));

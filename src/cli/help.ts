@@ -12,6 +12,14 @@ const NOT_A_FLAG = new Set(['auto', 'rm', 'json', 'stuck-', 'baseline-style']);
 
 const ALL_TOPICS = 'all';
 
+/** Subcommands whose help is a section of another name; `run` is the index itself. */
+const SUBCOMMAND_TOPICS: Record<string, string | undefined> = {
+  run: undefined,
+  doctor: 'onboarding',
+  init: 'onboarding',
+  completion: 'onboarding',
+};
+
 /** Every documented `--flag` name (without the dashes), deduped and sorted — the flag contract. */
 export function documentedFlagNames(): string[] {
   const names = new Set(
@@ -29,6 +37,7 @@ export function helpTopicKeys(): string[] {
 
 /** The help text for `topic` (undefined ⇒ the short index). Unknown topic ⇒ UsageError. */
 export function renderHelp(topic: string | undefined): string {
+  if (topic !== undefined && Object.hasOwn(SUBCOMMAND_TOPICS, topic)) topic = SUBCOMMAND_TOPICS[topic];
   if (topic === undefined) return helpIndex();
   if (topic === ALL_TOPICS) return USAGE;
   const found = findTopic(topic);

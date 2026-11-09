@@ -10,7 +10,7 @@ import { runWorktree } from './worktree-cmd';
 import { runDoctor } from './doctor';
 import { runInit } from './init';
 import { runConfig } from './config-cmd';
-import { renderCompletion } from './completion';
+import { renderCompletion, SUBCOMMANDS } from './completion';
 import { WorktreeManager, WorktreeError } from '../workspace/worktree-manager';
 import { executeRun } from './run-cmd';
 import { readPackageVersion } from '../util/package-version';
@@ -36,6 +36,10 @@ export async function main(argv: string[]): Promise<number> {
     }
     if (goal === undefined) return 0;
     argv = [goal, '--stream'];
+  }
+  // `goaly <subcommand> --help` must print help, never run the subcommand (init would write a file).
+  if (argv.length > 1 && argv.some((t) => t === '--help' || t === '-h')) {
+    argv = ['help', ...(SUBCOMMANDS.includes(argv[0]!) ? [argv[0]!] : [])];
   }
   let parsed;
   try {
