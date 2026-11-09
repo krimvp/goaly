@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { killActiveChildren } from '../util/spawn';
 
 /**
@@ -38,17 +39,29 @@ export function makeInterruptController(
 /**
  * Install `onSignal` for every signal that means "stop this run". SIGHUP is the terminal going
  * away (an ssh drop, a closed window): by default it kills goaly at once, which orphans the
- * group-spawned agent and loses its in-flight turn. Returns the uninstaller.
+ * group-spawned agent and loses its in-flight turn. Under `nohup` SIGHUP is ignored on purpose, and
+ * a handler would cancel that, so it is left alone there. Returns the uninstaller.
  */
 export function installInterruptHandlers(
   onSignal: () => void,
   proc: Pick<NodeJS.EventEmitter, 'on' | 'removeListener'> = process,
+  hupIgnored: boolean = sighupIgnored(),
 ): () => void {
-  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+  const signals = ['SIGINT', 'SIGTERM', ...(hupIgnored ? [] : ['SIGHUP'])];
   for (const s of signals) proc.on(s, onSignal);
   return () => {
     for (const s of signals) proc.removeListener(s, onSignal);
   };
+}
+
+/** Bit 0 of the `SigIgn` mask in `/proc/self/status` is SIGHUP; false where it cannot be read. */
+function sighupIgnored(): boolean {
+  try {
+    const mask = /^SigIgn:\s*([0-9a-f]+)/m.exec(readFileSync('/proc/self/status', 'utf8'))?.[1];
+    return mask !== undefined && (BigInt(`0x${mask}`) & 1n) === 1n;
+  } catch {
+    return false;
+  }
 }
 
 const CLOSED_CONSOLE_CODES: ReadonlySet<unknown> = new Set(['EPIPE', 'EIO', 'ERR_STREAM_DESTROYED']);

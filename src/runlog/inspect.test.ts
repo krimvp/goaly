@@ -62,6 +62,14 @@ function doneRun(runId = 'run-done'): { header: RunLogHeader; entries: RunLogEnt
   };
 }
 
+describe('runDetail budget cap', () => {
+  it('reads the cap an operator extension raised, not the header cap', () => {
+    const { header: h, entries } = doneRun('run-ext');
+    const extended = [...entries, entry('run-ext', { tag: 'RUN_EXTENDED', budgetTokens: 5000 })];
+    expect(runDetail(h, extended).usage.budget.tokens).toBe(5000);
+  });
+});
+
 describe('runSummary (pure projection)', () => {
   it('summarizes a DONE run with the Driver-matching status/iterations/tokens', () => {
     const { header: h, entries } = doneRun();

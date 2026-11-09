@@ -11,7 +11,7 @@ import { iterationCount, type OrchestratorState } from '../orchestrator/state';
 import { errorMessage } from '../util/errors';
 import { FileRunLog } from './file-runlog';
 import type { RunLogHeader, RunLogEntry, RunProvenance } from './runlog';
-import { effectiveDegraded, replay } from './replay';
+import { effectiveDegraded, extendedRunConfig, replay } from './replay';
 import { summarizeUsage } from './usage';
 import { lastRealSessionId } from './session-id';
 
@@ -176,7 +176,7 @@ export function runDetail(header: RunLogHeader, entries: readonly RunLogEntry[])
   const last = entries.length > 0 ? entries[entries.length - 1] : undefined;
   const usage = summarizeUsage(
     entries.map((e) => e.event),
-    header.config.budget,
+    extendedRunConfig(header.config, entries).budget,
   );
   return {
     runId: header.runId,

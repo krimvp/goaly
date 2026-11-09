@@ -61,7 +61,7 @@ describe('installInterruptHandlers', () => {
   it('routes SIGHUP (the terminal went away) to the same cooperative stop as SIGINT/SIGTERM', () => {
     const proc = new EventEmitter();
     const seen: string[] = [];
-    const uninstall = installInterruptHandlers(() => seen.push('stop'), proc);
+    const uninstall = installInterruptHandlers(() => seen.push('stop'), proc, false);
 
     proc.emit('SIGHUP');
     proc.emit('SIGINT');
@@ -72,6 +72,13 @@ describe('installInterruptHandlers', () => {
     expect(proc.listenerCount('SIGHUP')).toBe(0);
     expect(proc.listenerCount('SIGINT')).toBe(0);
     expect(proc.listenerCount('SIGTERM')).toBe(0);
+  });
+
+  it('leaves SIGHUP alone when it is ignored (nohup), so the run survives the lost terminal', () => {
+    const proc = new EventEmitter();
+    installInterruptHandlers(() => undefined, proc, true);
+    expect(proc.listenerCount('SIGHUP')).toBe(0);
+    expect(proc.listenerCount('SIGINT')).toBe(1);
   });
 });
 

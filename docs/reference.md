@@ -1384,6 +1384,7 @@ kill an hours-long run. All defaults, no flags needed
   that outcome's 0 or 1). A second signal exits immediately, after reaping live child process groups. A lost terminal
   (an ssh drop, a closed window, `goaly … | head`) is not a crash: SIGHUP takes the same clean stop,
   and a closed stdout/stderr only drops console output — `goaly.log` and the run log keep the record.
+  Under `nohup` (SIGHUP ignored) the run continues instead.
 - **Crash-safety end to end.** Every run-log append is fsync'd write-ahead; a torn tail is
   tolerated on read and repaired on the next append. A per-run lock stops two processes driving the
   same run (stale locks self-heal, with a notice naming the dead holder's pid — also when a
