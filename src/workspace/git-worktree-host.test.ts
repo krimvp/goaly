@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { GitWorktreeHost } from './git-worktree-host';
-import { GitWorkspace, realExec } from './git-workspace';
+import { GitWorkspace, realExec, type ExecFn } from './git-workspace';
 
 function git(cwd: string, ...args: string[]): string {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -160,5 +160,40 @@ describe('GitWorktreeHost (integration, real git) — best-of-N (issue #85)', ()
 
     await h.promoteTree(winningTree);
     await expect(stat(join(root, 'drop-me.txt'))).rejects.toThrow();
+  });
+
+  it('promoteTree deletes a dropped tracked file whose name git would quote (non-ASCII)', async () => {
+    await writeFile(join(root, 'café.txt'), 'temp\n');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-q', '-m', 'add café');
+
+    const h = host(root);
+    const wt = await h.addWorktree('HEAD');
+    await rm(join(wt.root, 'café.txt'));
+    const winningTree = await wt.scope.diffHash();
+    await h.removeWorktree(wt);
+
+    await h.promoteTree(winningTree);
+    await expect(stat(join(root, 'café.txt'))).rejects.toThrow();
+  });
+
+  it('addWorktree wraps a bare tree SHA on a host with no git identity configured', async () => {
+    const bare = await mkdtemp(join(tmpdir(), 'goaly-noident-'));
+    const noIdentity: ExecFn = (cmd, args, opts) => {
+      const env: NodeJS.ProcessEnv = { ...(opts.env ?? process.env), HOME: bare, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' };
+      for (const k of ['EMAIL', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL']) delete env[k];
+      return realExec(cmd, args, { ...opts, env });
+    };
+    git(root, 'config', '--unset', 'user.email');
+    git(root, 'config', '--unset', 'user.name');
+    const h = new GitWorktreeHost({ root, exec: noIdentity, excludes: ['.goaly'], scrubVerifyEnv: true });
+    const tree = git(root, 'rev-parse', 'HEAD^{tree}');
+    try {
+      const wt = await h.addWorktree(tree);
+      expect(await readFile(join(wt.root, 'file.txt'), 'utf8')).toBe('base\n');
+      await h.removeWorktree(wt);
+    } finally {
+      await rm(bare, { recursive: true, force: true });
+    }
   });
 });
