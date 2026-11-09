@@ -36,6 +36,40 @@ export function makeInterruptController(
 }
 
 /**
+ * Install `onSignal` for every signal that means "stop this run". SIGHUP is the terminal going
+ * away (an ssh drop, a closed window): by default it kills goaly at once, which orphans the
+ * group-spawned agent and loses its in-flight turn. Returns the uninstaller.
+ */
+export function installInterruptHandlers(
+  onSignal: () => void,
+  proc: Pick<NodeJS.EventEmitter, 'on' | 'removeListener'> = process,
+): () => void {
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+  for (const s of signals) proc.on(s, onSignal);
+  return () => {
+    for (const s of signals) proc.removeListener(s, onSignal);
+  };
+}
+
+const CLOSED_CONSOLE_CODES: ReadonlySet<unknown> = new Set(['EPIPE', 'EIO', 'ERR_STREAM_DESTROYED']);
+
+/**
+ * A closed stdout/stderr (`goaly … | head`, a dead `tee`, a vanished tty) emits an unhandled
+ * `'error'` that would end the run through the crash handler. The console is only a view: the
+ * run's own `goaly.log` and write-ahead log keep the record, so the run continues without it.
+ */
+export function tolerateClosedConsole(
+  streams: readonly Pick<NodeJS.EventEmitter, 'on'>[] = [process.stdout, process.stderr],
+): void {
+  for (const stream of streams) {
+    stream.on('error', (err: unknown) => {
+      const code = typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
+      if (!CLOSED_CONSOLE_CODES.has(code)) throw err;
+    });
+  }
+}
+
+/**
  * Last-resort fatal-error handler for the CLI process (`uncaughtException` /
  * `unhandledRejection`). A crash anywhere in the process — e.g. an unhandled `'error'` event on a
  * stream, the class of failure issue #101 was — must not orphan live child process groups: a

@@ -1378,9 +1378,11 @@ kill an hours-long run. All defaults, no flags needed
   non-zero exit or unparseable output; a judge-quorum sample that throws drops that sample only; a
   crashed harness turn is retried once before counting toward the stuck-crash streak. Timeouts are
   never retried.
-- **Ctrl-C is safe.** The first Ctrl-C / SIGTERM stops between steps: the in-flight step finishes,
-  lands write-ahead, and the outcome is a typed `ABORTED` naming `--resume <runId>` (exit 130). A
-  second Ctrl-C exits immediately, after reaping live child process groups.
+- **Ctrl-C is safe.** The first Ctrl-C / SIGTERM / SIGHUP stops between steps: the in-flight step
+  finishes, lands write-ahead, and the outcome is a typed `ABORTED` naming `--resume <runId>` (exit
+  130). A second signal exits immediately, after reaping live child process groups. A lost terminal
+  (an ssh drop, a closed window, `goaly … | head`) is not a crash: SIGHUP takes the same clean stop,
+  and a closed stdout/stderr only drops console output — `goaly.log` and the run log keep the record.
 - **Crash-safety end to end.** Every run-log append is fsync'd write-ahead; a torn tail is
   tolerated on read and repaired on the next append. A per-run lock stops two processes driving the
   same run (stale locks self-heal, with a notice naming the dead holder's pid). A

@@ -12,7 +12,7 @@ import type { PhasedStreamSink } from '../agent-cli/stream';
 import { acquireRunLock, RunLockedError, type RunLock } from '../runlog/lock';
 import { resumeHint } from './resume-cmd';
 import { computeCost } from './cost';
-import { makeInterruptController } from './crash-guard';
+import { installInterruptHandlers, makeInterruptController } from './crash-guard';
 import { prepareRun } from './run-prepare';
 import { logStartupDiagnostics } from './run-banner';
 import { composeOptions, resolveRunDegraded } from './run-wiring';
@@ -156,11 +156,9 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
         : makeInterruptController(runId, io.err);
 
     let outcome;
+    const uninstallSignals =
+      interrupt.onSignal !== undefined ? installInterruptHandlers(interrupt.onSignal) : undefined;
     try {
-      if (interrupt.onSignal !== undefined) {
-        process.on('SIGINT', interrupt.onSignal);
-        process.on('SIGTERM', interrupt.onSignal);
-      }
       outcome = await drive(
         { ...deps, interrupted: interrupt.interrupted },
         runConfig,
@@ -175,10 +173,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
         },
       );
     } finally {
-      if (interrupt.onSignal !== undefined) {
-        process.removeListener('SIGINT', interrupt.onSignal);
-        process.removeListener('SIGTERM', interrupt.onSignal);
-      }
+      uninstallSignals?.();
     }
 
     // Surface the egress audit trail: any denied host:port the jail tried to reach (issue #39).

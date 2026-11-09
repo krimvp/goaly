@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { makeCrashHandler } from './crash-guard';
+import { EventEmitter } from 'node:events';
+import { installInterruptHandlers, makeCrashHandler, tolerateClosedConsole } from './crash-guard';
 
 describe('makeCrashHandler', () => {
   it('reaps children, writes the error, and exits 1', () => {
@@ -53,5 +54,44 @@ describe('makeCrashHandler', () => {
     handler(new Error('boom'));
 
     expect(exited).toBe(true);
+  });
+});
+
+describe('installInterruptHandlers', () => {
+  it('routes SIGHUP (the terminal went away) to the same cooperative stop as SIGINT/SIGTERM', () => {
+    const proc = new EventEmitter();
+    const seen: string[] = [];
+    const uninstall = installInterruptHandlers(() => seen.push('stop'), proc);
+
+    proc.emit('SIGHUP');
+    proc.emit('SIGINT');
+    proc.emit('SIGTERM');
+    expect(seen).toEqual(['stop', 'stop', 'stop']);
+
+    uninstall();
+    expect(proc.listenerCount('SIGHUP')).toBe(0);
+    expect(proc.listenerCount('SIGINT')).toBe(0);
+    expect(proc.listenerCount('SIGTERM')).toBe(0);
+  });
+});
+
+describe('tolerateClosedConsole', () => {
+  const streamError = (code: string): Error => Object.assign(new Error(code), { code });
+
+  it('a closed stdout/stderr (EPIPE, EIO) no longer becomes a fatal uncaught error', () => {
+    const stream = new EventEmitter();
+    expect(() => stream.emit('error', streamError('EPIPE'))).toThrow();
+
+    tolerateClosedConsole([stream]);
+
+    expect(() => stream.emit('error', streamError('EPIPE'))).not.toThrow();
+    expect(() => stream.emit('error', streamError('EIO'))).not.toThrow();
+    expect(() => stream.emit('error', streamError('ERR_STREAM_DESTROYED'))).not.toThrow();
+  });
+
+  it('any other stream error stays fatal', () => {
+    const stream = new EventEmitter();
+    tolerateClosedConsole([stream]);
+    expect(() => stream.emit('error', streamError('ENOSPC'))).toThrow('ENOSPC');
   });
 });

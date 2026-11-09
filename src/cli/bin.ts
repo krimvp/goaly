@@ -9,7 +9,9 @@
  * flushed before the event loop drains and the process exits on its own.
  */
 import { main } from './main';
-import { makeCrashHandler } from './crash-guard';
+import { makeCrashHandler, tolerateClosedConsole } from './crash-guard';
+
+tolerateClosedConsole();
 
 // A fatal error anywhere in the process (an unhandled 'error' event on a stream, an unawaited
 // rejection) must reap live child process groups before dying — otherwise a group-spawned agent
