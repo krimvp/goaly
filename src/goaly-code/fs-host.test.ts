@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, symlink } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, symlink, stat } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { NodeToolHost, type ShellExec } from './fs-host';
@@ -117,6 +117,20 @@ describe('NodeToolHost (path-guarded fs + injected shell)', () => {
       try {
         await symlink(outside, path.join(root, 'out')); // root/out -> /outside
         await expect(host.writeFile('out/evil.txt', 'x')).rejects.toThrow(/symlink/);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('refuses to write THROUGH a dangling symlink whose missing target is outside the workspace', async () => {
+      const outside = await mkdtemp(path.join(os.tmpdir(), 'goaly-outside-'));
+      try {
+        await symlink(path.join(outside, 'new.txt'), path.join(root, 'link.txt'));
+        await expect(host.writeFile('link.txt', 'x')).rejects.toThrow(/symlink/);
+        await symlink(path.join(outside, 'missing-dir'), path.join(root, 'dir'));
+        await expect(host.writeFile('dir/evil.txt', 'x')).rejects.toThrow(/symlink/);
+        await expect(stat(path.join(outside, 'new.txt'))).rejects.toThrow();
+        await expect(stat(path.join(outside, 'missing-dir'))).rejects.toThrow();
       } finally {
         await rm(outside, { recursive: true, force: true });
       }

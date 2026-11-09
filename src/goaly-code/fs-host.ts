@@ -10,7 +10,7 @@
  * file or a chatty command can't blow up the model's context.
  */
 
-import { readFile, writeFile, mkdir, readdir, stat, realpath } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, stat, lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { applyEdit } from './edit';
 import type { ToolHost } from './tools';
@@ -53,6 +53,11 @@ async function realpathExistingAncestor(p: string): Promise<string> {
     try {
       return await realpath(cur);
     } catch {
+      // An entry that exists but does not resolve is a dangling (or looping) symlink. A write
+      // through it would land at its target, which can be outside the workspace.
+      if ((await lstat(cur).catch(() => null)) !== null) {
+        throw new Error(`path goes through a symlink that does not resolve: ${cur}`);
+      }
       const parent = path.dirname(cur);
       if (parent === cur) return cur;
       cur = parent;
