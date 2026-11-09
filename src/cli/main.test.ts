@@ -168,6 +168,24 @@ describe('nextStepHint — always-on next-step guidance for terminal outcomes', 
     expect(nextStepHint(aborted('STUCK_HARNESS_CRASH: boom'))).toContain('--stuck-crash-threshold');
   });
 
+  it('names the budget that ran out when the log says which one', () => {
+    const wall = nextStepHint(outcome({ status: 'ABORTED', reason: 'budget exceeded' })) ?? '';
+    expect(wall).toContain('wall-clock budget');
+    expect(wall).toContain('--budget-wall-ms <N>');
+    expect(wall).not.toContain('--budget-tokens');
+    const tokens =
+      nextStepHint(
+        outcome({
+          status: 'ABORTED',
+          reason: 'budget exceeded',
+          usage: usage({ budget: { tokens: 10_000, spent: 14_400, exceeded: true } }),
+        }),
+      ) ?? '';
+    expect(tokens).toContain('token budget');
+    expect(tokens).toContain('--budget-tokens <N>');
+    expect(tokens).not.toContain('--budget-wall-ms');
+  });
+
   it('points a permission REFUSAL at the autonomy flag, not at install/auth', () => {
     // A harness that refused an action is not a crashing CLI: "run it once by hand to check
     // install/auth" and "--stuck-crash-threshold 4" are both dead ends there.
