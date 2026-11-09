@@ -1,6 +1,7 @@
 import { recontractCommand } from '../followup/recontract';
 import type { RunOutcome, RunExtension } from '../domain/events';
 import type { RunLogEntry } from '../runlog/runlog';
+import type { RunDetail } from '../runlog/inspect';
 import { adjudicationVerdict } from '../runlog/replay';
 import { CONTRACT_SOUND_MARKER } from '../orchestrator/stuck';
 import { hintSubject } from './reason-text';
@@ -132,6 +133,18 @@ export function nextStepHint(o: RunOutcome): string | undefined {
   ];
   for (const [pattern, hint] of table) if (pattern.test(reason)) return hint;
   return undefined;
+}
+
+/**
+ * The `next:` line for a run read back from its log (`runs show`, `runs watch`). `live` is whether a
+ * process holds the run lock: an INCOMPLETE run without one crashed or was killed.
+ */
+export function storedRunNextStep(d: RunDetail, live: boolean): string | undefined {
+  if (d.status === 'INCOMPLETE') {
+    return live ? undefined : `no process drives this run (it crashed or was killed) — continue it: goaly --resume ${d.runId}`;
+  }
+  const { status, iterations, contractHash, runId } = d;
+  return nextStepHint({ status, iterations, contractHash, runId, ...(d.reason !== undefined ? { reason: d.reason } : {}) });
 }
 
 export function formatOutcome(

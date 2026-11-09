@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import type { RunsCommand } from './args';
 import type { CompiledContract, Rung } from '../domain/contract';
 import type { PhasePlan } from '../domain/plan';
@@ -15,6 +16,8 @@ import { recontractCommand } from '../followup/recontract';
 import { formatDuration, formatUsage } from './usage-format';
 import { resumeHint, renderResumeHint } from './resume-cmd';
 import { runsWatch } from './watch';
+import { storedRunNextStep } from './run-report';
+import { runLockActive } from '../runlog/lock';
 
 /**
  * Render the read-only `goaly runs` subcommands (issue #14). A pure presentation layer over the
@@ -45,7 +48,13 @@ async function runsList(stateDir: string, out: (s: string) => void): Promise<num
     );
     return 0;
   }
-  out(`${renderRunsTable(items)}\n`);
+  const live = new Set<string>();
+  for (const item of items) {
+    if (item.ok && item.summary.status === 'INCOMPLETE' && (await runLockActive(join(stateDir, item.summary.runId)))) {
+      live.add(item.summary.runId);
+    }
+  }
+  out(`${renderRunsTable(items, live)}\n`);
   return 0;
 }
 
@@ -64,7 +73,7 @@ async function runsShow(
     err(`run ${runId} is corrupt: ${result.error}\n`);
     return 1;
   }
-  out(`${renderRunDetail(result.detail)}\n`);
+  out(`${renderRunDetail(result.detail, await runLockActive(join(stateDir, runId)))}\n`);
   return 0;
 }
 
@@ -99,16 +108,17 @@ async function runsResumeCmd(
 
 const GOAL_WIDTH = 50;
 
-export function renderRunsTable(items: readonly RunListItem[]): string {
+/** `live`: the ids of the runs a process holds the lock of; another INCOMPLETE run is dead. */
+export function renderRunsTable(items: readonly RunListItem[], live: ReadonlySet<string> = new Set()): string {
   const headers = ['RUN ID', 'STATUS', 'ITERS', 'TOKENS', 'STARTED', 'ENDED', 'GOAL'];
-  const rows = items.map((item) => (item.ok ? summaryRow(item.summary) : corruptRow(item)));
+  const rows = items.map((item) => (item.ok ? summaryRow(item.summary, live.has(item.summary.runId)) : corruptRow(item)));
   return renderTable(headers, rows);
 }
 
-function summaryRow(s: RunSummary): string[] {
+function summaryRow(s: RunSummary, live: boolean): string[] {
   return [
     s.runId,
-    s.status,
+    s.status === 'INCOMPLETE' ? `INCOMPLETE (${live ? 'live' : 'dead'})` : s.status,
     String(s.iterations),
     s.tokensSpent === undefined ? '-' : String(s.tokensSpent),
     fmtTime(s.startedAt),
@@ -132,11 +142,13 @@ function renderTable(headers: string[], rows: string[][]): string {
 
 // ---- show rendering -------------------------------------------------------
 
-export function renderRunDetail(d: RunDetail): string {
+/** `live`: whether a process holds the run lock (undefined: not probed). */
+export function renderRunDetail(d: RunDetail, live?: boolean): string {
+  const liveness = live === undefined ? '' : live ? ', live' : ', dead';
   const lines: string[] = [
     '',
     `── goaly run ${d.runId} ──`,
-    `status:      ${d.status}${d.status === 'INCOMPLETE' ? ` (${d.stateTag})` : ''}`,
+    `status:      ${d.status}${d.status === 'INCOMPLETE' ? ` (${d.stateTag}${liveness})` : ''}`,
     `goal:        ${d.goal}`,
     `started:     ${fmtTime(d.startedAt)}`,
     `ended:       ${d.endedAt === undefined ? '-' : fmtTime(d.endedAt)}`,
@@ -145,6 +157,8 @@ export function renderRunDetail(d: RunDetail): string {
     `tokens:      ${d.tokensSpent === undefined ? '-' : d.tokensSpent}`,
   ];
   if (d.reason !== undefined) lines.push(`reason:      ${d.reason}`);
+  const next = storedRunNextStep(d, live ?? true);
+  if (next !== undefined) lines.push(`next:        ${next}`);
   lines.push(...renderDegraded(d.degraded));
   lines.push(...renderProvenance(d.provenance));
   lines.push(...renderAdjudication(d.adjudication, d.runId));

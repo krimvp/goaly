@@ -183,7 +183,7 @@ rejects a flag it does not accept and lists the flags it does. `goaly
 error or a pre-run guard (a bad flag value, an unresolvable `--baseline`, a live run lock) ·
 `130` interrupted (Ctrl-C; the run stays resumable). An internal crash also exits `1`, after
 reaping any live child processes. The read-only subcommands use `0` ok · `1` not-ok (`runs show`
-on a missing/corrupt run, `runs watch` on a stalled one, `doctor` on a hard fail, `config
+on a missing/corrupt run, `runs watch` on a stalled run or on one that ends FAILED/ABORTED, `doctor` on a hard fail, `config
 validate` on an invalid file) · `2` usage error.
 
 The stdout/stderr contract: **stdout carries only the machine-facing result** (the final outcome
@@ -1631,11 +1631,17 @@ re-run nothing:
 ```bash
 goaly runs list                  # one row per run: id, status, iterations, tokens, goal
 goaly runs show run-<id>         # frozen contract + hash, Seal outcome, every verdict, totals,
-                                 # wall-clock duration, and any degraded-mode label (e.g. SELF-JUDGED)
-goaly runs watch run-<id>        # follow a LIVE run from another terminal
+                                 # wall-clock duration, any degraded-mode label (e.g. SELF-JUDGED),
+                                 # and the same `next:` step as the end-of-run report
+goaly runs watch run-<id>        # follow a LIVE run from another terminal; at the end it prints the
+                                 # reason + `next:` step and exits like `goaly run` (0 DONE, else 1)
 goaly runs resume-cmd run-<id>   # how to continue the run's CLI session interactively
 goaly runs list --workspace ./myrepo
 ```
+
+An INCOMPLETE run is marked `live` (a process holds its run lock) or `dead` (the driver crashed or
+was killed; `runs show` then names the `goaly --resume <id>` command). The token total is the spend
+report's total, so `runs list`, `runs show`, the web UI and the end-of-run report agree.
 
 Beyond the contract and the verdicts, `runs show` reports the run's *provenance and labels* — the
 things a `DONE`/`ABORTED` line alone cannot tell you:
