@@ -5,6 +5,7 @@ import type { DoctorCommand } from '../doctor';
 import type { InitCommand } from '../init';
 import type { ConfigCommand } from '../config-cmd';
 import { UsageError, parseFlags, str, type RawFlags } from './tokens';
+import { rejectUnknownFlags } from './unknown';
 
 /**
  * The read-only run-inspection subcommand (`goaly runs list` / `goaly runs show <id>` /
@@ -32,21 +33,21 @@ export type UiCommand = {
 export function parseRunsCommand(rest: string[]): { runs: RunsCommand; workspace: string } {
   const [sub, ...subRest] = rest;
   if (sub === 'list') {
-    return { runs: { kind: 'list' }, workspace: runsWorkspace(subRest) };
+    return { runs: { kind: 'list' }, workspace: runsWorkspace(subRest, 'runs list') };
   }
   if (sub === 'show') {
     const runId = subRest[0];
     if (runId === undefined || runId.startsWith('--')) {
       throw new UsageError('runs show requires a <runId> (e.g. goaly runs show run-1234)');
     }
-    return { runs: { kind: 'show', runId }, workspace: runsWorkspace(subRest.slice(1)) };
+    return { runs: { kind: 'show', runId }, workspace: runsWorkspace(subRest.slice(1), 'runs show') };
   }
   if (sub === 'resume-cmd') {
     const runId = subRest[0];
     if (runId === undefined || runId.startsWith('--')) {
       throw new UsageError('runs resume-cmd requires a <runId> (e.g. goaly runs resume-cmd run-1234)');
     }
-    const flags = parseFlags(subRest.slice(1)).flags;
+    const flags = subFlags(subRest.slice(1), 'runs resume-cmd', ['harness', 'workspace']);
     return {
       runs: { kind: 'resume-cmd', runId, harness: str(flags, 'harness') },
       workspace: str(flags, 'workspace') ?? process.cwd(),
@@ -57,15 +58,21 @@ export function parseRunsCommand(rest: string[]): { runs: RunsCommand; workspace
     if (runId === undefined || runId.startsWith('--')) {
       throw new UsageError('runs watch requires a <runId> (e.g. goaly runs watch run-1234)');
     }
-    return { runs: { kind: 'watch', runId }, workspace: runsWorkspace(subRest.slice(1)) };
+    return { runs: { kind: 'watch', runId }, workspace: runsWorkspace(subRest.slice(1), 'runs watch') };
   }
   throw new UsageError(
     `unknown runs subcommand: ${sub ?? '(none)'} (expected list | show | resume-cmd | watch)`,
   );
 }
 
-function runsWorkspace(tokens: string[]): string {
-  return str(parseFlags(tokens).flags, 'workspace') ?? process.cwd();
+function runsWorkspace(tokens: string[], command: string): string {
+  return str(subFlags(tokens, command, ['workspace']), 'workspace') ?? process.cwd();
+}
+
+function subFlags(tokens: string[], command: string, known: readonly string[]): RawFlags {
+  const flags = parseFlags(tokens).flags;
+  rejectUnknownFlags(flags, { command, known });
+  return flags;
 }
 
 /**
@@ -90,11 +97,11 @@ export function parseWorktreeRun(flags: RawFlags): string | true | undefined {
 export function parseWorktreeCommand(rest: string[]): { worktree: WorktreeCommand; workspace: string } {
   const [sub, ...subRest] = rest;
   if (sub === 'list') {
-    return { worktree: { kind: 'list' }, workspace: runsWorkspace(subRest) };
+    return { worktree: { kind: 'list' }, workspace: runsWorkspace(subRest, 'worktree list') };
   }
   if (sub === 'create') {
     const name = worktreeNamePositional(subRest, 'create');
-    const flags = parseFlags(subRest.slice(1)).flags;
+    const flags = subFlags(subRest.slice(1), 'worktree create', ['base', 'workspace']);
     return {
       worktree: { kind: 'create', name, base: str(flags, 'base') },
       workspace: str(flags, 'workspace') ?? process.cwd(),
@@ -102,7 +109,7 @@ export function parseWorktreeCommand(rest: string[]): { worktree: WorktreeComman
   }
   if (sub === 'remove') {
     const name = worktreeNamePositional(subRest, 'remove');
-    const flags = parseFlags(subRest.slice(1)).flags;
+    const flags = subFlags(subRest.slice(1), 'worktree remove', ['force', 'delete-branch', 'workspace']);
     return {
       worktree: {
         kind: 'remove',
@@ -134,7 +141,7 @@ function worktreeNamePositional(subRest: string[], sub: string): string {
 
 /** Parse `goaly doctor [--base-url <url>] [--workspace <dir>]`. */
 export function parseDoctorCommand(rest: string[]): { doctor: DoctorCommand; workspace: string } {
-  const flags = parseFlags(rest).flags;
+  const flags = subFlags(rest, 'doctor', ['base-url', 'workspace']);
   return {
     doctor: { baseUrl: str(flags, 'base-url') },
     workspace: str(flags, 'workspace') ?? process.cwd(),
@@ -147,7 +154,9 @@ export function parseDoctorCommand(rest: string[]): { doctor: DoctorCommand; wor
  * so the interactive path answers with the same message.
  */
 export function parseInitCommand(rest: string[]): { init: InitCommand; workspace: string } {
-  const flags = parseFlags(rest).flags;
+  const flags = subFlags(rest, 'init', [
+    'harness', 'autonomous', 'model', 'verify-cmd', 'yes', 'force', 'workspace',
+  ]);
   return {
     init: {
       harness: str(flags, 'harness'),
@@ -176,11 +185,11 @@ export function parseConfigCommand(rest: string[]): { config: ConfigCommand; wor
     }
     return {
       config: { kind: 'validate', path },
-      workspace: str(parseFlags(subRest.slice(1)).flags, 'workspace') ?? process.cwd(),
+      workspace: str(subFlags(subRest.slice(1), 'config validate', ['workspace']), 'workspace') ?? process.cwd(),
     };
   }
   if (sub === 'presets') {
-    const flags = parseFlags(subRest).flags;
+    const flags = subFlags(subRest, 'config presets', ['names', 'workspace']);
     return {
       config: { kind: 'presets', names: flags['names'] !== undefined },
       workspace: str(flags, 'workspace') ?? process.cwd(),
@@ -195,7 +204,7 @@ export function parseConfigCommand(rest: string[]): { config: ConfigCommand; wor
         `unknown config defects action: ${action ?? '(none)'} (expected list | clear)`,
       );
     }
-    const flags = parseFlags(actionRest).flags;
+    const flags = subFlags(actionRest, `config defects ${action}`, ['defect-corpus', 'workspace']);
     const corpusPath = str(flags, 'defect-corpus');
     return {
       config: { kind: 'defects', action, ...(corpusPath !== undefined ? { path: corpusPath } : {}) },
@@ -209,7 +218,7 @@ export function parseConfigCommand(rest: string[]): { config: ConfigCommand; wor
 
 /** Parse `goaly ui [--port N] [--workspace <dir>]`, each validated fail-closed at the seam. */
 export function parseUiCommand(rest: string[]): { ui: UiCommand; workspace: string } {
-  const flags = parseFlags(rest).flags;
+  const flags = subFlags(rest, 'ui', ['port', 'workspace']);
   const rawPort = str(flags, 'port');
   let port: number | undefined;
   if (rawPort !== undefined) {

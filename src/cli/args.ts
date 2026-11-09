@@ -20,12 +20,13 @@ import {
   parseWorkspaceMode,
 } from './flags/misc-flags';
 import { parseWorktreeRun } from './flags/subcommands';
-import { rejectUnknownFlags } from './flags/unknown';
+import { closestName, rejectUnknownFlags } from './flags/unknown';
 import { parseSubcommand } from './args-commands';
 import { buildCliInput } from './args-cli-input';
 import { resolveFlagLayers, type ConfigLoader } from './args-layers';
 import { MULTI_SOURCE_FIELDS, RESUMED_GOAL_PLACEHOLDER, type ParsedArgs } from './args-types';
 import { which } from '../util/which';
+import { SUBCOMMANDS } from './completion';
 import { codecFor, isAgentCli } from '../agent-cli/registry';
 
 /**
@@ -59,6 +60,7 @@ export async function parseArgs(
   const [command, ...rest] = argv;
   const subcommand = parseSubcommand(command, rest);
   if (subcommand !== undefined) return subcommand;
+  rejectMistypedSubcommand(command);
 
   // `run` is optional: an argv that doesn't lead with a known subcommand (`runs`/`help`) is an
   // implicit run, whose first token may be a positional goal (`goaly "my goal"`) or a flag
@@ -163,6 +165,20 @@ export async function parseArgs(
     baseUrl: str(flags, 'base-url'),
     llmApiKeyEnv: str(flags, 'llm-api-key-env') ?? 'OPENAI_API_KEY',
   };
+}
+
+/**
+ * A one-word positional goal is usually a mistyped subcommand (`goaly doctr`). Taken as a goal it
+ * starts a real hands-off run and spends tokens, so a near miss is a usage error instead.
+ */
+function rejectMistypedSubcommand(command: string | undefined): void {
+  if (command === undefined || command.startsWith('-') || /\s/.test(command)) return;
+  const hint = closestName(command, SUBCOMMANDS);
+  if (hint === undefined || hint === command) return;
+  throw new UsageError(
+    `unknown command '${command}' — did you mean 'goaly ${hint}'? ` +
+      `To run it as a goal, pass --goal "${command}"`,
+  );
 }
 
 /** Tokenize a run's argv into its CLI flag overlay, folding a bare positional goal into `--goal`. */

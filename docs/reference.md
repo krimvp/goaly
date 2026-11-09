@@ -174,8 +174,10 @@ source <(goaly completion bash)
 
 `goaly help` prints the quick start, the synopsis, and a topic index; `goaly help <topic>` (e.g.
 `goaly help stuck`, `goaly help seal`, `goaly help models`) prints one section, and `goaly help all`
-prints every flag. A flag that is not in that contract is a usage error (`unknown flag: --budget-token`)
-— the command line fails closed on a typo exactly like `.goalyrc` does on an unknown key. `goaly
+prints every flag. A flag that is not in that contract is a usage error (`unknown flag: --budget-token
+— did you mean --budget-tokens?`) — the command line fails closed on a typo exactly like `.goalyrc`
+does on an unknown key. Each subcommand (`doctor`, `init`, `runs`, `worktree`, `ui`, `config`) also
+rejects a flag it does not accept and lists the flags it does. `goaly
 --version` (or `-v`) prints the installed package version and exits 0. Exit codes for a run: `0` DONE · `1` FAILED/ABORTED · `2` usage
 error or a pre-run guard (a bad flag value, an unresolvable `--baseline`, a live run lock) ·
 `130` interrupted (Ctrl-C; the run stays resumable). An internal crash also exits `1`, after
@@ -191,6 +193,8 @@ scriptable result.
 Bare `goaly` asks for one goal when stdin and stdout are terminals. It then starts the run with
 `--stream` output. A blank answer ends without a run. With no terminal, bare `goaly` prints help.
 A quoted positional goal starts the run at once; `run` and `--goal` remain available for scripts.
+A one-word goal near a subcommand name (`goaly doctr`) is a usage error that names the subcommand,
+so a typo never starts a run; pass `--goal "<word>"` to use such a word as the goal.
 
 Goal, intent, and rubric each accept exactly one source: inline (`--goal "…"`, `--intent "…"`,
 `--rubric "…"`), a file (`--goal-file <path>`, `--intent-file <path>`, `--rubric-file <path>`),
