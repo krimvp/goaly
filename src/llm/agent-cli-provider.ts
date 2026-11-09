@@ -89,6 +89,7 @@ export class AgentCliLlmProvider implements LlmProvider {
           // Same group-kill rationale as the harness exec: a timed-out CLI turn must never leave
           // descendants holding the stdio pipes open (the run would hang past its own timeout).
           killGroup: true,
+          keepEndsOnOverflow: true,
           ...(onStdout !== undefined ? { onStdout } : {}),
         }));
   }

@@ -186,6 +186,7 @@ export function defaultAgentExec(
       // CLI on a timeout would orphan those children and (because the pipes stay open) hang the
       // run forever past its own cap — group-kill the whole tree instead (see runProcess).
       killGroup: true,
+      keepEndsOnOverflow: true,
       ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
       // Run the agent IN the workspace, not goaly's own cwd. Otherwise the agent edits whatever
       // directory goaly was invoked from, and a `--workspace` that differs from that cwd (e.g. under

@@ -36,6 +36,13 @@ export type RunProcessOptions = {
   /** Cap on captured stdout+stderr bytes before the process is killed (default 16 MB). */
   maxOutputBytes?: number;
   /**
+   * Over the cap, keep the process running and keep only the START and the END of the capture (the
+   * middle is dropped) instead of killing it. For agent CLIs: a long streaming turn legitimately
+   * outgrows any fixed cap, and the parts the codec needs — the session id at the start, the final
+   * result envelope at the end — survive. Memory stays bounded by the cap.
+   */
+  keepEndsOnOverflow?: boolean;
+  /**
    * Optional live stdout tap (issue #23): invoked with each raw stdout chunk as it arrives, in
    * addition to the buffered capture returned at the end. Used to feed a streaming `StreamTap`.
    * Guarded so a throwing tap never affects the subprocess result.
@@ -96,6 +103,7 @@ export function runProcess(
     activeChildren.add(registryEntry);
     let stdout = '';
     let stderr = '';
+    let stdoutHead: string | undefined;
     let timedOut = false;
     let truncated = false;
     let settled = false;
@@ -140,14 +148,25 @@ export function runProcess(
       activeChildren.delete(registryEntry);
       if (settled) return;
       settled = true;
-      resolve({ stdout, stderr: `${stderr}${extraStderr}`, code, timedOut, truncated });
+      const out = stdoutHead !== undefined ? `${stdoutHead}\n${stdout}` : stdout;
+      resolve({ stdout: out, stderr: `${stderr}${extraStderr}`, code, timedOut, truncated });
     };
     armIdle();
 
     const enforceCap = (): void => {
       if (stdout.length + stderr.length <= maxBytes) return;
-      truncated = true;
-      kill();
+      if (options.keepEndsOnOverflow !== true) {
+        truncated = true;
+        kill();
+        return;
+      }
+      const quarter = Math.floor(maxBytes / 4);
+      if (stdoutHead === undefined && stdout.length > quarter) {
+        stdoutHead = stdout.slice(0, quarter);
+        stdout = stdout.slice(quarter);
+      }
+      stdout = stdout.slice(-quarter);
+      stderr = stderr.slice(-quarter);
     };
 
     // Decode as a stream so a multi-byte character split across two chunks is not corrupted.

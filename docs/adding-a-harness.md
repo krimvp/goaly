@@ -438,7 +438,9 @@ export const myagentCodec: AgentCliCodec = {
 The subprocess is **not** your problem: `AgentCliHarness` builds the default exec for you with
 `defaultAgentExec(codec.command, timeoutMs, codec.promptOnStdin)`, which spawns the real binary via
 the shared `runProcess` (output cap, timeout, process-group kill, never-reject). Tests inject a fake
-`AgentExecFn` instead.
+`AgentExecFn` instead. A turn that prints more than the 16 MB capture cap is not killed: the capture
+keeps its start (the session id) and its end (the final result envelope) and drops the middle, so your
+`parse` must tolerate one broken JSONL line where the middle was cut (`parseAgentOutput` does).
 
 **The sandbox is not your problem either.** When `--sandbox` is on, `compose-harness.ts` wraps the injected
 `exec` around your codec's `command`/argv at the composition root (`src/sandbox/`, ADR 0007) — it

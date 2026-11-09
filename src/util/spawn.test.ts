@@ -144,4 +144,15 @@ describe('runProcess', () => {
     const r = await runProcess('node', ['-e', script]);
     expect(r.stdout).toBe('€');
   });
+
+  it('keepEndsOnOverflow keeps the start and the end of the capture and lets the process finish', async () => {
+    const script =
+      "process.stdout.write('HEAD\\n');for(let i=0;i<200;i++)process.stdout.write('x'.repeat(1000)+'\\n');process.stdout.write('TAIL\\n');";
+    const r = await runProcess('node', ['-e', script], { maxOutputBytes: 8000, keepEndsOnOverflow: true });
+    expect(r.code).toBe(0);
+    expect(r.truncated).toBe(false);
+    expect(r.stdout.startsWith('HEAD\n')).toBe(true);
+    expect(r.stdout.endsWith('TAIL\n')).toBe(true);
+    expect(r.stdout.length).toBeLessThan(8000);
+  });
 });
