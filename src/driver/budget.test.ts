@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { SystemBudgetMeter } from './budget';
 import { ManualClock } from '../testing/fakes';
+import { BudgetSnapshot } from '../domain/events';
 
 describe('SystemBudgetMeter', () => {
   it('token cap: not exceeded below, exceeded at the threshold boundary (>=)', () => {
@@ -88,5 +89,16 @@ describe('SystemBudgetMeter', () => {
     meter.record(1_000_000);
     clock.advance(1_000_000);
     expect(meter.snapshot().exceeded).toBe(false);
+  });
+
+  it('a backward system-clock step (NTP correction) never yields a negative, unparseable elapsed', () => {
+    const clock = new ManualClock(10_000_000);
+    const meter = new SystemBudgetMeter({ wallClockMs: 5_000 }, clock);
+    clock.advance(1_000);
+    meter.snapshot();
+    clock.advance(-3_600_000);
+    expect(BudgetSnapshot.parse(meter.snapshot()).wallClockMs).toBe(1_000);
+    clock.advance(4_000); // time after the step still counts against the cap
+    expect(meter.snapshot()).toMatchObject({ wallClockMs: 5_000, exceeded: true });
   });
 });

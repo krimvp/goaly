@@ -33,12 +33,13 @@ export class SystemBudgetMeter implements BudgetMeter {
   #unknownCalls = 0;
   readonly #budget: BudgetConfig;
   readonly #clock: Clock;
-  readonly #startedAt: number;
+  #elapsed = 0;
+  #lastNow: number;
 
   constructor(budget: BudgetConfig, clock: Clock) {
     this.#budget = budget;
     this.#clock = clock;
-    this.#startedAt = clock.now();
+    this.#lastNow = clock.now();
   }
 
   record(tokensUsed: number | undefined, estimatedTokens = 0, opts?: { unknownCalls?: number }): void {
@@ -53,7 +54,12 @@ export class SystemBudgetMeter implements BudgetMeter {
   }
 
   snapshot(): BudgetSnapshot {
-    const wallClockMs = this.#clock.now() - this.#startedAt;
+    // Sum only forward steps: a backward system-clock step (NTP) would make a plain `now - start`
+    // negative, which the snapshot schema rejects and the Driver turns into an ABORTED run.
+    const now = this.#clock.now();
+    this.#elapsed += Math.max(now - this.#lastNow, 0);
+    this.#lastNow = now;
+    const wallClockMs = this.#elapsed;
     const tokenCapHit = this.#budget.tokens !== undefined && this.#tokens >= this.#budget.tokens;
     const timeCapHit =
       this.#budget.wallClockMs !== undefined && wallClockMs >= this.#budget.wallClockMs;
