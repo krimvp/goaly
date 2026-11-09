@@ -196,14 +196,18 @@ export function applyRunExtension(cfg: RunConfig, x: RunExtension): RunConfig {
 }
 
 /**
- * Re-judge a persisted AGENT_RAN budget snapshot against the EXTENDED caps. The `exceeded` flag was
+ * Re-judge a persisted budget snapshot (on AGENT_RAN, VERIFIED or SIGNOFF_DECIDED — DECIDE reads
+ * the latest) against the EXTENDED caps. The `exceeded` flag was
  * baked into the event by the meter that observed the OLD caps; when an extension raises them, the
  * fold must read the snapshot's raw numbers against the new caps or the run would re-abort at the
  * old cap forever. Only the flag is recomputed — the spent numbers are the persisted facts.
  */
 function rejudgeBudget(event: OrchestratorEvent, cfg: RunConfig): OrchestratorEvent {
-  if (event.tag !== 'AGENT_RAN') return event;
+  if (event.tag !== 'AGENT_RAN' && event.tag !== 'VERIFIED' && event.tag !== 'SIGNOFF_DECIDED') {
+    return event;
+  }
   const b = event.budget;
+  if (b === undefined) return event;
   const tokenCapHit = cfg.budget.tokens !== undefined && (b.tokensSpent ?? 0) >= cfg.budget.tokens;
   const timeCapHit =
     cfg.budget.wallClockMs !== undefined && (b.wallClockMs ?? 0) >= cfg.budget.wallClockMs;

@@ -12,6 +12,7 @@ import type { Verifier } from '../verify/verifier';
 import { bestOfFloor, performBestOf } from './best-of-driver';
 import { LlmTokenMeter } from './llm-meter';
 import { summarizeUsage } from '../runlog/usage';
+import { extendedRunConfig } from '../runlog/replay';
 import { lastRealSessionId } from '../runlog/session-id';
 import { noopLogger, type Logger } from '../log/logger';
 import type { Observer } from '../observe/observer';
@@ -418,7 +419,7 @@ async function buildOutcomeExtras(deps: DriverDeps): Promise<OutcomeExtras> {
     if (stored === null) return {};
     const usage = summarizeUsage(
       stored.entries.map((entry) => entry.event),
-      stored.header.config.budget,
+      extendedRunConfig(stored.header.config, stored.entries).budget,
     );
     const sessionId = lastRealSessionId(stored.entries);
     return { usage, ...(sessionId !== undefined ? { sessionId } : {}) };

@@ -131,4 +131,30 @@ describe('drive() — resume with an operator extension (RUN_EXTENDED, ADR 0012)
     const stored = await runlog.read();
     expect(stored!.entries.some((e) => e.event.tag === 'RUN_EXTENDED')).toBe(false);
   });
+
+  it('--budget-tokens revives a budget-ABORTED run and the report shows the raised cap', async () => {
+    const workspace = new FakeWorkspace('0000000');
+    const runlog = new InMemoryRunLog();
+    const aborted = await drive(
+      {
+        ...resumeDeps(runlog, new FakeHarness([{ postHash: '0000001', tokensUsed: 450 }], workspace), workspace),
+        compiler: new FakeCompiler(contract),
+        seal: new FakeSealGate({ kind: 'approve' }),
+        makeLadder: () => new FakeVerifier([failVerdict('still red')]),
+        budget: new ManualBudgetMeter(true),
+      },
+      makeConfig({ goal: 'extend me', budget: { tokens: 400 } }),
+      runId,
+    );
+    expect(aborted.reason).toBe('budget exceeded');
+
+    const ws = new FakeWorkspace('0000001');
+    const harness = new FakeHarness([{ postHash: '0000002' }], ws);
+    const outcome = await drive(resumeDeps(runlog, harness, ws), makeConfig(), runId, {
+      resume: true,
+      extend: { budgetTokens: 2000 },
+    });
+    expect(outcome.status).toBe('DONE');
+    expect(outcome.usage?.budget.tokens).toBe(2000);
+  });
 });
