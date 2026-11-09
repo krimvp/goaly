@@ -386,7 +386,9 @@ Keys mirror the CLI flags in kebab-case. Full precedence:
 ```
 
 Booleans take `true`/`false` (`false` = "not set"). An unknown key, non-primitive value, or invalid
-JSON is a usage error (the config seam parses with Zod and fails closed).
+JSON is a usage error (the config seam parses with Zod and fails closed). The error names the
+nearest key for a typo or a camelCase key (`maxIterations` → `max-iterations`), and says when a key
+is a per-run flag that only the command line takes (`dry-run`, `resume`, `workspace`, …).
 
 A file may also carry a `"presets"` block (named bundles of the same keys, selected with
 `--preset <name>`) and a top-level `"preset"` default — see
