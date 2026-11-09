@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { acquireRunLock, RunLockedError } from './lock';
+import { acquireRunLock, RunLockedError, runLockActive } from './lock';
 
 let counter = 0;
 async function freshDir(): Promise<string> {
@@ -44,6 +44,31 @@ describe('acquireRunLock', () => {
       const lock = await acquireRunLock(dir, { pid: 2000, isPidAlive: () => false });
       const raw = await readFile(join(dir, 'run.lock'), 'utf8');
       expect(raw.trim()).toBe('2000');
+      await lock.release();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('self-heals a lock whose pid now belongs to a different live process (pid reuse)', async () => {
+    const dir = await freshDir();
+    try {
+      // After a reboot or a container restart, the dead holder's pid is reused by another process.
+      await acquireRunLock(dir, { pid: 1000, isPidAlive: () => true, processStartOf: async () => '111' });
+      await expect(
+        acquireRunLock(dir, { pid: 2000, isPidAlive: () => true, processStartOf: async () => '111' }),
+      ).rejects.toThrow(RunLockedError);
+      expect(await runLockActive(dir, () => true, async () => '999')).toBe(false);
+
+      const notices: string[] = [];
+      const lock = await acquireRunLock(dir, {
+        pid: 2000,
+        isPidAlive: () => true,
+        processStartOf: async (pid) => (pid === 1000 ? '999' : '222'),
+        onStaleReclaim: (m) => notices.push(m),
+      });
+      expect(notices[0]).toContain('pid 1000');
+      expect((await readFile(join(dir, 'run.lock'), 'utf8')).trim()).toBe('2000 222');
       await lock.release();
     } finally {
       await rm(dir, { recursive: true, force: true });

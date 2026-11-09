@@ -20,7 +20,8 @@ export type RunLock = { release(): Promise<void> };
  * interleave appends with duplicate `seq` values and corrupt the write-ahead log logically).
  *
  * Mechanism: create `run.lock` with the `wx` flag (atomic create-or-fail) carrying the holder's
- * pid. On conflict, the holder pid is probed with `kill(pid, 0)`: a LIVE holder fails closed with
+ * pid and start time. On conflict, the holder is probed with `kill(pid, 0)` and its start time
+ * (see {@link holderAlive}): a LIVE holder fails closed with
  * a clear {@link RunLockedError}; a DEAD holder (crash / SIGKILL left the file behind) is stale —
  * the lock self-heals by unlinking and retrying, so a crashed run never needs manual cleanup.
  */
@@ -37,9 +38,12 @@ export async function acquireRunLock(
      * to know one was swept away. Default: no notice (library callers opt in).
      */
     onStaleReclaim?: (message: string) => void;
+    /** Injected process start-time probe (tests). Defaults to `/proc/<pid>/stat`. */
+    processStartOf?: (pid: number) => Promise<string | null>;
   } = {},
 ): Promise<RunLock> {
   const alive = opts.isPidAlive ?? defaultIsPidAlive;
+  const startOf = opts.processStartOf ?? defaultProcessStartOf;
   const pid = opts.pid ?? process.pid;
   const path = join(runDir, LOCK_FILE);
   await mkdir(runDir, { recursive: true });
@@ -50,7 +54,8 @@ export async function acquireRunLock(
     try {
       const handle = await open(path, 'wx');
       try {
-        await handle.write(`${pid}\n`);
+        const start = await startOf(pid);
+        await handle.write(start === null ? `${pid}\n` : `${pid} ${start}\n`);
         await handle.sync();
       } finally {
         await handle.close();
@@ -65,10 +70,10 @@ export async function acquireRunLock(
       };
     } catch (err: unknown) {
       if (!isExists(err)) throw err;
-      const holder = await readHolderPid(path);
-      if (holder !== null && holder !== pid && alive(holder)) {
+      const holder = await readHolder(path);
+      if (holder !== null && holder.pid !== pid && (await holderAlive(holder, alive, startOf))) {
         throw new RunLockedError(
-          `another goaly process (pid ${holder}) is already driving this run — ` +
+          `another goaly process (pid ${holder.pid}) is already driving this run — ` +
             `refusing to start a second one on the same run directory. ` +
             `If that process is truly gone, delete ${path} and retry.`,
         );
@@ -76,11 +81,11 @@ export async function acquireRunLock(
       // Stale (holder dead / unreadable / our own pid from a previous incarnation): self-heal.
       // Suppress the notice for our own pid — re-locking after our own earlier incarnation is
       // routine, not the trace of a crash.
-      if (holder !== pid) {
+      if (holder?.pid !== pid) {
         opts.onStaleReclaim?.(
           holder === null
             ? `reclaimed an unreadable run lock at ${path} (previous driver left no valid pid)`
-            : `reclaimed a stale run lock at ${path} (previous driver pid ${holder} is gone — it crashed or was killed)`,
+            : `reclaimed a stale run lock at ${path} (previous driver pid ${holder.pid} is gone — it crashed or was killed)`,
         );
       }
       await rm(path, { force: true }).catch(() => undefined);
@@ -99,9 +104,29 @@ export async function acquireRunLock(
 export async function runLockActive(
   runDir: string,
   isPidAlive: (pid: number) => boolean = defaultIsPidAlive,
+  processStartOf: (pid: number) => Promise<string | null> = defaultProcessStartOf,
 ): Promise<boolean> {
-  const pid = await readHolderPid(join(runDir, LOCK_FILE));
-  return pid !== null && isPidAlive(pid);
+  const holder = await readHolder(join(runDir, LOCK_FILE));
+  return holder !== null && holderAlive(holder, isPidAlive, processStartOf);
+}
+
+type Holder = { pid: number; start: string | undefined };
+
+/**
+ * A live pid is the holder only when its process start time still matches the one the lock
+ * recorded. After a reboot or a container restart the dead holder's pid is often reused by an
+ * unrelated process, and that lock would otherwise block `--resume` until a human deleted it.
+ * Without a recorded or readable start time (an old lock, no `/proc`), a live pid stays the holder.
+ */
+async function holderAlive(
+  holder: Holder,
+  isPidAlive: (pid: number) => boolean,
+  processStartOf: (pid: number) => Promise<string | null>,
+): Promise<boolean> {
+  if (!isPidAlive(holder.pid)) return false;
+  if (holder.start === undefined) return true;
+  const current = await processStartOf(holder.pid);
+  return current === null || current === holder.start;
 }
 
 /**
@@ -128,11 +153,21 @@ export async function anyRunLockActive(
   return false;
 }
 
-async function readHolderPid(path: string): Promise<number | null> {
+async function readHolder(path: string): Promise<Holder | null> {
   try {
-    const raw = await readFile(path, 'utf8');
-    const pid = Number.parseInt(raw.trim(), 10);
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
+    const [pidText, start] = (await readFile(path, 'utf8')).trim().split(/\s+/);
+    const pid = Number.parseInt(pidText ?? '', 10);
+    return Number.isInteger(pid) && pid > 0 ? { pid, start } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Field 22 of `/proc/<pid>/stat` (start time in clock ticks since boot); null where unreadable. */
+async function defaultProcessStartOf(pid: number): Promise<string | null> {
+  try {
+    const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] ?? null;
   } catch {
     return null;
   }

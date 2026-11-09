@@ -82,7 +82,8 @@ is allowed to end a run and *how* it is reported.
   `runs show` never mutates a live log.
 - A per-run `run.lock` (pid-stamped, `wx`-created) makes concurrent drivers impossible. A live
   holder fails closed with a clear message; a dead holder's lock self-heals — a crashed run never
-  needs manual cleanup.
+  needs manual cleanup. The lock also records the holder's process start time (Linux `/proc`), so a
+  pid that a reboot or a container restart gave to another process reads as dead too.
 - goaly-code session saves are atomic (`tmp → fsync → rename`): the previous complete log survives
   any crash mid-save.
 - `drive()`'s pre-loop IO (resume read, header write) resolves to a typed `ABORTED` — the last
