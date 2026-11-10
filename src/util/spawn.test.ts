@@ -153,6 +153,6 @@ describe('runProcess', () => {
     expect(r.truncated).toBe(false);
     expect(r.stdout.startsWith('HEAD\n')).toBe(true);
     expect(r.stdout.endsWith('TAIL\n')).toBe(true);
-    expect(r.stdout.length).toBeLessThan(8000);
+    expect(r.stdout.length).toBeLessThanOrEqual(8000);
   });
 });

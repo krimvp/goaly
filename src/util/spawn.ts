@@ -154,7 +154,7 @@ export function runProcess(
     armIdle();
 
     const enforceCap = (): void => {
-      if (stdout.length + stderr.length <= maxBytes) return;
+      if ((stdoutHead?.length ?? 0) + stdout.length + stderr.length < maxBytes) return;
       if (options.keepEndsOnOverflow !== true) {
         truncated = true;
         kill();
