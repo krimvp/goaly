@@ -130,7 +130,7 @@ describe('FileRunLog', () => {
       // Hand-corrupt the log: append a line that is not valid JSON.
       await appendFile(join(dir, 'log.jsonl'), '{ not valid json\n', 'utf8');
 
-      await expect(log.read()).rejects.toThrow();
+      await expect(log.read()).rejects.toThrow(`${join(dir, 'log.jsonl')} line 2:`);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -144,7 +144,7 @@ describe('FileRunLog', () => {
       // A structurally-JSON line that is not a valid RunLogEntry.
       await writeFile(join(dir, 'log.jsonl'), `${JSON.stringify({ seq: 'nope' })}\n`, 'utf8');
 
-      await expect(log.read()).rejects.toThrow();
+      await expect(log.read()).rejects.toThrow(`${join(dir, 'log.jsonl')} line 1:`);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
