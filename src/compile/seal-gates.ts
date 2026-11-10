@@ -1,6 +1,7 @@
 import type { CompiledContract, Rung } from '../domain/contract';
 import type { SealDecision } from '../domain/verdict';
 import type { SealGate } from './seal';
+import { errorMessage } from '../util/errors';
 
 const HUMAN_REJECT_REASON = 'rejected by human at Seal';
 
@@ -111,12 +112,20 @@ export class HumanSealGate implements SealGate {
     allowRevise?: boolean;
   }) {
     this.#out = opts?.out ?? ((msg) => console.error(msg));
-    this.#ask = opts?.ask ?? defaultAsk;
+    this.#ask = opts?.ask ?? ((q) => askStdin(q));
     this.#allowRevise = opts?.allowRevise ?? true;
   }
 
   async approveContract(contract: CompiledContract): Promise<SealDecision> {
     this.#out(renderContract(contract));
+    try {
+      return await this.#decide();
+    } catch (e) {
+      return { kind: 'reject', reason: `no answer at Seal (${errorMessage(e)})` };
+    }
+  }
+
+  async #decide(): Promise<SealDecision> {
     if (!this.#allowRevise) {
       const answer = await this.#ask(
         'Approve this success contract? [y]es / [e]dited (I changed the authored files — re-freeze) / [N]o ',
@@ -153,12 +162,22 @@ function approveOrReject(answer: string): SealDecision {
   return { kind: 'reject', reason: HUMAN_REJECT_REASON };
 }
 
-/** Default prompt: a single question over stdin/stdout via readline/promises. */
-async function defaultAsk(question: string): Promise<string> {
+/**
+ * The default gate prompt: one question over stdin/stdout. It rejects when stdin closes before an
+ * answer (EOF) — readline never settles a pending question then, so a gate would hang forever.
+ */
+export async function askStdin(
+  question: string,
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): Promise<string> {
   const { createInterface } = await import('node:readline/promises');
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const rl = createInterface({ input, output });
   try {
-    return await rl.question(question);
+    return await new Promise<string>((resolve, reject) => {
+      rl.once('close', () => reject(new Error('stdin closed before an answer')));
+      rl.question(question).then(resolve, reject);
+    });
   } finally {
     rl.close();
   }

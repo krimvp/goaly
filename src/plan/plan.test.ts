@@ -198,6 +198,18 @@ describe('plan Seal gates (issue #48)', () => {
     expect((await rejectGate.approvePlan(plan)).kind).toBe('reject');
   });
 
+  it('HumanPlanGate fails closed to reject (never approve) when the prompt has no answer (EOF)', async () => {
+    const eof = async (): Promise<string> => {
+      throw new Error('stdin closed before an answer');
+    };
+    const d = await new HumanPlanGate({ out: () => {}, ask: eof }).approvePlan(plan);
+    expect(d).toEqual({ kind: 'reject', reason: expect.stringMatching(/stdin closed before an answer/) });
+    const answers = ['f'];
+    let i = 0;
+    const midway = async (): Promise<string> => answers[i++] ?? eof();
+    expect((await new HumanPlanGate({ out: () => {}, ask: midway }).approvePlan(plan)).kind).toBe('reject');
+  });
+
   it('HumanPlanGate fails closed to reject on empty revise feedback', async () => {
     const answers = ['f', '   '];
     let i = 0;

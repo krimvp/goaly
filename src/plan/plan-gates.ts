@@ -1,6 +1,8 @@
 import type { PhasePlan } from '../domain/plan';
 import type { SealDecision } from '../domain/verdict';
 import type { PlanGate } from './plan-gate';
+import { askStdin } from '../compile/seal-gates';
+import { errorMessage } from '../util/errors';
 
 const HUMAN_REJECT_REASON = 'plan rejected by human at the plan Seal';
 
@@ -60,12 +62,20 @@ export class HumanPlanGate implements PlanGate {
     allowRevise?: boolean;
   }) {
     this.#out = opts?.out ?? ((msg) => console.error(msg));
-    this.#ask = opts?.ask ?? defaultAsk;
+    this.#ask = opts?.ask ?? ((q) => askStdin(q));
     this.#allowRevise = opts?.allowRevise ?? true;
   }
 
   async approvePlan(plan: PhasePlan): Promise<SealDecision> {
     this.#out(renderPlan(plan));
+    try {
+      return await this.#decide();
+    } catch (e) {
+      return { kind: 'reject', reason: `no answer at the plan Seal (${errorMessage(e)})` };
+    }
+  }
+
+  async #decide(): Promise<SealDecision> {
     if (!this.#allowRevise) {
       return approveOrReject(await this.#ask('Approve this decomposition plan? [y/N] '));
     }
@@ -89,15 +99,4 @@ function approveOrReject(answer: string): SealDecision {
     return { kind: 'approve' };
   }
   return { kind: 'reject', reason: HUMAN_REJECT_REASON };
-}
-
-/** Default prompt: a single question over stdin/stdout via readline/promises. */
-async function defaultAsk(question: string): Promise<string> {
-  const { createInterface } = await import('node:readline/promises');
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    return await rl.question(question);
-  } finally {
-    rl.close();
-  }
 }

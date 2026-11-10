@@ -461,6 +461,9 @@ Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject:
 Piping the goal via stdin (`--goal -`) consumes stdin, so there's nothing left for the prompt —
 use `--autonomous` or `--goal-file`. A fresh run that would pause at Seal refuses to start (exit 2)
 when stdin is not a terminal (a pipe, `</dev/null`, CI), because nobody could answer the prompt.
+If stdin closes (EOF) while the Seal or plan-Seal prompt waits — for example a mid-run plan gate,
+or an embedder that uses the human gates — the gate rejects (`no answer at Seal`) and the run
+aborts. It never approves.
 
 **What the banner shows.** The goal, the `contractHash`, any frozen `setup` and `requiredTools`, the
 rubric **once**, then the ladder *as it will actually run* — including the built-in
