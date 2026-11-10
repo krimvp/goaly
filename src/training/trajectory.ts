@@ -33,6 +33,7 @@ export type LadderOutcome = {
   ladderPassed: boolean | undefined;
   /** The Sign-off approver decision (present only when the ladder passed; true = vetoed). */
   approverVetoed: boolean | undefined;
+  /** The run's cumulative spend at this iteration's agent turn (not this iteration's own spend). */
   tokens: number | undefined;
 };
 

@@ -288,7 +288,7 @@ function renderIterations(iterations: readonly IterationDetail[]): string[] {
   for (const it of iterations) {
     const phase = it.phase === undefined ? '' : `  phase=${it.phase + 1}`;
     lines.push(`  #${it.index}${phase}  agent=${it.runStatus}  changed=${it.changed ? 'yes' : 'no'}${
-      it.tokensSpent === undefined ? '' : `  tokens=${it.tokensSpent}`
+      it.tokensSpent === undefined ? '' : `  tokens-so-far=${it.tokensSpent}`
     }`);
     lines.push(`      ladder=${fmtVerdict(it)}`);
     if (it.signoff !== undefined) {

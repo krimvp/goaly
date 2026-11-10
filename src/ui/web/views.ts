@@ -479,7 +479,7 @@ function Overview({ detail, isLive, runId }: { detail: RunDetailResponse; isLive
                   <div class="t-head">
                     agent <b>${it.runStatus}</b> · ${it.changed ? 'tree changed' : 'no changes'}
                     ${it.phase !== undefined ? html`<span class="muted"> · phase ${it.phase + 1}</span>` : ''}
-                    ${it.tokensSpent !== undefined ? html`<span class="muted mono"> · ${fmtTokens(it.tokensSpent)} tok</span>` : ''}
+                    ${it.tokensSpent !== undefined ? html`<span class="muted mono" title="run total at this agent turn"> · ${fmtTokens(it.tokensSpent)} tok so far</span>` : ''}
                   </div>
                   ${it.verdict !== undefined
                     ? html`<div class=${it.verdict.pass ? 'pass' : 'fail'}>

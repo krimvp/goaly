@@ -1689,14 +1689,17 @@ goaly runs list --workspace ./myrepo
 
 An INCOMPLETE run is marked `live` (a process holds its run lock) or `dead` (the driver crashed or
 was killed; `runs show` then names the `goaly --resume <id>` command). The token total is the spend
-report's total, so `runs list`, `runs show`, the web UI and the end-of-run report agree.
+report's total, so `runs list`, `runs show`, the web UI and the end-of-run report agree. The token
+count on each iteration line of `runs show` (`tokens-so-far=`) and of the UI timeline (`tok so far`)
+is the run's cumulative total at that agent turn, not the spend of that iteration. The per-iteration
+`tokens` field of the training export has the same cumulative meaning.
 
 Beyond the contract and the verdicts, `runs show` reports the run's *provenance and labels* — the
 things a `DONE`/`ABORTED` line alone cannot tell you:
 
 | Line | Meaning |
 | --- | --- |
-| `degraded:` | a typed [degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified) — `SELF-JUDGED` (every role on one model), `SELF-APPROVED` (the approver on the coding agent's model, the judge rung on another) , `INDEPENDENCE-UNVERIFIED` (goaly could not compare them) or `FAKE-LLM` (the LLM steps ran on the fake LLM of `--harness fake`) |
+| `degraded:` | a typed [degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified) — `SELF-JUDGED` (every role on one model), `SELF-APPROVED` (the approver on the coding agent's model, the judge rung on another), `INDEPENDENCE-UNVERIFIED` (goaly could not compare them) or `FAKE-LLM` (the LLM steps ran on the fake LLM of `--harness fake`) |
 | `adjudicated:` | this run's [contract-fault verdict](#in-loop-contract-fault-adjudication-contract_defective) (SOUND or DEFECTIVE, with the generalized anti-pattern), and for a defective one the exact `--recontract` command that recovers without discarding the tree |
 | `successor of:` | this run's [re-contract provenance](#re-contracting-a-defective-bar---recontract): the predecessor run + its frozen `contractHash`, the verdict that justified the successor, and the depth in the chain |
 

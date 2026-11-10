@@ -188,6 +188,12 @@ describe('renderRunDetail', () => {
     expect(text).toContain('sign-off=approved');
   });
 
+  it('labels the iteration token count as the run total so far, not the spend of the iteration', () => {
+    const text = renderRunDetail(detail());
+    expect(text).toContain('#2  agent=completed  changed=yes  tokens-so-far=25');
+    expect(text).not.toMatch(/ tokens=/);
+  });
+
   it('renders the per-layer spend breakdown (harness vs the LLM steps)', () => {
     const text = renderRunDetail(detail());
     expect(text).toContain('spend:');

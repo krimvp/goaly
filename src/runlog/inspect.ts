@@ -48,6 +48,7 @@ export type IterationDetail = {
   readonly runStatus: HarnessRunResult['status'];
   /** Whether the agent run changed the working tree (prev vs post diff hash). */
   readonly changed: boolean;
+  /** The RUN's cumulative spend at this iteration's agent turn — not this iteration's own spend. */
   readonly tokensSpent: number | undefined;
   /** The harness session id this iteration's agent run returned (may be a synthesized sentinel). */
   readonly sessionId: SessionId;

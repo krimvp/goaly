@@ -4,7 +4,7 @@ import { h, render } from 'preact';
 import { RunDetailPage, RunsPage, WorktreesPage } from './views';
 import type { RunDetailResponse, RunsIndex, WorktreesResponse } from '../api-schema';
 import { runDetail, type RunSummary } from '../../runlog/inspect';
-import { RunId } from '../../domain/ids';
+import { RunId, SessionId } from '../../domain/ids';
 import { makeConfig } from '../../testing/fakes';
 
 /**
@@ -193,5 +193,21 @@ describe('RunDetailPage', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(3);
+  });
+
+  it('labels the timeline token count as the run total so far, like `runs show`', async () => {
+    const header = { runId: RunId.parse('run-tok'), startedAt: 1, config: makeConfig({ goal: 'tok goal' }) };
+    const iteration = {
+      index: 1, runStatus: 'completed' as const, changed: true, tokensSpent: 120,
+      sessionId: SessionId.parse('s1'), verdict: undefined, signoff: undefined, phase: undefined,
+    };
+    const detail = { ...runDetail(header, []), iterationsDetail: [iteration] };
+    const body: RunDetailResponse = { root: { kind: 'main' }, live: false, detail };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(body)));
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    render(h(RunDetailPage, { runId: 'run-tok', tab: 'overview' }), root);
+    await until(() => text().includes('tok goal'));
+    expect(text()).toContain('120 tok so far');
   });
 });
