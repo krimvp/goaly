@@ -7,19 +7,23 @@ export function badFlagValue(flag: string, expected: string, value: unknown): Us
 }
 
 /** What a failed Zod issue accepts, in the words of {@link badFlagValue}. */
-export function zodExpectation(issue: z.ZodIssue | undefined): string {
+export function zodExpectation(issue: z.core.$ZodIssue | undefined): string {
   switch (issue?.code) {
     case 'invalid_type':
-      if (issue.expected === 'integer') return 'an integer';
-      return issue.expected === 'number' ? 'a number' : `a ${issue.expected}`;
-    case 'invalid_enum_value':
-      return issue.options.join(' | ');
+      if (issue.expected === 'int') return 'an integer';
+      return `a ${issue.expected}`;
+    case 'invalid_value':
+      return issue.values.map(String).join(' | ');
     case 'too_small':
-      if (issue.type === 'number') return `a number ${issue.inclusive ? '≥' : '>'} ${String(issue.minimum)}`;
-      return issue.minimum === 1 ? 'a non-empty value' : `at least ${String(issue.minimum)} ${unit(issue.type)}`;
+      if (issue.origin === 'number' || issue.origin === 'int') {
+        return `a number ${issue.inclusive === true ? '≥' : '>'} ${String(issue.minimum)}`;
+      }
+      return issue.minimum === 1 ? 'a non-empty value' : `at least ${String(issue.minimum)} ${unit(issue.origin)}`;
     case 'too_big':
-      if (issue.type === 'number') return `a number ${issue.inclusive ? '≤' : '<'} ${String(issue.maximum)}`;
-      return `at most ${String(issue.maximum)} ${unit(issue.type)}`;
+      if (issue.origin === 'number' || issue.origin === 'int') {
+        return `a number ${issue.inclusive === true ? '≤' : '<'} ${String(issue.maximum)}`;
+      }
+      return `at most ${String(issue.maximum)} ${unit(issue.origin)}`;
     default:
       return `a valid value (${issue?.message ?? 'invalid'})`;
   }

@@ -76,7 +76,7 @@ export function parseApproverDiversityTemp(flags: RawFlags): number | undefined 
  * form; the Zod array seam (`.nonempty()`, `.min(1)` per entry) is the real fail-closed gate. Absent
  * ⇒ undefined so the approver keeps the default lens taxonomy (byte-for-byte unchanged).
  */
-export function parseApproverLenses(flags: RawFlags): [string, ...string[]] | undefined {
+export function parseApproverLenses(flags: RawFlags): string[] | undefined {
   const v = str(flags, 'approver-lenses');
   if (v === undefined) return undefined;
   const entries = v.split(',').map((l) => l.trim());

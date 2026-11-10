@@ -41,7 +41,7 @@ export const ChatTool = z.object({
   function: z.object({
     name: z.string(),
     description: z.string().optional(),
-    parameters: z.record(z.unknown()),
+    parameters: z.record(z.string(), z.unknown()),
   }),
 });
 export type ChatTool = z.infer<typeof ChatTool>;
