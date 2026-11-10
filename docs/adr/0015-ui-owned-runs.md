@@ -64,6 +64,10 @@ working tree. The server refuses (409) to start a run in a root — the main wor
 worktree — where any live run holds a lock (UI-owned or terminal-driven), pointing at worktrees
 (ADR 0013) as the parallelism idiom. The session registry is server memory only; everything
 rendered about a run still comes from its log.
+*(Amended: `executeRun` now applies the same guard to terminal runs — after it takes its own run
+lock, it refuses (exit 2) when another live run holds a lock in the same tree, naming that run,
+`goaly runs watch`, and `--worktree`. The check runs after the own lock so that two runs that start
+at the same moment both stop instead of both starting.)*
 
 ### Requests parse fail-closed, and writes need `X-Goaly-Ui: 1`
 

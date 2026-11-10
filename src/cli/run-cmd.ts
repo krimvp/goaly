@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { ParsedArgs } from './args';
 import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
@@ -9,7 +10,7 @@ import type { RunOutcome } from '../domain/events';
 import type { SealGate } from '../compile/seal';
 import type { PlanGate } from '../plan/plan-gate';
 import type { PhasedStreamSink } from '../agent-cli/stream';
-import { acquireRunLock, RunLockedError, type RunLock } from '../runlog/lock';
+import { acquireRunLock, liveRunIn, RunLockedError, type RunLock } from '../runlog/lock';
 import { resumeHint } from './resume-cmd';
 import { computeCost } from './cost';
 import { installInterruptHandlers, makeInterruptController } from './crash-guard';
@@ -102,6 +103,19 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       return { code: 2, runId, outcome: undefined };
     }
     throw e;
+  }
+  // One live run per working tree: two agents must never edit one tree. The check runs AFTER our
+  // own lock is held, so two runs that start at the same moment both see each other and both stop.
+  const liveRun = await liveRunIn(path.join(parsed.workspace, STATE_DIR), runId);
+  if (liveRun !== undefined) {
+    io.err(
+      `goaly: run ${liveRun} is already live in this working tree — refusing to start a second agent on it. ` +
+        `Watch it with: goaly runs watch ${liveRun} — or start this run in its own git worktree with --worktree.\n`,
+    );
+    await runLock.release();
+    // A fresh run dir is empty now; `rmdir` leaves a resumed run's (non-empty) dir alone.
+    await rmdir(path.join(parsed.workspace, STATE_DIR, runId)).catch(() => undefined);
+    return { code: 2, runId, outcome: undefined };
   }
   io.onStarted?.(runId);
 

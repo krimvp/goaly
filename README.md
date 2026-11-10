@@ -79,6 +79,7 @@ COMPILE ──► SEAL ──► setup + pre-flight ──► ┌─────
 - **The control flow has zero LLM calls.** A pure reducer owns all policy behind four narrow seams.
 - **Every run is crash-safe and resumable.** A write-ahead log under `.goaly/<runId>/` makes runs
   replayable, `--resume`-able, and inspectable (`goaly runs list` / `show` / `watch`, `goaly ui`).
+  One working tree takes one live run; use `--worktree` to run in parallel.
 - **Stuck detection bails early with a typed reason** (no-diff, repeated failure, oscillation,
   harness crash, unevaluable contract, repeated timeout-with-no-diff, budget).
 

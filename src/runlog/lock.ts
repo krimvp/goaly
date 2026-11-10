@@ -150,25 +150,34 @@ async function holderAlive(
 /**
  * Is ANY run under this state dir currently held by a live process? The "one live run per tree"
  * guard (ADR 0015): per-run locks stop two drivers on one run, but nothing else stops two agents
- * editing one working tree — the UI refuses to start a second run in an occupied root, and
- * worktree removal refuses while an agent is inside. Read-only; a missing state dir is `false`.
+ * editing one working tree — `executeRun` and the UI refuse to start a second run in an occupied
+ * root, and worktree removal refuses while an agent is inside. Read-only; a missing state dir is `false`.
  */
 export async function anyRunLockActive(
   stateDir: string,
   isPidAlive: (pid: number) => boolean = defaultIsPidAlive,
 ): Promise<boolean> {
+  return (await liveRunIn(stateDir, undefined, isPidAlive)) !== undefined;
+}
+
+/** The id of a run under this state dir, other than `exceptRunId`, that a live process holds. */
+export async function liveRunIn(
+  stateDir: string,
+  exceptRunId?: string,
+  isPidAlive: (pid: number) => boolean = defaultIsPidAlive,
+): Promise<string | undefined> {
   let names: string[];
   try {
     names = (await readdir(stateDir, { withFileTypes: true }))
-      .filter((d) => d.isDirectory())
+      .filter((d) => d.isDirectory() && d.name !== exceptRunId)
       .map((d) => d.name);
   } catch {
-    return false;
+    return undefined;
   }
   for (const name of names) {
-    if (await runLockActive(join(stateDir, name), isPidAlive)) return true;
+    if (await runLockActive(join(stateDir, name), isPidAlive)) return name;
   }
-  return false;
+  return undefined;
 }
 
 async function readHolder(path: string): Promise<Holder | null> {

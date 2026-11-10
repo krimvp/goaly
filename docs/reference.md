@@ -1400,7 +1400,11 @@ kill an hours-long run. All defaults, no flags needed
 - **Crash-safety end to end.** Every run-log append is fsync'd write-ahead; a torn tail is
   tolerated on read and repaired on the next append. A per-run lock stops two processes driving the
   same run (stale locks self-heal, with a notice naming the dead holder's pid — also when a
-  reboot or a container restart gave that pid to another process). A
+  reboot or a container restart gave that pid to another process). One working tree takes one live
+  run: `goaly run` (and a `--resume` of a different run) refuses to start (exit 2) while another
+  live process drives a run in the same tree, and names that run, `goaly runs watch <id>`, and
+  `--worktree` for a parallel run. Best-of-N candidates and parallel waves run inside their own
+  worktrees and are not affected. A
   terminated-but-corrupt line still fails closed. An unexpected fatal error reaps live child
   process groups and removes the run lock before the process exits, so a crashed goaly never leaves an agent CLI editing
   the tree and spending tokens on its own — the run stays resumable either way.
