@@ -1966,7 +1966,9 @@ goaly ui --port 5000 --workspace ./myrepo
   turn boundaries — each tagged and filterable by seam (agent / judge / approver / compiler …),
   streaming live over SSE.
 - **Live event feed over SSE** — the write-ahead log tailed read-only (it never takes the run
-  lock), so it follows runs started in any terminal.
+  lock), so it follows runs started in any terminal. The feed ends at the terminal entry, and for
+  an INCOMPLETE run that no process drives (dead) it ends after a `live: false` frame; reopen the
+  page to follow a later `--resume`.
 - **Worktrees panel** — create/remove with the manager's refusal ladder surfaced verbatim.
 - **Start runs, and hold the Seal in your hand.** The start form executes in-process through the
   exact same code path as the CLI (same guards, run lock, write-ahead log). A non-autonomous run
