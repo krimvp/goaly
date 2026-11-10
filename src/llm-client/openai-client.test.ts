@@ -140,7 +140,7 @@ describe('OpenAiClient', () => {
     const slept: number[] = [];
     const { fetch } = fakeFetch([
       { kind: 'res', status: 429, body: 'x', headers: { 'retry-after': '99999' } },
-      { kind: 'res', status: 429, body: 'x', headers: { 'retry-after': 'Wed, 21 Oct 2026' } },
+      { kind: 'res', status: 429, body: 'x', headers: { 'retry-after': 'soon' } },
       { kind: 'res', status: 200, body: okBody() },
     ]);
     const c = new OpenAiClient({
@@ -153,6 +153,26 @@ describe('OpenAiClient', () => {
     });
     await c.chat(REQ);
     expect(slept).toEqual([60_000, 2000]); // capped at 60s; then garbage → base exponential backoff
+  });
+
+  it('honors a Retry-After header in HTTP-date form (a past date adds no wait)', async () => {
+    const slept: number[] = [];
+    const { fetch } = fakeFetch([
+      { kind: 'res', status: 503, body: 'x', headers: { 'retry-after': new Date(Date.now() + 30_000).toUTCString() } },
+      { kind: 'res', status: 503, body: 'x', headers: { 'retry-after': 'Wed, 21 Oct 2015 07:28:00 GMT' } },
+      { kind: 'res', status: 200, body: okBody() },
+    ]);
+    const c = new OpenAiClient({
+      baseUrl: 'https://api.example.com/v1',
+      fetch,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    await c.chat(REQ);
+    expect(slept[0]).toBeGreaterThan(25_000);
+    expect(slept[0]).toBeLessThanOrEqual(30_000);
+    expect(slept[1]).toBe(2000);
   });
 
   it('retries on a thrown network error then succeeds', async () => {
@@ -176,10 +196,19 @@ describe('OpenAiClient', () => {
     expect(calls).toHaveLength(7); // default 6 retries → 7 attempts
   });
 
-  it('fails closed (no retry) on a non-JSON body', async () => {
+  it('retries a 200 with a non-JSON body (a gateway page) like a 5xx, then succeeds', async () => {
+    const { fetch, calls } = fakeFetch([
+      { kind: 'res', status: 200, body: '<html>502 Bad Gateway</html>' },
+      { kind: 'res', status: 200, body: okBody() },
+    ]);
+    expect((await client(fetch).chat(REQ)).content).toBe('hello');
+    expect(calls).toHaveLength(2);
+  });
+
+  it('fails closed after exhausting retries on a persistent non-JSON body', async () => {
     const { fetch, calls } = fakeFetch([{ kind: 'res', status: 200, body: 'not json <<<' }]);
     await expect(client(fetch).chat(REQ)).rejects.toThrow(/not JSON/);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(7);
   });
 
   it('fails closed (no retry) on a schema-invalid body (empty choices)', async () => {

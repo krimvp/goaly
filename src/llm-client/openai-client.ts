@@ -6,9 +6,10 @@
  *
  * Design contract:
  *   - injectable `fetch` + `sleep` so unit tests never touch the network or a real timer;
- *   - bounded retries on transient failure (network error, 408, 429, 5xx) with exponential backoff,
+ *   - bounded retries on transient failure (network error, 408, 429, 5xx, a 200 whose body is not
+ *     JSON) with exponential backoff,
  *     then a fail-closed throw — never a fabricated empty completion (invariant #4);
- *   - the response is Zod-validated at the seam (invariant #6); a malformed envelope throws;
+ *   - the response is Zod-validated at the seam (invariant #6); a malformed JSON envelope throws;
  *   - per-request wall-clock timeout via `AbortController`. A timeout is NOT retried: the goaly-code
  *     harness uses its whole turn budget as this timeout, so a retry would run past that cap.
  * It returns a NORMALIZED {@link ChatResult} (minted tool-call ids, usage → `TokenBreakdown`) so the
@@ -202,15 +203,16 @@ export class OpenAiClient implements LlmClient {
     };
   }
 
-  /** Parse + Zod-validate the response body. A malformed envelope is a NON-retriable fail-closed error. */
+  /** Parse + Zod-validate the response body. Valid JSON with a malformed envelope is a NON-retriable fail-closed error. */
   #parseBody(
     text: string,
-  ): { ok: true; value: ChatResponse } | { ok: false; retriable: false; error: string } {
+  ): { ok: true; value: ChatResponse } | { ok: false; retriable: boolean; error: string } {
     let json: unknown;
     try {
       json = JSON.parse(text);
     } catch {
-      return { ok: false, retriable: false, error: `response was not JSON: ${text.slice(0, 300)}` };
+      // A 200 that is not JSON is a proxy/gateway page (e.g. "502 Bad Gateway"), not the endpoint's answer.
+      return { ok: false, retriable: true, error: `response was not JSON: ${text.slice(0, 300)}` };
     }
     const parsed = ChatResponse.safeParse(json);
     if (!parsed.success) {
@@ -225,15 +227,16 @@ export class OpenAiClient implements LlmClient {
 }
 
 /**
- * Parse a `Retry-After` header value (delta-seconds form) into milliseconds, capped at
- * {@link MAX_RETRY_AFTER_MS}. The HTTP-date form and garbage both return undefined (base backoff
- * applies) — fail-open to the client's own policy, never a stall.
+ * Parse a `Retry-After` header value (delta-seconds or HTTP-date form) into milliseconds, capped at
+ * {@link MAX_RETRY_AFTER_MS}; a past date is 0. Garbage returns undefined (base backoff applies) —
+ * fail-open to the client's own policy, never a stall.
  */
 function parseRetryAfterMs(value: string | null | undefined): number | undefined {
   if (value === null || value === undefined) return undefined;
-  const seconds = Number.parseFloat(value.trim());
-  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
-  return Math.min(Math.round(seconds * 1000), MAX_RETRY_AFTER_MS);
+  const v = value.trim();
+  const ms = /^\d/.test(v) ? Number.parseFloat(v) * 1000 : Math.max(0, Date.parse(v) - Date.now());
+  if (!Number.isFinite(ms) || ms < 0) return undefined;
+  return Math.min(Math.round(ms), MAX_RETRY_AFTER_MS);
 }
 
 /** Normalize the first choice into a {@link ChatResult}: minted tool-call ids + usage breakdown. */

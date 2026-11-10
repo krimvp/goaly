@@ -1373,8 +1373,9 @@ kill an hours-long run. All defaults, no flags needed
   stdin-fed goal lacks `--autonomous`, or stdin is not a terminal (either would deadlock the Seal
   prompt).
 - **Transient failures are absorbed.** The OpenAI-compatible transport retries 408/429/5xx/network
-  errors with exponential backoff for about one minute (1 s, 2 s, … 32 s; a longer `Retry-After` is
-  honored, capped at 60 s per wait); a request that hits its own timeout is not retried; CLI-backed LLM steps retry a
+  errors, and a 200 whose body is not JSON (a proxy or gateway page), with exponential backoff for
+  about one minute (1 s, 2 s, … 32 s; a longer `Retry-After`, in seconds or HTTP-date form, is
+  honored, capped at 60 s per wait); a 200 with JSON that fails the response schema is not retried; a request that hits its own timeout is not retried; CLI-backed LLM steps retry a
   non-zero exit or unparseable output; a judge-quorum sample that throws drops that sample only; a
   crashed harness turn is retried once before counting toward the stuck-crash streak. Timeouts are
   never retried.
