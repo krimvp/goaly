@@ -131,7 +131,13 @@ export async function runAgentLoop(opts: RunAgentLoopOptions): Promise<LoopResul
       break;
     }
 
-    const terminal = await dispatchToolCalls(opts, result, messages, emit, remaining);
+    const { terminal, timedOut } = await dispatchToolCalls(opts, result, messages, emit, remaining);
+    // A timer can fire a moment before the clock reaches the deadline, so the cut-off tool call
+    // itself ends the turn; the next deadline check alone could let one more model call through.
+    if (timedOut) {
+      status = 'timeout';
+      break;
+    }
     if (terminal !== null) {
       status = 'completed';
       output = terminal;
@@ -186,15 +192,17 @@ async function dispatchToolCalls(
   messages: ChatMessage[],
   emit: (e: AgentStreamEvent) => void,
   remaining: () => number | undefined,
-): Promise<string | null> {
+): Promise<{ terminal: string | null; timedOut: boolean }> {
   let terminalSummary: string | null = null;
+  let timedOut = false;
   for (const tc of result.toolCalls) {
     const outcome = await dispatchTool(opts.tools, tc.function.name, tc.function.arguments, opts.host, remaining());
     messages.push({ role: 'tool', content: outcome.output, tool_call_id: tc.id });
     emit({ kind: 'tool_result', id: tc.id, output: outcome.output });
     if (outcome.terminal) terminalSummary = outcome.output;
+    timedOut ||= outcome.timedOut === true;
   }
-  return terminalSummary;
+  return { terminal: terminalSummary, timedOut };
 }
 
 /** Resolve the final token accounting: prefer reported usage, fall back to the streamed estimate. */

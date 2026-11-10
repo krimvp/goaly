@@ -188,7 +188,7 @@ export const DEFAULT_TOOLS: ToolSpec[] = [
 ];
 
 /** The outcome of one tool call: the result string to feed back, and whether it ends the loop. */
-export type ToolOutcome = { output: string; terminal: boolean };
+export type ToolOutcome = { output: string; terminal: boolean; timedOut?: true };
 
 /**
  * Dispatch one model-requested tool call, fail-closed (spec §2.3): resolve the tool by name, parse
@@ -216,6 +216,7 @@ export async function dispatchTool(
   const timedOut: ToolOutcome = {
     output: [`Error: "${name}" timed out: the turn's time budget ran out.`, tool.timeoutHint].filter(Boolean).join(' '),
     terminal: false,
+    timedOut: true,
   };
   if (timeoutMs !== undefined && timeoutMs <= 0) return timedOut;
   let timer: NodeJS.Timeout | undefined;
