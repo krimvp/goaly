@@ -10,8 +10,9 @@
  *     JSON) with exponential backoff,
  *     then a fail-closed throw — never a fabricated empty completion (invariant #4);
  *   - the response is Zod-validated at the seam (invariant #6); a malformed JSON envelope throws;
- *   - per-request wall-clock timeout via `AbortController`. A timeout is NOT retried: the goaly-code
- *     harness uses its whole turn budget as this timeout, so a retry would run past that cap.
+ *   - per-request wall-clock timeout via `AbortController`. A timeout is NOT retried. A per-call
+ *     `timeoutMs` (the goaly-code harness passes the time left in its turn) caps every attempt AND the
+ *     backoff waits, so the retries never run past the caller's deadline.
  * It returns a NORMALIZED {@link ChatResult} (minted tool-call ids, usage → `TokenBreakdown`) so the
  * provider and the loop never re-handle wire quirks.
  */
@@ -71,7 +72,8 @@ export type ChatResult = {
 /** The transport seam. A test fake implements this directly; production is {@link OpenAiClient}. */
 export interface LlmClient {
   readonly name: string;
-  chat(req: ChatRequest): Promise<ChatResult>;
+  /** `timeoutMs` is the whole budget of this call, retries included. */
+  chat(req: ChatRequest, opts?: { timeoutMs?: number }): Promise<ChatResult>;
 }
 
 /** Thrown (fail-closed) when a call cannot produce a usable, validated completion. */
@@ -132,8 +134,9 @@ export class OpenAiClient implements LlmClient {
     this.#headers = opts.headers ?? {};
   }
 
-  async chat(req: ChatRequest): Promise<ChatResult> {
+  async chat(req: ChatRequest, opts: { timeoutMs?: number } = {}): Promise<ChatResult> {
     const body = JSON.stringify(req);
+    const deadline = opts.timeoutMs !== undefined ? Date.now() + opts.timeoutMs : Infinity;
     let lastError = 'unknown error';
     // Exponential backoff; a server-provided Retry-After (rate-limit window) overrides the base
     // wait when LONGER, capped so a bad header can't stall the run — real 429 windows are tens of
@@ -141,10 +144,13 @@ export class OpenAiClient implements LlmClient {
     let retryAfterMs: number | undefined;
     for (let attempt = 0; attempt <= this.#retries; attempt++) {
       if (attempt > 0) {
-        const backoff = BACKOFF_MS * 2 ** (attempt - 1);
-        await this.#sleep(Math.max(backoff, retryAfterMs ?? 0));
+        const wait = Math.max(BACKOFF_MS * 2 ** (attempt - 1), retryAfterMs ?? 0);
+        if (Date.now() + wait >= deadline) {
+          throw new LlmClientError(`chat-completions stopped: no time left for a retry: ${lastError}`);
+        }
+        await this.#sleep(wait);
       }
-      const outcome = await this.#attempt(body);
+      const outcome = await this.#attempt(body, Math.min(this.#timeoutMs, deadline - Date.now()));
       if (outcome.ok) return normalize(outcome.value);
       lastError = outcome.error;
       retryAfterMs = outcome.retryAfterMs;
@@ -158,12 +164,13 @@ export class OpenAiClient implements LlmClient {
   /** One HTTP attempt. Returns a discriminated outcome so retry policy lives in {@link chat}. */
   async #attempt(
     body: string,
+    timeoutMs: number,
   ): Promise<
     | { ok: true; value: ChatResponse }
     | { ok: false; retriable: boolean; error: string; status?: number; retryAfterMs?: number }
   > {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await this.#fetch(this.#url, {
         method: 'POST',
@@ -187,7 +194,7 @@ export class OpenAiClient implements LlmClient {
       return this.#parseBody(text);
     } catch (e) {
       if (controller.signal.aborted) {
-        return { ok: false, retriable: false, error: `request timed out after ${this.#timeoutMs}ms` };
+        return { ok: false, retriable: false, error: `request timed out after ${timeoutMs}ms` };
       }
       return { ok: false, retriable: true, error: errorMessage(e) };
     } finally {

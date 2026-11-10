@@ -13,11 +13,12 @@
 import { readFile, writeFile, mkdir, readdir, stat, lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { applyEdit } from './edit';
-import type { ToolHost } from './tools';
+import { SHELL_TIMEOUT_HINT, type ToolHost } from './tools';
 
 /** The injected, sandbox-wrapped shell. Returns the raw process result; the host formats it. */
 export type ShellExec = (
   command: string,
+  opts?: { timeoutMs?: number },
 ) => Promise<{ stdout: string; stderr: string; code: number; timedOut?: boolean }>;
 
 /** Cap a single file read so an enormous file can't flood the context. */
@@ -209,10 +210,10 @@ export class NodeToolHost implements ToolHost {
     return `Edited ${rel} (${result.strategy} match)`;
   }
 
-  async runShell(command: string): Promise<string> {
-    const r = await this.#shell(command);
+  async runShell(command: string, timeoutMs?: number): Promise<string> {
+    const r = await this.#shell(command, timeoutMs !== undefined ? { timeoutMs } : {});
     const parts: string[] = [];
-    if (r.timedOut === true) parts.push('[command timed out]');
+    if (r.timedOut === true) parts.push(`[command timed out] ${SHELL_TIMEOUT_HINT}`);
     parts.push(`exit code: ${r.code}`);
     if (r.stdout.length > 0) parts.push(`stdout:\n${r.stdout}`);
     if (r.stderr.length > 0) parts.push(`stderr:\n${r.stderr}`);

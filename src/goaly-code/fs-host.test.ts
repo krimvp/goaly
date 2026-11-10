@@ -167,10 +167,15 @@ describe('NodeToolHost (path-guarded fs + injected shell)', () => {
       expect(out).toMatch(/stderr:\nwarn/);
     });
 
-    it('flags a timed-out command', async () => {
-      const shell: ShellExec = async () => ({ stdout: '', stderr: '', code: 124, timedOut: true });
+    it('passes the time left to the shell and flags a timed-out command with the background hint', async () => {
+      const seen: Array<{ timeoutMs?: number } | undefined> = [];
+      const shell: ShellExec = async (_c, opts) => {
+        seen.push(opts);
+        return { stdout: '', stderr: '', code: 124, timedOut: true };
+      };
       const h = new NodeToolHost({ root, shell });
-      expect(await h.runShell('sleep 999')).toMatch(/timed out/);
+      expect(await h.runShell('sleep 999', 250)).toMatch(/timed out[\s\S]*background/);
+      expect(seen).toEqual([{ timeoutMs: 250 }]);
     });
   });
 });

@@ -254,6 +254,30 @@ describe('OpenAiClient', () => {
     expect(calls).toBe(1);
   });
 
+  it('caps the request at a per-call timeout shorter than the client timeout', async () => {
+    const slowFetch: FetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('This operation was aborted')));
+      });
+    const c = new OpenAiClient({ baseUrl: 'https://x.test', fetch: slowFetch, sleep: async () => {} });
+    await expect(c.chat(REQ, { timeoutMs: 5 })).rejects.toThrow(/timed out after 5ms/);
+  });
+
+  it('does not retry when the next backoff wait does not fit in the per-call timeout', async () => {
+    const slept: number[] = [];
+    const { fetch, calls } = fakeFetch([{ kind: 'res', status: 503, body: 'down' }]);
+    const c = new OpenAiClient({
+      baseUrl: 'https://api.example.com/v1',
+      fetch,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    await expect(c.chat(REQ, { timeoutMs: 1500 })).rejects.toThrow(/no time left for a retry: HTTP 503/);
+    expect(calls).toHaveLength(2);
+    expect(slept).toEqual([1000]);
+  });
+
   it('survives a provider outage of about one minute (six 503s, then a success)', async () => {
     const slept: number[] = [];
     const down: Canned = { kind: 'res', status: 503, body: 'overloaded' };

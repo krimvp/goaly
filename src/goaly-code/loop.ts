@@ -4,7 +4,9 @@
  * final message or called `finish`, stop. The loop is the single most important fail-closed surface:
  *
  *   - turn cap hit                          → status `truncated`
- *   - wall-clock deadline reached           → status `timeout`
+ *   - wall-clock deadline reached           → status `timeout` (each model call and each tool call
+ *                                             gets only the time left; a tool cut off at the deadline
+ *                                             gets a timeout result string)
  *   - the client throws (network / 5xx / malformed envelope, after its own bounded retries)
  *                                           → status `crashed` (feeds the pure STUCK_HARNESS_CRASH detector)
  *   - a throwing/invalid tool call          → its error becomes the tool RESULT string (never a crash)
@@ -53,7 +55,7 @@ export type RunAgentLoopOptions = {
   messages: ChatMessage[];
   /** Max model turns before the loop gives up (status `truncated`). */
   maxTurns: number;
-  /** Absolute wall-clock deadline (epoch ms); checked before each turn → status `timeout`. */
+  /** Absolute wall-clock deadline (epoch ms); bounds every model call and tool call → status `timeout`. */
   deadlineMs?: number;
   now?: () => number;
   onEvent?: AgentEventSink;
@@ -91,23 +93,25 @@ export async function runAgentLoop(opts: RunAgentLoopOptions): Promise<LoopResul
   let status: HarnessRunResult['status'] | undefined;
   let output = '';
 
+  const remaining = (): number | undefined =>
+    opts.deadlineMs !== undefined ? opts.deadlineMs - now() : undefined;
+  const pastDeadline = (): boolean => (remaining() ?? 1) <= 0;
+
   for (let turn = 0; turn < opts.maxTurns; turn++) {
-    if (opts.deadlineMs !== undefined && now() >= opts.deadlineMs) {
+    if (pastDeadline()) {
       status = 'timeout';
       break;
     }
 
     let result: ChatResult;
     try {
-      result = await opts.client.chat({
-        model: opts.model,
-        messages,
-        tools: apiTools,
-        temperature: 0,
-        tool_choice: 'auto',
-      });
+      const timeoutMs = remaining();
+      result = await opts.client.chat(
+        { model: opts.model, messages, tools: apiTools, temperature: 0, tool_choice: 'auto' },
+        timeoutMs !== undefined ? { timeoutMs } : {},
+      );
     } catch (e) {
-      status = 'crashed';
+      status = pastDeadline() ? 'timeout' : 'crashed';
       output = errorMessage(e);
       break;
     }
@@ -127,7 +131,7 @@ export async function runAgentLoop(opts: RunAgentLoopOptions): Promise<LoopResul
       break;
     }
 
-    const terminal = await dispatchToolCalls(opts, result, messages, emit);
+    const terminal = await dispatchToolCalls(opts, result, messages, emit, remaining);
     if (terminal !== null) {
       status = 'completed';
       output = terminal;
@@ -181,10 +185,11 @@ async function dispatchToolCalls(
   result: ChatResult,
   messages: ChatMessage[],
   emit: (e: AgentStreamEvent) => void,
+  remaining: () => number | undefined,
 ): Promise<string | null> {
   let terminalSummary: string | null = null;
   for (const tc of result.toolCalls) {
-    const outcome = await dispatchTool(opts.tools, tc.function.name, tc.function.arguments, opts.host);
+    const outcome = await dispatchTool(opts.tools, tc.function.name, tc.function.arguments, opts.host, remaining());
     messages.push({ role: 'tool', content: outcome.output, tool_call_id: tc.id });
     emit({ kind: 'tool_result', id: tc.id, output: outcome.output });
     if (outcome.terminal) terminalSummary = outcome.output;

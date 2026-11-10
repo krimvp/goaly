@@ -989,6 +989,10 @@ installed, it selects `claude` so the missing-install error gives a clear next s
   (`--llm-api-key-env <NAME>` overrides; a keyless local endpoint like ollama needs none). The
   read-only LLM steps default onto the same endpoint. Both fail closed (refuse to start) if the
   base URL or model is missing.
+- **`--harness-timeout-ms`** (default 600000) is the `goaly-code` turn budget. Each model call and
+  each tool call gets only the time left in the turn. A `run_shell` command that runs into the
+  deadline is killed, and the model gets a timeout result that tells it to run a server or a watcher
+  in the background. The turn then ends as `timeout`.
 - **`--max-agent-turns N`** (default 50) caps the `goaly-code` agent loop per run. Hitting the cap
   ends the turn as `truncated` — not a failure — and the loop grants another iteration. Raise to
   100–200 for hard from-scratch tasks. A no-op for the CLI harnesses (they manage their own turn

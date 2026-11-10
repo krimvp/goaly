@@ -625,11 +625,12 @@ src/goaly-code/
 The HTTP layer is one place (`OpenAiClient`): `fetch` + Zod, base-url + bearer auth, bounded retries
 (network / 408 / 429 / 5xx / a 200 whose body is not JSON, for about one minute, then a fail-closed
 throw; a JSON body that fails the Zod envelope fails closed at once), a per-request
-`AbortController` timeout (not retried — the harness passes its turn budget as this timeout), and `usage`
-→ `TokenBreakdown` (OpenAI's `prompt_tokens` is cache-inclusive, so cached tokens are split out into
+`AbortController` timeout (not retried), and `usage` → `TokenBreakdown` (OpenAI's `prompt_tokens` is cache-inclusive, so cached tokens are split out into
 `cacheRead`). Both `fetch` and the backoff `sleep` are injectable, so unit tests touch no network and
 no real timer. It returns a **normalized** `ChatResult` (minted tool-call ids, parsed usage) so the
-loop never re-handles wire quirks.
+loop never re-handles wire quirks. `chat(req, { timeoutMs })` takes a per-call budget that caps every
+attempt and every backoff wait: the loop passes the time left in the turn, so a retry never runs past
+the turn deadline.
 
 The same client backs the read-only `OpenAiLlmProvider` (`--llm-provider openai`): a single
 `[system?, user]` exchange with **no tools**, so it is structurally read-only — it fails closed
@@ -645,7 +646,8 @@ fail-closed mapping mirror `adapter.contract.test.ts`:
 | condition | status |
 |---|---|
 | turn cap hit | `truncated` |
-| wall-clock deadline reached | `timeout` |
+| wall-clock deadline reached (each model call and each tool call gets only the time left in the turn) | `timeout` |
+| a tool call runs into the deadline | a timeout **tool result string** (`run_shell` is also killed; its message tells the model to background a server or a watcher) |
 | client throws (network / 5xx / malformed envelope, after retries) | `crashed` (→ pure `STUCK_HARNESS_CRASH`) |
 | a throwing / invalid tool call | its error becomes the **tool result string** (never a crash) |
 | final message / `finish` | `completed` |
