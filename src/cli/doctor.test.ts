@@ -86,7 +86,7 @@ describe('goaly doctor', () => {
     });
     expect(badValue.code).toBe(1);
     expect(badValue.text).toContain('.goalyrc: INVALID');
-    expect(badValue.text).toContain('unknown harness: nope');
+    expect(badValue.text).toContain("--harness: expected claude | codex | droid | pi | goaly-code, got 'nope'");
   });
 
   it('reads the home config from the injected homeDir', async () => {

@@ -5,6 +5,7 @@ import type { DoctorCommand } from '../doctor';
 import type { InitCommand } from '../init';
 import type { ConfigCommand } from '../config-cmd';
 import { UsageError, parseFlags, str, type RawFlags } from './tokens';
+import { badFlagValue } from './value-error';
 import { rejectUnknownFlags } from './unknown';
 
 /**
@@ -224,7 +225,7 @@ export function parseUiCommand(rest: string[]): { ui: UiCommand; workspace: stri
   if (rawPort !== undefined) {
     const parsed = z.coerce.number().int().min(1).max(65535).safeParse(rawPort);
     if (!parsed.success) {
-      throw new UsageError(`--port: expected an integer in 1..65535, got '${rawPort}'`);
+      throw badFlagValue('--port', 'an integer in 1..65535', rawPort);
     }
     port = parsed.data;
   }

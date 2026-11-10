@@ -1,5 +1,6 @@
 import { SandboxPolicy } from '../../sandbox/policy';
 import { UsageError, str, type RawFlags } from './tokens';
+import { badFlagValue, zodExpectation } from './value-error';
 
 /**
  * Parse the `--sandbox-net` value into the policy's `network` shape. `none`/`allow` map to the
@@ -55,15 +56,16 @@ export function parseSandbox(flags: RawFlags): SandboxPolicy {
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const key = issue?.path[0];
-    const flag =
+    const [flag, value] =
       key === 'network'
-        ? '--sandbox-net'
+        ? ['--sandbox-net', net]
         : key === 'runtime'
-          ? '--sandbox-runtime'
+          ? ['--sandbox-runtime', runtime]
           : key === 'image'
-            ? '--sandbox-image'
-            : '--sandbox';
-    throw new UsageError(`${flag}: ${issue?.message ?? 'invalid sandbox option'}`);
+            ? ['--sandbox-image', image]
+            : ['--sandbox', mode];
+    const expected = key === 'network' ? 'none | allow | allow:<host,host,…>' : zodExpectation(issue);
+    throw badFlagValue(flag, expected, value);
   }
   return parsed.data;
 }

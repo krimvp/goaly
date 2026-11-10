@@ -52,7 +52,7 @@ describe('goaly config validate', () => {
     const preset = await validate('{ "presets": { "ci": { "harness": "nope" } } }');
     expect(preset.code).toBe(1);
     expect(preset.err).toContain("preset 'ci'");
-    expect(preset.err).toContain('unknown harness: nope');
+    expect(preset.err).toContain("--harness: expected claude | codex | droid | pi | goaly-code, got 'nope'");
   });
 
   it('accepts a valid config and lists the settings it carries', async () => {

@@ -936,6 +936,17 @@ describe('parseArgs', () => {
       expect(ok.timeouts.harnessIdleMs).toBe(1000);
     });
 
+    it('a bad flag value names the flag, the value given and the allowed shape', async () => {
+      const message = (argv: string[]) => parseArgs([...run, ...argv]).then(() => '', (e: Error) => e.message);
+      expect(await message(['--max-iterations', 'abc'])).toBe("--max-iterations: expected a number, got 'abc'");
+      expect(await message(['--max-iterations', '1.5'])).toBe("--max-iterations: expected an integer, got '1.5'");
+      expect(await message(['--budget-tokens', '-5'])).toBe("--budget-tokens: expected a number > 0, got '-5'");
+      expect(await message(['--candidates', '17'])).toBe("--candidates: expected a positive integer ≤ 16, got '17'");
+      expect(await message(['--sandbox=weird'])).toBe(
+        "--sandbox: expected none | auto | bwrap | firejail | container, got 'weird'",
+      );
+    });
+
     it('rejects sandbox sub-flags without --sandbox (they would be discarded)', async () => {
       await expect(parseArgs([...run, '--sandbox-net', 'allow'])).rejects.toThrow(
         /--sandbox-net requires --sandbox/,

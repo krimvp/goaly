@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { CliInput } from '../domain/config';
 import type { ResolvedInputs } from './input-sources';
 import { UsageError, str, boolFlag, type RawFlags } from './flags/tokens';
+import { badFlagValue, zodExpectation } from './flags/value-error';
 import { parseResumeBestOfIncomplete } from './flags/budget-flags';
 import {
   parseAdversarialCount,
@@ -174,7 +175,7 @@ function parseCliInput(input: Record<string, unknown>): z.infer<typeof CliInput>
     if (!(e instanceof z.ZodError)) throw e;
     const lines = e.issues.map((issue) => {
       const field = String(issue.path[0] ?? 'input');
-      return `invalid value for ${flagSpelling(field)}: ${issue.message}`;
+      return badFlagValue(flagSpelling(field), zodExpectation(issue), input[field]).message;
     });
     throw new UsageError(lines.join('\n'));
   }
