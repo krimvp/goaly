@@ -86,7 +86,7 @@ export function candidatesFlag(flags: RawFlags): string | undefined {
   if (value === undefined) return undefined;
   const parsed = z.coerce.number().int().positive().max(MAX_CANDIDATES).safeParse(value);
   if (!parsed.success) {
-    throw badFlagValue('--candidates', `a positive integer ≤ ${MAX_CANDIDATES}`, value);
+    throw badFlagValue(primary !== undefined ? '--candidates' : '--best-of', `a positive integer ≤ ${MAX_CANDIDATES}`, value);
   }
   return value;
 }

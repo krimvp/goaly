@@ -68,7 +68,7 @@ export function parseHarness(value: string | undefined): HarnessChoice {
   // The `claude-code` value was renamed to `claude` (one name per CLI across the harness and the
   // LLM-provider roles); fail closed with the migration hint rather than silently accept the old one.
   if (value === 'claude-code') {
-    throw new UsageError(`--harness: 'claude-code' was renamed — did you mean 'claude'?`);
+    throw new UsageError(`--harness: 'claude-code' was renamed — did you mean 'claude'?`, '--harness');
   }
   throw badFlagValue('--harness', PUBLIC_HARNESS_CHOICES.join(' | '), value);
 }

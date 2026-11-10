@@ -1107,6 +1107,22 @@ describe('parseArgs', () => {
       expect(explicit.llmProvider).toBe('claude');
     });
 
+    it('a bad value from a config file names that file; the same value on the CLI does not', async () => {
+      const fromRc = (overlay: Record<string, string>) => async () => ({ overlay, sources: ['/w/.goalyrc'] });
+      const message = (argv: string[], overlay: Record<string, string>) =>
+        parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', ...argv], undefined, fromRc(overlay)).then(
+          () => '',
+          (e: Error) => e.message,
+        );
+      expect(await message([], { harness: 'nope' })).toBe(
+        "--harness: expected claude | codex | droid | pi | goaly-code, got 'nope' (set in /w/.goalyrc)",
+      );
+      expect(await message([], { 'max-iterations': 'abc' })).toBe(
+        "--max-iterations: expected a number, got 'abc' (set in /w/.goalyrc)",
+      );
+      expect(await message(['--max-iterations', 'abc'], {})).toBe("--max-iterations: expected a number, got 'abc'");
+    });
+
     it('a config-file harness drives the derived provider; a config-file llm-provider is explicit', async () => {
       const derived = await parseArgs(
         ['run', '--goal', 'g', '--generate'],

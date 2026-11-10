@@ -3,7 +3,7 @@ import { UsageError } from './tokens';
 
 /** The one shape of a bad flag value: the flag, what it accepts, and the value given. */
 export function badFlagValue(flag: string, expected: string, value: unknown): UsageError {
-  return new UsageError(`${flag}: expected ${expected}, got '${String(value)}'`);
+  return new UsageError(`${flag}: expected ${expected}, got '${String(value)}'`, flag);
 }
 
 /** What a failed Zod issue accepts, in the words of {@link badFlagValue}. */

@@ -177,6 +177,6 @@ function parseCliInput(input: Record<string, unknown>): z.infer<typeof CliInput>
       const field = String(issue.path[0] ?? 'input');
       return badFlagValue(flagSpelling(field), zodExpectation(issue), input[field]).message;
     });
-    throw new UsageError(lines.join('\n'));
+    throw new UsageError(lines.join('\n'), flagSpelling(String(e.issues[0]?.path[0] ?? 'input')));
   }
 }

@@ -23,7 +23,7 @@ import { parseWorktreeRun } from './flags/subcommands';
 import { closestName, rejectUnknownFlags } from './flags/unknown';
 import { parseSubcommand } from './args-commands';
 import { buildCliInput } from './args-cli-input';
-import { resolveFlagLayers, type ConfigLoader } from './args-layers';
+import { resolveFlagLayers, type ConfigLoader, type FlagLayers } from './args-layers';
 import { MULTI_SOURCE_FIELDS, RESUMED_GOAL_PLACEHOLDER, type ParsedArgs } from './args-types';
 import { which } from '../util/which';
 import { SUBCOMMANDS } from './completion';
@@ -66,8 +66,27 @@ export async function parseArgs(
   // implicit run, whose first token may be a positional goal (`goaly "my goal"`) or a flag
   // (`goaly -d "my goal"`). A bare `goaly` already returned help above.
   const cliFlags = parseRunFlags(command === 'run' ? rest : argv);
-  const { flags, configSources, warnings } = await resolveFlagLayers(cliFlags, load);
+  const layers = await resolveFlagLayers(cliFlags, load);
+  try {
+    return await parseRun(cliFlags, layers, readers, isInstalled);
+  } catch (e) {
+    throw nameConfigSource(e, cliFlags, layers.configSources);
+  }
+}
 
+/** A bad value the command line did not set came from a config file: say which one. */
+function nameConfigSource(e: unknown, cliFlags: RawFlags, configSources: string[]): unknown {
+  if (!(e instanceof UsageError) || e.flag === undefined || configSources.length === 0) return e;
+  if (cliFlags[e.flag.replace(/^--/, '')] !== undefined) return e;
+  return new UsageError(`${e.message} (set in ${configSources.join(' / ')})`, e.flag);
+}
+
+async function parseRun(
+  cliFlags: RawFlags,
+  { flags, configSources, warnings }: FlagLayers,
+  readers: InputReaders,
+  isInstalled: (command: string) => boolean,
+): Promise<ParsedArgs> {
   // Goal/intent/rubric may come from inline flags, files, or stdin — resolve to strings first.
   const resolved = await resolveInputSources(flags, readers);
 

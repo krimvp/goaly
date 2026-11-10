@@ -90,12 +90,20 @@ export function parseFlags(tokens: string[]): ParsedTokens {
   return { flags, positionals };
 }
 
-export class UsageError extends Error {}
+/** `flag` names the flag a bad value belongs to, so the caller can say which layer set it. */
+export class UsageError extends Error {
+  constructor(
+    message: string,
+    readonly flag?: string,
+  ) {
+    super(message);
+  }
+}
 
 export function str(flags: RawFlags, key: string): string | undefined {
   const v = flags[key];
   if (v === undefined) return undefined;
-  if (typeof v === 'boolean') throw new UsageError(`--${key} expects a value`);
+  if (typeof v === 'boolean') throw new UsageError(`--${key} expects a value`, `--${key}`);
   return v;
 }
 
@@ -112,5 +120,5 @@ export function boolFlag(flags: RawFlags, key: string): boolean | undefined {
   if (typeof v === 'boolean') return v;
   if (v === 'true' || v === '1' || v === 'yes') return true;
   if (v === 'false' || v === '0' || v === 'no') return false;
-  throw new UsageError(`--${key}: expected true or false, got '${String(v)}'`);
+  throw new UsageError(`--${key}: expected true or false, got '${String(v)}'`, `--${key}`);
 }

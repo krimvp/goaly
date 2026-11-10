@@ -113,7 +113,7 @@ export async function checkConfigValues(doc: ParsedConfigDocument, source: strin
     } catch (e) {
       if (!(e instanceof UsageError)) throw e;
       const where = preset !== undefined ? ` (preset '${preset}')` : '';
-      throw new UsageError(`config file '${source}'${where}: ${e.message}`);
+      throw new UsageError(`config file '${source}'${where}: ${e.message.replace(` (set in ${source})`, '')}`);
     }
   }
 }

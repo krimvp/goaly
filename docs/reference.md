@@ -407,7 +407,8 @@ difference — and a test enforces it, so a newly added flag cannot quietly beco
 uses and reports the verdict (exit `0` valid / `1` invalid / `2` unreadable) — so "this file
 validates" and "a run accepts this file" are one fact. It checks each value with the run's own flag
 parser (`"max-iterations": "abc"` or `"harness": "nope"` is invalid), once for the top level and
-once for each preset it defines. It reports the presets a file defines
+once for each preset it defines. A run that reads a bad value from a config file names that file
+in its usage error (`--harness: expected …, got 'nope' (set in .goalyrc)`). It reports the presets a file defines
 alongside its settings. `goaly config presets [--names] [--workspace <dir>]` lists the named
 presets exactly as a run would resolve them across all layers.
 `goaly config defects list|clear [--defect-corpus <path>]` inspects or resets the cross-run
