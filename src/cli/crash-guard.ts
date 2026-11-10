@@ -25,7 +25,7 @@ export function makeInterruptController(
         warn(
           `\ngoaly: interrupt received — finishing the current step, then stopping cleanly ` +
             `(press Ctrl-C again to exit immediately).\n` +
-            `goaly: resume later with: goaly --resume ${runId} (plus your original flags)\n`,
+            `goaly: resume later with: goaly --resume ${runId}\n`,
         );
         return;
       }

@@ -224,7 +224,7 @@ describe('makeInterruptController', () => {
     expect(c.interrupted()).toBe(false);
     c.onSignal();
     expect(c.interrupted()).toBe(true);
-    expect(warned.join('')).toContain('--resume run-abc');
+    expect(warned.join('')).toContain('resume later with: goaly --resume run-abc\n');
     expect(warned.join('')).toContain('finishing the current step');
     expect(forced).toBe(0);
 
