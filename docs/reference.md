@@ -1400,7 +1400,12 @@ kill an hours-long run. All defaults, no flags needed
 - **Crash-safety end to end.** Every run-log append is fsync'd write-ahead; a torn tail is
   tolerated on read and repaired on the next append. A per-run lock stops two processes driving the
   same run (stale locks self-heal, with a notice naming the dead holder's pid — also when a
-  reboot or a container restart gave that pid to another process). One working tree takes one live
+  reboot or a container restart gave that pid to another process). While a run lives, the lock's
+  run dir also records each live agent / verify process group (`run.children`: pid and process start
+  time). When goaly is killed hard (`kill -9`) those groups can keep editing the tree, so the next
+  driver that reclaims the stale lock first SIGKILLs every recorded group whose start time still
+  matches (never a pid that now names another process), and the notice says how many it stopped.
+  Without `/proc` (non-Linux) nothing is recorded. One working tree takes one live
   run: `goaly run` (and a `--resume` of a different run) refuses to start (exit 2) while another
   live process drives a run in the same tree, and names that run, `goaly runs watch <id>`, and
   `--worktree` for a parallel run. Best-of-N candidates and parallel waves run inside their own

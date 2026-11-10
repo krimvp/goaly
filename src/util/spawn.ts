@@ -61,6 +61,26 @@ const EXIT_DRAIN_MS = 2000;
 /** Live children spawned through {@link runProcess}, so a forced shutdown can reap them. */
 const activeChildren = new Set<{ pid: number | undefined; killGroup: boolean }>();
 
+let childGroupsListener: ((pids: number[]) => void) | undefined;
+
+/**
+ * Be told the pids of the live `killGroup` children (each one leads its own process group) each
+ * time that set changes. The run lock uses it to record them durably, so the next driver can reap
+ * them after a SIGKILL of goaly. One listener per process; a throwing listener is ignored.
+ */
+export function setChildGroupsListener(listener: ((pids: number[]) => void) | undefined): void {
+  childGroupsListener = listener;
+}
+
+function notifyChildGroups(): void {
+  const pids = [...activeChildren].flatMap((c) => (c.killGroup && c.pid !== undefined ? [c.pid] : []));
+  try {
+    childGroupsListener?.(pids);
+  } catch {
+    // The record is a best-effort aid for the next driver; it must never affect the subprocess.
+  }
+}
+
 /**
  * SIGKILL every child (and, for group-spawned ones, its whole process group) still running.
  * Used by the CLI's force-exit path (second Ctrl-C): a `killGroup` child lives in its OWN process
@@ -101,6 +121,7 @@ export function runProcess(
     const child = spawn(command, args, spawnOptions);
     const registryEntry = { pid: child.pid, killGroup: options.killGroup === true };
     activeChildren.add(registryEntry);
+    if (registryEntry.killGroup) notifyChildGroups();
     let stdout = '';
     let stderr = '';
     let stdoutHead: string | undefined;
@@ -145,7 +166,7 @@ export function runProcess(
       if (timer !== null) clearTimeout(timer);
       if (idleTimer !== null) clearTimeout(idleTimer);
       if (drainTimer !== null) clearTimeout(drainTimer);
-      activeChildren.delete(registryEntry);
+      if (activeChildren.delete(registryEntry) && registryEntry.killGroup) notifyChildGroups();
       if (settled) return;
       settled = true;
       const out = stdoutHead !== undefined ? `${stdoutHead}\n${stdout}` : stdout;

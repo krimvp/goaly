@@ -1,8 +1,11 @@
-import { rmSync } from 'node:fs';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { setChildGroupsListener } from '../util/spawn';
 
 const LOCK_FILE = 'run.lock';
+/** The holder's live child process groups, `pid start` per line — see {@link recordChildGroups}. */
+const CHILDREN_FILE = 'run.children';
 
 /** Thrown when another live goaly process already holds the run directory. */
 export class RunLockedError extends Error {
@@ -25,6 +28,8 @@ export type RunLock = { release(): Promise<void> };
  * (see {@link holderAlive}): a LIVE holder fails closed with
  * a clear {@link RunLockedError}; a DEAD holder (crash / SIGKILL left the file behind) is stale —
  * the lock self-heals by unlinking and retrying, so a crashed run never needs manual cleanup.
+ * Before it does, it SIGKILLs the child process groups the dead holder recorded (see
+ * {@link reapRecordedChildGroups}): after a SIGKILL of goaly its agent can still be editing the tree.
  */
 export async function acquireRunLock(
   runDir: string,
@@ -61,10 +66,12 @@ export async function acquireRunLock(
       } finally {
         await handle.close();
       }
-      heldLocks.add(path);
+      heldRunDirs.add(runDir);
+      setChildGroupsListener(recordChildGroups);
       return {
         release: async () => {
-          if (!heldLocks.delete(path)) return;
+          if (!heldRunDirs.delete(runDir)) return;
+          await rm(join(runDir, CHILDREN_FILE), { force: true }).catch(() => undefined);
           await rm(path, { force: true }).catch(() => undefined);
         },
       };
@@ -82,10 +89,13 @@ export async function acquireRunLock(
       // Suppress the notice for our own pid — re-locking after our own earlier incarnation is
       // routine, not the trace of a crash.
       if (holder?.pid !== pid) {
+        const reaped = await reapRecordedChildGroups(runDir, startOf);
+        const orphans =
+          reaped > 0 ? `; stopped ${reaped} process group(s) it left running in the tree` : '';
         opts.onStaleReclaim?.(
           holder === null
-            ? `reclaimed an unreadable run lock at ${path} (previous driver left no valid pid)`
-            : `reclaimed a stale run lock at ${path} (previous driver pid ${holder.pid} is gone — it crashed or was killed)`,
+            ? `reclaimed an unreadable run lock at ${path} (previous driver left no valid pid${orphans})`
+            : `reclaimed a stale run lock at ${path} (previous driver pid ${holder.pid} is gone — it crashed or was killed${orphans})`,
         );
       }
       await rm(path, { force: true }).catch(() => undefined);
@@ -96,22 +106,76 @@ export async function acquireRunLock(
   );
 }
 
-/** Lock files this process holds, so a forced exit or a fatal crash can remove them synchronously. */
-const heldLocks = new Set<string>();
+/** Run dirs whose lock this process holds. */
+const heldRunDirs = new Set<string>();
+
+/**
+ * Write this process's live child groups next to every lock it holds. A SIGKILL of goaly cannot reap
+ * them, so the next driver that reclaims the stale lock does. A child whose start time cannot be read
+ * (no `/proc`) is not recorded and so is never reaped. No fsync: the record must outlive the goaly
+ * process only — a power loss stops the children too.
+ */
+function recordChildGroups(pids: number[]): void {
+  const lines = pids
+    .flatMap((pid) => {
+      const start = processStartSync(pid);
+      return start === null ? [] : [`${pid} ${start}\n`];
+    })
+    .join('');
+  for (const dir of heldRunDirs) {
+    const file = join(dir, CHILDREN_FILE);
+    try {
+      if (lines === '') {
+        rmSync(file, { force: true });
+      } else {
+        writeFileSync(`${file}.tmp`, lines);
+        renameSync(`${file}.tmp`, file);
+      }
+    } catch {
+      // One unwritable run dir must not cost the others their record.
+    }
+  }
+}
+
+/**
+ * SIGKILL each child group a dead driver recorded, but only while its leader still has the recorded
+ * start time: a pid that now names another process is never touched. Returns the count killed.
+ */
+async function reapRecordedChildGroups(
+  runDir: string,
+  startOf: (pid: number) => Promise<string | null>,
+): Promise<number> {
+  const file = join(runDir, CHILDREN_FILE);
+  let reaped = 0;
+  for (const child of parseEntries(await readFile(file, 'utf8').catch(() => ''))) {
+    // `kill(-1)` would signal every process this user owns: never let a record reach it.
+    if (child.pid <= 1 || child.start === undefined) continue;
+    if ((await startOf(child.pid)) !== child.start) continue;
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+      reaped += 1;
+    } catch {
+      // Already gone.
+    }
+  }
+  await rm(file, { force: true }).catch(() => undefined);
+  return reaped;
+}
 
 /**
  * Remove every run lock this process holds. For the exit paths that cannot await `release()`
  * (a second Ctrl-C, a fatal error): without it the next `--resume` reports a crashed driver.
  */
 export function releaseHeldRunLocksSync(): void {
-  for (const path of heldLocks) {
+  for (const dir of heldRunDirs) {
     try {
-      rmSync(path, { force: true });
+      rmSync(join(dir, CHILDREN_FILE), { force: true });
+      rmSync(join(dir, LOCK_FILE), { force: true });
     } catch {
       // Best-effort: a lock left behind only costs the stale-lock notice.
     }
   }
-  heldLocks.clear();
+  heldRunDirs.clear();
 }
 
 /**
@@ -182,22 +246,33 @@ export async function liveRunIn(
 
 async function readHolder(path: string): Promise<Holder | null> {
   try {
-    const [pidText, start] = (await readFile(path, 'utf8')).trim().split(/\s+/);
-    const pid = Number.parseInt(pidText ?? '', 10);
-    return Number.isInteger(pid) && pid > 0 ? { pid, start } : null;
+    return parseEntries(await readFile(path, 'utf8'))[0] ?? null;
   } catch {
     return null;
   }
 }
 
+/** `pid [start]` per line; a line without a valid pid is dropped. */
+function parseEntries(text: string): Holder[] {
+  return text.split('\n').flatMap((line) => {
+    const [pidText, start] = line.trim().split(/\s+/);
+    const pid = Number.parseInt(pidText ?? '', 10);
+    return Number.isInteger(pid) && pid > 0 ? [{ pid, start }] : [];
+  });
+}
+
 /** Field 22 of `/proc/<pid>/stat` (start time in clock ticks since boot); null where unreadable. */
-async function defaultProcessStartOf(pid: number): Promise<string | null> {
+function processStartSync(pid: number): string | null {
   try {
-    const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
     return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] ?? null;
   } catch {
     return null;
   }
+}
+
+async function defaultProcessStartOf(pid: number): Promise<string | null> {
+  return processStartSync(pid);
 }
 
 function defaultIsPidAlive(pid: number): boolean {

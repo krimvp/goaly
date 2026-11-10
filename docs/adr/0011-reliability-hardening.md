@@ -87,6 +87,11 @@ is allowed to end a run and *how* it is reported.
   holder fails closed with a clear message; a dead holder's lock self-heals — a crashed run never
   needs manual cleanup. The lock also records the holder's process start time (Linux `/proc`), so a
   pid that a reboot or a container restart gave to another process reads as dead too.
+  *(Amended: a SIGKILL of goaly cannot reap its group-spawned children, and they kept editing the
+  tree under the next `--resume`. While a lock is held, goaly records each live child group's pid
+  and start time in `run.children` beside it; a stale-lock reclaim SIGKILLs each recorded group
+  whose start time still matches, then removes the record. No `/proc` → no record → today's
+  behavior.)*
 - goaly-code session saves are atomic (`tmp → fsync → rename`): the previous complete log survives
   any crash mid-save.
 - `drive()`'s pre-loop IO (resume read, header write) resolves to a typed `ABORTED` — the last
