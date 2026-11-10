@@ -85,6 +85,7 @@ Usage:
   goaly init [--harness <name>] [--autonomous] [--model <m>] [--verify-cmd "<cmd>"] [--yes] [--force]
              [--workspace <dir>]
   goaly config validate <path>
+  goaly config presets [--names] [--workspace <dir>]
   goaly config defects list|clear [--defect-corpus <path>]
   goaly completion bash|zsh|fish
 
