@@ -20,8 +20,13 @@ export interface ToolHost {
   grep(pattern: string, path: string | undefined): Promise<string>;
   writeFile(path: string, content: string): Promise<string>;
   editFile(path: string, oldString: string, newString: string): Promise<string>;
-  runShell(command: string): Promise<string>;
+  /** `timeoutMs` (the time left in the turn) bounds the command; past it the process is killed. */
+  runShell(command: string, timeoutMs?: number): Promise<string>;
 }
+
+/** What the model reads when a command runs into the turn deadline. */
+export const SHELL_TIMEOUT_HINT =
+  'A command that does not exit (a server, a watcher) blocks the turn: run it in the background with its output sent to a file (e.g. `cmd > server.log 2>&1 &`) and do not wait on it.';
 
 /** One tool the model may call. `terminal` marks {@link finishTool}, which ends the loop. */
 export type ToolSpec = {
@@ -30,7 +35,9 @@ export type ToolSpec = {
   /** JSON-Schema for the function's parameters, advertised to the model. */
   readonly parameters: Record<string, unknown>;
   readonly terminal?: boolean;
-  run(rawArgs: unknown, host: ToolHost): Promise<string>;
+  /** Added to the result when the call runs into the turn deadline. */
+  readonly timeoutHint?: string;
+  run(rawArgs: unknown, host: ToolHost, timeoutMs?: number): Promise<string>;
 };
 
 /** Build a JSON-Schema object node from a property map + required list. */
@@ -149,10 +156,11 @@ const shellArgs = z.object({ command: z.string().min(1) });
 const runShellTool: ToolSpec = {
   name: 'run_shell',
   description:
-    'Run a shell command in the workspace (e.g. build, run tests, inspect). Do NOT use git commit/add/reset.',
+    'Run a shell command in the workspace (e.g. build, run tests, inspect). The command must exit: run a server or a watcher in the background. Do NOT use git commit/add/reset.',
   parameters: objectSchema({ command: STRING('The shell command line to run.') }, ['command']),
-  async run(rawArgs, host) {
-    return host.runShell(shellArgs.parse(rawArgs).command);
+  timeoutHint: SHELL_TIMEOUT_HINT,
+  async run(rawArgs, host, timeoutMs) {
+    return host.runShell(shellArgs.parse(rawArgs).command, timeoutMs);
   },
 };
 
@@ -180,19 +188,20 @@ export const DEFAULT_TOOLS: ToolSpec[] = [
 ];
 
 /** The outcome of one tool call: the result string to feed back, and whether it ends the loop. */
-export type ToolOutcome = { output: string; terminal: boolean };
+export type ToolOutcome = { output: string; terminal: boolean; timedOut?: true };
 
 /**
  * Dispatch one model-requested tool call, fail-closed (spec §2.3): resolve the tool by name, parse
  * the raw JSON argument STRING, Zod-validate the shape inside `run`, and run the handler — turning
- * EVERY failure (unknown tool, non-JSON args, invalid args, a throwing handler) into a result string
- * the model can read and recover from. Never throws.
+ * EVERY failure (unknown tool, non-JSON args, invalid args, a throwing handler, a call that runs past
+ * `timeoutMs`) into a result string the model can read and recover from. Never throws.
  */
 export async function dispatchTool(
   tools: ToolSpec[],
   name: string,
   rawArgsJson: string,
   host: ToolHost,
+  timeoutMs?: number,
 ): Promise<ToolOutcome> {
   const tool = tools.find((t) => t.name === name);
   if (tool === undefined) {
@@ -204,11 +213,25 @@ export async function dispatchTool(
   } catch {
     return { output: `Error: arguments for "${name}" were not valid JSON`, terminal: false };
   }
+  const timedOut: ToolOutcome = {
+    output: [`Error: "${name}" timed out: the turn's time budget ran out.`, tool.timeoutHint].filter(Boolean).join(' '),
+    terminal: false,
+    timedOut: true,
+  };
+  if (timeoutMs !== undefined && timeoutMs <= 0) return timedOut;
+  let timer: NodeJS.Timeout | undefined;
   try {
-    const output = await tool.run(parsed, host);
-    return { output, terminal: tool.terminal === true };
+    const run = tool.run(parsed, host, timeoutMs).then((output) => ({ output, terminal: tool.terminal === true }));
+    if (timeoutMs === undefined) return await run;
+    // The race only stops the WAIT; a tool that owns a process (run_shell) also gets `timeoutMs` and kills it.
+    const deadline = new Promise<ToolOutcome>((resolve) => {
+      timer = setTimeout(() => resolve(timedOut), timeoutMs);
+    });
+    return await Promise.race([run, deadline]);
   } catch (e) {
     return { output: `Error: ${errorMessage(e)}`, terminal: false };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -390,9 +390,9 @@ function parseBoolQuery(raw: string | null): boolean | null {
   return parsed.success ? parsed.data : null;
 }
 
-function firstIssue(error: { issues: Array<{ path: Array<string | number>; message: string }> }): string {
+function firstIssue(error: { issues: Array<{ path: PropertyKey[]; message: string }> }): string {
   const issue = error.issues[0];
   if (issue === undefined) return 'invalid request';
-  const at = issue.path.length > 0 ? ` (at ${issue.path.join('.')})` : '';
+  const at = issue.path.length > 0 ? ` (at ${issue.path.map(String).join('.')})` : '';
   return `${issue.message}${at}`;
 }

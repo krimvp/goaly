@@ -7,6 +7,8 @@ import { makeConfig, InMemoryLogFs } from '../testing/fakes';
 import { asRunId } from '../domain/ids';
 import type { ComposeOptions } from './compose';
 import type { FetchLike } from '../llm-client/openai-client';
+import { goalyCodeShellExec } from './compose-harness';
+import { makeLauncher } from '../sandbox';
 
 const base = (over: Partial<ComposeOptions> = {}): ComposeOptions => ({
   harness: 'fake',
@@ -140,5 +142,19 @@ describe('composeDeps — OpenAI LLM provider wiring', () => {
     expect(() =>
       composeDeps(makeConfig(), base({ llmProvider: 'openai', baseUrl: 'https://api.openai.com/v1' })),
     ).toThrow(EndpointConfigError);
+  });
+});
+
+describe('goalyCodeShellExec — run_shell is bounded per call', () => {
+  it('kills a foreground command at the per-call timeout the loop passes in', async () => {
+    const shell = goalyCodeShellExec({
+      root: tmpdir(),
+      launcher: makeLauncher({ mode: 'none', network: 'none' }),
+      policy: { mode: 'none', network: 'none' },
+    });
+    const started = Date.now();
+    const r = await shell('sleep 30', { timeoutMs: 200 });
+    expect(r.timedOut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 });

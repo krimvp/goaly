@@ -80,6 +80,13 @@ describe('goaly doctor', () => {
     });
     expect(valid.code).toBe(0);
     expect(valid.text).toContain('.goalyrc: present and valid');
+
+    const badValue = await report({
+      readConfigFile: async (p) => (p.includes('/ws/') ? '{ "harness": "nope" }' : undefined),
+    });
+    expect(badValue.code).toBe(1);
+    expect(badValue.text).toContain('.goalyrc: INVALID');
+    expect(badValue.text).toContain("--harness: expected claude | codex | droid | pi | goaly-code, got 'nope'");
   });
 
   it('reads the home config from the injected homeDir', async () => {

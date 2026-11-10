@@ -3,6 +3,7 @@ import path from 'node:path';
 import readline from 'node:readline/promises';
 import { parseArgs, UsageError, type UiCommand } from './args';
 import { renderHelp } from './help';
+import { usageErrorText } from './usage';
 import { startUiServer } from '../ui/server';
 import { STATE_DIR } from './compose';
 import { runRuns } from './runs';
@@ -10,7 +11,7 @@ import { runWorktree } from './worktree-cmd';
 import { runDoctor } from './doctor';
 import { runInit } from './init';
 import { runConfig } from './config-cmd';
-import { renderCompletion } from './completion';
+import { renderCompletion, SUBCOMMANDS } from './completion';
 import { WorktreeManager, WorktreeError } from '../workspace/worktree-manager';
 import { executeRun } from './run-cmd';
 import { readPackageVersion } from '../util/package-version';
@@ -37,14 +38,16 @@ export async function main(argv: string[]): Promise<number> {
     if (goal === undefined) return 0;
     argv = [goal, '--stream'];
   }
+  // `goaly <subcommand> --help` must print help, never run the subcommand (init would write a file).
+  if (argv.length > 1 && argv.some((t) => t === '--help' || t === '-h')) {
+    argv = ['help', ...(SUBCOMMANDS.includes(argv[0]!) ? [argv[0]!] : [])];
+  }
   let parsed;
   try {
     parsed = await parseArgs(argv);
   } catch (e) {
     if (e instanceof UsageError) {
-      // The message alone, plus a pointer: the full USAGE is hundreds of lines, and dumping it
-      // here scrolled the actual error (the first thing printed) straight off screen.
-      process.stderr.write(`${e.message}\n\nrun 'goaly help' for the full usage\n`);
+      process.stderr.write(usageErrorText(e.message));
       return 2;
     }
     throw e;
@@ -116,6 +119,17 @@ export async function main(argv: string[]): Promise<number> {
       out: (s) => process.stdout.write(s),
       err: (s) => process.stderr.write(s),
     });
+  }
+
+  // Without a terminal the Seal prompt reads EOF, its promise never settles, and Node exits 0 with
+  // no outcome — an unattended script would read that as DONE. A resume is past Seal.
+  if (!parsed.config.autonomous && parsed.resumeRunId === undefined && !parsed.dryRun && process.stdin.isTTY !== true) {
+    process.stderr.write(
+      'goaly: this run stops at Seal for a human to approve the contract, but stdin is not a ' +
+        'terminal, so nobody can answer. Run it in a terminal, or add --autonomous for an ' +
+        'unattended run (the contract is still frozen and logged).\n',
+    );
+    return 2;
   }
 
   // --worktree: re-root the ENTIRE run at a managed worktree BEFORE anything reads

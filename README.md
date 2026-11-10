@@ -79,6 +79,7 @@ COMPILE ──► SEAL ──► setup + pre-flight ──► ┌─────
 - **The control flow has zero LLM calls.** A pure reducer owns all policy behind four narrow seams.
 - **Every run is crash-safe and resumable.** A write-ahead log under `.goaly/<runId>/` makes runs
   replayable, `--resume`-able, and inspectable (`goaly runs list` / `show` / `watch`, `goaly ui`).
+  One working tree takes one live run; use `--worktree` to run in parallel.
 - **Stuck detection bails early with a typed reason** (no-diff, repeated failure, oscillation,
   harness crash, unevaluable contract, repeated timeout-with-no-diff, budget).
 
@@ -171,6 +172,9 @@ keyless one like ollama).
 make dev ARGS='run --goal "..." --verify-cmd "true" --harness fake --autonomous'  # run from source
 make check          # typecheck + tests (the definition-of-done gate)
 ```
+
+The `fake` harness changes no files, and its LLM steps default to a built-in fake LLM, so that dev
+run calls no model and spends no tokens. The run is labelled `FAKE-LLM`.
 
 `make help` lists every task. The dev loop runs the TypeScript entry directly with `tsx` — no build
 step. See [`AGENTS.md`](AGENTS.md) for the eight invariants and conventions, and

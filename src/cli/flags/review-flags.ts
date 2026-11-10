@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { UsageError, str, boolFlag, type RawFlags } from './tokens';
+import { badFlagValue } from './value-error';
 
 /**
  * Validate `--approver-quorum N` at the seam (issue #84): a positive integer reviewer count for the
@@ -11,7 +12,7 @@ export function parseApproverQuorum(flags: RawFlags): number | undefined {
   if (v === undefined) return undefined;
   const parsed = z.coerce.number().int().positive().safeParse(v);
   if (!parsed.success) {
-    throw new UsageError(`--approver-quorum: expected a positive integer, got '${v}'`);
+    throw badFlagValue('--approver-quorum', 'a positive integer', v);
   }
   return parsed.data;
 }
@@ -26,7 +27,7 @@ export function parseAdversarialCount(flags: RawFlags, name: string): number | u
   if (v === undefined) return undefined;
   const parsed = z.coerce.number().int().min(0).safeParse(v);
   if (!parsed.success) {
-    throw new UsageError(`--${name}: expected a non-negative integer, got '${v}'`);
+    throw badFlagValue(`--${name}`, 'a non-negative integer', v);
   }
   return parsed.data;
 }
@@ -63,7 +64,7 @@ export function parseApproverDiversityTemp(flags: RawFlags): number | undefined 
   if (v === undefined) return undefined;
   const parsed = z.coerce.number().min(0).max(2).safeParse(v);
   if (!parsed.success) {
-    throw new UsageError(`--approver-diversity-temp: expected a number in [0,2], got '${v}'`);
+    throw badFlagValue('--approver-diversity-temp', 'a number in [0,2]', v);
   }
   return parsed.data;
 }
@@ -75,15 +76,13 @@ export function parseApproverDiversityTemp(flags: RawFlags): number | undefined 
  * form; the Zod array seam (`.nonempty()`, `.min(1)` per entry) is the real fail-closed gate. Absent
  * ⇒ undefined so the approver keeps the default lens taxonomy (byte-for-byte unchanged).
  */
-export function parseApproverLenses(flags: RawFlags): [string, ...string[]] | undefined {
+export function parseApproverLenses(flags: RawFlags): string[] | undefined {
   const v = str(flags, 'approver-lenses');
   if (v === undefined) return undefined;
   const entries = v.split(',').map((l) => l.trim());
   const parsed = z.array(z.string().min(1)).nonempty().safeParse(entries);
   if (!parsed.success) {
-    throw new UsageError(
-      `--approver-lenses: expected a comma-separated list of non-empty lenses, got '${v}'`,
-    );
+    throw badFlagValue('--approver-lenses', 'a comma-separated list of non-empty lenses', v);
   }
   return parsed.data;
 }

@@ -60,7 +60,7 @@ function refinePlanGraph(value: { phases: readonly SubGoal[] }, ctx: z.Refinemen
   const violation = validatePlanGraph(value.phases);
   if (violation === undefined) return;
   ctx.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: 'custom',
     path: ['phases'],
     message: describePlanGraphViolation(violation),
     params: { planGraph: violation },

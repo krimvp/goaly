@@ -123,6 +123,25 @@ describe('classifyFlatRun (claude/droid shared policy)', () => {
     expect(r.status).toBe('crashed');
     expect(r.output).toBe('boom');
   });
+
+  it('keeps the bounded END of a long stderr on a crash — the last error line survives', () => {
+    const noise = Array.from({ length: 40 }, (_, i) => `(node:1) Warning: noise line ${i}`).join('\n');
+    const stderr = `${noise}\nFATAL: ENOSPC: no space left on device\n`;
+    const r = classifyFlatRun({ parsed: null, code: 1, stderr, unknownSession: 'unk' });
+    expect(r.output).toMatch(/ENOSPC: no space left on device$/);
+    expect(r.output.length).toBeLessThanOrEqual(500);
+  });
+
+  it('falls back to the raw stdout tail on a crash with no stderr and no parseable text', () => {
+    const r = classifyFlatRun({
+      parsed: null,
+      code: 1,
+      stderr: '',
+      stdout: "Error: unknown option '--frobnicate'\n",
+      unknownSession: 'unk',
+    });
+    expect(r.output).toBe("Error: unknown option '--frobnicate'");
+  });
 });
 
 describe('runCodecHarness', () => {
@@ -263,6 +282,24 @@ describe('defaultAgentExec cwd (the agent runs IN the workspace)', () => {
     expect(await realpath(r.stdout.trim())).toBe(ws);
     expect(r.stdout.trim()).not.toBe(process.cwd()); // would be the bug: agent in goaly's cwd
   });
+
+  it('a turn that streams more than the 16 MB capture cap still completes with its final result', async () => {
+    // A long streaming turn outgrows any fixed cap. Killing it there crashed a productive turn with
+    // an empty message and lost its session id.
+    const script = [
+      "const sid='11111111-2222-3333-4444-555555555555';",
+      "process.stdout.write(JSON.stringify({type:'system',subtype:'init',session_id:sid})+'\\n');",
+      "const line=JSON.stringify({type:'user',message:{role:'user',content:'x'.repeat(100000)}})+'\\n';",
+      "let i=0;const step=()=>{while(i<200){i++;if(!process.stdout.write(line))return process.stdout.once('drain',step);}",
+      "process.stdout.write(JSON.stringify({type:'result',subtype:'success',result:'all done',session_id:sid})+'\\n');};step();",
+    ].join('');
+    const exec = defaultAgentExec('node', 30_000, false);
+    const nodeExec: AgentExecFn = (_args, input, onStdout) => exec(['-e', script], input, onStdout);
+    const result = await runCodecHarness(claudeCodec, nodeExec, undefined, 'go');
+    expect(result.status).toBe('completed');
+    expect(result.output).toBe('all done');
+    expect(result.sessionId).toBe('11111111-2222-3333-4444-555555555555');
+  }, 30_000);
 
   it('falls back to the inherited cwd when none is given (sandbox sets the jail cwd itself)', async () => {
     const exec = defaultAgentExec('node', 5000, false);

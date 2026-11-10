@@ -6,10 +6,13 @@
  *
  * Design contract:
  *   - injectable `fetch` + `sleep` so unit tests never touch the network or a real timer;
- *   - bounded retries on transient failure (network error, 429, 5xx) with linear backoff, then a
- *     fail-closed throw — never a fabricated empty completion (invariant #4);
- *   - the response is Zod-validated at the seam (invariant #6); a malformed envelope throws;
- *   - per-request wall-clock timeout via `AbortController`.
+ *   - bounded retries on transient failure (network error, 408, 429, 5xx, a 200 whose body is not
+ *     JSON) with exponential backoff,
+ *     then a fail-closed throw — never a fabricated empty completion (invariant #4);
+ *   - the response is Zod-validated at the seam (invariant #6); a malformed JSON envelope throws;
+ *   - per-request wall-clock timeout via `AbortController`. A timeout is NOT retried. A per-call
+ *     `timeoutMs` (the goaly-code harness passes the time left in its turn) caps every attempt AND the
+ *     backoff waits, so the retries never run past the caller's deadline.
  * It returns a NORMALIZED {@link ChatResult} (minted tool-call ids, usage → `TokenBreakdown`) so the
  * provider and the loop never re-handle wire quirks.
  */
@@ -27,10 +30,14 @@ import {
 
 /** Default per-request wall-clock budget. */
 export const DEFAULT_LLM_HTTP_TIMEOUT_MS = 10 * 60 * 1000;
-/** Default number of retries (so total attempts = retries + 1) on a transient failure. */
-const DEFAULT_RETRIES = 2;
-/** Exponential backoff base between attempts (500ms, 1s, 2s, …). */
-const BACKOFF_MS = 500;
+/**
+ * Default number of retries (so total attempts = retries + 1) on a transient failure. With the
+ * backoff below the waits are 1s, 2s, 4s, … 32s: a provider outage of about one minute does not fail
+ * the call (and so does not count toward the stuck-crash streak of a long run).
+ */
+const DEFAULT_RETRIES = 6;
+/** Exponential backoff base between attempts (1s, 2s, 4s, …). */
+const BACKOFF_MS = 1000;
 /** Cap on a server-requested Retry-After wait, so a hostile/buggy header can't stall the run. */
 const MAX_RETRY_AFTER_MS = 60_000;
 
@@ -65,7 +72,8 @@ export type ChatResult = {
 /** The transport seam. A test fake implements this directly; production is {@link OpenAiClient}. */
 export interface LlmClient {
   readonly name: string;
-  chat(req: ChatRequest): Promise<ChatResult>;
+  /** `timeoutMs` is the whole budget of this call, retries included. */
+  chat(req: ChatRequest, opts?: { timeoutMs?: number }): Promise<ChatResult>;
 }
 
 /** Thrown (fail-closed) when a call cannot produce a usable, validated completion. */
@@ -126,8 +134,9 @@ export class OpenAiClient implements LlmClient {
     this.#headers = opts.headers ?? {};
   }
 
-  async chat(req: ChatRequest): Promise<ChatResult> {
+  async chat(req: ChatRequest, opts: { timeoutMs?: number } = {}): Promise<ChatResult> {
     const body = JSON.stringify(req);
+    const deadline = opts.timeoutMs !== undefined ? Date.now() + opts.timeoutMs : Infinity;
     let lastError = 'unknown error';
     // Exponential backoff; a server-provided Retry-After (rate-limit window) overrides the base
     // wait when LONGER, capped so a bad header can't stall the run — real 429 windows are tens of
@@ -135,10 +144,13 @@ export class OpenAiClient implements LlmClient {
     let retryAfterMs: number | undefined;
     for (let attempt = 0; attempt <= this.#retries; attempt++) {
       if (attempt > 0) {
-        const backoff = BACKOFF_MS * 2 ** (attempt - 1);
-        await this.#sleep(Math.max(backoff, retryAfterMs ?? 0));
+        const wait = Math.max(BACKOFF_MS * 2 ** (attempt - 1), retryAfterMs ?? 0);
+        if (Date.now() + wait >= deadline) {
+          throw new LlmClientError(`chat-completions stopped: no time left for a retry: ${lastError}`);
+        }
+        await this.#sleep(wait);
       }
-      const outcome = await this.#attempt(body);
+      const outcome = await this.#attempt(body, Math.min(this.#timeoutMs, deadline - Date.now()));
       if (outcome.ok) return normalize(outcome.value);
       lastError = outcome.error;
       retryAfterMs = outcome.retryAfterMs;
@@ -152,12 +164,13 @@ export class OpenAiClient implements LlmClient {
   /** One HTTP attempt. Returns a discriminated outcome so retry policy lives in {@link chat}. */
   async #attempt(
     body: string,
+    timeoutMs: number,
   ): Promise<
     | { ok: true; value: ChatResponse }
     | { ok: false; retriable: boolean; error: string; status?: number; retryAfterMs?: number }
   > {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await this.#fetch(this.#url, {
         method: 'POST',
@@ -167,8 +180,8 @@ export class OpenAiClient implements LlmClient {
       });
       const text = await res.text();
       if (!res.ok) {
-        // 429 / 5xx are transient (retry); other 4xx (auth, bad request) fail closed immediately.
-        const retriable = res.status === 429 || res.status >= 500;
+        // 408 / 429 / 5xx are transient (retry); other 4xx (auth, bad request) fail closed immediately.
+        const retriable = res.status === 408 || res.status === 429 || res.status >= 500;
         const retryAfterMs = parseRetryAfterMs(res.headers?.get('retry-after'));
         return {
           ok: false,
@@ -180,7 +193,9 @@ export class OpenAiClient implements LlmClient {
       }
       return this.#parseBody(text);
     } catch (e) {
-      // Network error / abort (timeout) — transient, so retry.
+      if (controller.signal.aborted) {
+        return { ok: false, retriable: false, error: `request timed out after ${timeoutMs}ms` };
+      }
       return { ok: false, retriable: true, error: errorMessage(e) };
     } finally {
       clearTimeout(timer);
@@ -195,15 +210,16 @@ export class OpenAiClient implements LlmClient {
     };
   }
 
-  /** Parse + Zod-validate the response body. A malformed envelope is a NON-retriable fail-closed error. */
+  /** Parse + Zod-validate the response body. Valid JSON with a malformed envelope is a NON-retriable fail-closed error. */
   #parseBody(
     text: string,
-  ): { ok: true; value: ChatResponse } | { ok: false; retriable: false; error: string } {
+  ): { ok: true; value: ChatResponse } | { ok: false; retriable: boolean; error: string } {
     let json: unknown;
     try {
       json = JSON.parse(text);
     } catch {
-      return { ok: false, retriable: false, error: `response was not JSON: ${text.slice(0, 300)}` };
+      // A 200 that is not JSON is a proxy/gateway page (e.g. "502 Bad Gateway"), not the endpoint's answer.
+      return { ok: false, retriable: true, error: `response was not JSON: ${text.slice(0, 300)}` };
     }
     const parsed = ChatResponse.safeParse(json);
     if (!parsed.success) {
@@ -218,15 +234,16 @@ export class OpenAiClient implements LlmClient {
 }
 
 /**
- * Parse a `Retry-After` header value (delta-seconds form) into milliseconds, capped at
- * {@link MAX_RETRY_AFTER_MS}. The HTTP-date form and garbage both return undefined (base backoff
- * applies) — fail-open to the client's own policy, never a stall.
+ * Parse a `Retry-After` header value (delta-seconds or HTTP-date form) into milliseconds, capped at
+ * {@link MAX_RETRY_AFTER_MS}; a past date is 0. Garbage returns undefined (base backoff applies) —
+ * fail-open to the client's own policy, never a stall.
  */
 function parseRetryAfterMs(value: string | null | undefined): number | undefined {
   if (value === null || value === undefined) return undefined;
-  const seconds = Number.parseFloat(value.trim());
-  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
-  return Math.min(Math.round(seconds * 1000), MAX_RETRY_AFTER_MS);
+  const v = value.trim();
+  const ms = /^\d/.test(v) ? Number.parseFloat(v) * 1000 : Math.max(0, Date.parse(v) - Date.now());
+  if (!Number.isFinite(ms) || ms < 0) return undefined;
+  return Math.min(Math.round(ms), MAX_RETRY_AFTER_MS);
 }
 
 /** Normalize the first choice into a {@link ChatResult}: minted tool-call ids + usage breakdown. */

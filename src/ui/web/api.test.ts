@@ -172,6 +172,14 @@ describe('subscribeRunEvents', () => {
     expect(source.closed).toBe(true);
   });
 
+  it('closes the stream on liveness false (the server ends a dead run; no reconnect loop)', () => {
+    subscribeRunEvents('r1', () => {});
+    const source = FakeEventSource.instances[0];
+    if (source === undefined) throw new Error('no EventSource created');
+    source.emit('liveness', { live: false });
+    expect(source.closed).toBe(true);
+  });
+
   it('invokes onError only once the source is CLOSED, and unsubscribe closes it', () => {
     const onError = vi.fn();
     const unsubscribe = subscribeRunEvents('r1', () => {}, onError);

@@ -3,6 +3,7 @@ import type { AgentCli } from '../../agent-cli/registry';
 import type { AutonomyLevel } from '../../agent-cli/droid-codec';
 import { ModelSelection, type ModelSelectionInput } from '../models';
 import { UsageError, str, type RawFlags } from './tokens';
+import { badFlagValue, zodExpectation } from './value-error';
 
 /**
  * The harness (write-role coding agent): any bundled CLI, the IO-free `fake`, plus `goaly-code` — the
@@ -39,9 +40,10 @@ export function isHarnessChoice(value: string): value is HarnessChoice {
 
 /**
  * Which provider runs the LLM workflow steps (judge / approver / compiler). Any bundled CLI, plus
- * `openai` — a direct OpenAI-compatible chat-completions endpoint (no coding CLI installed).
+ * `openai` — a direct OpenAI-compatible chat-completions endpoint (no coding CLI installed). `fake`
+ * is never accepted from `--llm-provider`: it is only the default of the `fake` harness.
  */
-export type LlmProviderChoice = AgentCli | 'openai';
+export type LlmProviderChoice = AgentCli | 'openai' | 'fake';
 
 /**
  * The default LLM provider for a harness: the workflow steps (compiler / judge / approver — the
@@ -49,12 +51,12 @@ export type LlmProviderChoice = AgentCli | 'openai';
  * so `--harness codex` does not silently keep requiring the `claude` CLI to generate the
  * verification. `goaly-code` drives an OpenAI-compatible endpoint, so its steps default to the
  * `openai` provider on that same endpoint (its required `--base-url`/`--model` are exactly what
- * the provider needs); the test-only `fake` harness cannot back LLM steps and keeps `claude`.
- * An explicit `--llm-provider` (CLI flag or config file) always overrides.
+ * the provider needs); the test-only `fake` harness gets the zero-network `fake` provider, so a
+ * trial run spends no real tokens (labelled FAKE-LLM). An explicit `--llm-provider` (CLI flag or
+ * config file) always overrides.
  */
 export function defaultLlmProvider(harness: HarnessChoice): LlmProviderChoice {
   if (harness === 'goaly-code') return 'openai';
-  if (harness === 'fake') return 'claude';
   return harness;
 }
 
@@ -66,9 +68,9 @@ export function parseHarness(value: string | undefined): HarnessChoice {
   // The `claude-code` value was renamed to `claude` (one name per CLI across the harness and the
   // LLM-provider roles); fail closed with the migration hint rather than silently accept the old one.
   if (value === 'claude-code') {
-    throw new UsageError(`unknown harness: claude-code (renamed — did you mean 'claude'?)`);
+    throw new UsageError(`--harness: 'claude-code' was renamed — did you mean 'claude'?`, '--harness');
   }
-  throw new UsageError(`unknown harness: ${value} (expected ${PUBLIC_HARNESS_CHOICES.join(' | ')})`);
+  throw badFlagValue('--harness', PUBLIC_HARNESS_CHOICES.join(' | '), value);
 }
 
 /**
@@ -80,7 +82,7 @@ export function parseHarness(value: string | undefined): HarnessChoice {
 export function parseHarnessAutonomy(value: string | undefined): AutonomyLevel | undefined {
   if (value === undefined) return undefined;
   if (value === 'low' || value === 'medium' || value === 'high') return value;
-  throw new UsageError(`--harness-autonomy: expected low | medium | high, got '${value}'`);
+  throw badFlagValue('--harness-autonomy', 'low | medium | high', value);
 }
 
 export function parseLlmProvider(value: string | undefined, harness: HarnessChoice): LlmProviderChoice {
@@ -88,7 +90,7 @@ export function parseLlmProvider(value: string | undefined, harness: HarnessChoi
   if (value === 'claude' || value === 'codex' || value === 'droid' || value === 'pi' || value === 'openai') {
     return value;
   }
-  throw new UsageError(`unknown llm provider: ${value} (expected claude | codex | droid | pi | openai)`);
+  throw badFlagValue('--llm-provider', 'claude | codex | droid | pi | openai', value);
 }
 
 /** Collect the model flags and validate them at the Zod seam (non-empty, fails closed). */
@@ -119,8 +121,9 @@ export function parseModels(flags: RawFlags): ModelSelection {
   } catch (e) {
     if (e instanceof z.ZodError) {
       const issue = e.issues[0];
-      const flag = issue?.path[0] !== undefined ? `--${String(issue.path[0])}` : 'a model flag';
-      throw new UsageError(`${flag}: ${issue?.message ?? 'must be a non-empty value'}`);
+      const key = issue?.path[0];
+      const flag = key !== undefined ? `--${String(key).replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}` : 'a model flag';
+      throw badFlagValue(flag, zodExpectation(issue), key !== undefined ? raw[key as keyof ModelSelectionInput] : '');
     }
     throw e;
   }

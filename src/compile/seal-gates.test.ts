@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { FakeWorkspace, makeFakeContract } from '../testing/fakes';
-import { AutoSealGate, HumanSealGate } from './seal-gates';
+import { PassThrough } from 'node:stream';
+import { AutoSealGate, HumanSealGate, askStdin } from './seal-gates';
 import { buildLadder } from '../cli/compose';
 import { FakeLlm } from '../llm/provider';
 import { sha256Hex } from '../util/hash';
@@ -52,7 +53,34 @@ describe('AutoSealGate', () => {
   });
 });
 
+describe('askStdin', () => {
+  it('rejects with a clear reason when stdin ends before an answer (EOF), instead of hanging', async () => {
+    const input = new PassThrough();
+    const answer = askStdin('q? ', input, new PassThrough());
+    input.end();
+    await expect(answer).rejects.toThrow(/stdin closed before an answer/);
+  });
+
+  it('resolves with the typed answer', async () => {
+    const input = new PassThrough();
+    const answer = askStdin('q? ', input, new PassThrough());
+    input.write('yes\n');
+    await expect(answer).resolves.toBe('yes');
+  });
+});
+
 describe('HumanSealGate', () => {
+  it('fails closed to reject (never approve) when the prompt has no answer (EOF)', async () => {
+    const gate = new HumanSealGate({
+      out: () => {},
+      ask: async () => {
+        throw new Error('stdin closed before an answer');
+      },
+    });
+    const d = await gate.approveContract(makeFakeContract());
+    expect(d).toEqual({ kind: 'reject', reason: expect.stringMatching(/at Seal.*stdin closed before an answer/) });
+  });
+
   it('approves when the human answers "a"', async () => {
     // Arrange
     const { ask, asked } = scriptedAsk(['a']);

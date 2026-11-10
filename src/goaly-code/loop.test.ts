@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { runAgentLoop } from './loop';
 import { DEFAULT_TOOLS, type ToolHost } from './tools';
-import type { ChatResult, LlmClient } from '../llm-client/openai-client';
+import { OpenAiClient, type ChatResult, type FetchLike, type LlmClient } from '../llm-client/openai-client';
 import type { ChatRequest } from '../llm-client/schema';
 import type { AgentStreamEvent } from '../agent-cli/stream';
 
@@ -9,10 +9,12 @@ import type { AgentStreamEvent } from '../agent-cli/stream';
 class ScriptedLlmClient implements LlmClient {
   readonly name = 'scripted';
   readonly requests: ChatRequest[] = [];
+  readonly timeouts: Array<number | undefined> = [];
   #i = 0;
   constructor(private readonly script: Array<ChatResult | Error>) {}
-  async chat(req: ChatRequest): Promise<ChatResult> {
+  async chat(req: ChatRequest, opts?: { timeoutMs?: number }): Promise<ChatResult> {
     this.requests.push(req);
+    this.timeouts.push(opts?.timeoutMs);
     const next = this.script[Math.min(this.#i, this.script.length - 1)];
     this.#i += 1;
     if (next instanceof Error) throw next;
@@ -62,9 +64,17 @@ class RecordingHost implements ToolHost {
     this.calls.push({ tool: 'editFile', args: [p, o, n] });
     return 'edited';
   }
-  async runShell(command: string): Promise<string> {
-    this.calls.push({ tool: 'runShell', args: [command] });
+  async runShell(command: string, timeoutMs?: number): Promise<string> {
+    this.calls.push({ tool: 'runShell', args: [command, timeoutMs] });
     return 'exit code: 0';
+  }
+}
+
+/** A host whose run_shell never returns — a foreground server started by the model. */
+class HangingShellHost extends RecordingHost {
+  override runShell(command: string, timeoutMs?: number): Promise<string> {
+    this.calls.push({ tool: 'runShell', args: [command, timeoutMs] });
+    return new Promise(() => {});
   }
 }
 
@@ -174,5 +184,53 @@ describe('runAgentLoop', () => {
     await runAgentLoop(base(client));
     const names = (client.requests[0]!.tools ?? []).map((t) => t.function.name);
     expect(names).toEqual(['read_file', 'list_dir', 'grep', 'write_file', 'edit_file', 'run_shell', 'finish']);
+  });
+
+  it('bounds each model call and each tool call by the time left in the turn', async () => {
+    const host = new RecordingHost();
+    const client = new ScriptedLlmClient([toolTurn([call('run_shell', '{"command":"npm test"}')]), text('done')]);
+    let t = 1000;
+    const r = await runAgentLoop(base(client, host, { now: () => (t += 100), deadlineMs: 5000 }));
+    expect(r.status).toBe('completed');
+    expect(client.timeouts[0]).toBe(3800);
+    expect(host.calls[0]!.args[1]).toBe(3700);
+  });
+
+  it('stops a tool call that runs past the turn deadline and tells the model to background it', async () => {
+    const host = new HangingShellHost();
+    const client = new ScriptedLlmClient([toolTurn([call('run_shell', '{"command":"node server.js"}')]), text('never')]);
+    const started = Date.now();
+    const r = await runAgentLoop(base(client, host, { deadlineMs: Date.now() + 50 }));
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(r.status).toBe('timeout');
+    const toolMsg = r.messages.find((m) => m.role === 'tool');
+    expect(toolMsg && 'content' in toolMsg && toolMsg.content).toMatch(/timed out[\s\S]*background/);
+  });
+
+  it('gives a tool call after the deadline a timeout result without running it', async () => {
+    const host = new RecordingHost();
+    const client = new ScriptedLlmClient([
+      toolTurn([call('run_shell', '{"command":"a"}', 'c1'), call('run_shell', '{"command":"b"}', 'c2')]),
+      text('never'),
+    ]);
+    let t = 0;
+    const r = await runAgentLoop(base(client, host, { now: () => (t += 300), deadlineMs: 1000 }));
+    expect(r.status).toBe('timeout');
+    expect(host.calls).toHaveLength(1);
+    const toolMsgs = r.messages.filter((m) => m.role === 'tool');
+    expect(toolMsgs).toHaveLength(2);
+    expect(toolMsgs[1] && 'content' in toolMsgs[1] && toolMsgs[1].content).toMatch(/timed out/);
+  });
+
+  it('ends as timeout, not crashed, when the HTTP call runs into the turn deadline', async () => {
+    const hangingFetch: FetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('This operation was aborted')));
+      });
+    const client = new OpenAiClient({ baseUrl: 'http://x.test', fetch: hangingFetch, sleep: async () => {} });
+    const started = Date.now();
+    const r = await runAgentLoop(base(client, new RecordingHost(), { deadlineMs: Date.now() + 50 }));
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(r.status).toBe('timeout');
   });
 });

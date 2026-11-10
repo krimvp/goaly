@@ -3,14 +3,17 @@ import { FileRunLog } from '../runlog/file-runlog';
 import type { RunLogEntry } from '../runlog/runlog';
 import { runLockActive } from '../runlog/lock';
 import { degradedModeTag } from '../domain/degraded';
+import { runDetail } from '../runlog/inspect';
+import { storedRunNextStep } from './run-report';
 
 /**
  * `goaly runs watch <runId>` — attach to a run from ANOTHER terminal and follow it live (operator
  * observability, ADR 0012). Strictly READ-ONLY: it polls the write-ahead log (whose reader already
  * tolerates a torn in-flight tail) and renders each new event as a human line; it never takes the
- * run lock, never mutates, and can therefore watch a run some other process is driving. Exits 0
- * when the run reaches a terminal state; exits 1 when the run is INCOMPLETE and no live process
- * holds its lock (stalled/crashed — the message names the resume command).
+ * run lock, never mutates, and can therefore watch a run some other process is driving. Exits like
+ * `goaly run` when the run reaches a terminal state (0 DONE, 1 FAILED/ABORTED); exits 1 when the run
+ * is INCOMPLETE and no live process holds its lock (stalled/crashed — the message names the resume
+ * command).
  */
 export type WatchDeps = {
   /** Poll interval between reads. Default 500 ms. */
@@ -69,8 +72,14 @@ export async function runsWatch(
     // an operator extension (RUN_EXTENDED, ADR 0012) revived the run and later entries continue it.
     const last = stored.entries[stored.entries.length - 1];
     if (last !== undefined && isTerminalTag(last.stateTagAfter)) {
-      out(`run ${runId} finished: ${last.stateTagAfter}  (details: goaly runs show ${runId})\n`);
-      return 0;
+      const d = runDetail(stored.header, stored.entries);
+      const next = storedRunNextStep(d, false);
+      out(
+        `run ${runId} finished: ${last.stateTagAfter}  (details: goaly runs show ${runId})\n` +
+          (d.reason !== undefined ? `reason: ${d.reason}\n` : '') +
+          (next !== undefined ? `next:   ${next}\n` : ''),
+      );
+      return last.stateTagAfter === 'DONE' ? 0 : 1;
     }
 
     if (fresh.length === 0 && !(await isActive(runDir))) {

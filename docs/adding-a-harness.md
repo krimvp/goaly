@@ -204,8 +204,8 @@ call what counts as "no text"). `parseAgentOutput` returns `null` when nothing u
 ### 2. Status mapping — `classify(input)`
 
 `classify` turns a finished process into a Zod-parsed `HarnessRunResult`. For the standard policy,
-delegate to the shared `classifyFlatRun({ parsed, code, stderr, timedOut, sessionId, unknownSession,
-estimator?, hint? })` (from `src/agent-cli/codec.ts`, used by claude **and** droid). The optional
+delegate to the shared `classifyFlatRun({ parsed, code, stderr, stdout?, timedOut, sessionId,
+unknownSession, estimator?, hint? })` (from `src/agent-cli/codec.ts`, used by claude **and** droid). The optional
 `estimator` (issue #24) is the `StreamTokenEstimator` `runCodecHarness` threads in when the run
 streamed: when the parsed envelope carries **no** `usage`, `classifyFlatRun` falls back to its local
 estimate and stamps `tokenSource: 'estimated'` (vs `'reported'` for a real count). A non-streaming run
@@ -220,7 +220,7 @@ branch without the accounting — dropping it makes `--budget-tokens` silently b
 | Condition | status |
 |---|---|
 | timed out (killed for exceeding the wall-clock budget) | `timeout` (salvages any parsed text) |
-| exited non-zero (or signal-killed) | `crashed` |
+| exited non-zero (or signal-killed) | `crashed` (output: the bounded **tail** of stderr — else the parsed text, else the stdout tail — via `failureTail`, so the crash reason quotes the real cause) |
 | exit 0, parseable, non-empty result | `completed` |
 | exit 0 but empty / unparseable result | `truncated` |
 | a soft `isError` flag on a clean exit | `truncated` |
@@ -233,6 +233,7 @@ classify(input) {
     parsed: this.parse(input.stdout),
     code: input.code,
     stderr: input.stderr,
+    stdout: input.stdout,
     timedOut: input.timedOut,
     sessionId: input.sessionId,
     unknownSession: this.unknownSession,
@@ -423,6 +424,7 @@ export const myagentCodec: AgentCliCodec = {
       parsed: parseAgentOutput(input.stdout, fieldExtractor),
       code: input.code,
       stderr: input.stderr,
+      stdout: input.stdout,
       timedOut: input.timedOut,
       sessionId: input.sessionId,
       unknownSession: UNKNOWN_SESSION,
@@ -438,7 +440,9 @@ export const myagentCodec: AgentCliCodec = {
 The subprocess is **not** your problem: `AgentCliHarness` builds the default exec for you with
 `defaultAgentExec(codec.command, timeoutMs, codec.promptOnStdin)`, which spawns the real binary via
 the shared `runProcess` (output cap, timeout, process-group kill, never-reject). Tests inject a fake
-`AgentExecFn` instead.
+`AgentExecFn` instead. A turn that prints more than the 16 MB capture cap is not killed: the capture
+keeps its start (the session id) and its end (the final result envelope) and drops the middle, so your
+`parse` must tolerate one broken JSONL line where the middle was cut (`parseAgentOutput` does).
 
 **The sandbox is not your problem either.** When `--sandbox` is on, `compose-harness.ts` wraps the injected
 `exec` around your codec's `command`/argv at the composition root (`src/sandbox/`, ADR 0007) — it
@@ -573,7 +577,7 @@ model is labelled `SELF-JUDGED` rather than gated.
 `quorum` times (default 3) per iteration — heavier than a one-shot completion API. The
 `--llm-provider` default **follows the harness** (`defaultLlmProvider` in `src/cli/args.ts`:
 `--harness codex` puts the compiler/judge/approver on `codex` too, `goaly-code` → `openai`, `fake`
-→ `claude`), so when you add a CLI to the `AgentCli` union it becomes the derived provider for its
+→ the built-in fake LLM), so when you add a CLI to the `AgentCli` union it becomes the derived provider for its
 own harness — another reason `readonlyArgs` must be genuinely read-only. Model names stay
 tool-specific: align `--llm-provider` with the model you pass, or the cascade may hand a name from
 one tool's namespace to another (`claude --model <a-codex-model>`).
@@ -621,11 +625,14 @@ src/goaly-code/
 ### The transport (`LlmClient`) — shared with the `openai` provider
 
 The HTTP layer is one place (`OpenAiClient`): `fetch` + Zod, base-url + bearer auth, bounded retries
-(network / 429 / 5xx, then a fail-closed throw), per-request `AbortController` timeout, and `usage`
-→ `TokenBreakdown` (OpenAI's `prompt_tokens` is cache-inclusive, so cached tokens are split out into
+(network / 408 / 429 / 5xx / a 200 whose body is not JSON, for about one minute, then a fail-closed
+throw; a JSON body that fails the Zod envelope fails closed at once), a per-request
+`AbortController` timeout (not retried), and `usage` → `TokenBreakdown` (OpenAI's `prompt_tokens` is cache-inclusive, so cached tokens are split out into
 `cacheRead`). Both `fetch` and the backoff `sleep` are injectable, so unit tests touch no network and
 no real timer. It returns a **normalized** `ChatResult` (minted tool-call ids, parsed usage) so the
-loop never re-handles wire quirks.
+loop never re-handles wire quirks. `chat(req, { timeoutMs })` takes a per-call budget that caps every
+attempt and every backoff wait: the loop passes the time left in the turn, so a retry never runs past
+the turn deadline.
 
 The same client backs the read-only `OpenAiLlmProvider` (`--llm-provider openai`): a single
 `[system?, user]` exchange with **no tools**, so it is structurally read-only — it fails closed
@@ -641,7 +648,8 @@ fail-closed mapping mirror `adapter.contract.test.ts`:
 | condition | status |
 |---|---|
 | turn cap hit | `truncated` |
-| wall-clock deadline reached | `timeout` |
+| wall-clock deadline reached (each model call and each tool call gets only the time left in the turn) | `timeout` |
+| a tool call runs into the deadline | a timeout **tool result string** (`run_shell` is also killed; its message tells the model to background a server or a watcher) |
 | client throws (network / 5xx / malformed envelope, after retries) | `crashed` (→ pure `STUCK_HARNESS_CRASH`) |
 | a throwing / invalid tool call | its error becomes the **tool result string** (never a crash) |
 | final message / `finish` | `completed` |

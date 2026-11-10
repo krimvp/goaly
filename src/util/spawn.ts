@@ -36,6 +36,13 @@ export type RunProcessOptions = {
   /** Cap on captured stdout+stderr bytes before the process is killed (default 16 MB). */
   maxOutputBytes?: number;
   /**
+   * Over the cap, keep the process running and keep only the START and the END of the capture (the
+   * middle is dropped) instead of killing it. For agent CLIs: a long streaming turn legitimately
+   * outgrows any fixed cap, and the parts the codec needs — the session id at the start, the final
+   * result envelope at the end — survive. Memory stays bounded by the cap.
+   */
+  keepEndsOnOverflow?: boolean;
+  /**
    * Optional live stdout tap (issue #23): invoked with each raw stdout chunk as it arrives, in
    * addition to the buffered capture returned at the end. Used to feed a streaming `StreamTap`.
    * Guarded so a throwing tap never affects the subprocess result.
@@ -44,9 +51,35 @@ export type RunProcessOptions = {
 };
 
 const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+/**
+ * How long to wait for the stdio pipes to close after the direct child exits. A descendant that
+ * outlives the child (a backgrounded server, a `setsid` daemon) inherits the pipes, so `close` never
+ * fires; past this grace the group is reaped and the run resolves with the child's real exit code.
+ */
+const EXIT_DRAIN_MS = 2000;
 
 /** Live children spawned through {@link runProcess}, so a forced shutdown can reap them. */
 const activeChildren = new Set<{ pid: number | undefined; killGroup: boolean }>();
+
+let childGroupsListener: ((pids: number[]) => void) | undefined;
+
+/**
+ * Be told the pids of the live `killGroup` children (each one leads its own process group) each
+ * time that set changes. The run lock uses it to record them durably, so the next driver can reap
+ * them after a SIGKILL of goaly. One listener per process; a throwing listener is ignored.
+ */
+export function setChildGroupsListener(listener: ((pids: number[]) => void) | undefined): void {
+  childGroupsListener = listener;
+}
+
+function notifyChildGroups(): void {
+  const pids = [...activeChildren].flatMap((c) => (c.killGroup && c.pid !== undefined ? [c.pid] : []));
+  try {
+    childGroupsListener?.(pids);
+  } catch {
+    // The record is a best-effort aid for the next driver; it must never affect the subprocess.
+  }
+}
 
 /**
  * SIGKILL every child (and, for group-spawned ones, its whole process group) still running.
@@ -88,10 +121,14 @@ export function runProcess(
     const child = spawn(command, args, spawnOptions);
     const registryEntry = { pid: child.pid, killGroup: options.killGroup === true };
     activeChildren.add(registryEntry);
+    if (registryEntry.killGroup) notifyChildGroups();
     let stdout = '';
     let stderr = '';
+    let stdoutHead: string | undefined;
     let timedOut = false;
     let truncated = false;
+    let settled = false;
+    let drainTimer: NodeJS.Timeout | null = null;
 
     /** Kill the whole process group when detached; fall back to the lone child otherwise. */
     const kill = (): void => {
@@ -125,18 +162,40 @@ export function runProcess(
         kill();
       }, options.idleTimeoutMs);
     };
-    const clearTimers = (): void => {
+    const finish = (code: number, extraStderr = ''): void => {
       if (timer !== null) clearTimeout(timer);
       if (idleTimer !== null) clearTimeout(idleTimer);
+      if (drainTimer !== null) clearTimeout(drainTimer);
+      if (activeChildren.delete(registryEntry) && registryEntry.killGroup) notifyChildGroups();
+      if (settled) return;
+      settled = true;
+      const out = stdoutHead !== undefined ? `${stdoutHead}\n${stdout}` : stdout;
+      resolve({ stdout: out, stderr: `${stderr}${extraStderr}`, code, timedOut, truncated });
     };
     armIdle();
 
-    const overCap = (): boolean => stdout.length + stderr.length > maxBytes;
+    const enforceCap = (): void => {
+      if ((stdoutHead?.length ?? 0) + stdout.length + stderr.length < maxBytes) return;
+      if (options.keepEndsOnOverflow !== true) {
+        truncated = true;
+        kill();
+        return;
+      }
+      const quarter = Math.floor(maxBytes / 4);
+      if (stdoutHead === undefined && stdout.length > quarter) {
+        stdoutHead = stdout.slice(0, quarter);
+        stdout = stdout.slice(quarter);
+      }
+      stdout = stdout.slice(-quarter);
+      stderr = stderr.slice(-quarter);
+    };
 
-    child.stdout?.on('data', (d: Buffer) => {
+    // Decode as a stream so a multi-byte character split across two chunks is not corrupted.
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
       if (truncated) return;
       armIdle();
-      const chunk = d.toString();
       stdout += chunk;
       if (options.onStdout !== undefined) {
         // Live tap is diagnostics-only: never let it disturb capture or the subprocess.
@@ -146,30 +205,27 @@ export function runProcess(
           /* ignore — a throwing stdout tap must not affect the run */
         }
       }
-      if (overCap()) {
-        truncated = true;
-        kill();
-      }
+      enforceCap();
     });
-    child.stderr?.on('data', (d: Buffer) => {
+    child.stderr?.on('data', (chunk: string) => {
       if (truncated) return;
       armIdle();
-      stderr += d.toString();
-      if (overCap()) {
-        truncated = true;
+      stderr += chunk;
+      enforceCap();
+    });
+    child.on('error', (e) => finish(127, String(e)));
+    child.on('exit', (code) => {
+      // The exit code is final now: a later timer must not relabel a finished command as timed out.
+      if (timer !== null) clearTimeout(timer);
+      if (idleTimer !== null) clearTimeout(idleTimer);
+      drainTimer = setTimeout(() => {
         kill();
-      }
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish(code ?? 1);
+      }, EXIT_DRAIN_MS);
     });
-    child.on('error', (e) => {
-      clearTimers();
-      activeChildren.delete(registryEntry);
-      resolve({ stdout, stderr: `${stderr}${String(e)}`, code: 127, timedOut, truncated });
-    });
-    child.on('close', (code) => {
-      clearTimers();
-      activeChildren.delete(registryEntry);
-      resolve({ stdout, stderr, code: code ?? 1, timedOut, truncated });
-    });
+    child.on('close', (code) => finish(code ?? 1));
 
     if (child.stdin !== null) {
       // A child that exits (or closes stdin) before draining a large piped input emits EPIPE on the

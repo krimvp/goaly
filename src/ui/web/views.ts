@@ -252,16 +252,31 @@ export function RunDetailPage({ runId, tab }: { runId: string; tab: RunTab }): V
   const [gate, setGate] = useState<PendingGate | null>(null);
   const [stopping, setStopping] = useState(false);
   const iterations = useRef(0);
+  const fetching = useRef<'idle' | 'busy' | 'again'>('idle');
   const now = useNow(1000);
 
+  // The SSE replay of a long finished run delivers every VERIFIED at once: coalesce the burst into
+  // at most one fetch in flight plus one trailing fetch, so the page and server do not stall.
   const refetch = (): void => {
-    api.run(runId).then(setDetail, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    if (fetching.current !== 'idle') {
+      fetching.current = 'again';
+      return;
+    }
+    fetching.current = 'busy';
+    api
+      .run(runId)
+      .then(setDetail, (e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => {
+        const again = fetching.current === 'again';
+        fetching.current = 'idle';
+        if (again) refetch();
+      });
   };
 
   useEffect(() => {
     refetch();
     iterations.current = 0;
-    const unsubscribe = subscribeRunEvents(runId, (frame: SseFrame) => {
+    const onFrame = (frame: SseFrame): void => {
       if (frame.event === 'entry') {
         const entry = frame.data as RunLogEntry;
         if (entry.event.tag === 'AGENT_RAN') iterations.current += 1;
@@ -286,6 +301,16 @@ export function RunDetailPage({ runId, tab }: { runId: string; tab: RunTab }): V
         setStateTag(frame.data.stateTag);
         refetch(); // pick up the final status / usage totals
       }
+    };
+    // Apply frames once per animation frame: one render per batch, not one per replayed entry.
+    let queued: SseFrame[] = [];
+    const unsubscribe = subscribeRunEvents(runId, (frame: SseFrame) => {
+      if (queued.push(frame) > 1) return;
+      requestAnimationFrame(() => {
+        const batch = queued;
+        queued = [];
+        batch.forEach(onFrame);
+      });
     });
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -454,7 +479,7 @@ function Overview({ detail, isLive, runId }: { detail: RunDetailResponse; isLive
                   <div class="t-head">
                     agent <b>${it.runStatus}</b> · ${it.changed ? 'tree changed' : 'no changes'}
                     ${it.phase !== undefined ? html`<span class="muted"> · phase ${it.phase + 1}</span>` : ''}
-                    ${it.tokensSpent !== undefined ? html`<span class="muted mono"> · ${fmtTokens(it.tokensSpent)} tok</span>` : ''}
+                    ${it.tokensSpent !== undefined ? html`<span class="muted mono" title="run total at this agent turn"> · ${fmtTokens(it.tokensSpent)} tok so far</span>` : ''}
                   </div>
                   ${it.verdict !== undefined
                     ? html`<div class=${it.verdict.pass ? 'pass' : 'fail'}>

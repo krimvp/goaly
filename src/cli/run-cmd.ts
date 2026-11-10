@@ -1,18 +1,19 @@
 import { randomUUID } from 'node:crypto';
+import { rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { ParsedArgs } from './args';
 import { composeDeps, STATE_DIR, EndpointConfigError } from './compose';
 import { SandboxUnavailableError, isAllowlist, startEgressProxy, type EgressProxy } from '../sandbox';
-import { drive } from '../driver/driver';
+import { drive, isInterruptedOutcome } from '../driver/driver';
 import { asRunId, type RunId } from '../domain/ids';
 import type { RunOutcome } from '../domain/events';
 import type { SealGate } from '../compile/seal';
 import type { PlanGate } from '../plan/plan-gate';
 import type { PhasedStreamSink } from '../agent-cli/stream';
-import { acquireRunLock, RunLockedError, type RunLock } from '../runlog/lock';
+import { acquireRunLock, liveRunIn, RunLockedError, type RunLock } from '../runlog/lock';
 import { resumeHint } from './resume-cmd';
 import { computeCost } from './cost';
-import { makeInterruptController } from './crash-guard';
+import { installInterruptHandlers, makeInterruptController } from './crash-guard';
 import { prepareRun } from './run-prepare';
 import { logStartupDiagnostics } from './run-banner';
 import { composeOptions, resolveRunDegraded } from './run-wiring';
@@ -61,6 +62,15 @@ export type RunResult = { code: number; runId: RunId | undefined; outcome: RunOu
 const EXIT_INTERRUPTED = 130;
 
 /**
+ * 0 for DONE, 130 only for a run an interrupt stopped (it is resumable), else 1. A run that reached
+ * FAILED or a stuck ABORTED of its own while the stop was pending exits 1, as without the stop.
+ */
+export function runExitCode(outcome: RunOutcome): number {
+  if (outcome.status === 'DONE') return 0;
+  return isInterruptedOutcome(outcome) ? EXIT_INTERRUPTED : 1;
+}
+
+/**
  * Execute one run end-to-end. Byte-for-byte the historical `main()` run path — extracted so the
  * goaly-ui server drives runs through the very same guards, lock, composition, and reporting.
  * The read-only head (guards, resume resolution, preflight, `--dry-run`) is `prepareRun`; from
@@ -93,6 +103,19 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
       return { code: 2, runId, outcome: undefined };
     }
     throw e;
+  }
+  // One live run per working tree: two agents must never edit one tree. The check runs AFTER our
+  // own lock is held, so two runs that start at the same moment both see each other and both stop.
+  const liveRun = await liveRunIn(path.join(parsed.workspace, STATE_DIR), runId);
+  if (liveRun !== undefined) {
+    io.err(
+      `goaly: run ${liveRun} is already live in this working tree — refusing to start a second agent on it. ` +
+        `Watch it with: goaly runs watch ${liveRun} — or start this run in its own git worktree with --worktree.\n`,
+    );
+    await runLock.release();
+    // A fresh run dir is empty now; `rmdir` leaves a resumed run's (non-empty) dir alone.
+    await rmdir(path.join(parsed.workspace, STATE_DIR, runId)).catch(() => undefined);
+    return { code: 2, runId, outcome: undefined };
   }
   io.onStarted?.(runId);
 
@@ -156,11 +179,9 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
         : makeInterruptController(runId, io.err);
 
     let outcome;
+    const uninstallSignals =
+      interrupt.onSignal !== undefined ? installInterruptHandlers(interrupt.onSignal) : undefined;
     try {
-      if (interrupt.onSignal !== undefined) {
-        process.on('SIGINT', interrupt.onSignal);
-        process.on('SIGTERM', interrupt.onSignal);
-      }
       outcome = await drive(
         { ...deps, interrupted: interrupt.interrupted },
         runConfig,
@@ -175,10 +196,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
         },
       );
     } finally {
-      if (interrupt.onSignal !== undefined) {
-        process.removeListener('SIGINT', interrupt.onSignal);
-        process.removeListener('SIGTERM', interrupt.onSignal);
-      }
+      uninstallSignals?.();
     }
 
     // Surface the egress audit trail: any denied host:port the jail tried to reach (issue #39).
@@ -197,8 +215,7 @@ export async function executeRun(parsed: ParsedArgs, io: RunIo): Promise<RunResu
     // command (or the goaly-code → --from-run route). Stays quiet when there is no real session.
     const hint = resumeHint(parsed.harness, outcome.sessionId, runId);
     io.out(`${formatOutcome(outcome, cost, hint, degraded, Date.now() - startedAt)}\n`);
-    if (outcome.status === 'DONE') return { code: 0, runId, outcome };
-    return { code: interrupt.interrupted() ? EXIT_INTERRUPTED : 1, runId, outcome };
+    return { code: runExitCode(outcome), runId, outcome };
   } finally {
     await egressProxy?.close();
     await runLock.release();

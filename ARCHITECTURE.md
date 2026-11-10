@@ -382,6 +382,6 @@ The test suite (`vitest`, `npm test`) mirrors the seam structure:
 - **Real-git workspace tests** (`src/workspace/`): `GitWorkspace`, worktrees, checkpoints, and the
   `FileWorkspace` parity suite run against temporary real repositories.
 - **CLI tests with injected fakes** (`src/cli/compose*.test.ts`): tests can run whole loops
-  without network calls. Selecting `--harness fake` in a normal CLI run does not fake the
-  compiler, judge, or approver. `scripts/check-docs-sync.ts` checks reference coverage of CLI
+  without network calls. In a normal CLI run, `--harness fake` without `--llm-provider`
+  puts the compiler, judge, and approver on a built-in fake LLM and labels the run `FAKE-LLM`. `scripts/check-docs-sync.ts` checks reference coverage of CLI
   flags and config keys in CI; it does not validate every behavior claim.

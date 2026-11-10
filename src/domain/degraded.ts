@@ -35,7 +35,12 @@ import { z } from 'zod';
  * type exists to prevent: the second key WAS the model that wrote the code, and nothing in the run
  * header, the summary or `goaly runs show` said so.
  */
-export const DEGRADED_MODE_KINDS = ['self-judged', 'self-approved', 'independence-unverified'] as const;
+export const DEGRADED_MODE_KINDS = [
+  'self-judged',
+  'self-approved',
+  'independence-unverified',
+  'fake-llm',
+] as const;
 
 export const DegradedMode = z.object({
   /**
@@ -43,7 +48,8 @@ export const DegradedMode = z.object({
    * SAME KNOWN model. `self-approved`: the approver resolved to the CODING AGENT's model while the
    * judge rung resolved to a different one. `independence-unverified`: they may have collapsed — the
    * approver runs on the provider's own default and goaly cannot tell whether that default is the
-   * agent's model.
+   * agent's model. `fake-llm`: the LLM steps ran on goaly's built-in fake provider, which approves
+   * every Sign-off — a DONE proves the pipeline only.
    */
   kind: z.enum(DEGRADED_MODE_KINDS),
   /**
@@ -71,6 +77,7 @@ const SEVERITY: Record<DegradedMode['kind'], number> = {
   'independence-unverified': 1,
   'self-approved': 2,
   'self-judged': 3,
+  'fake-llm': 4,
 };
 
 /**
@@ -115,6 +122,8 @@ export function degradedModeTag(d: DegradedMode): string {
       return 'SELF-APPROVED';
     case 'independence-unverified':
       return 'INDEPENDENCE-UNVERIFIED';
+    case 'fake-llm':
+      return 'FAKE-LLM';
   }
 }
 
@@ -128,6 +137,13 @@ export function degradedModeDetail(d: DegradedMode): string {
     .filter((s): s is string => s !== undefined)
     .join(' ');
   const suffix = shape.length > 0 ? ` (${shape})` : '';
+  if (d.kind === 'fake-llm') {
+    return (
+      `the compiler, judge and Sign-off approver ran on goaly's built-in FAKE LLM${suffix}: no model ` +
+      'was called and the second key approves every Sign-off, so a DONE proves only the pipeline. ' +
+      'Pass --llm-provider <provider> to use real LLM steps.'
+    );
+  }
   const remedy =
     'Pass --approver-model <other-model> (or --approver-models) for an independent second key.';
   if (d.kind === 'self-approved') {

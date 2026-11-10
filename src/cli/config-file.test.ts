@@ -87,6 +87,15 @@ describe('overlayFromConfig', () => {
     expect(() => overlayFromConfig({ maxIterations: 2 }, '.goalyrc')).toThrow(UsageError);
   });
 
+  it('names the intended key for a typo or a camelCase key, and says why a per-run flag is refused', () => {
+    expect(() => overlayFromConfig({ maxIterations: 2, harnes: 'pi' }, '.goalyrc')).toThrow(
+      "'maxIterations' (did you mean 'max-iterations'?), 'harnes' (did you mean 'harness'?)",
+    );
+    expect(() => overlayFromConfig({ 'dry-run': true }, '.goalyrc')).toThrow(
+      "'dry-run' (a per-run flag: pass it on the command line)",
+    );
+  });
+
   it('rejects a non-object config', () => {
     expect(() => overlayFromConfig([1, 2, 3], '.goalyrc')).toThrow(UsageError);
     expect(() => overlayFromConfig('nope', '.goalyrc')).toThrow(UsageError);

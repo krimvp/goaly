@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, symlink } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, symlink, stat } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { NodeToolHost, type ShellExec } from './fs-host';
@@ -121,6 +121,20 @@ describe('NodeToolHost (path-guarded fs + injected shell)', () => {
         await rm(outside, { recursive: true, force: true });
       }
     });
+
+    it('refuses to write THROUGH a dangling symlink whose missing target is outside the workspace', async () => {
+      const outside = await mkdtemp(path.join(os.tmpdir(), 'goaly-outside-'));
+      try {
+        await symlink(path.join(outside, 'new.txt'), path.join(root, 'link.txt'));
+        await expect(host.writeFile('link.txt', 'x')).rejects.toThrow(/symlink/);
+        await symlink(path.join(outside, 'missing-dir'), path.join(root, 'dir'));
+        await expect(host.writeFile('dir/evil.txt', 'x')).rejects.toThrow(/symlink/);
+        await expect(stat(path.join(outside, 'new.txt'))).rejects.toThrow();
+        await expect(stat(path.join(outside, 'missing-dir'))).rejects.toThrow();
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('grep ReDoS guard (review finding [4])', () => {
@@ -153,10 +167,15 @@ describe('NodeToolHost (path-guarded fs + injected shell)', () => {
       expect(out).toMatch(/stderr:\nwarn/);
     });
 
-    it('flags a timed-out command', async () => {
-      const shell: ShellExec = async () => ({ stdout: '', stderr: '', code: 124, timedOut: true });
+    it('passes the time left to the shell and flags a timed-out command with the background hint', async () => {
+      const seen: Array<{ timeoutMs?: number } | undefined> = [];
+      const shell: ShellExec = async (_c, opts) => {
+        seen.push(opts);
+        return { stdout: '', stderr: '', code: 124, timedOut: true };
+      };
       const h = new NodeToolHost({ root, shell });
-      expect(await h.runShell('sleep 999')).toMatch(/timed out/);
+      expect(await h.runShell('sleep 999', 250)).toMatch(/timed out[\s\S]*background/);
+      expect(seen).toEqual([{ timeoutMs: 250 }]);
     });
   });
 });

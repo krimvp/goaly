@@ -43,6 +43,14 @@ describe('prepareWorkspace — setup (Fix #1)', () => {
     expect(ws.commands).toEqual(['npm ci']); // short-circuited before pre-flight
   });
 
+  it('trims the trailing newline of the setup output out of the reason detail', async () => {
+    const ws = new ScriptedWorkspace([{ exitCode: 1, stdout: 'boom\n', stderr: '' }]);
+    const contract = makeFakeContract({ setup: 'make deps' });
+    const result = await prepareWorkspace({ workspace: ws }, contract);
+    if (result.prepared.status !== 'setup-failed') throw new Error('expected setup-failed');
+    expect(result.prepared.detail).toBe('`make deps` exited 1\nboom');
+  });
+
   it('exit 127 (command not found) adds an actionable hint about the missing toolchain', async () => {
     const ws = new ScriptedWorkspace([
       { exitCode: 127, stdout: '', stderr: '/bin/sh: 1: rustup: not found' },

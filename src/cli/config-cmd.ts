@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { loadConfig, parseConfigDocument, type LoadedConfig } from './config-file';
+import { loadConfig, parseConfigDocument, type LoadedConfig, type ParsedConfigDocument } from './config-file';
+import { parseArgs } from './args';
 import { mergedPresets } from './presets';
 import { UsageError } from './flags/tokens';
 import { FileDefectCorpus, type DefectCorpus } from '../defects/corpus';
@@ -73,6 +74,7 @@ export async function runConfig(
   }
   try {
     const doc = parseConfigDocument(json, cmd.path);
+    await checkConfigValues(doc, cmd.path);
     const keys = Object.keys(doc.overlay);
     const presetNames = Object.keys(doc.presets);
     out(
@@ -91,6 +93,28 @@ export async function runConfig(
       return 1;
     }
     throw e;
+  }
+}
+
+/**
+ * Parse a config document's VALUES with the run's own parser (once alone, once per preset), so
+ * "valid" here means a run accepts the file. Reads no file, no stdin, and no PATH.
+ */
+export async function checkConfigValues(doc: ParsedConfigDocument, source: string): Promise<void> {
+  const presets = Object.fromEntries(
+    Object.entries(doc.presets).map(([name, overlay]) => [name, { overlay, source }]),
+  );
+  const load = async (): Promise<LoadedConfig> => ({ overlay: doc.overlay, sources: [source], presets });
+  const readers = { readFile: async () => 'x', readStdin: async () => 'x' };
+  for (const preset of [undefined, ...Object.keys(presets)]) {
+    const argv = ['run', '--goal', 'x', ...(preset !== undefined ? ['--preset', preset] : [])];
+    try {
+      await parseArgs(argv, readers, load, () => true);
+    } catch (e) {
+      if (!(e instanceof UsageError)) throw e;
+      const where = preset !== undefined ? ` (preset '${preset}')` : '';
+      throw new UsageError(`config file '${source}'${where}: ${e.message.replace(` (set in ${source})`, '')}`);
+    }
   }
 }
 

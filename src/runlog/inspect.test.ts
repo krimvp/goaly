@@ -31,10 +31,10 @@ function entry(runId: string, event: OrchestratorEvent, ts = 1000 + seq): RunLog
   return { runId: RunId.parse(runId), seq, ts, contractHash: null, event, stateTagAfter: 'x' };
 }
 
-function agentRan(runId: string, prev: string, post: string, tokensSpent?: number): RunLogEntry {
+function agentRan(runId: string, prev: string, post: string, tokensSpent?: number, tokensUsed?: number): RunLogEntry {
   return entry(runId, {
     tag: 'AGENT_RAN',
-    run: { output: '', sessionId: SessionId.parse('s1'), status: 'completed' },
+    run: { output: '', sessionId: SessionId.parse('s1'), status: 'completed', ...(tokensUsed !== undefined ? { tokensUsed } : {}) },
     prevDiffHash: DiffHash.parse(prev),
     diffHash: DiffHash.parse(post),
     budget: { exceeded: false, ...(tokensSpent !== undefined ? { tokensSpent } : {}) },
@@ -49,14 +49,26 @@ function doneRun(runId = 'run-done'): { header: RunLogHeader; entries: RunLogEnt
     entries: [
       entry(runId, { tag: 'CONTRACT_COMPILED', contract }),
       entry(runId, { tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }),
-      agentRan(runId, '0000000', '0000001', 10),
+      agentRan(runId, '0000000', '0000001', 10, 10),
       entry(runId, { tag: 'VERIFIED', verdict: failVerdict('red') }),
-      agentRan(runId, '0000001', '0000002', 25),
+      agentRan(runId, '0000001', '0000002', 25, 15),
       entry(runId, { tag: 'VERIFIED', verdict: passVerdict('green') }),
-      entry(runId, { tag: 'SIGNOFF_DECIDED', approval: approve() }, 1_700_000_009_999),
+      entry(
+        runId,
+        { tag: 'SIGNOFF_DECIDED', approval: approve(), llm: { tokens: 7, calls: 1, unknownCalls: 0 } },
+        1_700_000_009_999,
+      ),
     ],
   };
 }
+
+describe('runDetail budget cap', () => {
+  it('reads the cap an operator extension raised, not the header cap', () => {
+    const { header: h, entries } = doneRun('run-ext');
+    const extended = [...entries, entry('run-ext', { tag: 'RUN_EXTENDED', budgetTokens: 5000 })];
+    expect(runDetail(h, extended).usage.budget.tokens).toBe(5000);
+  });
+});
 
 describe('runSummary (pure projection)', () => {
   it('summarizes a DONE run with the Driver-matching status/iterations/tokens', () => {
@@ -65,7 +77,9 @@ describe('runSummary (pure projection)', () => {
     expect(s.status).toBe('DONE');
     expect(s.stateTag).toBe('DONE');
     expect(s.iterations).toBe(2);
-    expect(s.tokensSpent).toBe(25); // cumulative = last AGENT_RAN snapshot
+    // The spend report's total: the last AGENT_RAN snapshot (25) misses the final Sign-off's 7.
+    expect(s.tokensSpent).toBe(32);
+    expect(runDetail(h, entries).tokensSpent).toBe(32);
     expect(s.goal).toBe('build the parser');
     expect(s.contractHash).toBe(contract.contractHash);
     expect(s.startedAt).toBe(1_700_000_000_000);

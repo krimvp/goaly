@@ -84,8 +84,8 @@ export const api = {
 
 /**
  * Subscribe to a run's live SSE feed. Returns an unsubscribe function. Frames arrive already
- * typed by event name; `terminal` closes the stream server-side (EventSource would auto-reconnect
- * and replay, so we close on it client-side too).
+ * typed by event name; `terminal`, and `liveness: false` for a dead run, close the stream
+ * server-side (EventSource would auto-reconnect and replay, so we close on them client-side too).
  */
 export function subscribeRunEvents(
   runId: string,
@@ -98,7 +98,7 @@ export function subscribeRunEvents(
     source.addEventListener(name, (raw) => {
       const data = JSON.parse((raw as MessageEvent<string>).data) as never;
       onFrame({ event: name, data } as SseFrame);
-      if (name === 'terminal') source.close();
+      if (name === 'terminal' || (name === 'liveness' && !(data as { live: boolean }).live)) source.close();
     });
   }
   source.onerror = (): void => {

@@ -139,7 +139,18 @@ export class GitWorktreeHost implements WorktreeHost {
     const commit = await this.#git(['rev-parse', '--verify', '--quiet', `${treeish}^{commit}`]);
     if (commit.code === 0 && commit.stdout.trim().length > 0) return commit.stdout.trim();
     // Not a commit-ish — treat it as a tree SHA and wrap it in a dangling commit to check out.
-    const wrapped = await this.#git(['commit-tree', treeish, '-m', 'goaly best-of-N baseline']);
+    // A fixed identity: commit-tree fails on a host with no git user configured (a fresh container),
+    // and this commit is internal and dangling, so the user's identity has no value here.
+    const wrapped = await this.#git([
+      '-c',
+      'user.name=goaly',
+      '-c',
+      'user.email=goaly@localhost',
+      'commit-tree',
+      treeish,
+      '-m',
+      'goaly best-of-N baseline',
+    ]);
     if (wrapped.code !== 0) {
       throw new Error(`git commit-tree failed (code ${wrapped.code}): ${wrapped.stderr.trim()}`);
     }
@@ -148,14 +159,14 @@ export class GitWorktreeHost implements WorktreeHost {
 
   /** Tracked working-tree paths (from the real index/HEAD), for the promote-time deletion pass. */
   async #trackedPaths(): Promise<string[]> {
-    const r = await this.#git(['ls-files']);
-    return splitLines(r.stdout);
+    const r = await this.#git(['ls-files', '-z']);
+    return splitNul(r.stdout);
   }
 
   /** Paths in the promoted tree's throwaway index (after read-tree), for the deletion diff. */
   async #trackedPathsFromIndex(env: NodeJS.ProcessEnv): Promise<string[]> {
-    const r = await this.#git(['ls-files'], env);
-    return splitLines(r.stdout);
+    const r = await this.#git(['ls-files', '-z'], env);
+    return splitNul(r.stdout);
   }
 
   #git(args: string[], env?: NodeJS.ProcessEnv): Promise<ExecResult> {
@@ -164,6 +175,11 @@ export class GitWorktreeHost implements WorktreeHost {
       ...(env !== undefined ? { env } : {}),
     });
   }
+}
+
+/** `ls-files -z` output: git C-quotes unusual names without `-z`, and a quoted name is not a path. */
+function splitNul(s: string): string[] {
+  return s.split('\0').filter((name) => name.length > 0);
 }
 
 function splitLines(s: string): string[] {

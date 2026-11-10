@@ -15,10 +15,10 @@ function entry(event: OrchestratorEvent, ts = 1000 + seq): RunLogEntry {
   seq += 1;
   return { runId: RunId.parse('run-1'), seq, ts, contractHash: null, event, stateTagAfter: 'x' };
 }
-function agentRan(prev: string, post: string, tokens: number, session = 's1'): RunLogEntry {
+function agentRan(prev: string, post: string, tokens: number, session = 's1', tokensUsed = 0): RunLogEntry {
   return entry({
     tag: 'AGENT_RAN',
-    run: { output: '', sessionId: SessionId.parse(session), status: 'completed' },
+    run: { output: '', sessionId: SessionId.parse(session), status: 'completed', tokensUsed },
     prevDiffHash: DiffHash.parse(prev),
     diffHash: DiffHash.parse(post),
     budget: { exceeded: false, tokensSpent: tokens },
@@ -33,9 +33,9 @@ function doneRun(): { header: RunLogHeader; entries: RunLogEntry[] } {
     entries: [
       entry({ tag: 'CONTRACT_COMPILED', contract }),
       entry({ tag: 'SEAL_DECIDED', decision: { kind: 'approve' } }),
-      agentRan('0000000', '0000001', 10),
+      agentRan('0000000', '0000001', 10, 's1', 10),
       entry({ tag: 'VERIFIED', verdict: failVerdict('red') }),
-      agentRan('0000001', '0000002', 25),
+      agentRan('0000001', '0000002', 25, 's1', 15),
       entry({ tag: 'VERIFIED', verdict: passVerdict('green') }),
       entry({ tag: 'SIGNOFF_DECIDED', approval: approve() }),
     ],

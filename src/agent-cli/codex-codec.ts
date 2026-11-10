@@ -25,7 +25,7 @@ import {
   type StreamEventExtractor,
 } from './stream';
 import { accountTokens } from './estimate';
-import type { AgentCliCodec } from './codec';
+import { failureTail, type AgentCliCodec } from './codec';
 import { isEmptyBreakdown, type TokenBreakdown } from '../domain/usage';
 
 const UNKNOWN_SESSION = 'codex-unknown';
@@ -271,7 +271,7 @@ export const codexCodec: AgentCliCodec = {
     // No parseable JSONL / no text → crashed, but still a valid RunResult.
     if (parsed === null) {
       return HarnessRunResult.parse({
-        output: '',
+        output: failureTail(input.stderr, input.stdout),
         sessionId: coerceSessionId(fallbackSession, UNKNOWN_SESSION),
         status: 'crashed',
       });

@@ -145,14 +145,13 @@ export function makeGoalyCodeHarness(
   if (models.harness === undefined) {
     throw new EndpointConfigError('--harness goaly-code requires a model (--model <m>)');
   }
-  const timeouts = options.timeouts ?? {};
-  const client = makeOpenAiClient(options.baseUrl, options.llmApiKey, timeouts.harnessMs, options.llmFetch);
+  const timeoutMs = options.timeouts?.harnessMs ?? DEFAULT_AGENT_TIMEOUT_MS;
+  const client = makeOpenAiClient(options.baseUrl, options.llmApiKey, timeoutMs, options.llmFetch);
   const shell = goalyCodeShellExec({
     root: options.workspaceRoot,
     launcher,
     policy: options.sandbox ?? defaultPolicy(),
     ...(options.egressProxy !== undefined ? { proxy: options.egressProxy } : {}),
-    ...(timeouts.harnessMs !== undefined ? { timeoutMs: timeouts.harnessMs } : {}),
   });
   return new GoalyCodeHarness({
     client,
@@ -160,7 +159,7 @@ export function makeGoalyCodeHarness(
     host: new NodeToolHost({ root: options.workspaceRoot, shell }),
     sessionStore: new FileSessionStore({ dir: path.join(stateDir, 'goaly-code-sessions') }),
     logger,
-    ...(timeouts.harnessMs !== undefined ? { timeoutMs: timeouts.harnessMs } : {}),
+    timeoutMs,
     ...(options.goalyCodeMaxTurns !== undefined ? { maxTurns: options.goalyCodeMaxTurns } : {}),
   });
 }
@@ -169,17 +168,17 @@ export function makeGoalyCodeHarness(
  * The sandboxed `run_shell` exec for the goaly-code harness — the agent's untrusted shell, jailed at the
  * tool grain. Mirrors the verifier seam's `sh -c` rewrite but keeps the HARNESS network profile +
  * full env (the agent may need egress to build/install; the inference call is made by goaly itself,
- * un-jailed). With a {@link NoneLauncher} it is a plain in-workspace shell (default behavior).
+ * un-jailed). With a {@link NoneLauncher} it is a plain in-workspace shell (default behavior). Each call
+ * is killed at the time left in the turn, which the loop passes in.
  */
-function goalyCodeShellExec(opts: {
+export function goalyCodeShellExec(opts: {
   root: string;
   launcher: SandboxLauncher;
   policy: SandboxPolicy;
   proxy?: SandboxProxy;
-  timeoutMs?: number;
 }): ShellExec {
-  const budget = opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs, killGroup: true } : { killGroup: true };
-  return async (command) => {
+  return async (command, call = {}) => {
+    const budget = { killGroup: true, ...(call.timeoutMs !== undefined ? { timeoutMs: call.timeoutMs } : {}) };
     // Scrub credentials: run_shell runs model-authored commands but, unlike a CLI harness, it does
     // NOT make the inference call (goaly does, un-jailed), so it never needs API keys. Deny it the
     // parent's secrets (matches the verifier seam); still augment PATH so an agent-installed toolchain

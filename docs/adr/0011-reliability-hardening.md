@@ -59,7 +59,10 @@ is allowed to end a run and *how* it is reported.
 - `JudgeVerifier`: each quorum sample individually guarded; a thrown sample drops that sample only.
   Zero surviving samples remain a fail-closed unevaluable red.
 - Driver `RUN_AGENT`: ONE retry of a `crashed` harness turn after a 2 s backoff, **before** the
-  event reaches the reducer. Retrying is an *effect policy*, so it lives in the Driver; the
+  event reaches the reducer. *(Amended: one retry was too short for a rate limit or an overloaded
+  provider that lasts minutes. The Driver now retries up to 6 times with a growing backoff of about
+  5 minutes in total, through the injected sleep, and stops the wait on an interrupt or a spent
+  budget. Every crash gets the same wait — the cause is never guessed from the error text.)* Retrying is an *effect policy*, so it lives in the Driver; the
   reducer, the stuck detectors, and the run-log semantics are untouched — a crash that survives the
   retry counts toward `stuckCrashThreshold` exactly as before.
 - **Timeouts are never retried**, anywhere. A wall-clock cap is the run's own guard; silently
@@ -82,7 +85,13 @@ is allowed to end a run and *how* it is reported.
   `runs show` never mutates a live log.
 - A per-run `run.lock` (pid-stamped, `wx`-created) makes concurrent drivers impossible. A live
   holder fails closed with a clear message; a dead holder's lock self-heals — a crashed run never
-  needs manual cleanup.
+  needs manual cleanup. The lock also records the holder's process start time (Linux `/proc`), so a
+  pid that a reboot or a container restart gave to another process reads as dead too.
+  *(Amended: a SIGKILL of goaly cannot reap its group-spawned children, and they kept editing the
+  tree under the next `--resume`. While a lock is held, goaly records each live child group's pid
+  and start time in `run.children` beside it; a stale-lock reclaim SIGKILLs each recorded group
+  whose start time still matches, then removes the record. No `/proc` → no record → today's
+  behavior.)*
 - goaly-code session saves are atomic (`tmp → fsync → rename`): the previous complete log survives
   any crash mid-save.
 - `drive()`'s pre-loop IO (resume read, header write) resolves to a typed `ABORTED` — the last
@@ -111,8 +120,8 @@ is allowed to end a run and *how* it is reported.
 
 - A short provider/network outage now costs seconds of backoff instead of an aborted run; a
   persistent failure terminates through the same typed paths as before (retries absorb blips,
-  stuck detection governs walls). Worst-case added latency per iteration is bounded (one 2 s
-  crash-retry + the provider's own bounded backoff).
+  stuck detection governs walls). Worst-case added latency per iteration is bounded (the crash
+  retries, about 5 minutes, + the provider's own bounded backoff).
 - A kill/power-loss at ANY byte offset of the run log leaves a readable, resumable run. The
   corrupt-log tests distinguish torn-tail (tolerated) from terminated-corrupt (rejected).
 - `--budget-tokens` is a real whole-run invariant. Wall-clock stays per-process by decision.

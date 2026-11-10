@@ -1,6 +1,7 @@
 import { DEFAULT_AGENT_TIMEOUT_MS } from '../../agent-cli/codec';
 import { z } from 'zod';
 import { UsageError, str, type RawFlags } from './tokens';
+import { badFlagValue } from './value-error';
 
 /**
  * Per-step subprocess kill-timeouts in milliseconds (pure wiring — never enters the contract).
@@ -35,7 +36,7 @@ export function parseTimeouts(flags: RawFlags): StepTimeouts {
     if (v === undefined) return undefined;
     const parsed = z.coerce.number().int().positive().safeParse(v);
     if (!parsed.success) {
-      throw new UsageError(`--${flag}: expected a positive integer (milliseconds), got '${v}'`);
+      throw badFlagValue(`--${flag}`, 'a positive integer (milliseconds)', v);
     }
     return parsed.data;
   };
@@ -85,9 +86,7 @@ export function candidatesFlag(flags: RawFlags): string | undefined {
   if (value === undefined) return undefined;
   const parsed = z.coerce.number().int().positive().max(MAX_CANDIDATES).safeParse(value);
   if (!parsed.success) {
-    throw new UsageError(
-      `--candidates: expected a positive integer ≤ ${MAX_CANDIDATES}, got '${value}'`,
-    );
+    throw badFlagValue(primary !== undefined ? '--candidates' : '--best-of', `a positive integer ≤ ${MAX_CANDIDATES}`, value);
   }
   return value;
 }
@@ -102,9 +101,7 @@ export function parseResumeBestOfIncomplete(flags: RawFlags): 'rerun' | 'collaps
   if (v === undefined) return undefined;
   const parsed = z.enum(['rerun', 'collapse']).safeParse(v);
   if (!parsed.success) {
-    throw new UsageError(
-      `--resume-best-of-incomplete: expected 'rerun' or 'collapse', got '${v}'`,
-    );
+    throw badFlagValue('--resume-best-of-incomplete', `'rerun' or 'collapse'`, v);
   }
   return parsed.data;
 }
@@ -119,7 +116,7 @@ export function parseMaxAgentTurns(flags: RawFlags): number | undefined {
   if (v === undefined) return undefined;
   const parsed = z.coerce.number().int().positive().safeParse(v);
   if (!parsed.success) {
-    throw new UsageError(`--max-agent-turns: expected a positive integer, got '${v}'`);
+    throw badFlagValue('--max-agent-turns', 'a positive integer', v);
   }
   return parsed.data;
 }

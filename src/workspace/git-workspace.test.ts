@@ -117,6 +117,17 @@ describe('GitWorkspace (integration, real git)', () => {
     expect(text).toContain('.b { color: red; }');
   });
 
+  it('diff renders untracked files whose names git would quote (non-ASCII, tab, leading space)', async () => {
+    const ws = new GitWorkspace(root);
+    await writeFile(join(root, 'café.py'), 'cafe-line\n');
+    await writeFile(join(root, 'tab\there.txt'), 'tab-line\n');
+    await writeFile(join(root, ' lead.txt'), 'lead-line\n');
+    const text = await ws.diff();
+    expect(text).toContain('+cafe-line');
+    expect(text).toContain('+tab-line');
+    expect(text).toContain('+lead-line');
+  });
+
   it('diff includes tracked modifications', async () => {
     const ws = new GitWorkspace(root);
     await writeFile(join(root, 'file.txt'), 'modified\n');
@@ -523,6 +534,14 @@ describe('GitWorkspace (integration, real git)', () => {
       await writeFile(join(scratch, '.goaly', 'state.json'), '{}\n');
       const ws = new GitWorkspace(scratch);
       expect(await ws.isEmptyOfSource([])).toBe(true);
+    });
+
+    it('true when the only files are a non-ASCII doc and a non-ASCII authored file (no C-quoted names)', async () => {
+      await writeFile(join(scratch, 'notés.md'), '# seed\n');
+      await mkdir(join(scratch, 'verify'));
+      await writeFile(join(scratch, 'verify', 'café.test.ts'), '// authored test\n');
+      const ws = new GitWorkspace(scratch);
+      expect(await ws.isEmptyOfSource(['verify/café.test.ts'])).toBe(true);
     });
 
     it('false once a real *.go source file exists (untracked)', async () => {

@@ -88,6 +88,7 @@ export function neutralAgentExec(
       // The jail wrapper (bwrap/firejail/container) is itself a parent of the agent CLI and its
       // tools — group-kill on timeout so no descendant can hold the pipes open past the cap.
       killGroup: true,
+      keepEndsOnOverflow: true,
       ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
       ...(promptOnStdin ? { input: input.prompt } : {}),
       ...(onStdout !== undefined ? { onStdout } : {}),

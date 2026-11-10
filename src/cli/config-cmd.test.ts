@@ -45,6 +45,16 @@ async function listPresets(content: string | undefined, names = false): Promise<
 }
 
 describe('goaly config validate', () => {
+  it('rejects a value a run would reject, top level or in a preset', async () => {
+    const top = await validate('{ "max-iterations": "abc" }');
+    expect(top.code).toBe(1);
+    expect(top.err).toContain('--max-iterations');
+    const preset = await validate('{ "presets": { "ci": { "harness": "nope" } } }');
+    expect(preset.code).toBe(1);
+    expect(preset.err).toContain("preset 'ci'");
+    expect(preset.err).toContain("--harness: expected claude | codex | droid | pi | goaly-code, got 'nope'");
+  });
+
   it('accepts a valid config and lists the settings it carries', async () => {
     const res = await validate('{ "harness": "codex", "max-iterations": 5 }');
     expect(res.code).toBe(0);

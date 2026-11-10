@@ -85,6 +85,7 @@ Usage:
   goaly init [--harness <name>] [--autonomous] [--model <m>] [--verify-cmd "<cmd>"] [--yes] [--force]
              [--workspace <dir>]
   goaly config validate <path>
+  goaly config presets [--names] [--workspace <dir>]
   goaly config defects list|clear [--defect-corpus <path>]
   goaly completion bash|zsh|fish
 
@@ -736,3 +737,10 @@ is a usage error; --generate still overrides a verify-cmd inherited from a confi
 ];
 
 export const USAGE = [USAGE_HEAD, ...USAGE_TOPICS.map((t) => t.text)].join('\n\n');
+
+/**
+ * A usage error prints its message and this one pointer, never the full USAGE: hundreds of lines
+ * scroll the error itself off screen.
+ */
+export const usageErrorText = (message: string): string =>
+  `${message}\n\nrun 'goaly help' for the full usage\n`;

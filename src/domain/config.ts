@@ -189,8 +189,8 @@ export const RunConfig = z.object({
    * 0 disables plan revision (the plan Seal stays binary). Ignored in `--autonomous` (auto-approve).
    */
   maxPlanRevisions: z.number().int().nonnegative().default(10),
-  budget: BudgetConfig.default({}),
-  stuckPolicy: StuckPolicy.default({}),
+  budget: BudgetConfig.prefault({}),
+  stuckPolicy: StuckPolicy.prefault({}),
   /**
    * Extra paths kept out of `diffHash`/`diff` beyond the orchestrator's own `.goaly` state dir.
    * Verifier side effects (coverage dirs, `__pycache__`, build output) otherwise land between
@@ -218,7 +218,7 @@ export const RunConfig = z.object({
       quorum: z.number().int().min(1).default(3),
       confidenceFloor: z.number().min(0).max(1).default(0.66),
     })
-    .default({}),
+    .prefault({}),
   /**
    * Sign-off (second-key) approver panel (issue #84). `quorum` reviewers behind the unchanged
    * Approver seam: with `quorum === 1` (the default) Sign-off is byte-for-byte the historical single
@@ -240,7 +240,7 @@ export const RunConfig = z.object({
        */
       lenses: z.array(z.string().min(1)).nonempty().optional(),
     })
-    .default({}),
+    .prefault({}),
   /**
    * Adversarial review steps (`--adversarial`). Opt-in Claude-style red-teaming at three points:
    * a plan critic panel before the plan Seal (phased runs), a contract red-team panel before the
@@ -290,7 +290,7 @@ export const RunConfig = z.object({
        */
       contractDryRun: z.boolean().default(true),
     })
-    .default({}),
+    .prefault({}),
   /**
    * Follow-up session inheritance (Capability C, `--from-run … --inherit-session`). When set, the
    * follow-up's FIRST agent turn resumes this prior harness session so the agent keeps its working
@@ -487,7 +487,7 @@ export function cliInputToRunConfig(input: CliInput): RunConfig {
   // Sign-off approver panel (issue #84): override only the fields the user set; the rest keep their
   // schema defaults (quorum 1 ⇒ byte-for-byte the single-call approver). Omitted entirely when no
   // flag was given so the approver-block default applies.
-  const approver: { quorum?: number; diversityTemperature?: number; lenses?: [string, ...string[]] } =
+  const approver: { quorum?: number; diversityTemperature?: number; lenses?: string[] } =
     {};
   if (input.approverQuorum !== undefined) approver.quorum = input.approverQuorum;
   if (input.approverDiversityTemp !== undefined)

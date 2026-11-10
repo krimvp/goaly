@@ -174,7 +174,14 @@ export class FileRunLog implements RunLog {
     // (After a normal write the popped element is the empty string after the final '\n'.)
     if (lines.length > 0) lines.pop();
 
-    const entries = lines.map((line) => RunLogEntry.parse(JSON.parse(line)));
+    const entries = lines.map((line, i) => {
+      try {
+        return RunLogEntry.parse(JSON.parse(line));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`corrupt run log entry at ${join(this.#dir, LOG_FILE)} line ${i + 1}: ${msg}`);
+      }
+    });
     return { header, entries };
   }
 }

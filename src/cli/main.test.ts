@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -168,6 +168,24 @@ describe('nextStepHint — always-on next-step guidance for terminal outcomes', 
     expect(nextStepHint(aborted('STUCK_HARNESS_CRASH: boom'))).toContain('--stuck-crash-threshold');
   });
 
+  it('names the budget that ran out when the log says which one', () => {
+    const wall = nextStepHint(outcome({ status: 'ABORTED', reason: 'budget exceeded' })) ?? '';
+    expect(wall).toContain('wall-clock budget');
+    expect(wall).toContain('--budget-wall-ms <N>');
+    expect(wall).not.toContain('--budget-tokens');
+    const tokens =
+      nextStepHint(
+        outcome({
+          status: 'ABORTED',
+          reason: 'budget exceeded',
+          usage: usage({ budget: { tokens: 10_000, spent: 14_400, exceeded: true } }),
+        }),
+      ) ?? '';
+    expect(tokens).toContain('token budget');
+    expect(tokens).toContain('--budget-tokens <N>');
+    expect(tokens).not.toContain('--budget-wall-ms');
+  });
+
   it('points a permission REFUSAL at the autonomy flag, not at install/auth', () => {
     // A harness that refused an action is not a crashing CLI: "run it once by hand to check
     // install/auth" and "--stuck-crash-threshold 4" are both dead ends there.
@@ -206,7 +224,7 @@ describe('makeInterruptController', () => {
     expect(c.interrupted()).toBe(false);
     c.onSignal();
     expect(c.interrupted()).toBe(true);
-    expect(warned.join('')).toContain('--resume run-abc');
+    expect(warned.join('')).toContain('resume later with: goaly --resume run-abc\n');
     expect(warned.join('')).toContain('finishing the current step');
     expect(forced).toBe(0);
 
@@ -259,6 +277,11 @@ describe('main() — --baseline validation (issue #47)', () => {
     );
     expect(code).toBe(2);
     expect(err).toContain('--baseline no-such-ref');
+    // The error and one pointer line — never the whole help text.
+    expect(err.trim().split('\n').filter((l) => l !== '')).toEqual([
+      expect.stringContaining('--baseline no-such-ref'),
+      "run 'goaly help' for the full usage",
+    ]);
   });
 });
 
@@ -788,6 +811,27 @@ describe('main() — --dry-run validates and prints, and starts nothing', () => 
     expect(existsSync(join(root, STATE_DIR))).toBe(false);
   });
 
+  it('reports a missing harness CLI as a finding under the printed config, with the real-run exit code', async () => {
+    const bin = await mkdtemp(join(tmpdir(), 'goaly-main-bin-'));
+    const gitPath = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+    await symlink(gitPath, join(bin, 'git'));
+    const origPath = process.env.PATH;
+    process.env.PATH = bin;
+    try {
+      const res = await capture(() =>
+        main(['run', 'g', '--verify-cmd', 'npm test', '--harness', 'codex', '--mode', 'review',
+          '--workspace', root, '--dry-run']),
+      );
+      expect(res.code).toBe(2);
+      expect(res.out).toContain('existing command: npm test');
+      expect(res.out).toContain("the 'codex' CLI (needed for --harness codex) was not found on PATH");
+      expect(existsSync(join(root, STATE_DIR))).toBe(false);
+    } finally {
+      process.env.PATH = origPath;
+      await rm(bin, { recursive: true, force: true });
+    }
+  });
+
   it('does not materialize a --worktree', async () => {
     const res = await capture(() =>
       main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--autonomous',
@@ -845,10 +889,66 @@ describe('main() — doctor and init onboarding subcommands', () => {
     expect(config).toEqual({ harness: 'codex', autonomous: true });
   });
 
+  it('--help after a subcommand prints its help and does not run it', async () => {
+    const res = await capture(() => main(['init', '--help', '--workspace', root]));
+    expect(res.code).toBe(0);
+    expect(res.out).toContain('goaly init');
+    expect(res.out).not.toContain('goaly doctor — environment report');
+    expect(existsSync(join(root, '.goalyrc'))).toBe(false);
+    expect((await capture(() => main(['run', '-h']))).code).toBe(0);
+  });
+
   it('goaly init refuses to overwrite without --force (exit 2)', async () => {
     await writeFile(join(root, '.goalyrc'), '{ "harness": "pi" }\n');
     const res = await capture(() => main(['init', '--harness', 'codex', '--workspace', root]));
     expect(res.code).toBe(2);
     expect(res.out).toContain('--force');
+  });
+});
+
+describe('main() — a human Seal needs a terminal', () => {
+  let root: string;
+  let origIsTTY: boolean | undefined;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'goaly-main-notty-'));
+    origIsTTY = process.stdin.isTTY;
+    process.stdin.isTTY = false as true;
+  });
+  afterEach(async () => {
+    process.stdin.isTTY = origIsTTY as true;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function captureErr(fn: () => Promise<number>): Promise<{ code: number; err: string }> {
+    const writes: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((s: string | Uint8Array): boolean => {
+      writes.push(typeof s === 'string' ? s : Buffer.from(s).toString());
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      return { code: await fn(), err: writes.join('') };
+    } finally {
+      process.stderr.write = orig;
+    }
+  }
+
+  it('refuses --mode review when stdin is not a terminal (exit 2), before a run starts', async () => {
+    const res = await captureErr(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--mode', 'review',
+        '--workspace-mode', 'file', '--workspace', root]),
+    );
+    expect(res.code).toBe(2);
+    expect(res.err).toContain('--autonomous');
+    expect(existsSync(join(root, STATE_DIR))).toBe(false);
+  });
+
+  it('still allows --dry-run, which never reaches Seal', async () => {
+    const res = await captureErr(() =>
+      main(['run', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--mode', 'review',
+        '--workspace-mode', 'file', '--workspace', root, '--dry-run']),
+    );
+    expect(res.code).toBe(0);
   });
 });

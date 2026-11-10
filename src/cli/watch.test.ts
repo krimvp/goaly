@@ -153,6 +153,29 @@ describe('runsWatch', () => {
     }
   });
 
+  it('ends a FAILED run with its reason and next step, and exits 1 like goaly run', async () => {
+    const stateDir = await freshDir();
+    try {
+      const log = new FileRunLog(join(stateDir, runId));
+      await log.writeHeader({ ...header(), config: makeConfig({ goal: 'watch me work', maxIterations: 1 }) });
+      for (const e of [compiled(1), sealed(2), agentRan(3), { ...verified(4, false), stateTagAfter: 'FAILED' as const }]) {
+        await log.append(e);
+      }
+      const lines: string[] = [];
+      const code = await runsWatch(runId, stateDir, (s) => lines.push(s), () => {}, {
+        sleep: async () => {},
+        isActive: async () => false,
+      });
+      const text = lines.join('');
+      expect(code).toBe(1);
+      expect(text).toContain('finished: FAILED');
+      expect(text).toContain('reason: reached maxIterations (1)');
+      expect(text).toContain(`next:   continue with more room: goaly --resume ${runId} --max-iterations <N>`);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it('exits 1 with the resume command when an INCOMPLETE run has no live driver', async () => {
     const stateDir = await freshDir();
     try {

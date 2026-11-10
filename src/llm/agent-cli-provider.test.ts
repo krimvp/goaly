@@ -294,6 +294,19 @@ describe('AgentCliLlmProvider — one codec-driven provider for every CLI', () =
     expect(calls).toBe(3); // default: 2 retries → 3 attempts
   });
 
+  it('names the END of the failure output in the error — stderr tail, else stdout tail', async () => {
+    const noise = Array.from({ length: 40 }, (_, i) => `(node:1) Warning: noise line ${i}`).join('\n');
+    const cases: Array<[ExecResult, RegExp]> = [
+      [{ stdout: '', stderr: `${noise}\nFATAL: ENOSPC`, code: 1 }, /exited 1: …[\s\S]*FATAL: ENOSPC$/],
+      [{ stdout: '{"is_error":true,"result":"Invalid API key"}', stderr: '', code: 1 }, /exited 1: .*Invalid API key/],
+      [{ stdout: '', stderr: 'model overloaded, gave up', code: 0 }, /no parseable text.*model overloaded, gave up/],
+    ];
+    for (const [result, pattern] of cases) {
+      const llm = new AgentCliLlmProvider({ codec: claudeCodec, sleep: () => Promise.resolve(), exec: async () => result });
+      await expect(llm.complete({ prompt: 'p' })).rejects.toThrow(pattern);
+    }
+  });
+
   it('throws when no parseable text comes back — fail closed, no plain-text fallback', async () => {
     // Both the argv-delivered (codex) and stdin-delivered (claude) codecs fail closed on garbage —
     // the old claude "return raw stdout" fallback is gone (invariant #4).

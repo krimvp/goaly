@@ -174,13 +174,16 @@ source <(goaly completion bash)
 
 `goaly help` prints the quick start, the synopsis, and a topic index; `goaly help <topic>` (e.g.
 `goaly help stuck`, `goaly help seal`, `goaly help models`) prints one section, and `goaly help all`
-prints every flag. A flag that is not in that contract is a usage error (`unknown flag: --budget-token`)
-— the command line fails closed on a typo exactly like `.goalyrc` does on an unknown key. `goaly
+prints every flag. `--help` (or `-h`) anywhere after a subcommand prints that subcommand's section
+and runs nothing (`goaly init --help` writes no file). A flag that is not in that contract is a usage error (`unknown flag: --budget-token
+— did you mean --budget-tokens?`) — the command line fails closed on a typo exactly like `.goalyrc`
+does on an unknown key. Each subcommand (`doctor`, `init`, `runs`, `worktree`, `ui`, `config`) also
+rejects a flag it does not accept and lists the flags it does. `goaly
 --version` (or `-v`) prints the installed package version and exits 0. Exit codes for a run: `0` DONE · `1` FAILED/ABORTED · `2` usage
 error or a pre-run guard (a bad flag value, an unresolvable `--baseline`, a live run lock) ·
 `130` interrupted (Ctrl-C; the run stays resumable). An internal crash also exits `1`, after
 reaping any live child processes. The read-only subcommands use `0` ok · `1` not-ok (`runs show`
-on a missing/corrupt run, `runs watch` on a stalled one, `doctor` on a hard fail, `config
+on a missing/corrupt run, `runs watch` on a stalled run or on one that ends FAILED/ABORTED, `doctor` on a hard fail, `config
 validate` on an invalid file) · `2` usage error.
 
 The stdout/stderr contract: **stdout carries only the machine-facing result** (the final outcome
@@ -191,6 +194,8 @@ scriptable result.
 Bare `goaly` asks for one goal when stdin and stdout are terminals. It then starts the run with
 `--stream` output. A blank answer ends without a run. With no terminal, bare `goaly` prints help.
 A quoted positional goal starts the run at once; `run` and `--goal` remain available for scripts.
+A one-word goal near a subcommand name (`goaly doctr`) is a usage error that names the subcommand,
+so a typo never starts a run; pass `--goal "<word>"` to use such a word as the goal.
 
 Goal, intent, and rubric each accept exactly one source: inline (`--goal "…"`, `--intent "…"`,
 `--rubric "…"`), a file (`--goal-file <path>`, `--intent-file <path>`, `--rubric-file <path>`),
@@ -215,8 +220,9 @@ unparsable config) surface as one actionable report instead of a cryptic mid-run
   `--workspace-mode file`; the report prints the `git init` recipe for full git-mode features),
 - which bundled harness CLIs (`claude`, `codex`, `droid`, `pi`) are on PATH — none installed is
   only a warning, since `--harness goaly-code` works against any OpenAI-compatible endpoint,
-- presence **and validity** of `~/.goalyrc` and the workspace `.goalyrc` (an invalid config file
-  fails every run in the tree, so it is a hard failure here),
+- presence **and validity** of `~/.goalyrc` and the workspace `.goalyrc` — keys and values, with the
+  same check as `goaly config validate` (an invalid config file fails every run in the tree, so it
+  is a hard failure here),
 - with `--base-url <url>`: whether the OpenAI-compatible endpoint answers (a `GET /models` probe).
 
 Exit code `0` means goaly can run here in some configuration; `1` means something goaly cannot
@@ -262,6 +268,9 @@ It runs **after** every read-only check a real run performs (config merge, `--co
 byte is written. So a dry run fails exactly the way the real run would, with the same message and
 the same exit code — and on success leaves no run directory, no lock, no diagnostics log, and no
 `--worktree`. Nothing is spent: no LLM is called, because the contract is compiled after this point.
+A preflight problem is an environment finding, not an input error: when the harness or
+`--llm-provider` CLI is not on PATH, the dry run still prints the resolved config, then prints the
+same message as the real run and exits `2`.
 
 `--dry-run` is per-invocation and cannot be set from a config file.
 
@@ -381,7 +390,9 @@ Keys mirror the CLI flags in kebab-case. Full precedence:
 ```
 
 Booleans take `true`/`false` (`false` = "not set"). An unknown key, non-primitive value, or invalid
-JSON is a usage error (the config seam parses with Zod and fails closed).
+JSON is a usage error (the config seam parses with Zod and fails closed). The error names the
+nearest key for a typo or a camelCase key (`maxIterations` → `max-iterations`), and says when a key
+is a per-run flag that only the command line takes (`dry-run`, `resume`, `workspace`, …).
 
 A file may also carry a `"presets"` block (named bundles of the same keys, selected with
 `--preset <name>`) and a top-level `"preset"` default — see
@@ -397,7 +408,10 @@ difference — and a test enforces it, so a newly added flag cannot quietly beco
 
 `goaly config validate <path>` parses a config file through the exact fail-closed path every run
 uses and reports the verdict (exit `0` valid / `1` invalid / `2` unreadable) — so "this file
-validates" and "a run accepts this file" are one fact. It reports the presets a file defines
+validates" and "a run accepts this file" are one fact. It checks each value with the run's own flag
+parser (`"max-iterations": "abc"` or `"harness": "nope"` is invalid), once for the top level and
+once for each preset it defines. A run that reads a bad value from a config file names that file
+in its usage error (`--harness: expected …, got 'nope' (set in .goalyrc)`). It reports the presets a file defines
 alongside its settings. `goaly config presets [--names] [--workspace <dir>]` lists the named
 presets exactly as a run would resolve them across all layers.
 `goaly config defects list|clear [--defect-corpus <path>]` inspects or resets the cross-run
@@ -449,7 +463,11 @@ Approve, revise with feedback, or reject? [a]pprove / [f]eedback / [r]eject:
 
 `--autonomous` skips the pause, never the freeze — the contract is still frozen and loudly logged.
 Piping the goal via stdin (`--goal -`) consumes stdin, so there's nothing left for the prompt —
-use `--autonomous` or `--goal-file`.
+use `--autonomous` or `--goal-file`. A fresh run that would pause at Seal refuses to start (exit 2)
+when stdin is not a terminal (a pipe, `</dev/null`, CI), because nobody could answer the prompt.
+If stdin closes (EOF) while the Seal or plan-Seal prompt waits — for example a mid-run plan gate,
+or an embedder that uses the human gates — the gate rejects (`no answer at Seal`) and the run
+aborts. It never approves.
 
 **What the banner shows.** The goal, the `contractHash`, any frozen `setup` and `requiredTools`, the
 rubric **once**, then the ladder *as it will actually run* — including the built-in
@@ -839,8 +857,8 @@ Model selection is pure wiring — it never enters the frozen contract.
 
 Precedence per LLM step: per-step flag → `--llm-model` → `--model` → the tool's own default — with
 one deliberate exception for the Sign-off approver, [below](#the-sign-off-approver-does-not-inherit---model).
-`--llm-provider` **follows `--harness`** by default (`codex` → `codex`, `goaly-code` → `openai`),
-so the compiler that authors a `--generate` bar runs on the tool you picked; pass the flag to split
+`--llm-provider` **follows `--harness`** by default (`codex` → `codex`, `goaly-code` → `openai`,
+`fake` → the built-in fake LLM, see [Harnesses](#harnesses)), so the compiler that authors a `--generate` bar runs on the tool you picked; pass the flag to split
 the LLM steps onto a different provider than the worker.
 
 ### The Sign-off approver does not inherit `--model`
@@ -925,7 +943,17 @@ degraded:    INDEPENDENCE-UNVERIFIED — the coding agent and the LLM judge rung
              is a different model. …
 ```
 
-All three kinds are exactly that: a **label**. None weakens or strengthens a gate — the frozen ladder
+A fourth kind, `FAKE-LLM` (`kind: "fake-llm"`), marks a run whose LLM steps ran on goaly's built-in
+fake LLM — the default of `--harness fake` without `--llm-provider`. No model is called, and the
+approver approves every Sign-off, so a DONE proves the pipeline only:
+
+```
+degraded:    FAKE-LLM — the compiler, judge and Sign-off approver ran on goaly's built-in FAKE LLM
+             (--autonomous): no model was called and the second key approves every Sign-off, so a
+             DONE proves only the pipeline. Pass --llm-provider <provider> to use real LLM steps.
+```
+
+All four kinds are exactly that: a **label**. None weakens or strengthens a gate — the frozen ladder
 and the veto-only approver still both have to turn for DONE — and none enters the frozen contract.
 Setting `--approver-model` (or `--approver-models`) on a model that differs from the agent's removes
 them.
@@ -934,7 +962,7 @@ them.
 Model flags are *not* part of the frozen contract or of the resumed config overlay, so a resume with
 different (or simply omitted) `--model` / `--approver-model` flags genuinely changes which keys run
 for the remaining iterations. The run as a whole is therefore labelled with the **more severe** of
-the recorded label and the resumed invocation's (`self-judged` > `self-approved` >
+the recorded label and the resumed invocation's (`fake-llm` > `self-judged` > `self-approved` >
 `independence-unverified` > none):
 a resume that collapses the keys further **upgrades** the label, and a resume that repairs the
 wiring does **not** erase the iterations that already ran degraded. Any difference at all is WARNed
@@ -978,6 +1006,16 @@ installed, it selects `claude` so the missing-install error gives a clear next s
   (`--llm-api-key-env <NAME>` overrides; a keyless local endpoint like ollama needs none). The
   read-only LLM steps default onto the same endpoint. Both fail closed (refuse to start) if the
   base URL or model is missing.
+- **`--harness-timeout-ms`** (default 600000) is the `goaly-code` turn budget. Each model call and
+  each tool call gets only the time left in the turn. A `run_shell` command that runs into the
+  deadline is killed, and the model gets a timeout result that tells it to run a server or a watcher
+  in the background. The turn then ends as `timeout`.
+- **`fake`** is a test harness that changes no files and calls no CLI. Without `--llm-provider`,
+  its compiler, judge and approver run on a built-in fake LLM that makes no network call and
+  approves every Sign-off, so `--harness fake --verify-cmd true --autonomous` reaches DONE with zero
+  tokens. The run is labelled [`FAKE-LLM`](#degraded-mode-self-judged-self-approved-and-independence-unverified).
+  The fake LLM cannot author a `--generate` bar or answer a `--rubric` judge: those fail closed.
+  Pass `--llm-provider <provider>` to put the LLM steps on a real model.
 - **`--max-agent-turns N`** (default 50) caps the `goaly-code` agent loop per run. Hitting the cap
   ends the turn as `truncated` — not a failure — and the loop grants another iteration. Raise to
   100–200 for hard from-scratch tasks. A no-op for the CLI harnesses (they manage their own turn
@@ -1359,20 +1397,41 @@ kill an hours-long run. All defaults, no flags needed
 
 - **Fail-fast preflight.** A run refuses to start — with the exact fix — when the workspace isn't a
   git repo, the `--harness` / `--llm-provider` CLI isn't on PATH, a `--resume` id is unknown, or a
-  stdin-fed goal lacks `--autonomous` (which would deadlock the Seal prompt).
-- **Transient failures are absorbed.** The OpenAI-compatible transport retries 429/5xx/network
-  errors with backoff (honoring `Retry-After`, capped at 60 s); CLI-backed LLM steps retry a
+  stdin-fed goal lacks `--autonomous`, or stdin is not a terminal (either would deadlock the Seal
+  prompt).
+- **Transient failures are absorbed.** The OpenAI-compatible transport retries 408/429/5xx/network
+  errors, and a 200 whose body is not JSON (a proxy or gateway page), with exponential backoff for
+  about one minute (1 s, 2 s, … 32 s; a longer `Retry-After`, in seconds or HTTP-date form, is
+  honored, capped at 60 s per wait); a 200 with JSON that fails the response schema is not retried; a request that hits its own timeout is not retried; CLI-backed LLM steps retry a
   non-zero exit or unparseable output; a judge-quorum sample that throws drops that sample only; a
-  crashed harness turn is retried once before counting toward the stuck-crash streak. Timeouts are
-  never retried.
-- **Ctrl-C is safe.** The first Ctrl-C / SIGTERM stops between steps: the in-flight step finishes,
-  lands write-ahead, and the outcome is a typed `ABORTED` naming `--resume <runId>` (exit 130). A
-  second Ctrl-C exits immediately, after reaping live child process groups.
+  crashed harness turn is retried up to 6 times with a growing backoff (5 s, 10 s, … 160 s; about
+  5 minutes in total) before it counts toward the stuck-crash streak, so a rate-limited or overloaded
+  agent CLI does not end a long run. goaly does not read the error text to decide; every crash gets
+  the same wait. Each wait logs a `harness crashed — waiting before retry` line, and Ctrl-C or a spent
+  budget stops the wait at once. Timeouts are never retried.
+- **Ctrl-C is safe.** The first Ctrl-C / SIGTERM / SIGHUP stops between steps: the in-flight step
+  finishes, lands write-ahead, and the outcome is a typed `ABORTED` naming `--resume <runId>` (exit
+  130; if that last step ends the run on its own — DONE, FAILED, a stuck abort — the exit code is
+  that outcome's 0 or 1). A second signal exits immediately, after reaping live child process groups and
+  removing the run lock (so the next `--resume` reports no stale lock). A lost terminal
+  (an ssh drop, a closed window, `goaly … | head`) is not a crash: SIGHUP takes the same clean stop,
+  and a closed stdout/stderr only drops console output — `goaly.log` and the run log keep the record.
+  Under `nohup` (SIGHUP ignored) the run continues instead.
 - **Crash-safety end to end.** Every run-log append is fsync'd write-ahead; a torn tail is
   tolerated on read and repaired on the next append. A per-run lock stops two processes driving the
-  same run (stale locks self-heal, with a notice naming the dead holder's pid). A
+  same run (stale locks self-heal, with a notice naming the dead holder's pid — also when a
+  reboot or a container restart gave that pid to another process). While a run lives, the lock's
+  run dir also records each live agent / verify process group (`run.children`: pid and process start
+  time). When goaly is killed hard (`kill -9`) those groups can keep editing the tree, so the next
+  driver that reclaims the stale lock first SIGKILLs every recorded group whose start time still
+  matches (never a pid that now names another process), and the notice says how many it stopped.
+  Without `/proc` (non-Linux) nothing is recorded. One working tree takes one live
+  run: `goaly run` (and a `--resume` of a different run) refuses to start (exit 2) while another
+  live process drives a run in the same tree, and names that run, `goaly runs watch <id>`, and
+  `--worktree` for a parallel run. Best-of-N candidates and parallel waves run inside their own
+  worktrees and are not affected. A
   terminated-but-corrupt line still fails closed. An unexpected fatal error reaps live child
-  process groups before the process exits, so a crashed goaly never leaves an agent CLI editing
+  process groups and removes the run lock before the process exits, so a crashed goaly never leaves an agent CLI editing
   the tree and spending tokens on its own — the run stays resumable either way.
 - **Budgets survive `--resume`.** Prior token spend is folded out of the log and re-armed against
   `--budget-tokens`. (The wall-clock budget restarts per process — the crash-to-resume gap is idle
@@ -1424,7 +1483,7 @@ The loop bails before `--max-iterations` with a typed reason when it's making no
 | no-diff | the tree didn't change | `--stuck-no-diff` (bool) |
 | repeat-failure | the same verifier-failure signature recurs (`STUCK_REPEATED_FAILURE`) | `--stuck-repeat-threshold` |
 | oscillation | period-N cycling between tree states | `--stuck-oscillation` |
-| harness-crash | the agent CLI exited abnormally N times in a row (`STUCK_HARNESS_CRASH`) | `--stuck-crash-threshold` |
+| harness-crash | the agent CLI exited abnormally N turns in a row, each after its crash retries (`STUCK_HARNESS_CRASH`) | `--stuck-crash-threshold` |
 | contract-unevaluable | the frozen ladder could not be *evaluated* N times in a row (`CONTRACT_UNEVALUABLE`) | `--stuck-unevaluable-threshold` |
 | timeout-no-diff | N iterations in a row both hit the harness wall-clock timeout **and** changed nothing (`STUCK_TIMEOUT_NO_DIFF`) | `--stuck-timeout-no-diff-threshold`, `--harness-timeout-ms`, `--harness-idle-timeout-ms` |
 | budget | `--budget-tokens` / `--budget-wall-ms` exhausted | the budget flags |
@@ -1486,7 +1545,9 @@ Details that make these accurate rather than trigger-happy:
   which in that situation is three dead ends. The classification is unchanged: the run is still a
   fail-closed `crashed`, still typed the same way. Only the guidance differs. Per-CLI string
   matching lives in the codec, never in the reducer, so the stuck detectors still key purely on
-  facts goaly owns.
+  facts goaly owns. The reason also quotes the bounded **end** of the CLI's failure output
+  (stderr, else stdout), where a CLI prints its fatal error; a failed CLI-backed LLM step names the
+  same tail in its error.
 - **A repeat-failure streak may be re-adjudicated as a *contract* fault** — see below.
 
 **Streak relief on `--resume`.** The counted streaks are not stored — they are re-derived by the
@@ -1618,18 +1679,27 @@ re-run nothing:
 ```bash
 goaly runs list                  # one row per run: id, status, iterations, tokens, goal
 goaly runs show run-<id>         # frozen contract + hash, Seal outcome, every verdict, totals,
-                                 # wall-clock duration, and any degraded-mode label (e.g. SELF-JUDGED)
-goaly runs watch run-<id>        # follow a LIVE run from another terminal
+                                 # wall-clock duration, any degraded-mode label (e.g. SELF-JUDGED),
+                                 # and the same `next:` step as the end-of-run report
+goaly runs watch run-<id>        # follow a LIVE run from another terminal; at the end it prints the
+                                 # reason + `next:` step and exits like `goaly run` (0 DONE, else 1)
 goaly runs resume-cmd run-<id>   # how to continue the run's CLI session interactively
 goaly runs list --workspace ./myrepo
 ```
+
+An INCOMPLETE run is marked `live` (a process holds its run lock) or `dead` (the driver crashed or
+was killed; `runs show` then names the `goaly --resume <id>` command). The token total is the spend
+report's total, so `runs list`, `runs show`, the web UI and the end-of-run report agree. The token
+count on each iteration line of `runs show` (`tokens-so-far=`) and of the UI timeline (`tok so far`)
+is the run's cumulative total at that agent turn, not the spend of that iteration. The per-iteration
+`tokens` field of the training export has the same cumulative meaning.
 
 Beyond the contract and the verdicts, `runs show` reports the run's *provenance and labels* — the
 things a `DONE`/`ABORTED` line alone cannot tell you:
 
 | Line | Meaning |
 | --- | --- |
-| `degraded:` | a typed [degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified) — `SELF-JUDGED` (every role on one model), `SELF-APPROVED` (the approver on the coding agent's model, the judge rung on another) or `INDEPENDENCE-UNVERIFIED` (goaly could not compare them) |
+| `degraded:` | a typed [degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified) — `SELF-JUDGED` (every role on one model), `SELF-APPROVED` (the approver on the coding agent's model, the judge rung on another), `INDEPENDENCE-UNVERIFIED` (goaly could not compare them) or `FAKE-LLM` (the LLM steps ran on the fake LLM of `--harness fake`) |
 | `adjudicated:` | this run's [contract-fault verdict](#in-loop-contract-fault-adjudication-contract_defective) (SOUND or DEFECTIVE, with the generalized anti-pattern), and for a defective one the exact `--recontract` command that recovers without discarding the tree |
 | `successor of:` | this run's [re-contract provenance](#re-contracting-a-defective-bar---recontract): the predecessor run + its frozen `contractHash`, the verdict that justified the successor, and the depth in the chain |
 
@@ -1896,7 +1966,9 @@ goaly ui --port 5000 --workspace ./myrepo
   turn boundaries — each tagged and filterable by seam (agent / judge / approver / compiler …),
   streaming live over SSE.
 - **Live event feed over SSE** — the write-ahead log tailed read-only (it never takes the run
-  lock), so it follows runs started in any terminal.
+  lock), so it follows runs started in any terminal. The feed ends at the terminal entry, and for
+  an INCOMPLETE run that no process drives (dead) it ends after a `live: false` frame; reopen the
+  page to follow a later `--resume`.
 - **Worktrees panel** — create/remove with the manager's refusal ladder surfaced verbatim.
 - **Start runs, and hold the Seal in your hand.** The start form executes in-process through the
   exact same code path as the CLI (same guards, run lock, write-ahead log). A non-autonomous run

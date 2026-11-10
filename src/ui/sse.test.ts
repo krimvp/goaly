@@ -114,6 +114,23 @@ describe('tailRun — the SSE live tail over the write-ahead log', () => {
     expect(frames.some((f) => f.event === 'heartbeat')).toBe(true);
   });
 
+  it('ends a dead INCOMPLETE run after the final liveness frame, flushing entries written before the exit', async () => {
+    await log.append(entry(1, agentRan(), 'VERIFYING'));
+    let probes = 0;
+    const frames = await collect({
+      isActive: async () => {
+        probes += 1;
+        // The driver appended one more entry, then exited, between the read and the lock probe.
+        if (probes === 1) await log.append(entry(2, { tag: 'VERIFIED', verdict: { pass: false, confidence: 1, detail: 'red' } }, 'RUNNING_AGENT'));
+        return false;
+      },
+      maxSleeps: 100,
+    });
+    expect(frames.filter((f) => f.event === 'entry').map((f) => (f.data as RunLogEntry).seq)).toEqual([1, 2]);
+    expect(frames[frames.length - 1]).toEqual({ event: 'liveness', data: { live: false } });
+    expect(probes).toBe(2);
+  });
+
   it('tails stream.jsonl incrementally when present, dropping corrupt lines', async () => {
     await log.append(entry(1, agentRan(), 'VERIFYING'));
     await appendFile(

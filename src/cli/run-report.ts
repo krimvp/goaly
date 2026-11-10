@@ -1,6 +1,7 @@
 import { recontractCommand } from '../followup/recontract';
 import type { RunOutcome, RunExtension } from '../domain/events';
 import type { RunLogEntry } from '../runlog/runlog';
+import type { RunDetail } from '../runlog/inspect';
 import { adjudicationVerdict } from '../runlog/replay';
 import { CONTRACT_SOUND_MARKER } from '../orchestrator/stuck';
 import { hintSubject } from './reason-text';
@@ -88,6 +89,13 @@ export function nextStepHint(o: RunOutcome): string | undefined {
   const resume = `goaly --resume ${o.runId}`;
   if (o.status === 'DONE' || reason.length === 0) return undefined;
   if (reason.includes('interrupted by user')) return undefined; // the reason already says how to resume
+  // The token and wall-clock caps share one reason; the folded spend says which one tripped.
+  const budgetHint =
+    o.usage === undefined
+      ? `raise the cap and continue: ${resume} --budget-tokens <N> (or --budget-wall-ms <N>)`
+      : o.usage.budget.exceeded
+        ? `the token budget ran out — raise it and continue: ${resume} --budget-tokens <N>`
+        : `the wall-clock budget ran out — raise it and continue: ${resume} --budget-wall-ms <N>`;
   // Every "…and continue" hint names the EXACT extension flag: a terminal run replays back to the
   // same terminal state on a plain resume — only a --resume extension (ADR 0012) un-terminates it.
   const table: readonly (readonly [RegExp, string])[] = [
@@ -121,7 +129,7 @@ export function nextStepHint(o: RunOutcome): string | undefined {
     // ── Generic substring rows LAST ────────────────────────────────────────────────────────────
     // Everything above keys off a marker goaly itself emits; these match ordinary English that a
     // typed reason may also happen to contain, so they only get a say once no marker matched.
-    [/budget exceeded/, `raise the cap and continue: ${resume} --budget-tokens <N> (or --budget-wall-ms <N>)`],
+    [/budget exceeded/, budgetHint],
     [/reached maxIterations/, `continue with more room: ${resume} --max-iterations <N> --note "<guidance>", or ${inspect}`],
     [/no-diff/, `the agent stopped changing the tree — steer it: ${resume} --stuck-no-diff false --note "<hint>", or refine the goal in a follow-up: --from-run ${o.runId}`],
     [/oscillation/, `the agent is flip-flopping between two states — ${inspect}; steer it: ${resume} --stuck-oscillation false --note "<which way to go>"`],
@@ -132,6 +140,18 @@ export function nextStepHint(o: RunOutcome): string | undefined {
   ];
   for (const [pattern, hint] of table) if (pattern.test(reason)) return hint;
   return undefined;
+}
+
+/**
+ * The `next:` line for a run read back from its log (`runs show`, `runs watch`). `live` is whether a
+ * process holds the run lock: an INCOMPLETE run without one crashed or was killed.
+ */
+export function storedRunNextStep(d: RunDetail, live: boolean): string | undefined {
+  if (d.status === 'INCOMPLETE') {
+    return live ? undefined : `no process drives this run (it crashed or was killed) — continue it: goaly --resume ${d.runId}`;
+  }
+  const { status, iterations, contractHash, runId, usage } = d;
+  return nextStepHint({ status, iterations, contractHash, runId, usage, ...(d.reason !== undefined ? { reason: d.reason } : {}) });
 }
 
 export function formatOutcome(

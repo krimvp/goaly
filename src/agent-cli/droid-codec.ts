@@ -207,6 +207,7 @@ export function makeDroidCodec(auto: AutonomyLevel = DEFAULT_AUTONOMY): AgentCli
         parsed: parseAgentOutput(input.stdout, fieldExtractor),
         code: input.code,
         stderr: input.stderr,
+        stdout: input.stdout,
         timedOut: input.timedOut,
         sessionId: input.sessionId,
         unknownSession: UNKNOWN_SESSION,

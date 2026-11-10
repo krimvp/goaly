@@ -50,6 +50,14 @@ describe('renderRunsTable', () => {
     expect(table).toContain('corrupt header');
   });
 
+  it('marks each INCOMPLETE run live or dead', () => {
+    const incomplete = (id: string): RunListItem =>
+      summaryItem({ runId: RunId.parse(id), status: 'INCOMPLETE', stateTag: 'VERIFYING' });
+    const table = renderRunsTable([incomplete('run-live'), incomplete('run-dead')], new Set(['run-live']));
+    expect(table).toMatch(/run-live\s+INCOMPLETE \(live\)/);
+    expect(table).toMatch(/run-dead\s+INCOMPLETE \(dead\)/);
+  });
+
   it('renders a dash for missing tokens / ended time', () => {
     const item: RunListItem = {
       ok: true,
@@ -180,6 +188,12 @@ describe('renderRunDetail', () => {
     expect(text).toContain('sign-off=approved');
   });
 
+  it('labels the iteration token count as the run total so far, not the spend of the iteration', () => {
+    const text = renderRunDetail(detail());
+    expect(text).toContain('#2  agent=completed  changed=yes  tokens-so-far=25');
+    expect(text).not.toMatch(/ tokens=/);
+  });
+
   it('renders the per-layer spend breakdown (harness vs the LLM steps)', () => {
     const text = renderRunDetail(detail());
     expect(text).toContain('spend:');
@@ -198,6 +212,22 @@ describe('renderRunDetail', () => {
   it('shows the terminal reason when present', () => {
     const text = renderRunDetail(detail({ status: 'ABORTED', stateTag: 'ABORTED', reason: 'no-diff: stuck' }));
     expect(text).toContain('reason:      no-diff: stuck');
+  });
+
+  it('prints the same next step as the end-of-run report for a terminal run', () => {
+    const text = renderRunDetail(detail({ status: 'ABORTED', stateTag: 'ABORTED', reason: 'no-diff: stuck' }));
+    expect(text).toContain('next:        the agent stopped changing the tree');
+    expect(text).toContain('goaly --resume run-aaa --stuck-no-diff false');
+  });
+
+  it('tells a dead INCOMPLETE run from a live one, and how to continue the dead one', () => {
+    const incomplete = detail({ status: 'INCOMPLETE', stateTag: 'VERIFYING', reason: undefined });
+    const live = renderRunDetail(incomplete, true);
+    expect(live).toContain('status:      INCOMPLETE (VERIFYING, live)');
+    expect(live).not.toContain('next:');
+    const dead = renderRunDetail(incomplete, false);
+    expect(dead).toContain('status:      INCOMPLETE (VERIFYING, dead)');
+    expect(dead).toContain('next:        no process drives this run (it crashed or was killed) — continue it: goaly --resume run-aaa');
   });
 
   it('notes a contract-less run that failed before compile', () => {
@@ -291,6 +321,29 @@ describe('runRuns dispatch', () => {
       expect(code).toBe(0);
       expect(c.stdout()).toContain('run-xyz');
       expect(c.stdout()).toContain(contract.contractHash);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('list and show: probe the run lock to mark an INCOMPLETE run live or dead', async () => {
+    const stateDir = await freshDir();
+    try {
+      for (const id of ['run-live', 'run-dead']) {
+        seq = 0;
+        const log = new FileRunLog(join(stateDir, id));
+        await log.writeHeader(h(id));
+        await log.append(e(id, { tag: 'CONTRACT_COMPILED', contract }));
+      }
+      await writeFile(join(stateDir, 'run-live', 'run.lock'), String(process.pid));
+      await writeFile(join(stateDir, 'run-dead', 'run.lock'), '2147483646');
+      const c = capture();
+      await runRuns({ kind: 'list' }, stateDir, c.out, c.err);
+      expect(c.stdout()).toMatch(/run-live\s+INCOMPLETE \(live\)/);
+      expect(c.stdout()).toMatch(/run-dead\s+INCOMPLETE \(dead\)/);
+      const d = capture();
+      await runRuns({ kind: 'show', runId: 'run-dead' }, stateDir, d.out, d.err);
+      expect(d.stdout()).toContain('continue it: goaly --resume run-dead');
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

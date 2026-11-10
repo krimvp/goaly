@@ -3,6 +3,7 @@ import { LogLevel } from '../../log/logger';
 import { DEFAULT_MAX_RECONTRACTS } from '../../followup/recontract';
 import type { DefectCorpusOptions } from '../../defects/wiring';
 import { boolFlag, str, UsageError, type RawFlags } from './tokens';
+import { badFlagValue } from './value-error';
 
 /**
  * `--recontract` (issue #117): with `--from-run <runId>`, start a SUCCESSOR run over the predecessor's
@@ -29,7 +30,7 @@ export function parseRecontract(flags: RawFlags): RecontractRequest | undefined 
   if (max === undefined) return { maxRecontracts: DEFAULT_MAX_RECONTRACTS };
   const parsed = z.coerce.number().int().positive().safeParse(max);
   if (!parsed.success) {
-    throw new UsageError(`--max-recontracts: expected a positive integer, got '${max}'`);
+    throw badFlagValue('--max-recontracts', 'a positive integer', max);
   }
   return { maxRecontracts: parsed.data };
 }
@@ -57,7 +58,7 @@ export function parseLogLevel(value: string | undefined): LogLevel {
   if (value === undefined) return 'info';
   const parsed = LogLevel.safeParse(value);
   if (!parsed.success) {
-    throw new UsageError(`unknown log level: ${value} (expected debug | info | warn | error)`);
+    throw badFlagValue('--log-level', 'debug | info | warn | error', value);
   }
   return parsed.data;
 }
@@ -65,7 +66,7 @@ export function parseLogLevel(value: string | undefined): LogLevel {
 export function parseWorkspaceMode(value: string | undefined): 'git' | 'file' | 'auto' {
   if (value === undefined) return 'auto';
   if (value !== 'git' && value !== 'file' && value !== 'auto') {
-    throw new UsageError(`--workspace-mode must be git|file|auto (got "${value}")`);
+    throw badFlagValue('--workspace-mode', 'git | file | auto', value);
   }
   return value;
 }

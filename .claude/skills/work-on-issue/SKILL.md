@@ -25,7 +25,9 @@ discussion) and the seam(s) it touches.
 Do not start coding until the issue is verified. This gate can legitimately **end** the work.
 
 - **Bug** → **replicate it first** (same discipline as the `log-issue` skill: `fake` harness +
-  `--verify-cmd` + `--autonomous` for orchestration bugs, a throwaway dir, redact secrets/ids).
+  `--verify-cmd` + `--autonomous` for orchestration bugs, a throwaway dir, redact secrets/ids; the
+  fake harness defaults its LLM steps to the zero-network fake LLM — add `--llm-provider` only when
+  the bug is in an LLM step).
   - Reproduced → you now have the exact failing behavior to fix and to lock in a test.
   - **Can't reproduce** → do **not** "fix" blindly. Comment on the issue with what you tried and ask
     for the missing repro (version, command, environment), or close as `invalid`/needs-info with a

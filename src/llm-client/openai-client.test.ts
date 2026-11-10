@@ -115,7 +115,7 @@ describe('OpenAiClient', () => {
       },
     });
     await c.chat(REQ);
-    expect(slept).toEqual([500, 1000]);
+    expect(slept).toEqual([1000, 2000]);
   });
 
   it('honors a Retry-After header on 429 when longer than the base backoff (capped)', async () => {
@@ -140,7 +140,7 @@ describe('OpenAiClient', () => {
     const slept: number[] = [];
     const { fetch } = fakeFetch([
       { kind: 'res', status: 429, body: 'x', headers: { 'retry-after': '99999' } },
-      { kind: 'res', status: 429, body: 'x', headers: { 'retry-after': 'Wed, 21 Oct 2026' } },
+      { kind: 'res', status: 429, body: 'x', headers: { 'retry-after': 'soon' } },
       { kind: 'res', status: 200, body: okBody() },
     ]);
     const c = new OpenAiClient({
@@ -152,7 +152,27 @@ describe('OpenAiClient', () => {
       },
     });
     await c.chat(REQ);
-    expect(slept).toEqual([60_000, 1000]); // capped at 60s; then garbage → base exponential backoff
+    expect(slept).toEqual([60_000, 2000]); // capped at 60s; then garbage → base exponential backoff
+  });
+
+  it('honors a Retry-After header in HTTP-date form (a past date adds no wait)', async () => {
+    const slept: number[] = [];
+    const { fetch } = fakeFetch([
+      { kind: 'res', status: 503, body: 'x', headers: { 'retry-after': new Date(Date.now() + 30_000).toUTCString() } },
+      { kind: 'res', status: 503, body: 'x', headers: { 'retry-after': 'Wed, 21 Oct 2015 07:28:00 GMT' } },
+      { kind: 'res', status: 200, body: okBody() },
+    ]);
+    const c = new OpenAiClient({
+      baseUrl: 'https://api.example.com/v1',
+      fetch,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    await c.chat(REQ);
+    expect(slept[0]).toBeGreaterThan(25_000);
+    expect(slept[0]).toBeLessThanOrEqual(30_000);
+    expect(slept[1]).toBe(2000);
   });
 
   it('retries on a thrown network error then succeeds', async () => {
@@ -173,13 +193,22 @@ describe('OpenAiClient', () => {
   it('fails closed after exhausting retries on persistent 500s', async () => {
     const { fetch, calls } = fakeFetch([{ kind: 'res', status: 500, body: 'boom' }]);
     await expect(client(fetch).chat(REQ)).rejects.toBeInstanceOf(LlmClientError);
-    expect(calls).toHaveLength(3); // default 2 retries → 3 attempts
+    expect(calls).toHaveLength(7); // default 6 retries → 7 attempts
   });
 
-  it('fails closed (no retry) on a non-JSON body', async () => {
+  it('retries a 200 with a non-JSON body (a gateway page) like a 5xx, then succeeds', async () => {
+    const { fetch, calls } = fakeFetch([
+      { kind: 'res', status: 200, body: '<html>502 Bad Gateway</html>' },
+      { kind: 'res', status: 200, body: okBody() },
+    ]);
+    expect((await client(fetch).chat(REQ)).content).toBe('hello');
+    expect(calls).toHaveLength(2);
+  });
+
+  it('fails closed after exhausting retries on a persistent non-JSON body', async () => {
     const { fetch, calls } = fakeFetch([{ kind: 'res', status: 200, body: 'not json <<<' }]);
     await expect(client(fetch).chat(REQ)).rejects.toThrow(/not JSON/);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(7);
   });
 
   it('fails closed (no retry) on a schema-invalid body (empty choices)', async () => {
@@ -206,19 +235,71 @@ describe('OpenAiClient', () => {
     expect(Number.isFinite(result.usage?.total ?? 0)).toBe(true); // dropped total → falls back to breakdown
   });
 
-  it('aborts on timeout and surfaces a fail-closed error', async () => {
-    // A fetch that respects the abort signal: rejects when aborted.
+  it('aborts on timeout, does NOT retry, and names the timeout in the error', async () => {
+    // The goaly-code harness passes its whole turn budget as this timeout: a retry would run the
+    // turn to a multiple of its own cap. The message must name the timeout, not "operation aborted".
+    let calls = 0;
     const slowFetch: FetchLike = (_url, init) =>
       new Promise((_resolve, reject) => {
-        init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        calls += 1;
+        init.signal?.addEventListener('abort', () => reject(new Error('This operation was aborted')));
       });
     const c = new OpenAiClient({
       baseUrl: 'https://x.test',
       fetch: slowFetch,
       sleep: async () => {},
       timeoutMs: 5,
-      retries: 0,
     });
-    await expect(c.chat(REQ)).rejects.toBeInstanceOf(LlmClientError);
+    await expect(c.chat(REQ)).rejects.toThrow(/timed out after 5ms/);
+    expect(calls).toBe(1);
+  });
+
+  it('caps the request at a per-call timeout shorter than the client timeout', async () => {
+    const slowFetch: FetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('This operation was aborted')));
+      });
+    const c = new OpenAiClient({ baseUrl: 'https://x.test', fetch: slowFetch, sleep: async () => {} });
+    await expect(c.chat(REQ, { timeoutMs: 5 })).rejects.toThrow(/timed out after 5ms/);
+  });
+
+  it('does not retry when the next backoff wait does not fit in the per-call timeout', async () => {
+    const slept: number[] = [];
+    const { fetch, calls } = fakeFetch([{ kind: 'res', status: 503, body: 'down' }]);
+    const c = new OpenAiClient({
+      baseUrl: 'https://api.example.com/v1',
+      fetch,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    await expect(c.chat(REQ, { timeoutMs: 1500 })).rejects.toThrow(/no time left for a retry: HTTP 503/);
+    expect(calls).toHaveLength(2);
+    expect(slept).toEqual([1000]);
+  });
+
+  it('survives a provider outage of about one minute (six 503s, then a success)', async () => {
+    const slept: number[] = [];
+    const down: Canned = { kind: 'res', status: 503, body: 'overloaded' };
+    const { fetch, calls } = fakeFetch([down, down, down, down, down, down, { kind: 'res', status: 200, body: okBody() }]);
+    const c = new OpenAiClient({
+      baseUrl: 'https://api.example.com/v1',
+      fetch,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    expect((await c.chat(REQ)).content).toBe('hello');
+    expect(calls).toHaveLength(7);
+    expect(slept.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it('retries a 408 request timeout from the server', async () => {
+    const { fetch, calls } = fakeFetch([
+      { kind: 'res', status: 408, body: 'timeout' },
+      { kind: 'res', status: 200, body: okBody() },
+    ]);
+    await client(fetch).chat(REQ);
+    expect(calls).toHaveLength(2);
   });
 });

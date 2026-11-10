@@ -385,6 +385,42 @@ describe('replay() — RUN_EXTENDED (operator extension, ADR 0012)', () => {
     expect(after.state.tag).toBe('RUNNING_AGENT'); // exceeded re-judged vs the new cap → continue
   });
 
+  it('a raised token budget revives a run the Driver aborted on budget at a VERIFIED or SIGNOFF_DECIDED', async () => {
+    // The live Driver stamps the snapshot on VERIFIED and SIGNOFF_DECIDED too, and DECIDE reads the
+    // latest one — so a re-judge of AGENT_RAN alone left the run aborted at the old cap.
+    const over = { tokensSpent: 450, wallClockMs: 10, exceeded: true };
+    const workspace = new FakeWorkspace('0000000');
+    const budget = { record: () => {}, snapshot: () => over };
+    for (const [verdicts, approvals] of [
+      [[failVerdict('red')], []],
+      [[passVerdict()], [{ veto: true, reason: 'not yet' }]],
+    ] as const) {
+      const log = new InMemoryRunLog();
+      const outcome = await drive(
+        {
+          compiler: new FakeCompiler(contract),
+          seal: new FakeSealGate({ kind: 'approve' }),
+          harness: new FakeHarness([{ postHash: '0000001' }], workspace),
+          makeLadder: () => new FakeVerifier([...verdicts]),
+          approver: new FakeApprover([...approvals]),
+          workspace,
+          clock: new ManualClock(),
+          budget,
+          runlog: log,
+        },
+        makeConfig({ goal: 'replayed goal', maxIterations: 5, budget: { tokens: 400 } }),
+        runId,
+      );
+      expect(outcome.status).toBe('ABORTED');
+      const stored = (await log.read())!;
+      const extended = [
+        ...stored.entries,
+        extensionEntry(stored.entries.length + 1, { budgetTokens: 2000 }),
+      ];
+      expect(replay(stored.header.config, extended).state.tag).toBe('RUNNING_AGENT');
+    }
+  });
+
   it('surfaces a pending note until an agent turn consumes it', async () => {
     const runlog = await driveToIterationCap(1);
     const stored = await runlog.read();

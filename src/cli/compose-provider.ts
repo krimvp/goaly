@@ -1,4 +1,4 @@
-import type { LlmProvider } from '../llm/provider';
+import { FakeLlm, type LlmProvider } from '../llm/provider';
 import { AgentCliLlmProvider } from '../llm/agent-cli-provider';
 import { OpenAiLlmProvider } from '../llm/openai-provider';
 import { OpenAiClient, type FetchLike } from '../llm-client/openai-client';
@@ -38,6 +38,9 @@ export function makeLlmProvider(
     fetch?: FetchLike;
   } = {},
 ): LlmProvider {
+  // The fake provider approves every Sign-off; any other step reads the approval as unparseable
+  // output and fails closed (a judge rung FAILs, a `--generate` compile errors).
+  if (choice === 'fake') return new FakeLlm([{ text: '{"veto":false}', tokensUsed: 0, tokenSource: 'reported' }]);
   // `openai` is the first non-CLI provider: a direct chat-completions call (no coding CLI). It is
   // structurally read-only (one [system,user] exchange, no tools) and fails closed without the
   // endpoint/model it needs.

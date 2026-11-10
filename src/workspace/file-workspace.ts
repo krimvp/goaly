@@ -26,8 +26,8 @@ const TIMEOUT_EXIT_CODE = 124;
 const SPAWN_FAILED_EXIT_CODE = 127;
 
 type Manifest = ReadonlyMap<string, Buffer>;
-const Baseline = z.object({ version: z.literal(2), files: z.record(z.string()) });
-const LegacyBaseline = z.record(z.string().regex(/^[a-f0-9]{64}$/));
+const Baseline = z.object({ version: z.literal(2), files: z.record(z.string(), z.string()) });
+const LegacyBaseline = z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/));
 const hashBytes = (content: Buffer): string => createHash('sha256').update(content).digest('hex');
 
 export class LegacyFileBaselineError extends Error {

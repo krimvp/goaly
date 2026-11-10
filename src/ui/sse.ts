@@ -30,7 +30,8 @@ const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r
  * Strictly READ-ONLY: it never takes the run lock, so it can watch a run any process is driving —
  * terminal-started runs included. The generator ends after `terminal` (the LAST entry is
  * DONE/FAILED/ABORTED — a terminal tag mid-log is a superseded outcome that a RUN_EXTENDED revived,
- * exactly the `runs watch` rule). It throws on a missing/corrupt run — the router maps that to
+ * exactly the `runs watch` rule), or after `liveness: false` for an INCOMPLETE run that no process
+ * drives (a later resume is seen by a new subscription). It throws on a missing/corrupt run — the router maps that to
  * 404/409 BEFORE any SSE bytes are written. `signal` aborts the loop when the client disconnects.
  */
 export async function* tailRun(
@@ -50,6 +51,7 @@ export async function* tailRun(
   let lastLive: boolean | undefined;
   let idlePolls = 0;
   let announced = false;
+  let deadSeen = false;
 
   for (;;) {
     if (signal?.aborted) return;
@@ -80,11 +82,19 @@ export async function* tailRun(
     }
 
     const live = await isActive(runDir);
+    // A dead run never changes again until a resume, so end the stream instead of polling it for
+    // ever. Read the log once more first: the driver may have appended just before it exited.
+    if (!live && !deadSeen) {
+      deadSeen = true;
+      continue;
+    }
+    deadSeen = !live;
     if (live !== lastLive) {
       lastLive = live;
       yield { event: 'liveness', data: { live } };
       sentSomething = true;
     }
+    if (!live) return;
 
     idlePolls = sentSomething ? 0 : idlePolls + 1;
     if (idlePolls >= heartbeatPolls) {

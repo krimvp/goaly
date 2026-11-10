@@ -27,7 +27,9 @@ goaly run --goal "make the parser handle empty input" \
 ```
 
 Replace the goal, check command, and harness with values for your project. The dry run checks
-the input and prints the resolved config. It does not run the worker or verifier. If you use
+the input and prints the resolved config. It does not run the worker or verifier. If the harness
+CLI (here `codex`) is not installed, it still prints the config, then names the missing CLI and
+exits 2, as the real run would. If you use
 this repository's source CLI, run `npm run dev -- run ... --workspace /path/to/project` from
 the goaly clone because `npm run` starts in that clone.
 
@@ -39,7 +41,8 @@ after the verifier ladder passes. A veto or a failed check becomes feedback for 
 See [how a run works](how-it-works.md) for this sequence.
 
 The default mode auto-accepts Seal and uses large token and wall-time caps. Keep
-`--mode review` for a first run if you want to inspect the bar before work starts. For exact
+`--mode review` for a first run if you want to inspect the bar before work starts. Review mode
+needs a terminal: without one (a pipe, CI), goaly refuses to start and asks for `--autonomous`. For exact
 defaults and limits, use [autonomy profiles](reference.md#autonomy-profiles---mode).
 
 ## Inspect the result
@@ -53,6 +56,8 @@ The run ID appears in the run output. A result of DONE means the frozen ladder p
 Sign-off did not veto. Its strength depends on the check quality and model independence. Read
 [inspection and resume](reference.md#inspecting-past-runs) for logs, transcripts, and recovery.
 
-The `fake` harness is useful for pipeline checks but does not fake the compiler, judge, or
-approver in a CLI run. Those LLM steps still need a working provider. For source-level checks
-with injected fakes, use the [verification guide](verification.md).
+The `fake` harness is useful for pipeline checks. Without `--llm-provider`, its compiler, judge,
+and approver use a built-in fake LLM: no model is called and Sign-off always approves. The run
+is labelled `FAKE-LLM`, so its DONE proves the pipeline only. Add `--llm-provider <provider>` to
+use real LLM steps. For source-level checks with injected fakes, use the
+[verification guide](verification.md).

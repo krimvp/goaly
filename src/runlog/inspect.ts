@@ -11,7 +11,7 @@ import { iterationCount, type OrchestratorState } from '../orchestrator/state';
 import { errorMessage } from '../util/errors';
 import { FileRunLog } from './file-runlog';
 import type { RunLogHeader, RunLogEntry, RunProvenance } from './runlog';
-import { effectiveDegraded, replay } from './replay';
+import { effectiveDegraded, extendedRunConfig, replay } from './replay';
 import { summarizeUsage } from './usage';
 import { lastRealSessionId } from './session-id';
 
@@ -48,6 +48,7 @@ export type IterationDetail = {
   readonly runStatus: HarnessRunResult['status'];
   /** Whether the agent run changed the working tree (prev vs post diff hash). */
   readonly changed: boolean;
+  /** The RUN's cumulative spend at this iteration's agent turn — not this iteration's own spend. */
   readonly tokensSpent: number | undefined;
   /** The harness session id this iteration's agent run returned (may be a synthesized sentinel). */
   readonly sessionId: SessionId;
@@ -164,7 +165,7 @@ export function runSummary(header: RunLogHeader, entries: readonly RunLogEntry[]
     status: statusOf(state),
     stateTag: state.tag,
     iterations: iterationCount(state),
-    tokensSpent: lastTokensSpent(entries),
+    tokensSpent: reportedTotal(summarizeUsage(entries.map((e) => e.event), header.config.budget)),
     startedAt: header.startedAt,
     endedAt: last?.ts,
     contractHash,
@@ -174,6 +175,10 @@ export function runSummary(header: RunLogHeader, entries: readonly RunLogEntry[]
 export function runDetail(header: RunLogHeader, entries: readonly RunLogEntry[]): RunDetail {
   const { state, contract, contractHash, plan } = replay(header.config, entries);
   const last = entries.length > 0 ? entries[entries.length - 1] : undefined;
+  const usage = summarizeUsage(
+    entries.map((e) => e.event),
+    extendedRunConfig(header.config, entries).budget,
+  );
   return {
     runId: header.runId,
     goal: header.config.goal,
@@ -188,11 +193,8 @@ export function runDetail(header: RunLogHeader, entries: readonly RunLogEntry[])
     startedAt: header.startedAt,
     endedAt: last?.ts,
     iterations: iterationCount(state),
-    tokensSpent: lastTokensSpent(entries),
-    usage: summarizeUsage(
-      entries.map((e) => e.event),
-      header.config.budget,
-    ),
+    tokensSpent: reportedTotal(usage),
+    usage,
     contract,
     contractHash,
     plan,
@@ -252,15 +254,12 @@ function terminalReason(state: OrchestratorState): string | undefined {
   return state.tag === 'FAILED' || state.tag === 'ABORTED' ? state.reason : undefined;
 }
 
-/** Cumulative tokens = the last AGENT_RAN budget snapshot that reported a count. */
-function lastTokensSpent(entries: readonly RunLogEntry[]): number | undefined {
-  let tokens: number | undefined;
-  for (const e of entries) {
-    if (e.event.tag === 'AGENT_RAN' && e.event.budget.tokensSpent !== undefined) {
-      tokens = e.event.budget.tokensSpent;
-    }
-  }
-  return tokens;
+/**
+ * The spend report's total, so `runs list`/`show` and the UI agree with the end-of-run report. The
+ * last AGENT_RAN budget snapshot is not enough: it is taken before that iteration's LLM steps.
+ */
+function reportedTotal(usage: UsageReport): number | undefined {
+  return usage.total.calls > usage.total.unknownCalls ? usage.total.tokens : undefined;
 }
 
 function collectCompileFailures(entries: readonly RunLogEntry[]): string[] {

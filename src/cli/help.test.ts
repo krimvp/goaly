@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { documentedFlagNames, helpTopicKeys, renderHelp } from './help';
 import { USAGE, USAGE_HEAD, USAGE_TOPICS } from './usage';
 import { UsageError } from './flags/tokens';
+import { parseArgs } from './args';
 
 describe('usage topics', () => {
   it('concatenate to the full USAGE (the flag contract is unchanged by the split)', () => {
@@ -24,6 +25,14 @@ describe('renderHelp', () => {
     expect(text.startsWith(USAGE_HEAD)).toBe(true);
     for (const t of USAGE_TOPICS) expect(text).toContain(`  ${t.key}`);
     expect(text.split('\n').length).toBeLessThan(USAGE.split('\n').length / 4);
+  });
+
+  it('maps every subcommand name to its section, and run to the index', () => {
+    expect(renderHelp('doctor')).toContain('goaly doctor');
+    expect(renderHelp('init')).toContain('goaly init');
+    expect(renderHelp('completion')).toContain('goaly completion');
+    expect(renderHelp('worktree')).toContain('goaly worktree');
+    expect(renderHelp('run')).toBe(renderHelp(undefined));
   });
 
   it('prints one section for a topic key, and the whole contract for "all"', () => {
@@ -52,5 +61,14 @@ describe('documentedFlagNames', () => {
     expect(names).toContain('max-iterations');
     expect(names).not.toContain('stuck-');
     expect([...names].sort()).toEqual(names);
+  });
+});
+
+describe('the help synopsis and the subcommand usage errors agree', () => {
+  it.each(['runs', 'worktree', 'config'])('every `goaly %s` subcommand the error names is in the synopsis', async (command) => {
+    const message = await parseArgs([command, 'bogus']).then(() => '', (e: Error) => e.message);
+    const listed = /\(expected ([^)]*)\)/.exec(message)?.[1]?.split(' | ') ?? [];
+    expect(listed.length).toBeGreaterThan(0);
+    for (const sub of listed) expect(USAGE_HEAD).toContain(`goaly ${command} ${sub}`);
   });
 });

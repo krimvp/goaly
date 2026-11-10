@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { errorMessage } from '../util/errors';
 import { UsageError, type RawFlags } from './flags/tokens';
+import { closestName } from './flags/unknown';
 
 /**
  * Config-file support (issue #15): the SAME run wiring (harness, verifier, autonomous, budgets,
@@ -251,9 +252,11 @@ export function parseConfigDocument(raw: unknown, source: string): ParsedConfigD
     if (e instanceof z.ZodError) {
       const issue = e.issues[0];
       const at = issue?.path.length ? ` at key '${issue.path.join('.')}'` : '';
-      throw new UsageError(
-        `config file '${source}' is invalid${at}: ${issue?.message ?? 'expected a JSON object of flag values'}`,
-      );
+      const detail =
+        issue?.code === 'unrecognized_keys'
+          ? unknownKeysDetail(issue.keys)
+          : (issue?.message ?? 'expected a JSON object of flag values');
+      throw new UsageError(`config file '${source}' is invalid${at}: ${detail}`);
     }
     throw e;
   }
@@ -274,6 +277,15 @@ export function parseConfigDocument(raw: unknown, source: string): ParsedConfigD
     presets[name] = normalizeOverlay(body);
   }
   return { overlay: normalizeOverlay(flagEntries), presets };
+}
+
+function unknownKeysDetail(keys: string[]): string {
+  const named = keys.map((k) => {
+    if (PER_INVOCATION_FLAGS.has(k)) return `'${k}' (a per-run flag: pass it on the command line)`;
+    const hint = closestName(k, CONFIG_FILE_KEYS);
+    return hint !== undefined ? `'${k}' (did you mean '${hint}'?)` : `'${k}'`;
+  });
+  return `unknown key${keys.length > 1 ? 's' : ''} ${named.join(', ')}`;
 }
 
 /** The top-level flag overlay of a config document (kept for callers that write no presets). */
