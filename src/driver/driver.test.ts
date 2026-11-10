@@ -1046,6 +1046,24 @@ describe('drive() — diagnostic logging', () => {
     expect(warn).toBeDefined();
   });
 
+  it('warns about missing token usage once, not on every iteration', async () => {
+    const { logger, records } = recordingLogger('debug');
+    const { deps } = wire({
+      scripts: [{ postHash: '0000001' }, { postHash: '0000002' }, { postHash: '0000003' }],
+      verdicts: [failVerdict('red'), failVerdict('red2'), passVerdict()],
+      approvals: [approve()],
+      logger,
+    });
+
+    const outcome = await drive(deps, makeConfig({ goal: 'make the thing work' }), runId);
+
+    expect(outcome.iterations).toBe(3);
+    const warns = records.filter(
+      (r) => r.level === 'warn' && r.msg.includes('harness reported no token usage'),
+    );
+    expect(warns).toHaveLength(1);
+  });
+
   it('does not warn about token usage when the harness reports it', async () => {
     const { logger, records } = recordingLogger('debug');
     const { deps } = wire({

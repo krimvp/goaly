@@ -41,6 +41,8 @@ const SENTINEL_POST_HASH: DiffHash = DiffHash.parse('0000001');
 const HARNESS_CRASH_RETRIES = 1;
 const HARNESS_CRASH_BACKOFF_MS = 2000;
 
+const blindBudgetWarned = new WeakSet<Logger>();
+
 const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export type Performed = {
@@ -340,8 +342,10 @@ async function performRunAgent(
       run.tokenSource === 'estimated' && run.tokensUsed !== undefined ? run.tokensUsed : 0;
     deps.budget.record(run.tokensUsed, estimated);
     // Loud, not silent: a harness that surfaces no usage AND couldn't be estimated leaves
-    // the token cap blind for this iteration — wall-clock is the only backstop. Mark it.
-    if (run.tokensUsed === undefined) {
+    // the token cap blind — wall-clock is the only backstop. Said once per logger (one per run),
+    // because a harness that never reports usage would otherwise repeat it every iteration.
+    if (run.tokensUsed === undefined && !blindBudgetWarned.has(log)) {
+      blindBudgetWarned.add(log);
       log.warn('harness reported no token usage — token budget is blind, wall-clock governs', {
         status: run.status,
       });
