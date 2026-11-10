@@ -277,6 +277,11 @@ describe('main() — --baseline validation (issue #47)', () => {
     );
     expect(code).toBe(2);
     expect(err).toContain('--baseline no-such-ref');
+    // The error and one pointer line — never the whole help text.
+    expect(err.trim().split('\n').filter((l) => l !== '')).toEqual([
+      expect.stringContaining('--baseline no-such-ref'),
+      "run 'goaly help' for the full usage",
+    ]);
   });
 });
 

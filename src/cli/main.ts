@@ -3,6 +3,7 @@ import path from 'node:path';
 import readline from 'node:readline/promises';
 import { parseArgs, UsageError, type UiCommand } from './args';
 import { renderHelp } from './help';
+import { usageErrorText } from './usage';
 import { startUiServer } from '../ui/server';
 import { STATE_DIR } from './compose';
 import { runRuns } from './runs';
@@ -46,9 +47,7 @@ export async function main(argv: string[]): Promise<number> {
     parsed = await parseArgs(argv);
   } catch (e) {
     if (e instanceof UsageError) {
-      // The message alone, plus a pointer: the full USAGE is hundreds of lines, and dumping it
-      // here scrolled the actual error (the first thing printed) straight off screen.
-      process.stderr.write(`${e.message}\n\nrun 'goaly help' for the full usage\n`);
+      process.stderr.write(usageErrorText(e.message));
       return 2;
     }
     throw e;

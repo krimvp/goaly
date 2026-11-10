@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { USAGE, defaultLlmProvider, isHarnessChoice, type ParsedArgs } from './args';
+import { usageErrorText } from './usage';
+import { defaultLlmProvider, isHarnessChoice, type ParsedArgs } from './args';
 import { resolveFollowup, resumeAuthoringSeed, type FollowupResolution } from './followup-wiring';
 import { STATE_DIR } from './compose';
 import { refResolves, resolveRef } from '../workspace/git-workspace';
@@ -173,9 +174,7 @@ async function checkBaseline(
     concreteWorkspaceMode === 'git'
   ) {
     if (!(await refResolves(parsed.workspace, parsed.baseline))) {
-      err(
-        `--baseline ${parsed.baseline}: not a resolvable git ref in ${parsed.workspace}\n\n${USAGE}\n`,
-      );
+      err(usageErrorText(`--baseline ${parsed.baseline}: not a resolvable git ref in ${parsed.workspace}`));
       return { ok: false, code: 2 };
     }
   }
