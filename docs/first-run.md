@@ -54,6 +54,8 @@ The run ID appears in the run output. A result of DONE means the frozen ladder p
 Sign-off did not veto. Its strength depends on the check quality and model independence. Read
 [inspection and resume](reference.md#inspecting-past-runs) for logs, transcripts, and recovery.
 
-The `fake` harness is useful for pipeline checks but does not fake the compiler, judge, or
-approver in a CLI run. Those LLM steps still need a working provider. For source-level checks
-with injected fakes, use the [verification guide](verification.md).
+The `fake` harness is useful for pipeline checks. Without `--llm-provider`, its compiler, judge,
+and approver use a built-in fake LLM: no model is called and Sign-off always approves. The run
+is labelled `FAKE-LLM`, so its DONE proves the pipeline only. Add `--llm-provider <provider>` to
+use real LLM steps. For source-level checks with injected fakes, use the
+[verification guide](verification.md).

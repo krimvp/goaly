@@ -577,7 +577,7 @@ model is labelled `SELF-JUDGED` rather than gated.
 `quorum` times (default 3) per iteration — heavier than a one-shot completion API. The
 `--llm-provider` default **follows the harness** (`defaultLlmProvider` in `src/cli/args.ts`:
 `--harness codex` puts the compiler/judge/approver on `codex` too, `goaly-code` → `openai`, `fake`
-→ `claude`), so when you add a CLI to the `AgentCli` union it becomes the derived provider for its
+→ the built-in fake LLM), so when you add a CLI to the `AgentCli` union it becomes the derived provider for its
 own harness — another reason `readonlyArgs` must be genuinely read-only. Model names stay
 tool-specific: align `--llm-provider` with the model you pass, or the cascade may hand a name from
 one tool's namespace to another (`claude --model <a-codex-model>`).

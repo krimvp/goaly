@@ -165,6 +165,9 @@ export function degradedMode(
   llmProvider: LlmProviderChoice,
   context: IndependenceContext = {},
 ): DegradedMode | undefined {
+  if (llmProvider === 'fake') {
+    return { kind: 'fake-llm', generate: context.generate === true, autonomous: context.autonomous === true };
+  }
   const c = collapses(resolved, harness, llmProvider, context);
   // The skeptic is established to be a different model than the author: nothing to label, whatever
   // the judge rung does (a judge↔approver collapse keeps its advisory warning only).
@@ -284,6 +287,7 @@ export function independenceWarnings(
   llmProvider: LlmProviderChoice,
   context: IndependenceContext = {},
 ): string[] {
+  if (llmProvider === 'fake') return [];
   const warnings: string[] = [];
 
   const { judgeApprover: judgeApproverCollapse, workerApprover: workerApproverCollapse } = collapses(

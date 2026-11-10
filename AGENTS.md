@@ -206,8 +206,10 @@ the separate, **read-only** `LlmProvider` seam — `AgentCliLlmProvider` consume
 (its `readonlyArgs` + `fieldExtractor`/`streamExtractor`); register an `LlmProviderChoice` +
 `makeLlmProvider()` case, and select it with `--llm-provider`. The `--llm-provider` **default
 follows the harness** (`defaultLlmProvider` in `src/cli/args.ts`: `codex` → `codex`, `goaly-code`
-→ `openai`, `fake` → `claude`), so the compiler that authors a `--generate` bar runs on the
-harness the user picked — never unconditionally `claude`. A judge/approver must never edit the
+→ `openai`, `fake` → the built-in `fake` LLM provider), so the compiler that authors a `--generate`
+bar runs on the harness the user picked — never unconditionally `claude`. The `fake` provider is
+not accepted by `--llm-provider`; it makes no network call, approves every Sign-off, and labels the
+run `FAKE-LLM` (a degraded mode), so a `--harness fake` trial run spends no tokens. A judge/approver must never edit the
 tree, so this is read-only only. See the "Optional: also use the tool for the LLM steps" section of
 the harness guide.
 
@@ -264,7 +266,7 @@ definition-of-done checklist. Two skills automate the workflow and enforce the r
 
 - **`log-issue`** — file a high-quality, *verified* issue. Bugs follow **reported → replicated →
   logged**: a bug is reproduced (prefer the `fake` harness + `--verify-cmd` for orchestration bugs,
-  zero network) *before* it's filed, and the report carries verified reproduction steps plus a
+  zero network — its LLM steps default to the fake LLM) *before* it's filed, and the report carries verified reproduction steps plus a
   preliminary cause; if it can't be reproduced it isn't filed as a bug. Features/enhancements use the
   comprehensive, invariant-aware templates.
 - **`work-on-issue`** — pick up an issue. **Verify the claim first**: replicate the bug, or confirm a

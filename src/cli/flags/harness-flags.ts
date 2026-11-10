@@ -39,9 +39,10 @@ export function isHarnessChoice(value: string): value is HarnessChoice {
 
 /**
  * Which provider runs the LLM workflow steps (judge / approver / compiler). Any bundled CLI, plus
- * `openai` — a direct OpenAI-compatible chat-completions endpoint (no coding CLI installed).
+ * `openai` — a direct OpenAI-compatible chat-completions endpoint (no coding CLI installed). `fake`
+ * is never accepted from `--llm-provider`: it is only the default of the `fake` harness.
  */
-export type LlmProviderChoice = AgentCli | 'openai';
+export type LlmProviderChoice = AgentCli | 'openai' | 'fake';
 
 /**
  * The default LLM provider for a harness: the workflow steps (compiler / judge / approver — the
@@ -49,12 +50,12 @@ export type LlmProviderChoice = AgentCli | 'openai';
  * so `--harness codex` does not silently keep requiring the `claude` CLI to generate the
  * verification. `goaly-code` drives an OpenAI-compatible endpoint, so its steps default to the
  * `openai` provider on that same endpoint (its required `--base-url`/`--model` are exactly what
- * the provider needs); the test-only `fake` harness cannot back LLM steps and keeps `claude`.
- * An explicit `--llm-provider` (CLI flag or config file) always overrides.
+ * the provider needs); the test-only `fake` harness gets the zero-network `fake` provider, so a
+ * trial run spends no real tokens (labelled FAKE-LLM). An explicit `--llm-provider` (CLI flag or
+ * config file) always overrides.
  */
 export function defaultLlmProvider(harness: HarnessChoice): LlmProviderChoice {
   if (harness === 'goaly-code') return 'openai';
-  if (harness === 'fake') return 'claude';
   return harness;
 }
 

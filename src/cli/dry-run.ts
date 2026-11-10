@@ -225,6 +225,8 @@ function degradedRowReason(kind: DegradedMode['kind']): string {
       return 'the approver runs the SAME model as the coding agent (the judge rung differs)';
     case 'self-judged':
       return 'agent, judge rung and approver share one model';
+    case 'fake-llm':
+      return 'no LLM step calls a model and the approver approves every Sign-off; pass --llm-provider <provider> for real LLM steps';
   }
 }
 
@@ -254,9 +256,8 @@ function keyIndependenceRows(parsed: ParsedArgs, config: RunConfig): Row[] {
       : ([
           [
             'degraded mode',
-            `${degradedModeTag(degraded)} — ${degradedRowReason(
-              degraded.kind,
-            )}; pass --approver-model <other> for an independent second key`,
+            `${degradedModeTag(degraded)} — ${degradedRowReason(degraded.kind)}` +
+              (degraded.kind === 'fake-llm' ? '' : '; pass --approver-model <other> for an independent second key'),
           ],
         ] as Row[])),
   ];

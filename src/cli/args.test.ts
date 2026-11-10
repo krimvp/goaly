@@ -1087,9 +1087,13 @@ describe('parseArgs', () => {
       expect(a.llmProviderExplicit).toBe(true);
     });
 
-    it('the fake harness cannot back LLM steps — keeps the claude default', async () => {
+    it('the fake harness defaults to the fake LLM provider — a trial run calls no real model', async () => {
       const a = await parseArgs(['run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'fake']);
-      expect(a.llmProvider).toBe('claude');
+      expect(a.llmProvider).toBe('fake');
+      const explicit = await parseArgs([
+        'run', '--goal', 'g', '--verify-cmd', 'true', '--harness', 'fake', '--llm-provider', 'claude',
+      ]);
+      expect(explicit.llmProvider).toBe('claude');
     });
 
     it('a config-file harness drives the derived provider; a config-file llm-provider is explicit', async () => {

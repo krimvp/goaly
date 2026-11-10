@@ -77,6 +77,22 @@ describe('CLI pipeline (compose + drive) — real git workspace, faked agent/LLM
     expect(outcome.contractHash).not.toBeNull();
   });
 
+  it('a fake harness with no explicit LLM provider reaches DONE on the fake LLM (no real model call)', async () => {
+    dir = await initRepo();
+    const config = makeConfig({
+      goal: 'keep it green',
+      verifier: { kind: 'existing', ref: 'true' },
+      autonomous: true,
+    });
+    const runId = asRunId('run-cli-fake-llm');
+    const deps = composeDeps(config, { harness: 'fake', workspaceRoot: dir, runId, noLogConsole: true });
+
+    const outcome = await drive(deps, config, runId);
+
+    expect(outcome.status).toBe('DONE');
+    expect(outcome.iterations).toBe(1);
+  });
+
   it('ABORTED via no-diff (proves the .goaly state dir is excluded from the tree hash)', async () => {
     dir = await initRepo();
     const config = makeConfig({

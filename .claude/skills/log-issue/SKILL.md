@@ -39,7 +39,9 @@ A bug is filed **only after it is reproduced**. The three states:
    (goaly/Node version, OS, harness, llm-provider/models).
 2. **Replicated.** Reproduce it yourself, minimally and deterministically.
    - Prefer the **`fake` harness** with `--verify-cmd "true"`/`"false"` and `--autonomous` when the
-     bug is in the orchestration layer — it reproduces with **zero network/API** and no real agent.
+     bug is in the orchestration layer — it reproduces with **zero network/API** and no real agent (without `--llm-provider`, its
+     compiler/judge/approver run on the built-in fake LLM, which approves every Sign-off; the run
+     is labelled `FAKE-LLM`).
      Reach for a real harness only when the bug is in an adapter/LLM seam.
    - Work in a **throwaway dir** (`mktemp -d`, `git init`, one commit) or a copy — never reproduce
      destructively against the user's real workspace. **Redact** secrets and session ids.

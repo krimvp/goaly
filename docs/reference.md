@@ -853,8 +853,8 @@ Model selection is pure wiring — it never enters the frozen contract.
 
 Precedence per LLM step: per-step flag → `--llm-model` → `--model` → the tool's own default — with
 one deliberate exception for the Sign-off approver, [below](#the-sign-off-approver-does-not-inherit---model).
-`--llm-provider` **follows `--harness`** by default (`codex` → `codex`, `goaly-code` → `openai`),
-so the compiler that authors a `--generate` bar runs on the tool you picked; pass the flag to split
+`--llm-provider` **follows `--harness`** by default (`codex` → `codex`, `goaly-code` → `openai`,
+`fake` → the built-in fake LLM, see [Harnesses](#harnesses)), so the compiler that authors a `--generate` bar runs on the tool you picked; pass the flag to split
 the LLM steps onto a different provider than the worker.
 
 ### The Sign-off approver does not inherit `--model`
@@ -939,7 +939,17 @@ degraded:    INDEPENDENCE-UNVERIFIED — the coding agent and the LLM judge rung
              is a different model. …
 ```
 
-All three kinds are exactly that: a **label**. None weakens or strengthens a gate — the frozen ladder
+A fourth kind, `FAKE-LLM` (`kind: "fake-llm"`), marks a run whose LLM steps ran on goaly's built-in
+fake LLM — the default of `--harness fake` without `--llm-provider`. No model is called, and the
+approver approves every Sign-off, so a DONE proves the pipeline only:
+
+```
+degraded:    FAKE-LLM — the compiler, judge and Sign-off approver ran on goaly's built-in FAKE LLM
+             (--autonomous): no model was called and the second key approves every Sign-off, so a
+             DONE proves only the pipeline. Pass --llm-provider <provider> to use real LLM steps.
+```
+
+All four kinds are exactly that: a **label**. None weakens or strengthens a gate — the frozen ladder
 and the veto-only approver still both have to turn for DONE — and none enters the frozen contract.
 Setting `--approver-model` (or `--approver-models`) on a model that differs from the agent's removes
 them.
@@ -948,7 +958,7 @@ them.
 Model flags are *not* part of the frozen contract or of the resumed config overlay, so a resume with
 different (or simply omitted) `--model` / `--approver-model` flags genuinely changes which keys run
 for the remaining iterations. The run as a whole is therefore labelled with the **more severe** of
-the recorded label and the resumed invocation's (`self-judged` > `self-approved` >
+the recorded label and the resumed invocation's (`fake-llm` > `self-judged` > `self-approved` >
 `independence-unverified` > none):
 a resume that collapses the keys further **upgrades** the label, and a resume that repairs the
 wiring does **not** erase the iterations that already ran degraded. Any difference at all is WARNed
@@ -996,6 +1006,12 @@ installed, it selects `claude` so the missing-install error gives a clear next s
   each tool call gets only the time left in the turn. A `run_shell` command that runs into the
   deadline is killed, and the model gets a timeout result that tells it to run a server or a watcher
   in the background. The turn then ends as `timeout`.
+- **`fake`** is a test harness that changes no files and calls no CLI. Without `--llm-provider`,
+  its compiler, judge and approver run on a built-in fake LLM that makes no network call and
+  approves every Sign-off, so `--harness fake --verify-cmd true --autonomous` reaches DONE with zero
+  tokens. The run is labelled [`FAKE-LLM`](#degraded-mode-self-judged-self-approved-and-independence-unverified).
+  The fake LLM cannot author a `--generate` bar or answer a `--rubric` judge: those fail closed.
+  Pass `--llm-provider <provider>` to put the LLM steps on a real model.
 - **`--max-agent-turns N`** (default 50) caps the `goaly-code` agent loop per run. Hitting the cap
   ends the turn as `truncated` — not a failure — and the loop grants another iteration. Raise to
   100–200 for hard from-scratch tasks. A no-op for the CLI harnesses (they manage their own turn
@@ -1676,7 +1692,7 @@ things a `DONE`/`ABORTED` line alone cannot tell you:
 
 | Line | Meaning |
 | --- | --- |
-| `degraded:` | a typed [degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified) — `SELF-JUDGED` (every role on one model), `SELF-APPROVED` (the approver on the coding agent's model, the judge rung on another) or `INDEPENDENCE-UNVERIFIED` (goaly could not compare them) |
+| `degraded:` | a typed [degraded mode](#degraded-mode-self-judged-self-approved-and-independence-unverified) — `SELF-JUDGED` (every role on one model), `SELF-APPROVED` (the approver on the coding agent's model, the judge rung on another) , `INDEPENDENCE-UNVERIFIED` (goaly could not compare them) or `FAKE-LLM` (the LLM steps ran on the fake LLM of `--harness fake`) |
 | `adjudicated:` | this run's [contract-fault verdict](#in-loop-contract-fault-adjudication-contract_defective) (SOUND or DEFECTIVE, with the generalized anti-pattern), and for a defective one the exact `--recontract` command that recovers without discarding the tree |
 | `successor of:` | this run's [re-contract provenance](#re-contracting-a-defective-bar---recontract): the predecessor run + its frozen `contractHash`, the verdict that justified the successor, and the depth in the chain |
 

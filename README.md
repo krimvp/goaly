@@ -173,6 +173,9 @@ make dev ARGS='run --goal "..." --verify-cmd "true" --harness fake --autonomous'
 make check          # typecheck + tests (the definition-of-done gate)
 ```
 
+The `fake` harness changes no files, and its LLM steps default to a built-in fake LLM, so that dev
+run calls no model and spends no tokens. The run is labelled `FAKE-LLM`.
+
 `make help` lists every task. The dev loop runs the TypeScript entry directly with `tsx` — no build
 step. See [`AGENTS.md`](AGENTS.md) for the eight invariants and conventions, and
 [`docs/adding-a-harness.md`](docs/adding-a-harness.md) to wrap a new coding-agent CLI (one codec

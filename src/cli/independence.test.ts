@@ -214,6 +214,15 @@ describe('degradedMode (issue #125): the typed self-judged label', () => {
     expect(DegradedMode.safeParse(d).success).toBe(true);
   });
 
+  it('labels a fake-LLM run FAKE-LLM, ahead of every model comparison, with no model warnings', () => {
+    const d = degradedMode(resolveModels({}), 'fake', 'fake', { autonomous: true });
+    expect(d).toEqual({ kind: 'fake-llm', generate: false, autonomous: true });
+    expect(DegradedMode.safeParse(d).success).toBe(true);
+    expect(degradedModeTag(d!)).toBe('FAKE-LLM');
+    expect(degradedModeDetail(d!)).toContain('--llm-provider');
+    expect(independenceWarnings(resolveModels({}), 'fake', 'fake')).toEqual([]);
+  });
+
   it('names the shared model when one was selected', () => {
     const d = degradedMode(resolveModels({ model: 'claude-x' }), 'claude', 'claude', {});
     expect(d?.model).toBe('claude-x');

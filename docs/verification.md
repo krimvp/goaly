@@ -44,11 +44,11 @@ npm run dev -- run --goal "add a health endpoint" --verify-cmd "true" \
   --harness fake --workspace-mode file --workspace "$work_dir" --dry-run
 ```
 
-The `fake` harness changes no files. In a CLI run, it does **not** fake the compiler, judge,
-or approver. A live CLI run still needs a working LLM provider. The composition tests inject
-fake implementations for those seams; see [the test fakes](../src/testing/fakes.ts) and
-[composition tests](../src/cli/compose.test.ts). Do not treat a `fake` CLI run as a fully offline
-proof of DONE.
+The `fake` harness changes no files. Without `--llm-provider`, its compiler, judge, and approver
+use a built-in fake LLM that calls no model and approves every Sign-off. The run is labelled
+`FAKE-LLM`. A `fake` CLI run therefore proves the pipeline, not the code. The composition tests
+inject other fakes for those seams; see [the test fakes](../src/testing/fakes.ts) and
+[composition tests](../src/cli/compose.test.ts).
 
 For a live run, use a real harness and a meaningful verification command in a project workspace.
 Then inspect the run with `goaly runs show <run-id>` or `goaly ui`. See the
