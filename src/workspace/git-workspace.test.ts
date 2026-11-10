@@ -536,6 +536,14 @@ describe('GitWorkspace (integration, real git)', () => {
       expect(await ws.isEmptyOfSource([])).toBe(true);
     });
 
+    it('true when the only files are a non-ASCII doc and a non-ASCII authored file (no C-quoted names)', async () => {
+      await writeFile(join(scratch, 'notés.md'), '# seed\n');
+      await mkdir(join(scratch, 'verify'));
+      await writeFile(join(scratch, 'verify', 'café.test.ts'), '// authored test\n');
+      const ws = new GitWorkspace(scratch);
+      expect(await ws.isEmptyOfSource(['verify/café.test.ts'])).toBe(true);
+    });
+
     it('false once a real *.go source file exists (untracked)', async () => {
       await writeFile(join(scratch, 'README.md'), '# seed\n');
       await writeFile(join(scratch, 'main.go'), 'package main\n');

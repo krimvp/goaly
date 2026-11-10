@@ -379,14 +379,14 @@ export class GitWorkspace implements Workspace {
     try {
       const listed = await this.#exec(
         'git',
-        ['-C', this.#root, 'ls-files', '--cached', '--others', '--exclude-standard', ...this.#pathspec()],
+        ['-C', this.#root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', ...this.#pathspec()],
         { cwd: this.#root },
       );
       if (listed.code !== 0) return false; // can't enumerate ⇒ conservatively not from-scratch
       const authored = new Set(generatedFiles.map(normalizeRel));
+      // `-z`: see the untracked diff path — a C-quoted name never matches a doc rule or an authored path.
       const candidates = listed.stdout
-        .split('\n')
-        .map((l) => l.trim())
+        .split('\0')
         .filter((l) => l.length > 0)
         .map(normalizeRel)
         .filter((f) => !authored.has(f))
