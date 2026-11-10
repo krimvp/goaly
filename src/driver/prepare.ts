@@ -270,10 +270,10 @@ async function runSetup(
     const r = await workspace.run(setup, { timeoutMs: timeoutMs ?? DEFAULT_SETUP_TIMEOUT_MS });
     if (r.exitCode === 0) return null;
     log.error('workspace setup failed (fail-closed → SETUP_FAILED)', { exitCode: r.exitCode });
-    const output = (r.stderr || r.stdout).slice(0, DETAIL_LIMIT);
+    const output = (r.stderr || r.stdout).slice(0, DETAIL_LIMIT).trimEnd();
     return {
       status: 'setup-failed',
-      detail: `\`${setup}\` exited ${r.exitCode}\n${output}${setupHint(r.exitCode)}`,
+      detail: `\`${setup}\` exited ${r.exitCode}${output === '' ? '' : `\n${output}`}${setupHint(r.exitCode)}`,
     };
   } catch (e) {
     log.error('workspace setup threw (fail-closed → SETUP_FAILED)', { reason: errorMessage(e) });
