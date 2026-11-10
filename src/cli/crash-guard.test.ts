@@ -1,6 +1,34 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { installInterruptHandlers, makeCrashHandler, tolerateClosedConsole } from './crash-guard';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { acquireRunLock } from '../runlog/lock';
+import {
+  installInterruptHandlers,
+  makeCrashHandler,
+  makeInterruptController,
+  tolerateClosedConsole,
+} from './crash-guard';
+
+describe('makeInterruptController — forced exit', () => {
+  it('removes the held run lock before it exits, so the next resume sees no stale lock', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'goaly-force-exit-'));
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    try {
+      await acquireRunLock(dir);
+      const c = makeInterruptController('run-abc', () => {});
+      c.onSignal();
+      c.onSignal();
+      expect(exit).toHaveBeenCalledWith(130);
+      expect(existsSync(join(dir, 'run.lock'))).toBe(false);
+    } finally {
+      exit.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('makeCrashHandler', () => {
   it('reaps children, writes the error, and exits 1', () => {

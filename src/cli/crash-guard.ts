@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { killActiveChildren } from '../util/spawn';
+import { releaseHeldRunLocksSync } from '../runlog/lock';
 
 /**
  * Graceful-interrupt wiring (Ctrl-C / SIGTERM). The FIRST signal requests a cooperative stop: the
@@ -13,7 +14,7 @@ export function makeInterruptController(
   runId: string,
   warn: (s: string) => void,
   forceExit: () => void = () => {
-    killActiveChildren();
+    reapForExit();
     process.exit(130);
   },
 ): { onSignal: () => void; interrupted: () => boolean } {
@@ -34,6 +35,12 @@ export function makeInterruptController(
     },
     interrupted: (): boolean => signals > 0,
   };
+}
+
+/** Kill the child groups first, so no child still runs when the run lock is gone. */
+function reapForExit(): void {
+  killActiveChildren();
+  releaseHeldRunLocksSync();
 }
 
 /**
@@ -98,7 +105,7 @@ export function makeCrashHandler(
     exit?: (code: number) => void;
   } = {},
 ): (err: unknown) => void {
-  const reap = deps.reap ?? killActiveChildren;
+  const reap = deps.reap ?? reapForExit;
   const write = deps.write ?? ((s: string) => process.stderr.write(s));
   const exit = deps.exit ?? ((code: number) => process.exit(code));
   return (err: unknown): void => {

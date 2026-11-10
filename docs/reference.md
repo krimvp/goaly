@@ -1389,7 +1389,8 @@ kill an hours-long run. All defaults, no flags needed
 - **Ctrl-C is safe.** The first Ctrl-C / SIGTERM / SIGHUP stops between steps: the in-flight step
   finishes, lands write-ahead, and the outcome is a typed `ABORTED` naming `--resume <runId>` (exit
   130; if that last step ends the run on its own — DONE, FAILED, a stuck abort — the exit code is
-  that outcome's 0 or 1). A second signal exits immediately, after reaping live child process groups. A lost terminal
+  that outcome's 0 or 1). A second signal exits immediately, after reaping live child process groups and
+  removing the run lock (so the next `--resume` reports no stale lock). A lost terminal
   (an ssh drop, a closed window, `goaly … | head`) is not a crash: SIGHUP takes the same clean stop,
   and a closed stdout/stderr only drops console output — `goaly.log` and the run log keep the record.
   Under `nohup` (SIGHUP ignored) the run continues instead.
@@ -1398,7 +1399,7 @@ kill an hours-long run. All defaults, no flags needed
   same run (stale locks self-heal, with a notice naming the dead holder's pid — also when a
   reboot or a container restart gave that pid to another process). A
   terminated-but-corrupt line still fails closed. An unexpected fatal error reaps live child
-  process groups before the process exits, so a crashed goaly never leaves an agent CLI editing
+  process groups and removes the run lock before the process exits, so a crashed goaly never leaves an agent CLI editing
   the tree and spending tokens on its own — the run stays resumable either way.
 - **Budgets survive `--resume`.** Prior token spend is folded out of the log and re-armed against
   `--budget-tokens`. (The wall-clock budget restarts per process — the crash-to-resume gap is idle

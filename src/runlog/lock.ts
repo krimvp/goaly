@@ -1,3 +1,4 @@
+import { rmSync } from 'node:fs';
 import { mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -60,11 +61,10 @@ export async function acquireRunLock(
       } finally {
         await handle.close();
       }
-      let released = false;
+      heldLocks.add(path);
       return {
         release: async () => {
-          if (released) return;
-          released = true;
+          if (!heldLocks.delete(path)) return;
           await rm(path, { force: true }).catch(() => undefined);
         },
       };
@@ -94,6 +94,24 @@ export async function acquireRunLock(
   throw new RunLockedError(
     `could not acquire the run lock at ${path} (another process kept re-creating it)`,
   );
+}
+
+/** Lock files this process holds, so a forced exit or a fatal crash can remove them synchronously. */
+const heldLocks = new Set<string>();
+
+/**
+ * Remove every run lock this process holds. For the exit paths that cannot await `release()`
+ * (a second Ctrl-C, a fatal error): without it the next `--resume` reports a crashed driver.
+ */
+export function releaseHeldRunLocksSync(): void {
+  for (const path of heldLocks) {
+    try {
+      rmSync(path, { force: true });
+    } catch {
+      // Best-effort: a lock left behind only costs the stale-lock notice.
+    }
+  }
+  heldLocks.clear();
 }
 
 /**
