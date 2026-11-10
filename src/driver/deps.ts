@@ -64,12 +64,12 @@ export type DriverDeps = {
   clock: Clock;
   budget: BudgetMeter;
   /**
-   * Backoff sleep used by the harness crash-retry (see `HARNESS_CRASH_RETRIES` in `perform.ts`).
+   * Backoff sleep used by the harness crash-retry (see `HARNESS_CRASH_BACKOFF_MS` in `perform.ts`).
    * Injectable so tests never wait a real timer; defaults to a real `setTimeout`.
    */
   sleep?: (ms: number) => Promise<void>;
   /**
-   * Cooperative interrupt probe (Ctrl-C / SIGTERM): polled between steps — and before a crash-retry
+   * Cooperative interrupt probe (Ctrl-C / SIGTERM): polled between steps — and during a crash-retry wait
    * — so a graceful shutdown finishes the in-flight effect, persists its event write-ahead, and
    * resolves to a typed ABORTED (with a resume path) instead of dying mid-iteration. Absent ⇒ never
    * interrupted. The write-ahead log makes even a HARD kill safe (at-least-once resume); this just

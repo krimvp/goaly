@@ -30,17 +30,18 @@ const SENTINEL_PREV_HASH: DiffHash = DiffHash.parse('0000000');
 const SENTINEL_POST_HASH: DiffHash = DiffHash.parse('0000001');
 
 /**
- * Transient-crash absorption for one agent turn: a CRASHED harness run (the CLI exited abnormally —
- * the shape a momentary rate-limit / network / auth blip produces) is retried once after a short
- * backoff BEFORE the crash reaches the reducer. Without it, two quick back-to-back blips burn the
- * whole `stuckCrashThreshold` (default 2) in seconds and abort an otherwise-healthy run. Retrying
- * here is an EFFECT policy (the Driver's job), so the reducer, the stuck detectors, and the run-log
- * semantics are untouched — a crash that survives the retry still counts toward the streak exactly
- * as before. Timeouts are NOT retried (the wall-clock cap is the run's own guard).
+ * Patient crash absorption for one agent turn: a CRASHED harness run (the CLI exited abnormally —
+ * the shape a rate limit, an overloaded provider, or a network drop produces) is retried with a
+ * growing backoff, about five minutes in total, BEFORE the crash reaches the reducer. goaly does not
+ * guess the cause from the error text (invariant #8); it only waits long enough for a transient
+ * cause to pass. Retrying is an EFFECT policy (the Driver's job), so the reducer, the stuck
+ * detectors, and the run-log semantics are untouched — a crash that survives every retry still
+ * counts toward the streak exactly as before. The wait stops at once on an interrupt or a spent
+ * budget. Timeouts are NOT retried (the wall-clock cap is the run's own guard).
  */
-const HARNESS_CRASH_RETRIES = 1;
-const HARNESS_CRASH_BACKOFF_MS = 2000;
-
+export const HARNESS_CRASH_BACKOFF_MS: readonly number[] = [5_000, 10_000, 20_000, 40_000, 80_000, 160_000];
+/** The wait sleeps in slices this long, so Ctrl-C and the wall-clock budget are seen within one. */
+const BACKOFF_SLICE_MS = 1000;
 const blindBudgetWarned = new WeakSet<Logger>();
 
 const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -385,7 +386,7 @@ function workspaceErrorRan(command: Cmd<'RUN_AGENT'>, deps: DriverDeps, e: unkno
   };
 }
 
-/** One agent turn with the transient-crash absorption described at {@link HARNESS_CRASH_RETRIES}. */
+/** One agent turn with the crash absorption described at {@link HARNESS_CRASH_BACKOFF_MS}. */
 async function runHarnessWithRetry(
   command: Cmd<'RUN_AGENT'>,
   deps: DriverDeps,
@@ -398,25 +399,36 @@ async function runHarnessWithRetry(
       ? (event: Parameters<PhasedStreamSink>[1]): void => deps.onStreamEvent?.('agent', event)
       : undefined;
   let run = await deps.harness.run(command.prompt, command.sessionId, onEvent);
-  // Transient-crash absorption: retry a crashed turn once after a short backoff, accounting
-  // the abandoned attempt's spend first (usually none — a crash rarely reports usage). A
-  // crash that survives the retry flows to the reducer unchanged (stuck detection governs).
-  const sleep = deps.sleep ?? realSleep;
-  for (
-    let retry = 0;
-    run.status === 'crashed' && retry < HARNESS_CRASH_RETRIES && deps.interrupted?.() !== true;
-    retry++
-  ) {
+  for (const [i, backoffMs] of HARNESS_CRASH_BACKOFF_MS.entries()) {
+    if (run.status !== 'crashed' || mustStopWaiting(deps)) break;
+    // Account the abandoned attempt's spend first (usually none — a crash rarely reports usage).
     const abandonedEstimate =
       run.tokenSource === 'estimated' && run.tokensUsed !== undefined ? run.tokensUsed : 0;
     deps.budget.record(run.tokensUsed, abandonedEstimate);
-    log.warn('harness crashed — retrying once after backoff (transient blips must not burn the crash streak)', {
-      backoffMs: HARNESS_CRASH_BACKOFF_MS,
+    log.warn('harness crashed — waiting before retry (a rate limit or an outage may be transient; the crash counts toward the stuck streak only after the last retry)', {
+      retry: i + 1,
+      of: HARNESS_CRASH_BACKOFF_MS.length,
+      backoffMs,
+      output: run.output.slice(0, 200),
     });
-    await sleep(HARNESS_CRASH_BACKOFF_MS);
+    if (!(await waitInterruptibly(deps, backoffMs))) break;
     run = await deps.harness.run(command.prompt, command.sessionId, onEvent);
   }
   return run;
+}
+
+function mustStopWaiting(deps: DriverDeps): boolean {
+  return deps.interrupted?.() === true || deps.budget.snapshot().exceeded;
+}
+
+/** Sleep `ms` in short slices; false when an interrupt or a spent budget cut the wait short. */
+async function waitInterruptibly(deps: DriverDeps, ms: number): Promise<boolean> {
+  const sleep = deps.sleep ?? realSleep;
+  for (let waited = 0; waited < ms; waited += BACKOFF_SLICE_MS) {
+    await sleep(Math.min(BACKOFF_SLICE_MS, ms - waited));
+    if (mustStopWaiting(deps)) return false;
+  }
+  return true;
 }
 
 async function performRunVerifier(

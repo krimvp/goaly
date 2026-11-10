@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { drive, type DriverDeps } from './driver';
+import { HARNESS_CRASH_BACKOFF_MS } from './perform';
 import type { RunLog } from '../runlog/runlog';
 import { replay } from '../runlog/replay';
 import { RunId } from '../domain/ids';
@@ -28,6 +29,8 @@ import type { Logger, LogRecord } from '../log/logger';
 import { sha256Hex } from '../util/hash';
 
 const runId = RunId.parse('run-1');
+/** One visible agent turn makes this many harness attempts when every attempt crashes. */
+const CRASH_ATTEMPTS = HARNESS_CRASH_BACKOFF_MS.length + 1;
 const contract = makeFakeContract({ goal: 'make the thing work' });
 
 type Wiring = {
@@ -347,16 +350,14 @@ describe('drive() — full loop with zero IO', () => {
     // The real incident: the agent CLI crashed every turn (status=crashed), leaving a stale verifier
     // red that repeated. The loop must stop after the crash streak (2) with a harness-focused reason,
     // not churn until the downstream verifier signature trips STUCK_REPEATED_FAILURE. Each iteration
-    // now absorbs ONE transient crash by retrying, so a persistently-crashing CLI burns two scripted
-    // crashes per iteration — the streak still fires at iteration 2, exactly as before.
+    // first retries a crashed turn with a backoff, so a persistently-crashing CLI burns every
+    // attempt of each iteration — the streak still fires at iteration 2, exactly as before.
     const crash = { status: 'crashed', output: 'claude: command not found' } as const;
     const { deps } = wire({
-      scripts: [
-        { ...crash, postHash: '0000001' },
-        { ...crash, postHash: '0000002' }, // iteration 1: crash + retried crash
-        { ...crash, postHash: '0000003' },
-        { ...crash, postHash: '0000004' }, // iteration 2: crash + retried crash → streak trips
-      ],
+      scripts: Array.from({ length: 2 * CRASH_ATTEMPTS }, (_, i) => ({
+        ...crash,
+        postHash: `000000${i + 1}`.slice(-7),
+      })),
       verdicts: [failVerdict('ImportError'), failVerdict('ImportError'), failVerdict('ImportError')],
     });
     const outcome = await drive(deps, makeConfig({ maxIterations: 10 }), runId);
@@ -371,9 +372,12 @@ describe('drive() — full loop with zero IO', () => {
   it('a crashed visible turn does not consume the only allowed iteration, leaving room to recover', async () => {
     const { deps } = wire({
       scripts: [
-        // First visible turn: crash + retried crash (both attempts fail; the Driver's one retry is used).
-        { status: 'crashed', output: 'transient blip', postHash: '0000001' },
-        { status: 'crashed', output: 'transient blip', postHash: '0000002' },
+        // First visible turn: every attempt crashes (the Driver's retries are all used).
+        ...Array.from({ length: CRASH_ATTEMPTS }, () => ({
+          status: 'crashed' as const,
+          output: 'transient blip',
+          postHash: '0000001',
+        })),
         // Second visible turn: recovered attempt completes the single allowed iteration.
         { postHash: '0000003' },
       ],

@@ -1384,8 +1384,11 @@ kill an hours-long run. All defaults, no flags needed
   about one minute (1 s, 2 s, … 32 s; a longer `Retry-After`, in seconds or HTTP-date form, is
   honored, capped at 60 s per wait); a 200 with JSON that fails the response schema is not retried; a request that hits its own timeout is not retried; CLI-backed LLM steps retry a
   non-zero exit or unparseable output; a judge-quorum sample that throws drops that sample only; a
-  crashed harness turn is retried once before counting toward the stuck-crash streak. Timeouts are
-  never retried.
+  crashed harness turn is retried up to 6 times with a growing backoff (5 s, 10 s, … 160 s; about
+  5 minutes in total) before it counts toward the stuck-crash streak, so a rate-limited or overloaded
+  agent CLI does not end a long run. goaly does not read the error text to decide; every crash gets
+  the same wait. Each wait logs a `harness crashed — waiting before retry` line, and Ctrl-C or a spent
+  budget stops the wait at once. Timeouts are never retried.
 - **Ctrl-C is safe.** The first Ctrl-C / SIGTERM / SIGHUP stops between steps: the in-flight step
   finishes, lands write-ahead, and the outcome is a typed `ABORTED` naming `--resume <runId>` (exit
   130; if that last step ends the run on its own — DONE, FAILED, a stuck abort — the exit code is
@@ -1451,7 +1454,7 @@ The loop bails before `--max-iterations` with a typed reason when it's making no
 | no-diff | the tree didn't change | `--stuck-no-diff` (bool) |
 | repeat-failure | the same verifier-failure signature recurs (`STUCK_REPEATED_FAILURE`) | `--stuck-repeat-threshold` |
 | oscillation | period-N cycling between tree states | `--stuck-oscillation` |
-| harness-crash | the agent CLI exited abnormally N times in a row (`STUCK_HARNESS_CRASH`) | `--stuck-crash-threshold` |
+| harness-crash | the agent CLI exited abnormally N turns in a row, each after its crash retries (`STUCK_HARNESS_CRASH`) | `--stuck-crash-threshold` |
 | contract-unevaluable | the frozen ladder could not be *evaluated* N times in a row (`CONTRACT_UNEVALUABLE`) | `--stuck-unevaluable-threshold` |
 | timeout-no-diff | N iterations in a row both hit the harness wall-clock timeout **and** changed nothing (`STUCK_TIMEOUT_NO_DIFF`) | `--stuck-timeout-no-diff-threshold`, `--harness-timeout-ms`, `--harness-idle-timeout-ms` |
 | budget | `--budget-tokens` / `--budget-wall-ms` exhausted | the budget flags |
