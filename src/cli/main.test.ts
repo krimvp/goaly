@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -809,6 +809,27 @@ describe('main() — --dry-run validates and prints, and starts nothing', () => 
     );
     expect(res.code).toBe(2);
     expect(existsSync(join(root, STATE_DIR))).toBe(false);
+  });
+
+  it('reports a missing harness CLI as a finding under the printed config, with the real-run exit code', async () => {
+    const bin = await mkdtemp(join(tmpdir(), 'goaly-main-bin-'));
+    const gitPath = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+    await symlink(gitPath, join(bin, 'git'));
+    const origPath = process.env.PATH;
+    process.env.PATH = bin;
+    try {
+      const res = await capture(() =>
+        main(['run', 'g', '--verify-cmd', 'npm test', '--harness', 'codex', '--mode', 'review',
+          '--workspace', root, '--dry-run']),
+      );
+      expect(res.code).toBe(2);
+      expect(res.out).toContain('existing command: npm test');
+      expect(res.out).toContain("the 'codex' CLI (needed for --harness codex) was not found on PATH");
+      expect(existsSync(join(root, STATE_DIR))).toBe(false);
+    } finally {
+      process.env.PATH = origPath;
+      await rm(bin, { recursive: true, force: true });
+    }
   });
 
   it('does not materialize a --worktree', async () => {

@@ -83,17 +83,26 @@ export async function prepareRun(
   if (!resumed.ok) return resumed;
   parsed = resumed.parsed;
 
-  const preflightCode = await preflight(parsed, io.err);
-  if (preflightCode !== null) return { ok: false, code: preflightCode };
+  const problem = await preflightRun({
+    harness: parsed.harness,
+    llmProvider: parsed.llmProvider,
+    workspace: parsed.workspace,
+    workspaceMode: parsed.workspaceMode,
+  });
 
   // `--dry-run`: the LAST read-only point. Everything above validates (config merge, --cost-table,
   // --baseline resolution, --from-run/--resume log reads, preflight) and everything below MUTATES —
   // `acquireRunLock` mkdirs the run directory. Printing here means a dry run exercises exactly the
   // checks a real run would, with the same messages and the same exit code, and still writes nothing.
+  // A preflight problem (a missing CLI) is an environment finding, so the config still prints first.
   if (parsed.dryRun) {
     io.out(renderResolvedConfig(dryRunView(parsed, baseline.autoPinnedBaseline), resumed.runConfig));
-    return { ok: false, code: 0 };
   }
+  if (problem !== null) {
+    io.err(`goaly: ${problem}\n`);
+    return { ok: false, code: 2 };
+  }
+  if (parsed.dryRun) return { ok: false, code: 0 };
 
   return {
     ok: true,
@@ -106,25 +115,6 @@ export async function prepareRun(
     followupSeed: resumed.followupSeed,
     recordedDegraded: resumed.recordedDegraded,
   };
-}
-
-/**
- * First-run preflight (fail-fast, before any spend): git repo present, harness / LLM-provider
- * CLI on PATH — the mistakes that used to surface only AFTER a compile + agent turn, as cryptic
- * spawn/plumbing errors. Cheap (milliseconds). On resume this runs AFTER the harness adoption in
- * {@link resolveResume}, so it validates the harness the resumed run will actually use. Returns
- * the exit code, or `null` to proceed.
- */
-async function preflight(parsed: ParsedArgs, err: (s: string) => void): Promise<number | null> {
-  const problem = await preflightRun({
-    harness: parsed.harness,
-    llmProvider: parsed.llmProvider,
-    workspace: parsed.workspace,
-    workspaceMode: parsed.workspaceMode,
-  });
-  if (problem === null) return null;
-  err(`goaly: ${problem}\n`);
-  return 2;
 }
 
 /**

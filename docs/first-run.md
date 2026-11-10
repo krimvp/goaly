@@ -27,7 +27,9 @@ goaly run --goal "make the parser handle empty input" \
 ```
 
 Replace the goal, check command, and harness with values for your project. The dry run checks
-the input and prints the resolved config. It does not run the worker or verifier. If you use
+the input and prints the resolved config. It does not run the worker or verifier. If the harness
+CLI (here `codex`) is not installed, it still prints the config, then names the missing CLI and
+exits 2, as the real run would. If you use
 this repository's source CLI, run `npm run dev -- run ... --workspace /path/to/project` from
 the goaly clone because `npm run` starts in that clone.
 

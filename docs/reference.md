@@ -268,6 +268,9 @@ It runs **after** every read-only check a real run performs (config merge, `--co
 byte is written. So a dry run fails exactly the way the real run would, with the same message and
 the same exit code — and on success leaves no run directory, no lock, no diagnostics log, and no
 `--worktree`. Nothing is spent: no LLM is called, because the contract is compiled after this point.
+A preflight problem is an environment finding, not an input error: when the harness or
+`--llm-provider` CLI is not on PATH, the dry run still prints the resolved config, then prints the
+same message as the real run and exits `2`.
 
 `--dry-run` is per-invocation and cannot be set from a config file.
 
