@@ -4,7 +4,7 @@ import { runProcess } from '../util/spawn';
 import { parseAgentOutput } from '../agent-cli/output';
 import { StreamTap, type AgentEventSink } from '../agent-cli/stream';
 import { accountTokens, streamingEstimator } from '../agent-cli/estimate';
-import { ambientSessionId, type AgentCliCodec } from '../agent-cli/codec';
+import { ambientSessionId, failureTail, type AgentCliCodec } from '../agent-cli/codec';
 
 /**
  * Injectable subprocess seam: takes the full argv plus the prompt (delivered on stdin only when the
@@ -155,7 +155,7 @@ export class AgentCliLlmProvider implements LlmProvider {
       return {
         ok: false,
         retriable: true,
-        error: new Error(`LLM CLI ${this.name} exited ${r.code}: ${r.stderr.slice(0, 500)}`),
+        error: new Error(`LLM CLI ${this.name} exited ${r.code}: ${failureTail(r.stderr, r.stdout)}`),
       };
     }
     const parsed = parseAgentOutput(r.stdout, this.#codec.fieldExtractor);
@@ -165,7 +165,8 @@ export class AgentCliLlmProvider implements LlmProvider {
         ok: false,
         retriable: true,
         error: new Error(
-          `LLM CLI ${this.name} produced no parseable text (exit ${r.code}, ${r.stdout.length}B stdout)`,
+          `LLM CLI ${this.name} produced no parseable text (exit ${r.code}, ${r.stdout.length}B stdout)` +
+            (r.stderr.trim().length > 0 ? `: ${failureTail(r.stderr, '')}` : ''),
         ),
       };
     }

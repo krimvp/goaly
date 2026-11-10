@@ -204,8 +204,8 @@ call what counts as "no text"). `parseAgentOutput` returns `null` when nothing u
 ### 2. Status mapping — `classify(input)`
 
 `classify` turns a finished process into a Zod-parsed `HarnessRunResult`. For the standard policy,
-delegate to the shared `classifyFlatRun({ parsed, code, stderr, timedOut, sessionId, unknownSession,
-estimator?, hint? })` (from `src/agent-cli/codec.ts`, used by claude **and** droid). The optional
+delegate to the shared `classifyFlatRun({ parsed, code, stderr, stdout?, timedOut, sessionId,
+unknownSession, estimator?, hint? })` (from `src/agent-cli/codec.ts`, used by claude **and** droid). The optional
 `estimator` (issue #24) is the `StreamTokenEstimator` `runCodecHarness` threads in when the run
 streamed: when the parsed envelope carries **no** `usage`, `classifyFlatRun` falls back to its local
 estimate and stamps `tokenSource: 'estimated'` (vs `'reported'` for a real count). A non-streaming run
@@ -220,7 +220,7 @@ branch without the accounting — dropping it makes `--budget-tokens` silently b
 | Condition | status |
 |---|---|
 | timed out (killed for exceeding the wall-clock budget) | `timeout` (salvages any parsed text) |
-| exited non-zero (or signal-killed) | `crashed` |
+| exited non-zero (or signal-killed) | `crashed` (output: the bounded **tail** of stderr — else the parsed text, else the stdout tail — via `failureTail`, so the crash reason quotes the real cause) |
 | exit 0, parseable, non-empty result | `completed` |
 | exit 0 but empty / unparseable result | `truncated` |
 | a soft `isError` flag on a clean exit | `truncated` |
@@ -233,6 +233,7 @@ classify(input) {
     parsed: this.parse(input.stdout),
     code: input.code,
     stderr: input.stderr,
+    stdout: input.stdout,
     timedOut: input.timedOut,
     sessionId: input.sessionId,
     unknownSession: this.unknownSession,
@@ -423,6 +424,7 @@ export const myagentCodec: AgentCliCodec = {
       parsed: parseAgentOutput(input.stdout, fieldExtractor),
       code: input.code,
       stderr: input.stderr,
+      stdout: input.stdout,
       timedOut: input.timedOut,
       sessionId: input.sessionId,
       unknownSession: UNKNOWN_SESSION,

@@ -123,6 +123,25 @@ describe('classifyFlatRun (claude/droid shared policy)', () => {
     expect(r.status).toBe('crashed');
     expect(r.output).toBe('boom');
   });
+
+  it('keeps the bounded END of a long stderr on a crash — the last error line survives', () => {
+    const noise = Array.from({ length: 40 }, (_, i) => `(node:1) Warning: noise line ${i}`).join('\n');
+    const stderr = `${noise}\nFATAL: ENOSPC: no space left on device\n`;
+    const r = classifyFlatRun({ parsed: null, code: 1, stderr, unknownSession: 'unk' });
+    expect(r.output).toMatch(/ENOSPC: no space left on device$/);
+    expect(r.output.length).toBeLessThanOrEqual(500);
+  });
+
+  it('falls back to the raw stdout tail on a crash with no stderr and no parseable text', () => {
+    const r = classifyFlatRun({
+      parsed: null,
+      code: 1,
+      stderr: '',
+      stdout: "Error: unknown option '--frobnicate'\n",
+      unknownSession: 'unk',
+    });
+    expect(r.output).toBe("Error: unknown option '--frobnicate'");
+  });
 });
 
 describe('runCodecHarness', () => {

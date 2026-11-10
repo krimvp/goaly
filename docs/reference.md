@@ -1512,7 +1512,9 @@ Details that make these accurate rather than trigger-happy:
   which in that situation is three dead ends. The classification is unchanged: the run is still a
   fail-closed `crashed`, still typed the same way. Only the guidance differs. Per-CLI string
   matching lives in the codec, never in the reducer, so the stuck detectors still key purely on
-  facts goaly owns.
+  facts goaly owns. The reason also quotes the bounded **end** of the CLI's failure output
+  (stderr, else stdout), where a CLI prints its fatal error; a failed CLI-backed LLM step names the
+  same tail in its error.
 - **A repeat-failure streak may be re-adjudicated as a *contract* fault** — see below.
 
 **Streak relief on `--resume`.** The counted streaks are not stored — they are re-derived by the

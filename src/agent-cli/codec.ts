@@ -301,6 +301,22 @@ export async function runCodecHarness(
 }
 
 /**
+ * Bound on {@link failureTail}. It matches the reducer's quote limit for a STUCK_HARNESS_CRASH
+ * reason (`CRASH_OUTPUT_LIMIT` in `src/orchestrator/stuck.ts`), which quotes the HEAD of the output:
+ * a tail no longer than that limit reaches the operator whole.
+ */
+const FAILURE_TAIL_CHARS = 500;
+
+/**
+ * The bounded END of a failed CLI's output — stderr, else stdout. A CLI prints its fatal error last,
+ * after any warnings or progress lines, so the end is where the cause is.
+ */
+export function failureTail(stderr: string, stdout: string): string {
+  const s = stderr.trim().length > 0 ? stderr.trim() : stdout.trim();
+  return s.length <= FAILURE_TAIL_CHARS ? s : `…${s.slice(-(FAILURE_TAIL_CHARS - 1))}`;
+}
+
+/**
  * The shared run-status classifier for the FLAT codecs (claude, droid), whose `run()` tails are
  * identical: a timeout salvages any parsed text → `timeout`; a non-zero/killed exit → `crashed`;
  * exit-0 with no usable text → `truncated`; a soft `isError` flag (droid) → `truncated`; otherwise
@@ -313,6 +329,8 @@ export function classifyFlatRun(opts: {
   parsed: AgentOutput | null;
   code: number | null;
   stderr: string;
+  /** Raw stdout: the crash output falls back to its tail when there is no stderr and no parsed text. */
+  stdout?: string;
   timedOut?: boolean | undefined;
   sessionId?: string | undefined;
   unknownSession: string;
@@ -320,7 +338,7 @@ export function classifyFlatRun(opts: {
   /** Optional codec-recognised remediation KIND for a FAILED run (see {@link AgentCliCodec.diagnose}). */
   hint?: HarnessRemediation | undefined;
 }): HarnessRunResult {
-  const { parsed, code, stderr, timedOut, sessionId, unknownSession, estimator, hint } = opts;
+  const { parsed, code, stderr, stdout, timedOut, sessionId, unknownSession, estimator, hint } = opts;
   const session = coerceSessionId(parsed?.sessionId ?? sessionId, unknownSession);
 
   // Spend is accounted for EVERY status, not just `completed`. A turn that did real work and then
@@ -349,7 +367,7 @@ export function classifyFlatRun(opts: {
   }
   if (code !== 0) {
     return HarnessRunResult.parse({
-      output: stderr.length > 0 ? stderr : (parsed?.text ?? ''),
+      output: stderr.trim().length > 0 ? failureTail(stderr, '') : (parsed?.text ?? failureTail('', stdout ?? '')),
       sessionId: session,
       status: 'crashed',
       ...spend,

@@ -170,7 +170,8 @@ describe('AgentCliHarness(codexCodec)', () => {
     const result = await adapter.run('go');
 
     expect(result.status).toBe('crashed');
-    expect(result.output).toBe('');
+    // The crash cause (stderr) reaches the output, so the STUCK_HARNESS_CRASH reason can quote it.
+    expect(result.output).toBe('boom');
     // Fallback session id is used (and is a valid SessionId).
     expect(result.sessionId).toBe('codex-unknown');
   });
